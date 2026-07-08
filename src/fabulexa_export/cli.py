@@ -24,9 +24,11 @@ Exit codes:
 from __future__ import annotations
 
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fabulexa_export.anchor import resolve_effective_anchor
 from fabulexa_export.errors import ExporterError
@@ -94,10 +96,15 @@ def _cmd_validate(args: list[str]) -> int:
     Returns:
         Exit code.
     """
-    if len(args) != 1:
-        print("Usage: fabexport validate <emit_dir>", file=sys.stderr)
-        return 1
-    return _run_validate(args[0])
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="fabexport validate",
+        description="Run C1-C12 conformance checks against an emit.",
+    )
+    parser.add_argument("emit_dir", type=Path)
+    parsed = parser.parse_args(args)
+    return _run_validate(str(parsed.emit_dir))
 
 
 def _print_window_counts(window_label: str, counts: dict[str, int]) -> None:
@@ -316,8 +323,7 @@ def _cmd_export(args: list[str]) -> int:
 
     parser = argparse.ArgumentParser(
         prog="fabexport export",
-        description="Run a dimensional config against an emit.",
-        add_help=False,
+        description="Run an export config against an emit.",
     )
     parser.add_argument("emit_dir", type=Path)
     parser.add_argument("config_path", type=Path)
@@ -331,14 +337,7 @@ def _cmd_export(args: list[str]) -> int:
     parser.add_argument("--from", dest="range_from", type=str, default=None)
     parser.add_argument("--to", dest="range_to", type=str, default=None)
 
-    try:
-        parsed = parser.parse_args(args)
-    except SystemExit as e:
-        print(
-            "Usage: fabexport export <emit_dir> <config_path> <out> --fmt <csv|duckdb>",
-            file=sys.stderr,
-        )
-        return int(e.code) if e.code is not None else 1
+    parsed = parser.parse_args(args)
 
     return cmd_export(
         parsed.emit_dir,
@@ -519,7 +518,6 @@ def _cmd_stream(args: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="fabexport stream",
         description="Replay the base layer as a CDC event stream.",
-        add_help=False,
     )
     parser.add_argument("emit_dir", type=Path)
     parser.add_argument("config_path", type=Path)
@@ -535,15 +533,7 @@ def _cmd_stream(args: list[str]) -> int:
         "--bootstrap-servers", dest="bootstrap_servers", type=str, default=None
     )
 
-    try:
-        parsed = parser.parse_args(args)
-    except SystemExit as e:
-        print(
-            "Usage: fabexport stream <emit_dir> <config_path>"
-            " --fmt jsonl|debezium --sink <stdout|file|kafka> [--out <dir>]",
-            file=sys.stderr,
-        )
-        return int(e.code) if e.code is not None else 1
+    parsed = parser.parse_args(args)
 
     return cmd_stream(
         parsed.emit_dir,
@@ -836,7 +826,6 @@ def _cmd_mixer(args: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="fabexport mixer",
         description="Replay the base layer as a live, operator-mixable Kafka feed.",
-        add_help=False,
     )
     parser.add_argument("emit_dir", type=Path)
     parser.add_argument("config_path", type=Path)
@@ -867,20 +856,7 @@ def _cmd_mixer(args: list[str]) -> int:
         "--consumer-offset", dest="consumer_offset", type=str, default="earliest"
     )
 
-    _USAGE = (
-        "Usage: fabexport mixer <emit_dir> <config_path>"
-        " --fmt jsonl|debezium [--bootstrap-servers <addr>]"
-        " [--play|--paused] [--speed <n>] [--tick <s>]"
-        " [--host <h>] [--port <p>]"
-        " [--consumer [--window <ms>]... [--join <fact>:<dim>]..."
-        " [--consumer-group <id>] [--consumer-offset earliest|latest]]"
-    )
-
-    try:
-        parsed = parser.parse_args(args)
-    except SystemExit as e:
-        print(_USAGE, file=sys.stderr)
-        return int(e.code) if e.code is not None else 1
+    parsed = parser.parse_args(args)
 
     # Validate --join format: each must be "fact:dim"
     parsed_joins: list[tuple[str, str]] = []
@@ -891,7 +867,6 @@ def _cmd_mixer(args: list[str]) -> int:
                 f"Usage error: --join must be 'fact:dim', got {raw!r}",
                 file=sys.stderr,
             )
-            print(_USAGE, file=sys.stderr)
             return 1
         parsed_joins.append(pair)
 
@@ -924,13 +899,16 @@ def _cmd_init(args: list[str]) -> int:
     Returns:
         Exit code.
     """
-    if len(args) not in (1, 2):
-        print("Usage: fabexport init <emit_dir> [<out_path>]", file=sys.stderr)
-        return 1
+    import argparse
 
-    emit_dir = Path(args[0])
-    out_path = Path(args[1]) if len(args) == 2 else None
-    return cmd_init(emit_dir, out_path)
+    parser = argparse.ArgumentParser(
+        prog="fabexport init",
+        description="Propose a candidate dimensional config from the sidecar.",
+    )
+    parser.add_argument("emit_dir", type=Path)
+    parser.add_argument("out_path", type=Path, nargs="?", default=None)
+    parsed = parser.parse_args(args)
+    return cmd_init(parsed.emit_dir, parsed.out_path)
 
 
 def _print_corrupt_report(report: "CorruptReport") -> None:
@@ -995,23 +973,85 @@ def _cmd_corrupt(args: list[str]) -> int:
     parser = argparse.ArgumentParser(
         prog="fabexport corrupt",
         description="Apply a corrupter config to an emit.",
-        add_help=False,
     )
     parser.add_argument("emit_dir", type=Path)
     parser.add_argument("--config", dest="config_path", type=Path, required=True)
     parser.add_argument("--out", dest="out_dir", type=Path, required=True)
 
-    _USAGE = (
-        "Usage: fabexport corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>"
-    )
-
-    try:
-        parsed = parser.parse_args(args)
-    except SystemExit as e:
-        print(_USAGE, file=sys.stderr)
-        return int(e.code) if e.code is not None else 1
+    parsed = parser.parse_args(args)
 
     return cmd_corrupt(parsed.emit_dir, parsed.config_path, parsed.out_dir)
+
+
+@dataclass(frozen=True)
+class Verb:
+    """A dispatchable fabexport verb.
+
+    Attributes:
+        name: The verb as typed on the command line.
+        summary: One-line description, rendered in the top-level verb table.
+        handler: Parses the verb's remaining argv and returns its exit code.
+            Lets argparse's SystemExit escape; dispatch translates it.
+    """
+
+    name: str
+    summary: str
+    handler: Callable[[list[str]], int]
+
+
+VERBS: Final[tuple[Verb, ...]] = (
+    Verb("validate", "Run C1-C12 conformance checks against an emit.", _cmd_validate),
+    Verb("export", "Run an export config against an emit.", _cmd_export),
+    Verb(
+        "init",
+        "Propose a candidate dimensional config from the sidecar.",
+        _cmd_init,
+    ),
+    Verb("stream", "Replay the base layer as a CDC event stream.", _cmd_stream),
+    Verb(
+        "mixer",
+        "Replay the base layer as a live, operator-mixable Kafka feed.",
+        _cmd_mixer,
+    ),
+    Verb("corrupt", "Apply a corrupter config to an emit.", _cmd_corrupt),
+)
+"""The verb registry. The sole source of the verb list -- never a literal."""
+
+
+def render_usage() -> str:
+    """Render the top-level usage block: usage line plus the verb table.
+
+    Returns:
+        Multi-line text without a trailing newline, derived from VERBS.
+    """
+    lines = ["Usage: fabexport <verb> [args...]", "", "Verbs:"]
+    width = max(len(v.name) for v in VERBS)
+    for v in VERBS:
+        lines.append(f"  {v.name:<{width}}  {v.summary}")
+    return "\n".join(lines)
+
+
+def dispatch(verb: Verb, rest: list[str]) -> int:
+    """Run a verb handler, translating argparse's SystemExit into an exit code.
+
+    argparse raises SystemExit(0) after writing --help to stdout, and
+    SystemExit(2) after writing a usage error to stderr. Both are control flow,
+    not failure; this is the one place that distinction is made.
+
+    Args:
+        verb: The registry entry to run.
+        rest: Argv after the verb token.
+
+    Returns:
+        0 if the handler succeeded or argparse printed help; 2 on a usage error;
+        the handler's own non-zero code otherwise.
+    """
+    try:
+        return verb.handler(rest)
+    except SystemExit as e:
+        if e.code is None or e.code == 0:
+            return 0
+        return 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1027,26 +1067,21 @@ def main(argv: list[str] | None = None) -> int:
         argv = sys.argv[1:]
 
     if not argv:
-        print("Usage: fabexport <verb> [args...]", file=sys.stderr)
-        print("Verbs: validate, export, init, stream, mixer, corrupt", file=sys.stderr)
+        print(render_usage(), file=sys.stderr)
         return 1
 
-    verb = argv[0]
+    if argv[0] in {"--help", "-h", "help"}:
+        print(render_usage())
+        return 0
+
+    verb_name = argv[0]
     rest = argv[1:]
 
-    if verb == "validate":
-        return _cmd_validate(rest)
-    if verb == "export":
-        return _cmd_export(rest)
-    if verb == "init":
-        return _cmd_init(rest)
-    if verb == "stream":
-        return _cmd_stream(rest)
-    if verb == "mixer":
-        return _cmd_mixer(rest)
-    if verb == "corrupt":
-        return _cmd_corrupt(rest)
+    by_name = {v.name: v for v in VERBS}
+    v = by_name.get(verb_name)
+    if v is None:
+        print(f"Unknown verb: {verb_name!r}", file=sys.stderr)
+        print(render_usage(), file=sys.stderr)
+        return 1
 
-    print(f"Unknown verb: {verb!r}", file=sys.stderr)
-    print("Verbs: validate, export, init, stream, mixer, corrupt", file=sys.stderr)
-    return 1
+    return dispatch(v, rest)
