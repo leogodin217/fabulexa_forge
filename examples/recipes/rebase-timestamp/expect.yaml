@@ -1,0 +1,18 @@
+tables:
+  fact_status_event:
+    columns: [patient_id, event_time, status_value, event_ts]
+    row_count: 4
+    contains_rows:
+      # sim_time = 0 repinned to 2030-06-15; offsets land one day later each.
+      - patient_id: p001
+        event_time: 86400000000000     # 1*DAY
+        event_ts: 2030-06-16 00:00:00
+      - patient_id: p001
+        event_time: 172800000000000    # 2*DAY
+        event_ts: 2030-06-17 00:00:00
+      - patient_id: p001
+        event_time: 259200000000000    # 3*DAY
+        event_ts: 2030-06-18 00:00:00
+      - patient_id: p002
+        event_time: 172800000000000    # 2*DAY
+        event_ts: 2030-06-17 00:00:00

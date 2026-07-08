@@ -1,0 +1,49 @@
+# Recipe: fact-from-membership
+# ============================================================
+# Demonstrates how to build a fact table from a membership grain —
+# one row per membership binding (i.e. per "patient visited a slot").
+#
+# The membership grain reads from the membership__<kind>__<property>
+# table. Each row in that table represents a period during which a
+# record was bound to a collection-struct slot (a visit in this case).
+#
+# Grain surface columns available on a membership source:
+#   record_id          — the owner record (patient here)
+#   joined_sim_time    — when the binding started (sim-time ns)
+#   left_sim_time      — when it ended (NULL = still active)
+#   elem__<name>       — element-slot columns (e.g. elem__slot = "morning")
+#   member__<f>__kind  — kind of the member linked in slot <f>
+#   member__<f>__id    — record_id of the linked member (e.g. doctor d001)
+#
+# Note: property: visits names the collection-struct property that owns
+# the membership table; source.kind names the OWNER kind (patient).
+#
+# Fixture world (recipe emit):
+#   membership__patient__visits — 1 row linking p001 to a morning slot
+#                                 joined_sim_time = 2*DAY = 172800000000000 ns
+#                                 member__doctor__id = d001
+#
+# Output:
+#   fact_visits — 1 row (p001, 172800000000000, "morning")
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_visits
+      role: fact
+      source:
+        grain: membership        # drive rows from membership__patient__visits
+        kind: patient            # owner kind
+        property: visits         # membership property name
+      key: [patient_id, joined_sim_time]
+      columns:
+        # The owning record's identity
+        - name: patient_id
+          from: record_id
+        # When the patient joined the visit slot (raw sim-time nanoseconds)
+        - name: joined_sim_time
+          from: joined_sim_time
+        # Element-slot column: the visit slot name (e.g. "morning")
+        - name: slot
+          from: elem__slot

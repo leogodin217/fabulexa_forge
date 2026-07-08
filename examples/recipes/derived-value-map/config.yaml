@@ -1,0 +1,62 @@
+# Recipe: derived-value-map
+# ============================================================
+# Demonstrates the value_map derived column: a CASE-expression that
+# substitutes source values with author-supplied labels. Unmapped
+# values become NULL (not an error — by design, for forward-compatibility).
+#
+# Use cases:
+#   - Turn enum codes into display labels (e.g. "active" → "Currently Active")
+#   - Map status keys to numeric severity scores for downstream ML pipelines
+#   - Override raw strings with locale-friendly descriptions
+#
+# The value_map derived column:
+#   from:  the base-layer grain column whose values are substituted
+#   map:   a key→value dict; source values NOT in this dict become NULL
+#
+# Here we extend the fact-from-history recipe by adding a status_label
+# column alongside the raw status_value — showing both in the same table
+# to make the substitution hand-traceable.
+#
+# Fixture world (recipe emit):
+#   history — 4 patient status changes:
+#     p001: pending@1*DAY, active@2*DAY, discharged@3*DAY
+#     p002: pending@2*DAY
+#   enum_domains.patient.status = [active, discharged, pending]
+#
+# Output:
+#   fact_status_labeled — 4 rows; status_label maps every value in the enum
+#     "pending"    → "Pending Review"
+#     "active"     → "Currently Active"
+#     "discharged" → "Discharged"
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_status_labeled
+      role: fact
+      source:
+        grain: history_point   # one row per status-change event in the history table
+        kind: patient
+        property: status
+      key: [patient_id, event_time]
+      columns:
+        - name: patient_id
+          from: record_id
+        # Raw sim-time nanosecond offset of the status-change event
+        - name: event_time
+          from: sim_time
+        # The raw history value (straight projection from the grain)
+        - name: status_value
+          from: value
+        # value_map: substitutes the raw status code with a human-readable label.
+        # The `from` field names the grain column to map; `map` is the substitution
+        # table. Any source value absent from `map` becomes NULL.
+        - name: status_label
+          derived:
+            value_map:
+              from: value     # grain surface column to substitute
+              map:
+                active: "Currently Active"
+                discharged: "Discharged"
+                pending: "Pending Review"

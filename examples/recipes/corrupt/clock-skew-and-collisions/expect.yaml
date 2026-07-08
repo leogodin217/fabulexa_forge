@@ -1,0 +1,17 @@
+defect_counts:
+  shifted_event_time: 1
+  tick_collision: 1
+
+impact_union:
+  - C6
+
+contains_defects:
+  - class: shifted_event_time
+    rule: offset_status_anchor
+    impact: [C6]
+    location.table: history
+
+  - class: tick_collision
+    rule: collide_future_name_event
+    impact: [C6]
+    location.table: history

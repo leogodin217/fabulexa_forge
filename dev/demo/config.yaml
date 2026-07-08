@@ -1,0 +1,28 @@
+# FabulMixer live-perform demo — streaming config
+# ============================================================
+# Drives `make mixer-demo`. Streams two kinds as `state-changes`, so the demo
+# emit (dev/demo/build_emit.py) routes to two Kafka topics — one channel strip
+# per topic on the board:
+#
+#   patient   — history-tracked `status`: create + update (`c`/`u`) events.
+#               The enrichment DIMENSION in the demo join.
+#   admission — identity + lifecycle, no tracked property: create + delete
+#               (`c`/`d`) events. The append-only FACT in the demo join.
+#
+# Why this pairing: `make mixer-demo` launches the consumer instrument with
+# `--join admission:patient`. The join is a timing dependency only — each
+# `admission` (fact) record resolves to null until the `patient` (dimension)
+# topic's watermark catches up. Lag or mute `patient` from the board and watch
+# the join's null_rate climb and the windows stop firing: one slow stream
+# stalls the whole pipeline. (See docs/architecture/mixer-consumer.md.)
+#
+# Topic names are the kind names (default routing). Launch is PAUSED — the
+# operator drives play / speed / lag / mute / ingest-rate live from the board.
+
+content: state-changes
+
+kinds:
+  - kind: patient
+    properties: [status]
+  - kind: admission
+    properties: []

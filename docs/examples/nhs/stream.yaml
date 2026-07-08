@@ -1,0 +1,48 @@
+# StreamConfig — NHS bundle, mixer/stream preset
+# ============================================================
+# Drives `fabexport mixer docs/examples/nhs/bundle <this>` (and `fabexport stream …`
+# for a non-Kafka dry run). The NHS bundle is primarily a *non-streaming* fixture
+# (its main use is dimensional export / conformance); this config exists so the
+# `EXAMPLE=nhs` mixer preset is complete and runnable, not as a showcase.
+#
+#   content: state-changes  — `history` replayed as an ordered c/u/d CDC stream.
+#   routing  nhs.{kind}     — one topic per kind, named for the kind. {kind} is used
+#                             (not the default {route_table}) because `actor`'s only
+#                             sub-type discriminator value is the degenerate
+#                             `actor_type = "default"`, which would otherwise name the
+#                             topic `default`. {kind} yields clean topic names.
+#
+# Topic set: nhs.actor, nhs.diary, nhs.journey_instance, nhs.resource — four channel
+# strips.
+#
+# Streamable surface (only history-tracked kinds carry a state-changes stream):
+#   actor             — patient/actor DIMENSION. Clinical-pathway flags over time.
+#   diary             — clinic-diary DIMENSION. next_opening drift.
+#   journey_instance  — pathway-instance DIMENSION. current_state -> c/u/d; the
+#                       busiest strip (~219k events).
+#   resource          — resource DIMENSION. `allocated` over time (~25k events,
+#                       concentrated — one record changes ~9.7k times).
+#
+# Deliberately excluded:
+#   entity, queue, tick_decision — no history-tracked property, so no state-changes.
+#   booking           — appears in `history` but has no records__booking table.
+#
+# All four topics are dimensions; there are no fact->dimension edges among them, so
+# the paired demo.yaml declares no joins (a valid pure read-back preset, like retail
+# and ride-sharing). Anchor resolves from the sidecar runtime (start 2023-01-01, UTC);
+# bootstrap is supplied at the CLI (`--bootstrap-servers localhost:9092`).
+
+content: state-changes
+
+kinds:
+  - kind: actor
+    properties: [status, hai_status, admission_count, cancer_referred, fft_outcome, surgical_referred, fft_invited]
+  - kind: diary
+    properties: [next_opening]
+  - kind: journey_instance
+    properties: [current_state]
+  - kind: resource
+    properties: [allocated]
+
+routing:
+  topic_template: "nhs.{kind}"

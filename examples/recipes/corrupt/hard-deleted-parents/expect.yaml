@@ -1,0 +1,24 @@
+defect_counts:
+  deleted_row: 2
+  phantom_row: 1
+
+impact_union:
+  - C6
+  - C9
+  - C10
+
+contains_defects:
+  - class: deleted_row
+    rule: hard_delete_referenced_doctor
+    impact: [C10]
+    location.table: records__doctor
+
+  - class: deleted_row
+    rule: hard_delete_pinned_actor
+    impact: [C6, C9]
+    location.table: records__actor
+
+  - class: phantom_row
+    rule: phantom_actor_bystander
+    impact: [beyond-c1-c12]
+    location.table: records__actor

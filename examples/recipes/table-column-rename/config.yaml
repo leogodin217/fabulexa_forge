@@ -1,0 +1,40 @@
+# Recipe: table-column-rename
+# ============================================================
+# Demonstrates that EVERY output name is author-verbatim. There is no
+# required dim_/fact_ prefix and no implicit name carried over from the
+# base layer — you name the table and you name each column.
+#
+# How naming works:
+#   - The table's `name:` is the literal output table name.
+#   - Each column's `name:` is the literal output column name.
+#   - `from:` names the BASE-LAYER source column, decoupling it from the
+#     output name (e.g. record_id → customer_id, prop__name → full_name).
+#
+# (`fabexport init` PROPOSES prefix-stripped names by reading the sidecar,
+# but those are only suggestions — every one is yours to override here.)
+#
+# Fixture world (recipe emit):
+#   records__patient — record_id, prop__name, created_sim_time
+#                      p001 Alice created@1*DAY, p002 Bob created@2*DAY
+#
+# Output:
+#   customer — 2 rows; the patient kind re-presented under domain-neutral names
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: customer          # any name — no dim_/fact_ prefix is required
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [customer_id]
+      columns:
+        - name: customer_id     # output name
+          from: record_id       # base-layer source column
+        - name: full_name
+          from: prop__name
+        - name: signed_up_at
+          from: created_sim_time

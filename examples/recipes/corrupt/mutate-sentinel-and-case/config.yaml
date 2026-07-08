@@ -1,0 +1,16 @@
+seed: 21
+operations:
+  - kind: mutate_cells
+    name: sentinel_doctor_name
+    target:
+      table: records__doctor
+      columns: [prop__name]
+    amount: { rate: 1.0 }
+    mutation: { kind: sentinel, value: "N/A" }
+  - kind: mutate_cells
+    name: case_drift_slot
+    target:
+      table: membership__actor__appointments
+      columns: [elem__slot]
+    amount: { rate: 1.0 }
+    mutation: { kind: case, form: upper }

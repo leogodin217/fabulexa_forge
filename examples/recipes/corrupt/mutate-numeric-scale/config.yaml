@@ -1,0 +1,14 @@
+seed: 7
+operations:
+  # prop__wait_minutes is history_tracked (BIGINT), value 12. A `scale`
+  # mutation with factor 1000 multiplies the stored value to 12000 -- the
+  # classic "cents mistaken for dollars" unit-scale defect. 12 * 1000 != 12,
+  # so this is never a no-op, and since the mutated value no longer matches
+  # the series' latest pre-slice anchor text "12", it genuinely trips C6.
+  - kind: mutate_cells
+    name: wait_minutes_scale_1000x
+    target:
+      table: records__actor
+      columns: [prop__wait_minutes]
+    amount: { rate: 1.0 }
+    mutation: { kind: scale, factor: 1000 }

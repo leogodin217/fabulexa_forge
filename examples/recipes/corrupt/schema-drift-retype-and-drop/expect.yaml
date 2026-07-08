@@ -1,0 +1,20 @@
+defect_counts:
+  column_drop: 1
+  column_retype: 1
+
+impact_union:
+  - C6
+  - C11
+
+contains_defects:
+  - class: column_retype
+    rule: retype_wait_minutes_and_drop_status
+    impact: [C6]
+    location.table: records__actor
+    location.column: prop__wait_minutes
+
+  - class: column_drop
+    rule: retype_wait_minutes_and_drop_status
+    impact: [C11]
+    location.table: records__actor
+    location.column: prop__status

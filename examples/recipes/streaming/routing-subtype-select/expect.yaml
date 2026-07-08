@@ -1,0 +1,11 @@
+streams:
+  # Only the selected sub-type's topic exists; physician was dropped pre-merge,
+  # so there is no physician.jsonl and seq 1 is the surviving nurse event.
+  nurse:
+    event_count: 1
+    contains_events:
+      - seq: 1
+        op: c
+        kind: staff
+        record_id: s001
+        after.prop__name: Nora Vega

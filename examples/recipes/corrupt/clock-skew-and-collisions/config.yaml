@@ -1,0 +1,20 @@
+seed: 5
+operations:
+  - kind: shift_sim_time
+    name: offset_status_anchor
+    target:
+      table: history
+      where: { property: status, sim_time: "40" }
+    amount: { count: 1 }
+    shift:
+      kind: offset
+      distribution: { shape: uniform, low: 70, high: 70 }
+
+  - kind: shift_sim_time
+    name: collide_future_name_event
+    target:
+      table: history
+      where: { property: name, sim_time: "150" }
+    amount: { count: 1 }
+    shift:
+      kind: collide

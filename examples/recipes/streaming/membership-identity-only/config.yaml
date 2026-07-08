@@ -1,0 +1,29 @@
+# Recipe: streaming / membership-identity-only
+# ============================================================
+# The degenerate-but-valid membership selection: an empty `fields` list.
+#
+# With `fields: []` each event's `after` image carries the owner identity only
+# ({record_id}) — no elem__ or member__ columns. The join/leave shape, the seq
+# order, the owner key, and the event count are all unchanged; only the payload
+# narrows. This is the membership analog of a state-changes `properties: []`
+# selection: the pure presence/absence signal of a collection.
+#
+# Use it when the *fact that* an element joined or left matters but the element's
+# attributes do not (e.g. arrival/departure counts, occupancy over time).
+#
+# Fixture world (recipe emit):
+#   membership__queue__waiters on owner q001 —
+#     p001: joined@1d, left@2d   (closed -> join + leave)
+#     p002: joined@2d, left NULL (open   -> join only)
+#
+# Output (one queue__waiters.jsonl stream, global seq order):
+#   seq 1  join  q001  after {record_id: q001}   @2024-01-02
+#   seq 2  join  q001  after {record_id: q001}   @2024-01-03
+#   seq 3  leave q001  after {record_id: q001}   @2024-01-03
+
+content: membership-events
+
+memberships:
+  - owner_kind: queue
+    property: waiters
+    fields: []   # owner identity only — no element fields in the payload

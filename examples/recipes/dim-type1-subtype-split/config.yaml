@@ -1,0 +1,59 @@
+# Recipe: dim-type1-subtype-split
+# ============================================================
+# Demonstrates splitting one polymorphic kind into several Type-1
+# dimensions, one per sub-type, using a discriminator `filter`.
+#
+# A single base-layer kind sometimes carries a sub-type discriminator
+# property (e.g. staff with prop__staff_type ∈ {nurse, physician}). Rather
+# than one wide dim with mostly-irrelevant columns, you emit one narrow
+# dimension per sub-type by filtering the records grain on the discriminator.
+#
+# The records-grain `filter`:
+#   filter: { <prop column>: <value> }  — keep only records whose column
+#           equals the value (records grain only). Each filtered table is an
+#           independent dimension.
+#
+# Fixture world (recipe emit):
+#   records__staff — s001 (staff_type=nurse), s002 (staff_type=physician)
+#
+# Output:
+#   dim_nurse     — 1 row (s001 / Nora Vega)
+#   dim_physician — 1 row (s002 / Owen Reed)
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: dim_nurse
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: staff
+        filter:
+          prop__staff_type: nurse     # keep only nurse records
+      key: [staff_id]
+      columns:
+        - name: staff_id
+          from: record_id
+        - name: name
+          from: prop__name
+        - name: role_type
+          from: prop__staff_type
+
+    - name: dim_physician
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: staff
+        filter:
+          prop__staff_type: physician  # keep only physician records
+      key: [staff_id]
+      columns:
+        - name: staff_id
+          from: record_id
+        - name: name
+          from: prop__name
+        - name: role_type
+          from: prop__staff_type

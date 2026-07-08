@@ -1,0 +1,20 @@
+seed: 3
+operations:
+  - kind: null_cells
+    name: null_one_scoped_entity_name
+    # Same target shape as category-null-cells: category: records pools every
+    # records__* table (records__actor + records__doctor here), giving a
+    # pooled population of 2 distinct record_ids (a001, d001) to draw over.
+    target:
+      category: records
+      columns: [prop__name]
+    amount: { rate: 1.0 }
+    # NEW here (vs category-null-cells, which draws uniformly over all rows):
+    # placement.entity_scoped concentrates the draw onto a seeded subset of
+    # distinct record_id entities in the pooled population, before the
+    # rate/count amount is applied within that subset. entities: {count: 1}
+    # picks exactly ONE of the 2 pooled entities (a001 or d001, seed-decided);
+    # only that entity's prop__name row(s) are eligible to be nulled.
+    placement:
+      kind: entity_scoped
+      entities: { count: 1 }

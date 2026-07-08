@@ -1,0 +1,54 @@
+# Recipe: rebase-timestamp
+# ============================================================
+# Demonstrates the top-level `rebase:` block: override the wallclock
+# ORIGIN and/or ZONE that timestamp columns render through.
+#
+# By default, timestamp derived columns (see derived-timestamp) use the
+# emit's `runtime` anchor (here 2024-01-01T00:00:00 UTC). A `rebase:` block
+# repins that anchor for the whole export — useful to relocate a simulated
+# run onto real-world dates, or to localize into a presentation timezone,
+# without touching the underlying sim_time offsets.
+#
+# The rebase block (cross-mode — a sibling of `mode`, not inside `dimensional`):
+#   base_date: the naive wallclock origin that sim_time = 0 maps to
+#   timezone:  the IANA zone the rendered timestamps are expressed in
+# Set at least one. The CLI flags --base-date / --timezone win over these.
+#
+# Fixture world (recipe emit):
+#   history — patient status changes at 1/2/3*DAY ns offsets
+#
+# Output (origin repinned from 2024-01-01 to 2030-06-15):
+#   fact_status_event — 4 rows; event_ts now lands in June 2030
+#     1*DAY → 2030-06-16 00:00:00
+#     2*DAY → 2030-06-17 00:00:00
+#     3*DAY → 2030-06-18 00:00:00
+
+mode: dimensional
+
+# Repin the origin: sim_time = 0 becomes 2030-06-15 00:00:00 UTC.
+rebase:
+  base_date: 2030-06-15T00:00:00
+  timezone: UTC
+
+dimensional:
+  tables:
+    - name: fact_status_event
+      role: fact
+      source:
+        grain: history_point
+        kind: patient
+        property: status
+      key: [patient_id, event_time]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: event_time
+          from: sim_time
+        - name: status_value
+          from: value
+        # Same timestamp derivation as derived-timestamp — but rendered
+        # through the rebased origin above.
+        - name: event_ts
+          derived:
+            timestamp:
+              source: sim_time

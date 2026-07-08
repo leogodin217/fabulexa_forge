@@ -1,0 +1,18 @@
+defect_counts:
+  sentinel_value: 3
+  case_drift: 1
+
+impact_union: []
+
+contains_defects:
+  - class: sentinel_value
+    rule: sentinel_doctor_name
+    impact: [beyond-c1-c12]
+    location.table: records__doctor
+    location.column: prop__name
+
+  - class: case_drift
+    rule: case_drift_slot
+    impact: [beyond-c1-c12]
+    location.table: membership__actor__appointments
+    location.column: elem__slot

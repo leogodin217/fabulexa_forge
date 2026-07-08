@@ -1,0 +1,17 @@
+tables:
+  fact_status_event:
+    columns: [patient_id, event_time, status_value]
+    row_count: 4
+    contains_rows:
+      # p001 initial status change at sim_time 1*DAY (2024-01-02)
+      - patient_id: p001
+        event_time: 86400000000000
+        status_value: pending
+      # p001 status upgrade at sim_time 2*DAY (2024-01-03)
+      - patient_id: p001
+        event_time: 172800000000000
+        status_value: active
+      # p002 single status event at sim_time 2*DAY (2024-01-03)
+      - patient_id: p002
+        event_time: 172800000000000
+        status_value: pending

@@ -1,0 +1,19 @@
+defect_counts:
+  whitespace_pad: 3
+  truncated_value: 1
+
+impact_union:
+  - C6
+
+contains_defects:
+  - class: whitespace_pad
+    rule: whitespace_pad_doctor_name
+    impact: [beyond-c1-c12]
+    location.table: records__doctor
+    location.column: prop__name
+
+  - class: truncated_value
+    rule: truncate_status_value
+    impact: [C6]
+    location.table: records__actor
+    location.column: prop__status

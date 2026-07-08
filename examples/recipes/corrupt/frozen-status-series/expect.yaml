@@ -1,0 +1,11 @@
+defect_counts:
+  frozen_series_event: 1
+
+impact_union:
+  - C6
+
+contains_defects:
+  - class: frozen_series_event
+    rule: freeze_status_series
+    impact: [C6]
+    location.table: history

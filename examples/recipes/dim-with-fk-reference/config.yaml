@@ -1,0 +1,69 @@
+# Recipe: dim-with-fk-reference
+# ============================================================
+# Demonstrates FK reference resolution: denormalizing a related
+# record's property onto a dimension row via a labeled-edge pathfind.
+#
+# The patient records table carries prop__doctor_id, which the sidecar
+# annotates with references: doctor (a labeled edge). The fk column
+# mode follows that edge to resolve the doctor's identity, embedding it
+# as a surrogate on each patient dimension row.
+#
+# The fk clause:
+#   to:  the OUTPUT table name of the target dimension
+#   via: reference  — follow the labeled reference edge (prop__doctor_id
+#                     → records__doctor)
+#
+# No `path` hint is needed here because there is exactly one reference
+# edge from patient → doctor. Supply `path` only when the pathfind is
+# ambiguous (multiple routes to the same target kind).
+#
+# Fixture world (recipe emit):
+#   records__patient — 2 patients; prop__doctor_id references doctor d001
+#   records__doctor  — 1 doctor; record_id = d001
+#
+# Output:
+#   dim_doctor      — 1 row (d001 / Dr. Carter)
+#   dim_patient     — 2 rows; doctor_fk = d001 on both (the resolved doctor)
+#
+# Reading the output:
+#   dim_patient.doctor_fk = "d001" is the record_id of the referenced doctor.
+#   You can JOIN dim_patient ON dim_patient.doctor_fk = dim_doctor.doctor_id
+#   to denormalize the doctor name alongside the patient.
+
+mode: dimensional
+
+dimensional:
+  tables:
+    # dim_doctor must be declared BEFORE dim_patient so the FK target exists
+    - name: dim_doctor
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: doctor
+      key: [doctor_id]
+      columns:
+        - name: doctor_id
+          from: record_id
+        - name: name
+          from: prop__name
+
+    - name: dim_patient
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [patient_id]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: patient_name
+          from: prop__name
+        # FK column: resolved by following the labeled reference edge
+        # patient.prop__doctor_id → doctor.record_id
+        - name: doctor_fk
+          fk:
+            to: dim_doctor      # the OUTPUT table that holds the target dimension
+            via: reference      # pathfind along the sidecar's 'references' annotation
+            # target_key: record_id   ← default; use 'presentation_id' for surrogate keys

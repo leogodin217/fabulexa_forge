@@ -1,0 +1,13 @@
+seed: 4
+operations:
+  - kind: drop_events
+    name: drop_name_events
+    target:
+      table: history
+      where: { property: name }
+    amount: { count: 1 }
+    placement:
+      kind: clustered_temporal
+      column: sim_time
+      clusters: 1
+      width: 1

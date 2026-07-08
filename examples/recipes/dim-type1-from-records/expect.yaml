@@ -1,0 +1,8 @@
+tables:
+  dim_doctor:
+    columns: [doctor_id, name]
+    row_count: 1
+    contains_rows:
+      # d001 — the only doctor record; name from records__doctor.prop__name
+      - doctor_id: d001
+        name: Dr. Carter

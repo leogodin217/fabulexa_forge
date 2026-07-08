@@ -1,0 +1,59 @@
+# Recipe: derived-elapsed
+# ============================================================
+# Demonstrates the elapsed derived column: a time delta computed
+# ACROSS two correlated rows — the duration between one event and a
+# counterpart event on the same entity.
+#
+# Use cases:
+#   - Length of stay (admission → discharge)
+#   - Time-to-resolution (opened → closed)
+#   - Lead time between two lifecycle milestones
+#
+# Here each output row is a discharge event (source.value filters the
+# history_point grain to status = discharged). The elapsed column reaches
+# back to that patient's admission (status = pending) and measures the gap.
+#
+# The elapsed derived column:
+#   correlate_on: the base-layer column linking the two rows (record_id)
+#   other_where:  predicate selecting the COUNTERPART event row
+#   start_source: the sim_time column on the counterpart (interval start)
+#   end_source:   the sim_time column on THIS row (interval end)
+#   unit:         minutes | seconds | hours
+# The counterpart is resolved as MIN(start_source) per correlate_on group —
+# the earliest matching event — so the join never fans out.
+#
+# Fixture world (recipe emit):
+#   history — p001: pending@1*DAY, active@2*DAY, discharged@3*DAY
+#             p002: pending@2*DAY (never discharged)
+#
+# Output:
+#   fact_length_of_stay — 1 row (only p001 was discharged)
+#     stay_hours = (3*DAY - 1*DAY) / 1 hour = 48
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_length_of_stay
+      role: fact
+      source:
+        grain: history_point
+        kind: patient
+        property: status
+        value: discharged      # one output row per discharge event
+      key: [patient_id]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: discharged_at
+          from: sim_time
+        # elapsed: hours from the patient's admission (pending) to this discharge.
+        - name: stay_hours
+          derived:
+            elapsed:
+              correlate_on: record_id        # same patient
+              other_where:
+                value: pending               # the admission event
+              start_source: sim_time         # admission sim_time
+              end_source: sim_time           # discharge sim_time (this row)
+              unit: hours

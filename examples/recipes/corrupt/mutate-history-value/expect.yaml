@@ -1,0 +1,11 @@
+defect_counts:
+  case_drift: 1
+
+impact_union:
+  - C6
+
+contains_defects:
+  - class: case_drift
+    rule: mutate_name_anchor
+    impact: [C6]
+    location.table: history

@@ -1,0 +1,35 @@
+# Recipe: fact-from-history
+# ============================================================
+# Demonstrates how to build a fact table from a history_point
+# grain — one row per (kind, record_id, property, sim_time) event.
+#
+# history_point grain reads directly from the `history` table and
+# filters to the named property. Each distinct (record_id, sim_time)
+# in the history table for this property becomes one fact row.
+#
+# Fixture world (recipe emit):
+#   history — 4 rows of patient.status changes:
+#     patient p001: status at t=1*DAY/2024-01-02 (pending), t=2*DAY/2024-01-03 (active), t=3*DAY/2024-01-04 (discharged)
+#     patient p002: status at t=2*DAY/2024-01-03 (pending)
+#
+# Output:
+#   fact_status_event — one row per history status-change event (4 rows total)
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_status_event
+      role: fact
+      source:
+        grain: history_point   # one row per (record_id, sim_time) history entry
+        kind: patient
+        property: status       # filter to the 'status' property in history
+      key: [patient_id, event_time]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: event_time
+          from: sim_time
+        - name: status_value
+          from: value

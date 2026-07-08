@@ -1,0 +1,25 @@
+seed: 501
+operations:
+  # overlap extends an earlier interval's coverage past its successor's join
+  # -- membership__actor__oncall's two adjacent-interval timelines (a002,
+  # a003) each contribute one pair; the rewritten predecessor now overlaps
+  # its successor's join time, an SCD-2-rebuilt-wrong defect.
+  - kind: distort_intervals
+    name: overlap_oncall
+    mode: overlap
+    target: { table: membership__actor__oncall }
+    amount: { rate: 1.0 }
+
+  # gap ends a covered interval early, opening a coverage hole before the
+  # member's next (or final) join -- a lost leave/join-coverage defect.
+  # Its population resolves against the overlap op's *output*, not the
+  # source: overlap's rewrite widens each pair's earlier row (a002's and
+  # a003's first row) enough that it newly clears the gap duration
+  # threshold too, so gap's population is 4 rows here, not the 2 the
+  # source alone would offer (a002's second row, a004's row) --
+  # DD's composition rule made concrete within one recipe.
+  - kind: distort_intervals
+    name: gap_oncall
+    mode: gap
+    target: { table: membership__actor__oncall }
+    amount: { rate: 1.0 }

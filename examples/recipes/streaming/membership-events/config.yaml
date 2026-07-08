@@ -1,0 +1,40 @@
+# Recipe: streaming / membership-events
+# ============================================================
+# Stream a collection (membership) property as an append-only event log.
+#
+# `content: membership-events` selects a different source from state-changes:
+# the materialized membership__<owner>__<property> interval table, NOT history.
+# Each interval row is unpivoted into events:
+#   join  — at joined_sim_time (always)
+#   leave — at left_sim_time (only when the element has left; an interval still
+#           open at the slice boundary, left_sim_time NULL, emits a join only —
+#           no synthetic leave is fabricated)
+#
+# Both join and leave carry a full `after` image (it is a log, not an upsert
+# stream, so a leave is not a key-only tombstone — it carries what left). The
+# message key is the owner's record_id, so all of one collection's events share
+# a key and stay ordered together.
+#
+# `fields` names bare element-schema fields carried in the payload:
+#   - a scalar field f    -> elem__<f>            (priority -> elem__priority)
+#   - a reference field f -> member__<f>__kind / member__<f>__id
+#                            (patient -> member__patient__kind / __id)
+#
+# Fixture world (recipe emit):
+#   membership__queue__waiters on owner q001 —
+#     p001 priority 2: joined@1d, left@2d   (closed interval -> join + leave)
+#     p002 priority 1: joined@2d, left NULL (open interval   -> join only)
+#   The leave of p001 coincides with the join of p002 at 2d; the canonical order
+#   ranks the join (event_class 0) before the leave (event_class 1).
+#
+# Output (one queue__waiters.jsonl stream, global seq order):
+#   seq 1  join  q001  after {patient: p001, priority: 2}   @2024-01-02
+#   seq 2  join  q001  after {patient: p002, priority: 1}   @2024-01-03
+#   seq 3  leave q001  after {patient: p001, priority: 2}   @2024-01-03
+
+content: membership-events
+
+memberships:
+  - owner_kind: queue
+    property: waiters
+    fields: [patient, priority]   # bare element-schema names; the sidecar maps each

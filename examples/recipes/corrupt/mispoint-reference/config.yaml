@@ -1,0 +1,8 @@
+seed: 1
+operations:
+  - kind: mispoint_reference
+    name: mispoint_appointment_doctor
+    target:
+      table: membership__actor__appointments
+      columns: [member__doctor__id]
+    amount: { rate: 1.0 }

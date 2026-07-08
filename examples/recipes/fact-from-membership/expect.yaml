@@ -1,0 +1,9 @@
+tables:
+  fact_visits:
+    columns: [patient_id, joined_sim_time, slot]
+    row_count: 1
+    contains_rows:
+      # p001 in a morning visit slot; joined at 2*DAY = 172800000000000 ns
+      - patient_id: p001
+        joined_sim_time: 172800000000000
+        slot: morning

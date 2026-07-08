@@ -1,0 +1,44 @@
+# StreamConfig — retail bundle, mixer smoke test (<kind>_type sub-type routing)
+# ============================================================
+# Drives `fabexport mixer` / `fabexport stream` over the retail emit at
+# docs/examples/retail/bundle/.
+#
+# Sub-typing is driven by the `<kind>_type` discriminator domain in enum_domains,
+# NOT by record_roles. A kind whose `<kind>_type` domain is non-empty is sub-typed:
+# its routing leaf (`route_table`, the Layer-A attribute) is the discriminator value
+# — one leaf per declared sub-type, not the bare kind. A kind with no `<kind>_type`
+# domain is not sub-typed: its route_table is the kind itself.
+#
+# Retail discriminator domains (enum_domains) -> the route_table leaves each kind emits:
+#   actor:  actor_type = [customer]                 -> sub-typed -> `customer`
+#   entity: entity_type = [product, infrastructure] -> sub-typed -> `product`, `infrastructure`
+#   journey_instance: (no journey_instance_type)    -> not sub-typed -> `journey_instance`
+#
+# The Layer-B `topic_template` renders each leaf into the Kafka topic name. With the
+# `retail.{route_table}` policy below the topic set is FOUR topics:
+#   retail.customer         (actor; its single declared sub-type)
+#   retail.product          (entity sub-type)
+#   retail.infrastructure   (entity sub-type)
+#   retail.journey_instance (not sub-typed)
+#
+# NOTE — entity splits into product + infrastructure because `entity_type` has domain
+# [product, infrastructure]; sub-typing follows that discriminator domain regardless of
+# entity's bare-string warehouse role in record_roles. To stream only one entity
+# sub-type, scope it with `types: [product]` (selection is valid on any sub-typed kind).
+#
+# Anchor resolves from the sidecar runtime (start 2022-03-01, UTC). Bootstrap is
+# supplied at the CLI (`--bootstrap-servers localhost:9092`).
+
+content: state-changes
+
+kinds:
+  - kind: actor             # actor_type=[customer] -> sub-typed -> route_table = `customer`
+    types: [customer]       # explicit sub-type selection (the only declared value)
+    properties: [tier, segment, total_purchases]
+  - kind: entity            # entity_type=[product,infrastructure] -> splits into both topics
+    properties: [category, price, status]
+  - kind: journey_instance  # no <kind>_type domain -> not sub-typed -> route_table = `journey_instance`
+    properties: [current_state, complete]
+
+routing:
+  topic_template: "retail.{route_table}"

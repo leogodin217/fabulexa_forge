@@ -1,0 +1,40 @@
+# Recipe: source-junction-from-membership
+# ============================================================
+# The JUNCTION genre: every `membership__<K>__<p>` table exports
+# unconditionally as an operational association table, whatever the owner
+# kind's own genre (source.md § The junction render) — a faithful read of
+# the interval rows, no derivation.
+#
+# `exclude.kinds` narrows the bare dump down to the owner kind whose
+# membership table is under test (queue, owning membership__queue__waiters)
+# so this recipe's expect.yaml only has to declare the owner's own
+# reference-genre table plus the junction table itself — a membership
+# table's owner can never be excluded out from under it (exclude.kinds
+# would drop `queue_waiters` right along with `queue`; see
+# `source-exclude-kind`).
+#
+# Table naming: the default output name is `<K>_<p>` — owner kind + member
+# property, e.g. `queue_waiters` for `membership__queue__waiters`.
+#
+# Junction column shape (source.md § The junction render):
+#   <K>_id     — record_id (the owner), e.g. queue_id
+#   joined_at  — joined_sim_time, wallclock TIMESTAMP
+#   left_at    — left_sim_time, wallclock TIMESTAMP; null while the
+#                membership is still open at the slice boundary
+#   <f>        — elem__<f> scalar element-slot fields, prefix-stripped
+#   <f>_kind / <f>_id — member__<f>__kind / __id reference fields
+#
+# Fixture world (recipe emit):
+#   membership__queue__waiters — 2 waiter intervals on owner q001:
+#     p001 priority 2: joined@1d, left@2d   (a CLOSED interval)
+#     p002 priority 1: joined@2d, left NULL (an OPEN interval — still waiting)
+#
+# Output:
+#   queue_waiters — 2 rows: one with left_at set, one with left_at null —
+#                   the faithful open/closed distinction, never fabricated.
+
+mode: source
+
+source:
+  exclude:
+    kinds: [patient, doctor, staff, admission]

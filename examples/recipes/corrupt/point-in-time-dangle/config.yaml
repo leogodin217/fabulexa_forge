@@ -1,0 +1,9 @@
+seed: 1
+operations:
+  - kind: mispoint_reference
+    name: late_doctor_on_appointment
+    target:
+      table: membership__actor__appointments
+      columns: [member__doctor__id]
+    amount: { rate: 1.0 }
+    constraint: created_after_reference

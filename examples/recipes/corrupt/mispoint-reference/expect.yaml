@@ -1,0 +1,11 @@
+defect_counts:
+  mispointed_reference: 1
+
+impact_union: []
+
+contains_defects:
+  - class: mispointed_reference
+    rule: mispoint_appointment_doctor
+    impact: [beyond-c1-c12]
+    location.table: membership__actor__appointments
+    location.column: member__doctor__id

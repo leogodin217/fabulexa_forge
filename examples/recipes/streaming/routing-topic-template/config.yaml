@@ -1,0 +1,30 @@
+# Recipe: streaming / routing-topic-template
+# ============================================================
+# Customise topic names with `topic_template` — literal text plus placeholders.
+#
+# The template is rendered per event via str.format against the event's route
+# attributes. Placeholders: {route_table} (the leaf — sub-type for a sub-typed
+# kind, else the kind), {kind} (always present), {sub_type} (sub-typed kinds
+# only). Literal text outside the braces passes through verbatim, so a prefix
+# namespaces every topic.
+#
+# Here `cdc.{route_table}` prefixes each leaf topic, writing cdc.nurse.jsonl and
+# cdc.physician.jsonl. (Two distinct route attributes that render to the SAME
+# name would deterministically merge into one topic — e.g. `{kind}` would fold
+# both sub-types back into a single `staff` topic.)
+#
+# Fixture world (recipe emit):
+#   records__staff — s001 (nurse), s002 (physician); one `c` each.
+#
+# Output — leaf topics under a literal prefix, global seq across the run:
+#   cdc.nurse.jsonl       c s001  after {name: Nora Vega}
+#   cdc.physician.jsonl   c s002  after {name: Owen Reed}
+
+content: state-changes
+
+routing:
+  topic_template: "cdc.{route_table}"   # literal prefix + the leaf placeholder
+
+kinds:
+  - kind: staff
+    properties: [name]

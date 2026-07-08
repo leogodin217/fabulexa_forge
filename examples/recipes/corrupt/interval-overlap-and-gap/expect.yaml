@@ -1,0 +1,18 @@
+defect_counts:
+  overlapping_interval: 2
+  interval_gap: 4
+
+impact_union: []
+
+contains_defects:
+  - class: overlapping_interval
+    rule: overlap_oncall
+    impact: [beyond-c1-c12]
+    location.table: membership__actor__oncall
+    location.column: left_sim_time
+
+  - class: interval_gap
+    rule: gap_oncall
+    impact: [beyond-c1-c12]
+    location.table: membership__actor__oncall
+    location.column: left_sim_time

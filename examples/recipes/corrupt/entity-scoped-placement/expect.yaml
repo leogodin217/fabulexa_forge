@@ -1,0 +1,12 @@
+defect_counts:
+  missing_value: 1
+
+impact_union:
+  - C6
+
+contains_defects:
+  - class: missing_value
+    rule: null_one_scoped_entity_name
+    impact: [C6]
+    location.table: records__actor
+    location.column: prop__name

@@ -1,0 +1,20 @@
+tables:
+  dim_doctor:
+    columns: [doctor_id, name]
+    row_count: 1
+    contains_rows:
+      - doctor_id: d001
+        name: Dr. Carter
+
+  dim_patient:
+    columns: [patient_id, patient_name, doctor_fk]
+    row_count: 2
+    contains_rows:
+      # p001 Alice — prop__doctor_id = d001; FK resolves to doctor record_id d001
+      - patient_id: p001
+        patient_name: Alice
+        doctor_fk: d001
+      # p002 Bob — also references d001
+      - patient_id: p002
+        patient_name: Bob
+        doctor_fk: d001

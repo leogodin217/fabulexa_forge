@@ -1,0 +1,10 @@
+seed: 11
+operations:
+  - kind: mutate_cells
+    name: resample_name_anchor
+    target:
+      table: history
+      where: { property: name, sim_time: "90" }
+      columns: [value]
+    amount: { rate: 1.0 }
+    mutation: { kind: resample }

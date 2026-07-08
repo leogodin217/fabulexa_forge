@@ -1,0 +1,39 @@
+# format: debezium -> the harness runs `--fmt debezium` and matches predicates
+# against the envelope ({schema, payload} unwrapped to the payload).
+format: debezium
+
+streams:
+  # patient — the upsert log: c + u, full after-image, before always null
+  patient:
+    event_count: 4
+    contains_events:
+      # create — before null; after carries the creation-seed value; the source
+      # masquerade and the anchor-derived ts_ms (created p001 at +1 day)
+      - op: c
+        before: null
+        after.record_id: p001
+        after.prop__status: pending
+        source.connector: postgres
+        source.name: hospital
+        source.table: patient          # the leaf source table (the kind)
+        ts_ms: 1704153600000           # 2024-01-02T00:00:00Z in epoch-ms
+        source.ts_ms: 1704153600000    # source.ts_ms == payload.ts_ms (no now())
+      # update — type-2 status advances; still an upsert (before null)
+      - op: u
+        before: null
+        after.record_id: p001
+        after.prop__status: discharged
+        source.table: patient
+  # admission — identity only; the delete shows the key-only before-image
+  admission:
+    event_count: 3
+    contains_events:
+      - op: c
+        before: null
+        after.record_id: a001
+        source.table: admission
+      # delete — after null, before the record's key alone (REPLICA IDENTITY DEFAULT)
+      - op: d
+        after: null
+        before.record_id: a002
+        source.table: admission

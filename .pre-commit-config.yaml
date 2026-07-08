@@ -1,0 +1,30 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.15
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # Strict mypy over src. Runs the whole check on any .py / pyproject change
+  # rather than just staged files, because type-checking needs full package
+  # context. Runs through `uv run --frozen` so it resolves this repo's own
+  # standalone .venv (the boundary) and does not rewrite uv.lock on each run
+  # (which would trip pre-commit's "files were modified by this hook" check).
+  # pytest is intentionally not gated here — it stays in `make check`.
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy (strict, src)
+        entry: uv run --frozen mypy src
+        language: system
+        pass_filenames: false
+        files: \.(py|toml)$

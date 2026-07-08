@@ -1,0 +1,10 @@
+defect_counts:
+  dropped_event: 1
+
+impact_union: []
+
+contains_defects:
+  - class: dropped_event
+    rule: drop_name_events
+    impact: [beyond-c1-c12]
+    location.table: history

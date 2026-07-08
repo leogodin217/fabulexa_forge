@@ -1,0 +1,13 @@
+seed: 3
+operations:
+  - kind: null_cells
+    name: mnar_null_active_actor_name
+    target:
+      table: records__actor
+      columns: [prop__name]
+    amount: { rate: 1.0 }
+    placement:
+      kind: correlated
+      column: prop__status
+      value: active
+      weight: 5.0

@@ -1,0 +1,21 @@
+tables:
+  dim_staff:
+    columns: [staff_id, name]
+    row_count: 2
+    contains_rows:
+      - staff_id: s001
+        name: Nora Vega
+      - staff_id: s002
+        name: Owen Reed
+
+  dim_patient:
+    columns: [patient_id, patient_name, primary_staff_fk]
+    row_count: 2
+    contains_rows:
+      # FK follows the prop__primary_staff_id edge (not prop__backup_staff_id)
+      - patient_id: p001
+        patient_name: Alice
+        primary_staff_fk: s001
+      - patient_id: p002
+        patient_name: Bob
+        primary_staff_fk: s002

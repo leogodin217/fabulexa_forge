@@ -1,0 +1,35 @@
+# Recipe: streaming / state-changes
+# ============================================================
+# The canonical change-data-capture (CDC) stream: replay a record kind's
+# lifecycle as one event per state change, newest state reconstructed in full.
+#
+# `fabexport stream` emits, per record:
+#   c (create) — once, at created_sim_time
+#   u (update) — once per distinct history timestamp strictly after creation
+#   d (delete) — once, at deactivated_at (only if the record was deactivated)
+#
+# Each event carries an `after` image: the whole row reconstructed as of that
+# event's instant. The message key is always the record's natural id.
+#
+# Type-1 vs type-2 properties (the teaching point):
+#   - prop__status is history_tracked (type-2) — it changes over time, so each
+#     distinct change spawns a `u` and the after-image carries the as-of value.
+#   - prop__name is NOT history-tracked (type-1) — it has no history, so it never
+#     spawns a `u`; it simply rides every event at the record's current value.
+#
+# Fixture world (recipe emit):
+#   records__patient — p001 status pending@1d -> active@2d -> discharged@3d (Alice)
+#                      p002 status pending@2d (Bob)
+#   Neither patient is deactivated, so this stream has no `d` events.
+#
+# Output (one patient.jsonl stream, global seq order):
+#   seq 1  c p001  after {status: pending,    name: Alice}
+#   seq 2  c p002  after {status: pending,    name: Bob}
+#   seq 3  u p001  after {status: active,     name: Alice}
+#   seq 4  u p001  after {status: discharged, name: Alice}
+
+content: state-changes
+
+kinds:
+  - kind: patient
+    properties: [status, name]   # bare prop__ names; the sidecar classifies each

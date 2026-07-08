@@ -1,0 +1,12 @@
+defect_counts:
+  near_duplicate_row: 1
+
+impact_union:
+  - C6
+  - C9
+
+contains_defects:
+  - class: near_duplicate_row
+    rule: duplicate_alice_jittered
+    impact: [C6, C9]
+    location.table: records__actor

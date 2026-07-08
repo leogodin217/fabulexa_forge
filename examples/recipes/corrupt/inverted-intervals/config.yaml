@@ -1,0 +1,10 @@
+seed: 502
+operations:
+  # left_before_join swaps a closed interval's joined_sim_time and
+  # left_sim_time -- the C10 timing break: the member's own recorded
+  # interval now ends before it begins.
+  - kind: distort_intervals
+    name: invert_oncall
+    mode: left_before_join
+    target: { table: membership__actor__oncall }
+    amount: { rate: 1.0 }

@@ -1,0 +1,13 @@
+seed: 13
+operations:
+  # Split-brain duplicate: the pinned actor a001 is copied once, its name
+  # typo'd on the copy -- two rows now disagree on the same identity. The
+  # tracked name column now fails its round-trip (C6), and the copied id is
+  # pinned (C9).
+  - kind: duplicate_rows
+    name: split_brain_actor_name
+    target:
+      table: records__actor
+      columns: [prop__name]
+    amount: { count: 1 }
+    mutation: { kind: typo }

@@ -1,0 +1,11 @@
+defect_counts:
+  point_in_time_dangling_reference: 1
+
+impact_union: []
+
+contains_defects:
+  - class: point_in_time_dangling_reference
+    rule: late_doctor_on_appointment
+    impact: [beyond-c1-c12]
+    location.table: membership__actor__appointments
+    location.column: member__doctor__id

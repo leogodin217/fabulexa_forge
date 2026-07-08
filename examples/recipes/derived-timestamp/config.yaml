@@ -1,0 +1,49 @@
+# Recipe: derived-timestamp
+# ============================================================
+# Demonstrates the timestamp derived column: convert a raw sim_time
+# (nanosecond offset) into a wallclock TIMESTAMP through the effective
+# anchor.
+#
+# The base layer measures time as `sim_time` — an integer nanosecond
+# offset from a run anchor. The timestamp derived column renders that
+# offset as a real calendar timestamp using the emit's `runtime` anchor
+# (here timezone=UTC, start=2024-01-01T00:00:00). To override the origin
+# or zone, add a top-level `rebase:` block (see the rebase-timestamp recipe).
+#
+# The timestamp derived column:
+#   source: the base-layer sim_time column to convert (e.g. sim_time)
+#
+# Fixture world (recipe emit):
+#   runtime anchor — 2024-01-01T00:00:00 UTC
+#   history        — patient status changes at 1/2/3*DAY ns offsets
+#
+# Output:
+#   fact_status_event — 4 rows; event_ts is the wallclock instant of each event
+#     1*DAY → 2024-01-02 00:00:00
+#     2*DAY → 2024-01-03 00:00:00
+#     3*DAY → 2024-01-04 00:00:00
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_status_event
+      role: fact
+      source:
+        grain: history_point
+        kind: patient
+        property: status
+      key: [patient_id, event_time]
+      columns:
+        - name: patient_id
+          from: record_id
+        # The raw nanosecond offset, kept alongside for comparison.
+        - name: event_time
+          from: sim_time
+        - name: status_value
+          from: value
+        # timestamp: render sim_time as a wallclock TIMESTAMP via the anchor.
+        - name: event_ts
+          derived:
+            timestamp:
+              source: sim_time

@@ -1,0 +1,13 @@
+seed: 7
+operations:
+  - kind: duplicate_rows
+    name: duplicate_alice
+    target:
+      table: records__actor
+      where: { record_id: a001 }
+    amount: { count: 1 }
+
+  - kind: schema_drift
+    name: rename_name_column
+    target: { table: records__actor }
+    rename_to: { prop__name: prop__full_name }

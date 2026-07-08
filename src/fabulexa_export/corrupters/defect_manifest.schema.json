@@ -1,0 +1,273 @@
+{
+  "$defs": {
+    "CellLocator": {
+      "additionalProperties": false,
+      "description": "Locates a defect at single-cell granularity (a nulled/overwritten cell).",
+      "properties": {
+        "column": {
+          "title": "Column",
+          "type": "string"
+        },
+        "kind": {
+          "const": "cell",
+          "title": "Kind",
+          "type": "string"
+        },
+        "row": {
+          "$ref": "#/$defs/RowRef"
+        },
+        "table": {
+          "title": "Table",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "table",
+        "row",
+        "column"
+      ],
+      "title": "CellLocator",
+      "type": "object"
+    },
+    "ColumnLocator": {
+      "additionalProperties": false,
+      "description": "Locates a defect at whole-column granularity (dropped/renamed/retyped).",
+      "properties": {
+        "column": {
+          "title": "Column",
+          "type": "string"
+        },
+        "kind": {
+          "const": "column",
+          "title": "Kind",
+          "type": "string"
+        },
+        "table": {
+          "title": "Table",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "table",
+        "column"
+      ],
+      "title": "ColumnLocator",
+      "type": "object"
+    },
+    "DefectCounts": {
+      "additionalProperties": false,
+      "description": "Derived summary; must equal the aggregation of `defects`.\n\nby_class partitions defects -- each defect has exactly one class, so\nsum(by_class.values()) == len(defects). by_impact counts code\noccurrences: a defect with a multi-code impact (e.g. [\"C6\", \"C7\"]) adds +1\nto each code it names, so sum(by_impact.values()) >= len(defects).",
+      "properties": {
+        "by_class": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "By Class",
+          "type": "object"
+        },
+        "by_impact": {
+          "additionalProperties": {
+            "type": "integer"
+          },
+          "title": "By Impact",
+          "type": "object"
+        }
+      },
+      "required": [
+        "by_class",
+        "by_impact"
+      ],
+      "title": "DefectCounts",
+      "type": "object"
+    },
+    "DefectSource": {
+      "additionalProperties": false,
+      "description": "Stable identity of the input base emit this manifest describes.",
+      "properties": {
+        "base_format_version": {
+          "title": "Base Format Version",
+          "type": "integer"
+        },
+        "sidecar_sha256": {
+          "title": "Sidecar Sha256",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sidecar_sha256",
+        "base_format_version"
+      ],
+      "title": "DefectSource",
+      "type": "object"
+    },
+    "ManifestDefect": {
+      "additionalProperties": false,
+      "description": "A DefectRecord after the engine assigns its deterministic id.",
+      "properties": {
+        "class": {
+          "title": "Class",
+          "type": "string"
+        },
+        "defect_id": {
+          "title": "Defect Id",
+          "type": "string"
+        },
+        "impact": {
+          "items": {
+            "enum": [
+              "C6",
+              "C7",
+              "C9",
+              "C10",
+              "C11",
+              "C12",
+              "beyond-c1-c12"
+            ],
+            "type": "string"
+          },
+          "title": "Impact",
+          "type": "array"
+        },
+        "location": {
+          "discriminator": {
+            "mapping": {
+              "cell": "#/$defs/CellLocator",
+              "column": "#/$defs/ColumnLocator",
+              "row": "#/$defs/RowLocator"
+            },
+            "propertyName": "kind"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/ColumnLocator"
+            },
+            {
+              "$ref": "#/$defs/RowLocator"
+            },
+            {
+              "$ref": "#/$defs/CellLocator"
+            }
+          ],
+          "title": "Location"
+        },
+        "rule": {
+          "title": "Rule",
+          "type": "string"
+        }
+      },
+      "required": [
+        "class",
+        "rule",
+        "impact",
+        "location",
+        "defect_id"
+      ],
+      "title": "ManifestDefect",
+      "type": "object"
+    },
+    "RowLocator": {
+      "additionalProperties": false,
+      "description": "Locates a defect at whole-row granularity (an injected duplicate row).",
+      "properties": {
+        "kind": {
+          "const": "row",
+          "title": "Kind",
+          "type": "string"
+        },
+        "row": {
+          "$ref": "#/$defs/RowRef"
+        },
+        "table": {
+          "title": "Table",
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "table",
+        "row"
+      ],
+      "title": "RowLocator",
+      "type": "object"
+    },
+    "RowRef": {
+      "additionalProperties": false,
+      "description": "A base row's structural identity, as codec-text key/value pairs.",
+      "properties": {
+        "category": {
+          "enum": [
+            "records",
+            "history",
+            "membership"
+          ],
+          "title": "Category",
+          "type": "string"
+        },
+        "keys": {
+          "items": {
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "type": "array"
+          },
+          "title": "Keys",
+          "type": "array"
+        }
+      },
+      "required": [
+        "category",
+        "keys"
+      ],
+      "title": "RowRef",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "The full defect manifest serialized to defects.json.\n\nFields:\n    defect_manifest_version: Our schema version (independent of the base\n        format version), supplied by build_defect_manifest from the\n        module constant DEFECT_MANIFEST_VERSION -- a code constant, not a\n        caller input.\n    source: Identity of the input base emit.\n    config_fingerprint: SHA-256 of the canonicalized corrupter config.\n    code_version: The fabulexa-export package version string.\n    counts: Derived per-class and per-impact totals.\n    defects: The canonically ordered, id-assigned defect records.",
+  "properties": {
+    "code_version": {
+      "title": "Code Version",
+      "type": "string"
+    },
+    "config_fingerprint": {
+      "title": "Config Fingerprint",
+      "type": "string"
+    },
+    "counts": {
+      "$ref": "#/$defs/DefectCounts"
+    },
+    "defect_manifest_version": {
+      "title": "Defect Manifest Version",
+      "type": "integer"
+    },
+    "defects": {
+      "items": {
+        "$ref": "#/$defs/ManifestDefect"
+      },
+      "title": "Defects",
+      "type": "array"
+    },
+    "source": {
+      "$ref": "#/$defs/DefectSource"
+    }
+  },
+  "required": [
+    "defect_manifest_version",
+    "source",
+    "config_fingerprint",
+    "code_version",
+    "counts",
+    "defects"
+  ],
+  "title": "DefectManifest",
+  "type": "object"
+}

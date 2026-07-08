@@ -1,0 +1,14 @@
+streams:
+  patient:
+    event_count: 4
+    contains_events:
+      # rebased onto a 2030-06-01 Asia/Kolkata origin; the +05:30 offset is explicit
+      - seq: 1
+        op: c
+        record_id: p001
+        ts: "2030-06-02T00:00:00+05:30"
+      - seq: 4
+        op: u
+        record_id: p001
+        after.prop__status: discharged
+        ts: "2030-06-04T00:00:00+05:30"

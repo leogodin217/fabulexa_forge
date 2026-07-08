@@ -1,0 +1,690 @@
+"""FK labeled-edge pathfind for the dimensional exporter.
+
+Builds JOIN SQL fragments for two edge types:
+  - via: reference  — transitive equality joins along prop__<x> columns that
+                      carry a `references` annotation in the sidecar. Multi-hop.
+  - via: membership — locate the membership__<kind>__<property> table for the
+                      anchor kind, join on record_id + the where predicate,
+                      project member__<member_field>__id whose kind = dim's
+                      source kind.
+
+All functions are module-level for independent testability.
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from fabulexa_export.config.models import ColumnDecl, DimensionalConfig, TableDecl
+    from fabulexa_export.reader.sidecar import Sidecar
+
+from fabulexa_export.derivations.reference_resolution import (
+    _collect_reference_columns,
+    _find_all_reference_paths,
+    _path_hint_to_cols,
+    build_membership_edge_sql,
+    build_reference_path_sql,
+    get_fork_path_from_sidecar,
+)
+from fabulexa_export.errors import ExportError
+from fabulexa_export.reader.errors import TableNotFoundError
+
+# ---------------------------------------------------------------------------
+# FK target validation
+# ---------------------------------------------------------------------------
+
+
+def check_fk_target_is_dim(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    config: "DimensionalConfig",
+) -> "TableDecl":
+    """Enforce FkTargetIsDim: fk.to names a declared role='dim' table.
+
+    Args:
+        col_decl: The column declaration with fk set.
+        table_decl: The output table declaration (for error messages).
+        config: The dimensional config (to search declared tables).
+
+    Returns:
+        The target TableDecl.
+
+    Raises:
+        ExportError: fk.to does not name a declared dimension.
+    """
+    assert col_decl.fk is not None
+    to_name = col_decl.fk.to
+    for t in config.tables:
+        if t.name == to_name and t.role == "dim":
+            return t
+    raise ExportError(
+        f"FK target '{to_name}' on '{table_decl.name}.{col_decl.name}'"
+        " is not a declared dimension"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Reference FK SQL builder
+# ---------------------------------------------------------------------------
+
+
+def build_reference_fk_expr(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    anchor_kind: str,
+    anchor_alias: str,
+    target_kind: str,
+    sidecar: "Sidecar",
+    source_grain: str,
+) -> tuple[str, list[str]]:
+    """Build the SELECT expression + JOIN clauses for a via:reference FK column.
+
+    Composes the reference-path derivation: resolves the hop chain, calls
+    build_reference_path_sql to produce a subquery, and LEFT JOINs it on
+    record_id. The SELECT projects the derivation's `resolved` column aliased
+    to col_decl.name. Fan-out-free: the derivation guarantees at most one
+    resolved per anchor record_id.
+
+    For any non-records grain (history_point, history_interval, membership) the
+    reference chain starts from records__<anchor_kind> joined on record_id; only
+    a records grain carries the anchor's prop__ columns on the grain row. Rows
+    whose record_id has no matching records row emit NULL — the documented
+    non-records-grain FK limitation. Every emitted JOIN alias is namespaced by
+    the output column name, so multiple FK columns on one table never collide.
+
+    Args:
+        col_decl: The FK column declaration (fk.via == 'reference').
+        table_decl: The output table declaration (for error messages).
+        anchor_kind: The anchor grain's record kind.
+        anchor_alias: SQL alias for the grain's base table (e.g. "_grain").
+        target_kind: The dim's source kind (the FK lands here).
+        sidecar: The open emit's sidecar.
+        source_grain: The grain type ('records', 'history_point',
+            'history_interval', 'membership'); only 'records' skips the
+            preamble records JOIN.
+
+    Returns:
+        (select_expr, join_clauses) — insert join_clauses before the ORDER BY,
+        use select_expr in the SELECT list.
+
+    Raises:
+        ExportError: ReferencePathResolvable — no path, or ambiguous path.
+    """
+    assert col_decl.fk is not None
+
+    ref_map = _collect_reference_columns(sidecar)
+    path_hint = col_decl.fk.path
+    context_label = f"{table_decl.name}.{col_decl.name}"
+
+    if path_hint is not None:
+        hops = _path_hint_to_cols(path_hint, anchor_kind, sidecar, context_label)
+    else:
+        paths = _find_all_reference_paths(anchor_kind, target_kind, ref_map)
+        if not paths:
+            raise ExportError(
+                f"no reference path from '{anchor_kind}' to '{target_kind}'"
+                f" for '{context_label}'"
+            )
+        if len(paths) > 1:
+            raise ExportError(
+                f"ambiguous reference path from '{anchor_kind}' to '{target_kind}'"
+                f" for '{context_label}';"
+                " supply `path` (ordered prop__ columns)"
+            )
+        hops = paths[0]
+
+    alias_ns = f"_fk_{col_decl.name}"
+    fork_path = get_fork_path_from_sidecar(sidecar)
+
+    if col_decl.fk.target_key == "presentation_id":
+        # Derivation resolves to record_id; an extra join fetches presentation_id
+        deriv_sql = build_reference_path_sql(
+            sidecar=sidecar,
+            fork_path=fork_path,
+            anchor_kind=anchor_kind,
+            hop_columns=hops,
+            terminal_projection="record_id",
+        )
+        deriv_alias = f"{alias_ns}_rp"
+        rec_alias = f"{alias_ns}_rp_rec"
+        target_table = f"records__{target_kind}"
+        join_clauses = [
+            f'LEFT JOIN ({deriv_sql}) AS "{deriv_alias}"'
+            f' ON "{deriv_alias}"."record_id" = "{anchor_alias}"."record_id"',
+            f'LEFT JOIN "{target_table}" AS "{rec_alias}"'
+            f' ON "{rec_alias}"."record_id" = "{deriv_alias}"."resolved"',
+        ]
+        select_expr = f'"{rec_alias}"."presentation_id" AS "{col_decl.name}"'
+        return select_expr, join_clauses
+
+    deriv_sql = build_reference_path_sql(
+        sidecar=sidecar,
+        fork_path=fork_path,
+        anchor_kind=anchor_kind,
+        hop_columns=hops,
+        terminal_projection=col_decl.fk.target_key,
+    )
+    deriv_alias = f"{alias_ns}_rp"
+
+    join_clauses = [
+        f'LEFT JOIN ({deriv_sql}) AS "{deriv_alias}"'
+        f' ON "{deriv_alias}"."record_id" = "{anchor_alias}"."record_id"'
+    ]
+    select_expr = f'"{deriv_alias}"."resolved" AS "{col_decl.name}"'
+    return select_expr, join_clauses
+
+
+# ---------------------------------------------------------------------------
+# Membership FK SQL builder
+# ---------------------------------------------------------------------------
+
+
+def _find_membership_table(
+    anchor_kind: str,
+    property_hint: str | None,
+    sidecar: "Sidecar",
+    table_decl: "TableDecl",
+    col_decl: "ColumnDecl",
+) -> "tuple[str, str]":
+    """Locate the membership__<anchor_kind>__<property> table for an FK.
+
+    When property_hint is given, use it directly; otherwise infer from the
+    single collection-struct property owned by anchor_kind.
+
+    Args:
+        anchor_kind: The anchor grain's record kind.
+        property_hint: FK's property field, or None when to be inferred.
+        sidecar: The open emit's sidecar.
+        table_decl: The output table declaration (for error messages).
+        col_decl: The FK column declaration (for error messages).
+
+    Returns:
+        (table_name, property_name) — resolved membership table name and property.
+
+    Raises:
+        ExportError: MembershipEdgeResolvable — the table cannot be resolved uniquely.
+    """
+    prefix = f"membership__{anchor_kind}__"
+    matching: list[str] = []
+    for t in sidecar.tables():
+        if t.name.startswith(prefix):
+            matching.append(t.name)
+
+    if property_hint is not None:
+        expected = f"{prefix}{property_hint}"
+        if expected not in matching:
+            raise ExportError(
+                f"membership FK '{table_decl.name}.{col_decl.name}' is unresolvable:"
+                f" table '{expected}' not found in emit"
+            )
+        return expected, property_hint
+
+    if not matching:
+        raise ExportError(
+            f"membership FK '{table_decl.name}.{col_decl.name}' is unresolvable:"
+            f" no membership table for kind '{anchor_kind}' found in emit"
+        )
+    if len(matching) > 1:
+        raise ExportError(
+            f"membership FK '{table_decl.name}.{col_decl.name}' is unresolvable:"
+            f" kind '{anchor_kind}' owns multiple collection-struct properties"
+            f" {[t[len(prefix) :] for t in matching]};"
+            " supply 'property' to disambiguate"
+        )
+    prop_name = matching[0][len(prefix) :]
+    return matching[0], prop_name
+
+
+def _find_member_field(
+    mem_table_name: str,
+    member_field_hint: str | None,
+    sidecar: "Sidecar",
+    table_decl: "TableDecl",
+    col_decl: "ColumnDecl",
+) -> str:
+    """Resolve the member_field (the reference field) on the membership table.
+
+    When member_field_hint is given, verify it exists; otherwise infer from
+    the single member__<f>__id column on the table.
+
+    Args:
+        mem_table_name: The resolved membership table name.
+        member_field_hint: The FK's member_field, or None when to be inferred.
+        sidecar: The open emit's sidecar.
+        table_decl: The output table declaration (for error messages).
+        col_decl: The FK column declaration (for error messages).
+
+    Returns:
+        The member field name (the <f> in member__<f>__id).
+
+    Raises:
+        ExportError: MembershipEdgeResolvable — field absent or ambiguous.
+    """
+    try:
+        cols = sidecar.columns(mem_table_name)
+    except Exception:
+        raise ExportError(
+            f"membership FK '{table_decl.name}.{col_decl.name}' is unresolvable:"
+            f" cannot read columns for '{mem_table_name}'"
+        )
+
+    ref_fields: list[str] = []
+    for c in cols:
+        if c.name.startswith("member__") and c.name.endswith("__id"):
+            # member__<f>__id -> <f>
+            inner = c.name[len("member__") : -len("__id")]
+            ref_fields.append(inner)
+
+    if member_field_hint is not None:
+        if member_field_hint not in ref_fields:
+            raise ExportError(
+                f"membership FK '{table_decl.name}.{col_decl.name}' is unresolvable:"
+                f" member_field '{member_field_hint}' not found on '{mem_table_name}'"
+            )
+        return member_field_hint
+
+    if not ref_fields:
+        raise ExportError(
+            f"membership FK '{table_decl.name}.{col_decl.name}' is unresolvable:"
+            f" no member__<f>__id column found on '{mem_table_name}'"
+        )
+    if len(ref_fields) > 1:
+        raise ExportError(
+            f"membership FK '{table_decl.name}.{col_decl.name}' is unresolvable:"
+            f" multiple reference fields {ref_fields} on '{mem_table_name}';"
+            " supply 'member_field' to disambiguate"
+        )
+    return ref_fields[0]
+
+
+def _check_where_columns_exist(
+    where: dict[str, str],
+    mem_table_name: str,
+    sidecar: "Sidecar",
+    table_decl: "TableDecl",
+    col_decl: "ColumnDecl",
+) -> None:
+    """Verify that all where predicate columns are elem__ columns on the table.
+
+    Args:
+        where: The FK's where dict (col_name -> value).
+        mem_table_name: The resolved membership table name.
+        sidecar: The open emit's sidecar.
+        table_decl: The output table declaration (for error messages).
+        col_decl: The FK column declaration (for error messages).
+
+    Raises:
+        ExportError: MembershipEdgeResolvable — a where column is not an elem__ column.
+    """
+    try:
+        cols = sidecar.columns(mem_table_name)
+    except TableNotFoundError as exc:
+        raise ExportError(
+            f"membership FK '{table_decl.name}.{col_decl.name}' is unresolvable:"
+            f" cannot read columns for '{mem_table_name}'"
+        ) from exc
+    col_names = {c.name for c in cols}
+    for where_col in where:
+        if where_col not in col_names or not where_col.startswith("elem__"):
+            raise ExportError(
+                f"membership FK '{table_decl.name}.{col_decl.name}' is unresolvable:"
+                f" where column '{where_col}' is not an elem__ column"
+                f" on '{mem_table_name}'"
+            )
+
+
+def build_membership_fk_expr_on_records(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    anchor_kind: str,
+    target_kind: str,
+    sidecar: "Sidecar",
+) -> tuple[str, list[str]]:
+    """Build SELECT expr + JOIN clauses for a via:membership FK (records/history grain).
+
+    Composes the membership-edge derivation: resolves membership table and
+    member_field, calls build_membership_edge_sql to produce a subquery, and
+    LEFT JOINs it on record_id. The SELECT projects `resolved` (the
+    member__<field>__id) aliased to col_decl.name.
+
+    Args:
+        col_decl: The FK column declaration (fk.via == 'membership').
+        table_decl: The output table declaration (for error messages).
+        anchor_kind: The anchor grain's record kind.
+        target_kind: The dim's source kind.
+        sidecar: The open emit's sidecar.
+
+    Returns:
+        (select_expr, join_clauses).
+
+    Raises:
+        ExportError: MembershipEdgeResolvable.
+    """
+    assert col_decl.fk is not None
+    fk = col_decl.fk
+    where = fk.where or {}
+
+    mem_table_name, prop_name = _find_membership_table(
+        anchor_kind, fk.property, sidecar, table_decl, col_decl
+    )
+    member_field = _find_member_field(
+        mem_table_name, fk.member_field, sidecar, table_decl, col_decl
+    )
+    _check_where_columns_exist(where, mem_table_name, sidecar, table_decl, col_decl)
+
+    fork_path = get_fork_path_from_sidecar(sidecar)
+
+    deriv_sql = build_membership_edge_sql(
+        sidecar=sidecar,
+        fork_path=fork_path,
+        owner_kind=anchor_kind,
+        property_name=prop_name,
+        member_field=member_field,
+        member_kind=target_kind,
+        where_predicate=dict(where),
+    )
+    mem_alias = f"_fk_{col_decl.name}_mem"
+
+    join_clause = (
+        f'LEFT JOIN ({deriv_sql}) AS "{mem_alias}"'
+        f' ON "{mem_alias}"."record_id" = "_grain"."record_id"'
+    )
+
+    if fk.target_key == "presentation_id":
+        rec_alias = f"_fk_{col_decl.name}_mem_rec"
+        target_table = f"records__{target_kind}"
+        rec_join = (
+            f'LEFT JOIN "{target_table}" AS "{rec_alias}"'
+            f' ON "{rec_alias}"."record_id" = "{mem_alias}"."resolved"'
+        )
+        select_expr = f'"{rec_alias}"."presentation_id" AS "{col_decl.name}"'
+        return select_expr, [join_clause, rec_join]
+
+    select_expr = f'"{mem_alias}"."resolved" AS "{col_decl.name}"'
+    return select_expr, [join_clause]
+
+
+def build_membership_fk_expr_on_membership(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    anchor_kind: str,
+    target_kind: str,
+    sidecar: "Sidecar",
+) -> tuple[str, list[str]]:
+    """Build SELECT expr for a via:membership FK when the grain IS a membership grain.
+
+    The binding is already the grain — project member__<member_field>__id directly
+    from the grain surface (already narrowed by source.where).
+
+    Args:
+        col_decl: The FK column declaration (fk.via == 'membership').
+        table_decl: The output table declaration (for error messages).
+        anchor_kind: The anchor grain's record kind (the membership owner kind).
+        target_kind: The dim's source kind.
+        sidecar: The open emit's sidecar.
+
+    Returns:
+        (select_expr, []) — no JOIN needed; grain is already the membership table.
+
+    Raises:
+        ExportError: MembershipEdgeResolvable.
+    """
+    assert col_decl.fk is not None
+    fk = col_decl.fk
+    where = fk.where or {}
+
+    mem_table_name, _prop = _find_membership_table(
+        anchor_kind, fk.property, sidecar, table_decl, col_decl
+    )
+    member_field = _find_member_field(
+        mem_table_name, fk.member_field, sidecar, table_decl, col_decl
+    )
+    if where:
+        _check_where_columns_exist(where, mem_table_name, sidecar, table_decl, col_decl)
+
+    id_col = f"member__{member_field}__id"
+    kind_col = f"member__{member_field}__kind"
+
+    if fk.target_key == "presentation_id":
+        target_table = f"records__{target_kind}"
+        rec_alias = f"_fk_{col_decl.name}_mem_rec"
+        rec_join = (
+            f'LEFT JOIN "{target_table}" AS "{rec_alias}"'
+            f' ON "{rec_alias}"."record_id" = "_grain"."{id_col}"'
+            f' AND "_grain"."{kind_col}" = \'{target_kind}\''
+        )
+        select_expr = f'"{rec_alias}"."presentation_id" AS "{col_decl.name}"'
+        return select_expr, [rec_join]
+
+    # On a membership grain, filter by target_kind inline in a CASE/NULLIF
+    select_expr = (
+        f"CASE WHEN \"{kind_col}\" = '{target_kind}'"
+        f' THEN "{id_col}" ELSE NULL END AS "{col_decl.name}"'
+    )
+    return select_expr, []
+
+
+# ---------------------------------------------------------------------------
+# Point-in-time membership FK SQL builder
+# ---------------------------------------------------------------------------
+
+
+def build_point_in_time_membership_fk_expr(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    anchor_kind: str,
+    target_kind: str,
+    sidecar: "Sidecar",
+) -> tuple[str, list[str]]:
+    """Build SELECT expr + JOIN clauses for a point-in-time via:membership FK.
+
+    The grain is neither the owner nor the member.  `fk.as_of` names the
+    grain column carrying firing time T; `fk.member_path` is the ordered
+    reference chain from the grain kind to the MEMBER identity.
+
+    The OWNER is the dim's source kind (`target_kind`).  The membership table
+    is `membership__<target_kind>__<property>`.
+
+    The correlated scalar subquery is DETERMINISTIC (ORDER BY joined_sim_time
+    DESC, record_id ASC LIMIT 1) — guarantees ≤1 result per grain row, no
+    fan-out.
+
+    Args:
+        col_decl: The FK column declaration (fk.via=='membership', fk.as_of set).
+        table_decl: The output table declaration (for error messages).
+        anchor_kind: The anchor grain's record kind.
+        target_kind: The dim's source kind (the OWNER kind in the membership).
+        sidecar: The open emit's sidecar.
+
+    Returns:
+        (select_expr, join_clauses) where join_clauses are the member-path
+        LEFT JOINs and select_expr is the deterministic correlated subquery.
+
+    Raises:
+        ExportError: Any structural assumption fails (missing column, table,
+            member_path unresolvable, etc.).
+    """
+    assert col_decl.fk is not None
+    fk = col_decl.fk
+    assert fk.as_of is not None
+    assert fk.member_path is not None
+
+    as_of = fk.as_of
+    context_label = f"{table_decl.name}.{col_decl.name}"
+
+    # --- Validate as_of column exists on the grain surface ---
+    grain_table = f"records__{anchor_kind}"
+    try:
+        grain_cols = sidecar.columns(grain_table)
+    except Exception:
+        raise ExportError(
+            f"point-in-time FK '{context_label}':"
+            f" kind '{anchor_kind}' has no records table"
+        )
+    grain_col_names = {c.name for c in grain_cols}
+    if as_of not in grain_col_names:
+        raise ExportError(
+            f"point-in-time FK '{context_label}':"
+            f" as_of column '{as_of}' not found on '{grain_table}'"
+        )
+
+    # --- Resolve member_path to get member identity expr P ---
+    hops = _path_hint_to_cols(fk.member_path, anchor_kind, sidecar, context_label)
+
+    join_clauses: list[str] = []
+    prev_alias = "_grain"
+    member_kind = anchor_kind
+    for i, hop_col in enumerate(hops):
+        hop_kind = hop_col.references
+        assert hop_kind is not None
+        hop_table = f"records__{hop_kind}"
+        hop_alias = f"_fk_{col_decl.name}_mp_{i}"
+        join_clauses.append(
+            f'LEFT JOIN "{hop_table}" AS "{hop_alias}"'
+            f' ON "{hop_alias}"."record_id" = "{prev_alias}"."{hop_col.name}"'
+        )
+        prev_alias = hop_alias
+        member_kind = hop_kind
+
+    # The terminal alias's record_id is the member identity expr P
+    # member_kind is the kind of the terminal hop (the MEMBER kind)
+    member_id_expr = f'"{prev_alias}"."record_id"'
+
+    # --- Resolve membership table (owner = target_kind) ---
+    mem_table_name, _prop = _find_membership_table(
+        target_kind, fk.property, sidecar, table_decl, col_decl
+    )
+
+    # --- Resolve member_field ---
+    member_field = _find_member_field(
+        mem_table_name, fk.member_field, sidecar, table_decl, col_decl
+    )
+
+    mf_id_col = f"member__{member_field}__id"
+    mf_kind_col = f"member__{member_field}__kind"
+
+    # INT64 max sentinel for open-interval containment
+    _INT64_MAX = 9223372036854775807
+
+    # Determine what to project and whether we need a records join
+    if fk.target_key == "presentation_id":
+        target_table = f"records__{target_kind}"
+        rec_join = f'JOIN "{target_table}" r ON r."record_id" = h."record_id"'
+        proj = 'r."presentation_id"'
+        inner = (
+            f'SELECT {proj} FROM "{mem_table_name}" h\n'
+            f"   {rec_join}\n"
+            f' WHERE h."{mf_id_col}" = {member_id_expr}\n'
+            f"   AND h.\"{mf_kind_col}\" = '{member_kind}'\n"
+            f'   AND h."joined_sim_time" <= "_grain"."{as_of}"\n'
+            f'   AND "_grain"."{as_of}" < COALESCE(h."left_sim_time", {_INT64_MAX})\n'
+            f' ORDER BY h."joined_sim_time" DESC, h."record_id" ASC LIMIT 1'
+        )
+    else:
+        proj = 'h."record_id"'
+        inner = (
+            f'SELECT {proj} FROM "{mem_table_name}" h\n'
+            f' WHERE h."{mf_id_col}" = {member_id_expr}\n'
+            f"   AND h.\"{mf_kind_col}\" = '{member_kind}'\n"
+            f'   AND h."joined_sim_time" <= "_grain"."{as_of}"\n'
+            f'   AND "_grain"."{as_of}" < COALESCE(h."left_sim_time", {_INT64_MAX})\n'
+            f' ORDER BY h."joined_sim_time" DESC, h."record_id" ASC LIMIT 1'
+        )
+
+    select_expr = f'({inner}) AS "{col_decl.name}"'
+    return select_expr, join_clauses
+
+
+# ---------------------------------------------------------------------------
+# Unified FK expression builder (dispatches on grain + via)
+# ---------------------------------------------------------------------------
+
+
+def build_fk_expr(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    source_grain: str,
+    anchor_kind: str,
+    target_kind: str,
+    sidecar: "Sidecar",
+) -> tuple[str, list[str]]:
+    """Build the SELECT expression + JOIN clauses for an fk column.
+
+    Dispatches on fk.via and grain type. Returns a (select_expr, join_clauses)
+    pair; caller integrates them into the grain SQL.
+
+    Args:
+        col_decl: The FK column declaration (exactly one fk set).
+        table_decl: The output table declaration (for error messages).
+        source_grain: The table's grain type ('records', 'history_point',
+            'history_interval', or 'membership').
+        anchor_kind: The record kind of the grain's anchor row.
+        target_kind: The dim's source kind (from the target TableDecl).
+        sidecar: The open emit's sidecar.
+
+    Returns:
+        (select_expr, join_clauses).
+
+    Raises:
+        ExportError: Any FK validation or pathfind failure.
+    """
+    assert col_decl.fk is not None
+    via = col_decl.fk.via
+
+    if col_decl.fk.target_key == "presentation_id":
+        target_table = f"records__{target_kind}"
+        try:
+            target_cols = sidecar.columns(target_table)
+        except TableNotFoundError as exc:
+            raise ExportError(
+                f"FK '{table_decl.name}.{col_decl.name}' targets '{target_kind}'"
+                f" with target_key=presentation_id but '{target_table}'"
+                " was not found in the emit; the projected emit must carry"
+                " presentation_id for a surrogate-keyed FK"
+            ) from exc
+        col_names = {c.name for c in target_cols}
+        if "presentation_id" not in col_names:
+            raise ExportError(
+                f"FK '{table_decl.name}.{col_decl.name}' targets '{target_kind}'"
+                f" with target_key=presentation_id but '{target_table}'"
+                " does not carry a 'presentation_id' column;"
+                " the projected emit must carry presentation_id"
+                " for a surrogate-keyed FK"
+            )
+
+    if via == "reference":
+        return build_reference_fk_expr(
+            col_decl=col_decl,
+            table_decl=table_decl,
+            anchor_kind=anchor_kind,
+            anchor_alias="_grain",
+            target_kind=target_kind,
+            sidecar=sidecar,
+            source_grain=source_grain,
+        )
+
+    # via == "membership"
+    if col_decl.fk.as_of is not None:
+        return build_point_in_time_membership_fk_expr(
+            col_decl=col_decl,
+            table_decl=table_decl,
+            anchor_kind=anchor_kind,
+            target_kind=target_kind,
+            sidecar=sidecar,
+        )
+    if source_grain == "membership":
+        return build_membership_fk_expr_on_membership(
+            col_decl=col_decl,
+            table_decl=table_decl,
+            anchor_kind=anchor_kind,
+            target_kind=target_kind,
+            sidecar=sidecar,
+        )
+    return build_membership_fk_expr_on_records(
+        col_decl=col_decl,
+        table_decl=table_decl,
+        anchor_kind=anchor_kind,
+        target_kind=target_kind,
+        sidecar=sidecar,
+    )

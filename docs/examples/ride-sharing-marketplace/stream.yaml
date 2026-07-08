@@ -1,0 +1,57 @@
+# FabulMixer live-perform config — ride-sharing marketplace (primary demo)
+# ============================================================
+# Drives `fabexport mixer docs/examples/ride-sharing-marketplace/bundle <this>`
+# (and `fabexport stream …` for a non-Kafka dry run). Streams a real 30-day,
+# ~129k-event two-sided marketplace emit as `state-changes`, producing FIVE Kafka
+# topics — one channel strip per topic on the board:
+#
+#   journey_instance  — trip-lifecycle DIMENSION. current_state -> c/u/d.
+#                       Busiest strip (~77k events).
+#   rider             — actor sub-type, demand FACT. status + zone (FSM + spatial)
+#                       and the rider scorecard (loyalty_band, ride_count) -> c/u/d.
+#   driver            — actor sub-type, supply FACT. status + zone and the driver
+#                       scorecard (session_earnings) -> c/u/d.
+#   pairing           — ride_match FACT. One row per rider<->driver match; created
+#                       at match, deactivated at release -> ephemeral c/d. The
+#                       marketplace centerpiece.
+#   zone_market       — zone-market DIMENSION. supply/demand surge pressure -> c/u.
+#                       Three zones, lowest volume (~2k events): the laggable dim.
+#
+# Routing (all default policy, no routing block needed):
+#   - `actor` sub-types into `driver` / `rider` topics. Sub-typing is driven by the
+#     `<kind>_type` discriminator domain in enum_domains, NOT by record_roles.
+#   - `entity` likewise sub-types: its `entity_type` domain is [zone_market], so it
+#     routes to topic `zone_market` (one sub-type), NOT `entity`.
+#   - `journey_instance` and `pairing` carry single-value/string roles -> one topic
+#     named for the kind.
+#
+# `pairing.prop__requester -> actor` (always a rider) and `prop__counterpart -> actor`
+# (always a driver) are contract-true edges (base.json references). The producer
+# brackets each pairing inside the rider's enroute->on_trip->completed
+# journey_instance.current_state span; the streaming global `seq` (event-time order)
+# preserves that causal nesting automatically. `journey_instance.prop__bound_roles` /
+# `prop__output_roles` are internal coupling bookkeeping (no references) — opaque,
+# not surfaced.
+#
+# Demo joins (CLI flags via the paired demo.yaml, not config) — two contract-true
+# fact->dimension dependencies, both laggable on the board:
+#   --join driver:zone_market --join rider:zone_market   (actor zone enrichment)
+#   --join pairing:driver --join pairing:rider           (match needs both sides)
+# Mute `zone_market` -> the surge joins go dark; mute `driver` -> the market goes
+# one-sided and `pairing` joins stall. One slow stream stalls the pipeline.
+# (See docs/architecture/mixer-consumer.md.)
+
+content: state-changes
+
+kinds:
+  - kind: actor
+    # status + zone (FSM + spatial), plus the rider/driver SCD-2 scorecards.
+    # All history-tracked; null-safe across both sub-types.
+    properties: [status, zone, loyalty_band, ride_count, session_earnings]
+  - kind: entity
+    properties: [demand_pressure, supply_pressure]
+  - kind: journey_instance
+    properties: [current_state]
+  - kind: pairing
+    # No history-tracked property -> pure create/delete lifecycle (match / release).
+    properties: []

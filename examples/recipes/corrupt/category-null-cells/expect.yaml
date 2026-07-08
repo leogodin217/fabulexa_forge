@@ -1,0 +1,18 @@
+defect_counts:
+  missing_value: 4
+
+impact_union:
+  - C6
+
+contains_defects:
+  - class: missing_value
+    rule: null_all_records_names
+    impact: [C6]
+    location.table: records__actor
+    location.column: prop__name
+
+  - class: missing_value
+    rule: null_all_records_names
+    impact: [beyond-c1-c12]
+    location.table: records__doctor
+    location.column: prop__name

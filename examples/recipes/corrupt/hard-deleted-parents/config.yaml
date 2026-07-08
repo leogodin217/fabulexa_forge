@@ -1,0 +1,29 @@
+seed: 42
+operations:
+  # A referenced parent (d001) is hard-deleted: the appointment membership row
+  # still resolves to it, so the deletion's own wake declares C10.
+  - kind: delete_rows
+    name: hard_delete_referenced_doctor
+    target:
+      table: records__doctor
+      where: { record_id: d001 }
+    amount: { count: 1 }
+
+  # A bystander phantom actor keeps records__actor non-empty after the pinned
+  # actor below is removed, so its pin's wake can trip (rather than pass
+  # vacuously against an emptied table).
+  - kind: insert_rows
+    name: phantom_actor_bystander
+    target:
+      table: records__actor
+    amount: { count: 1 }
+
+  # The pinned actor (a001) is hard-deleted: no other row carries its id, its
+  # history series is now unresolved (C6), and its pin is broken while the
+  # table stays non-empty (C9).
+  - kind: delete_rows
+    name: hard_delete_pinned_actor
+    target:
+      table: records__actor
+      where: { record_id: a001 }
+    amount: { count: 1 }

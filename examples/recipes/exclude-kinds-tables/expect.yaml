@@ -1,0 +1,10 @@
+tables:
+  # Only dim_patient is emitted — doctor/staff/history/visits are guarded out.
+  dim_patient:
+    columns: [patient_id, patient_name]
+    row_count: 2
+    contains_rows:
+      - patient_id: p001
+        patient_name: Alice
+      - patient_id: p002
+        patient_name: Bob

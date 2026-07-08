@@ -1,0 +1,39 @@
+# Recipe: streaming / membership-routing
+# ============================================================
+# Route membership-events to topics by their relation identity.
+#
+# Membership-events carry a different route-attribute set from state-changes
+# (Layer A): a membership relation has no <kind>_type sub-type, so its attributes
+# are {owner_kind, property, route_table}, where route_table = <owner>__<property>
+# (the leaf, used by the default policy). Layer B is unchanged — `topic_template`
+# renders against those attributes exactly as it does for record events.
+#
+# Here the template `{owner_kind}.{property}` names one topic per selected table
+# from the owner kind and property. Stream several tables in one run and a single
+# global `seq` orders all their events together — merging the files by seq
+# recovers the one true cross-relation order.
+#
+# Fixture world (recipe emit):
+#   membership__queue__waiters  on q001 — p001 (join@1d, leave@2d), p002 (join@2d, open)
+#   membership__patient__visits on p001 — doctor d001 (join@2d, open)
+#
+# Output — two topics, one global seq across the run:
+#   queue.waiters.jsonl    seq 1 join q001/p001 @2024-01-02
+#                          seq 3 join q001/p002 @2024-01-03
+#                          seq 4 leave q001/p001 @2024-01-03
+#   patient.visits.jsonl   seq 2 join p001/doctor d001 @2024-01-03
+# (seq 2 falls between the queue events: the visits join at 2d sorts after the
+#  queue join at 1d and, at 2d, before the queue events by relation identity.)
+
+content: membership-events
+
+routing:
+  topic_template: "{owner_kind}.{property}"   # override the default "{route_table}"
+
+memberships:
+  - owner_kind: queue
+    property: waiters
+    fields: [patient, priority]
+  - owner_kind: patient
+    property: visits
+    fields: [slot, doctor]

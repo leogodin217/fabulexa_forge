@@ -1,0 +1,9 @@
+seed: 11
+operations:
+  - kind: freeze_series
+    name: freeze_status_series
+    target:
+      table: history
+      where: { property: status }
+    amount: { rate: 1.0 }
+    cut: after_first

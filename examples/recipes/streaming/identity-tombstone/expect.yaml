@@ -1,0 +1,17 @@
+streams:
+  admission:
+    event_count: 3
+    contains_events:
+      # active admission -> create only; after-image carries just the record id
+      - seq: 1
+        op: c
+        record_id: a001
+        after.record_id: a001
+      - seq: 2
+        op: c
+        record_id: a002
+      # deactivated admission -> delete tombstone; after-image is null, keyed on id
+      - seq: 3
+        op: d
+        record_id: a002
+        after: null

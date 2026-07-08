@@ -1,0 +1,19 @@
+# FabulMixer demo preset — consumer-side flags for the ride-sharing demo.
+# ============================================================
+# Demo glue only — read by the demo launcher (`make mixer-demo EXAMPLE=...`), NEVER
+# by `fabexport`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
+# See dev/demo/README.md.
+#
+# Ride-sharing topic set (default routing `{route_table}` -> the leaf):
+#   trip               — actor sub-typed to its single declared sub-type (status, surge_tier);
+#                        actor_type=[trip], so the topic is `trip`, not `actor`
+#   journey_instance   — trip lifecycle (current_state, complete); not sub-typed
+#
+# Without an explicit fact->dimension edge declared in the base-layer record_roles
+# for this emit, joins is empty. This is a valid pure read-back preset that
+# demonstrates the two-strip mixer board with no consumer join lag.
+
+windows:
+  - 3600000             # 1h tumbling window
+
+consumer_offset: earliest

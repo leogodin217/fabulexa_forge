@@ -1,0 +1,35 @@
+# Recipe: streaming / clock-realtime
+# ============================================================
+# Demonstrates realtime pacing: the event stream is delivered at a
+# controlled real-time rate governed by the sim-time spacing of events.
+#
+# `clock.mode: realtime` activates the pacer. `speed` is the sim-to-real
+# multiplier: 3600.0 means one simulated hour plays back in one real second.
+# `idle_cap_seconds` collapses any gap longer than the cap to the cap — useful
+# to prevent long quiet periods from stalling a consumer.
+#
+# Pacing does not change the event bytes, the topic set, or the outcome counts;
+# it only governs the wall-clock timing of each event's delivery. A paced run
+# and an unpaced run produce byte-identical output.
+#
+# Fixture world (recipe emit):
+#   records__patient — p001 status pending@1d -> active@2d -> discharged@3d (Alice)
+#                      p002 status pending@2d (Bob)
+#   Neither patient is deactivated, so this stream has no `d` events.
+#
+# Output (one patient.jsonl stream, global seq order):
+#   seq 1  c p001  after {status: pending,    name: Alice}
+#   seq 2  c p002  after {status: pending,    name: Bob}
+#   seq 3  u p001  after {status: active,     name: Alice}
+#   seq 4  u p001  after {status: discharged, name: Alice}
+
+content: state-changes
+
+clock:
+  mode: realtime
+  speed: 3600.0          # 1 sim-hour plays back in 1 real second
+  idle_cap_seconds: 2.0  # collapse gaps > 2 s to 2 s
+
+kinds:
+  - kind: patient
+    properties: [status, name]   # bare prop__ names; the sidecar classifies each

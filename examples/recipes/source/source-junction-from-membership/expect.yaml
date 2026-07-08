@@ -1,0 +1,23 @@
+tables:
+  # The genre under test: junction, from membership__queue__waiters.
+  queue_waiters:
+    columns: [queue_id, joined_at, left_at, priority, patient_kind, patient_id]
+    row_count: 2
+    contains_rows:
+      # p001 — closed interval: joined then left, left_at is set
+      - queue_id: q001
+        priority: "2"
+        patient_kind: patient
+        patient_id: p001
+      # p002 — open interval: still waiting, left_at is null
+      - queue_id: q001
+        priority: "1"
+        patient_kind: patient
+        patient_id: p002
+        left_at: null
+  # The junction's owner — declared only because the table-set check is
+  # exact (a membership table's owner kind can never be excluded out from
+  # under it).
+  queue:
+    columns: [id, created_at, active, deactivated_at, updated_at, name]
+    row_count: 1

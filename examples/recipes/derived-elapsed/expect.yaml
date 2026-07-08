@@ -1,0 +1,9 @@
+tables:
+  fact_length_of_stay:
+    columns: [patient_id, discharged_at, stay_hours]
+    row_count: 1            # only p001 was discharged
+    contains_rows:
+      # 3*DAY discharge minus 1*DAY admission = 2 days = 48.0 hours (DOUBLE)
+      - patient_id: p001
+        discharged_at: 259200000000000
+        stay_hours: 48.0

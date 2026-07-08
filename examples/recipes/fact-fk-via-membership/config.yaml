@@ -1,0 +1,66 @@
+# Recipe: fact-fk-via-membership
+# ============================================================
+# Demonstrates an fk column resolved through a MEMBERSHIP edge
+# (via: membership) — the counterpart to dim-with-fk-reference's
+# via: reference.
+#
+# A membership table (membership__<owner>__<property>) records that an owner
+# record was bound to one or more member records over an interval. A
+# via: membership FK starts from the owner row, hops into that membership
+# table, and resolves the member identity — denormalizing "who was linked"
+# onto the owner's dimension row.
+#
+# The fk clause (via: membership):
+#   to:           the OUTPUT dimension table the member resolves to
+#   via:          membership
+#   property:     the collection-struct property naming the membership table
+#                 (inferable when the owner kind owns exactly one)
+#   member_field: the member__<field>__id column to resolve
+#                 (inferable when the table has exactly one)
+#
+# Fixture world (recipe emit):
+#   membership__patient__visits — one row: p001 bound to doctor d001
+#                                 (p002 has no visit binding)
+#
+# Output:
+#   dim_doctor  — 1 row (d001 / Dr. Carter)
+#   dim_patient — 2 rows; attending_doctor_fk = d001 for p001, NULL for p002
+#                 (no membership row → no member to resolve)
+
+mode: dimensional
+
+dimensional:
+  tables:
+    # FK target must be a declared dimension; declare it first for clarity.
+    - name: dim_doctor
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: doctor
+      key: [doctor_id]
+      columns:
+        - name: doctor_id
+          from: record_id
+        - name: name
+          from: prop__name
+
+    - name: dim_patient
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [patient_id]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: patient_name
+          from: prop__name
+        # Resolve the doctor linked via the patient's visits membership.
+        - name: attending_doctor_fk
+          fk:
+            to: dim_doctor
+            via: membership
+            property: visits      # membership__patient__visits (inferable)
+            member_field: doctor  # member__doctor__id (inferable)

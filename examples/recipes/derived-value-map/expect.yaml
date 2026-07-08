@@ -1,0 +1,25 @@
+tables:
+  fact_status_labeled:
+    columns: [patient_id, event_time, status_value, status_label]
+    row_count: 4
+    contains_rows:
+      # p001 pending → label "Pending Review"
+      - patient_id: p001
+        event_time: 86400000000000
+        status_value: pending
+        status_label: Pending Review
+      # p001 active → label "Currently Active"
+      - patient_id: p001
+        event_time: 172800000000000
+        status_value: active
+        status_label: Currently Active
+      # p001 discharged → label "Discharged"
+      - patient_id: p001
+        event_time: 259200000000000
+        status_value: discharged
+        status_label: Discharged
+      # p002 pending → label "Pending Review"
+      - patient_id: p002
+        event_time: 172800000000000
+        status_value: pending
+        status_label: Pending Review

@@ -1,0 +1,10 @@
+seed: 7
+operations:
+  - kind: duplicate_rows
+    name: duplicate_alice_jittered
+    target:
+      table: records__actor
+      where: { record_id: a001 }
+      columns: [prop__wait_minutes]
+    amount: { count: 1 }
+    jitter: { shape: uniform, low: 50, high: 80 }

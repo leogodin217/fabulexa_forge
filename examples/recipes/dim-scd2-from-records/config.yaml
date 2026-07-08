@@ -1,0 +1,44 @@
+# Recipe: dim-scd2-from-records
+# ============================================================
+# Demonstrates how to build an SCD-2 dimension table from a
+# records__<kind> source whose prop__status is history-tracked.
+#
+# The SCD-2 engine uses LEAD() over the history table to derive
+# valid_from / valid_to for each version of a record. The current
+# open version has valid_to = null.
+#
+# Fixture world (recipe emit):
+#   records__patient — 2 patients; prop__status is history_tracked=True
+#   history          — 4 rows of status changes for p001 and p002
+#
+# Output:
+#   dim_patient — one row per (patient, status version)
+#                 p001 has 3 status versions (pending→active→discharged)
+#                 p002 has 1 status version  (pending, open)
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: dim_patient
+      role: dim
+      scd: type2          # SCD-2: one row per status version per patient
+      source:
+        grain: records    # drive rows from records__patient
+        kind: patient
+      key: [patient_id, valid_from]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: name
+          from: prop__name
+        - name: status
+          from: prop__status
+        # valid_from = sim_time of this version's first history row
+        - name: valid_from
+          derived:
+            scd_window: valid_from
+        # valid_to = sim_time of the next version, or null for the current version
+        - name: valid_to
+          derived:
+            scd_window: valid_to

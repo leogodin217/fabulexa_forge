@@ -1,0 +1,35 @@
+# record_kind: actor now pools three tables: records__actor,
+# membership__actor__appointments, and membership__actor__oncall (added by
+# the family-E corpus-emit swap; all 9 rows carry a non-NULL
+# member__doctor__id) -- 1 + 1 + 9 = 11 dangling_reference defects.
+defect_counts:
+  dangling_reference: 11
+  missing_value: 3
+
+impact_union:
+  - C10
+
+contains_defects:
+  - class: dangling_reference
+    rule: dangle_actor_doctor_refs
+    impact: [C10]
+    location.table: membership__actor__appointments
+    location.column: member__doctor__id
+
+  - class: dangling_reference
+    rule: dangle_actor_doctor_refs
+    impact: [C10]
+    location.table: membership__actor__oncall
+    location.column: member__doctor__id
+
+  - class: dangling_reference
+    rule: dangle_actor_doctor_refs
+    impact: [beyond-c1-c12]
+    location.table: records__actor
+    location.column: prop__doctor_id
+
+  - class: missing_value
+    rule: null_doctor_name
+    impact: [beyond-c1-c12]
+    location.table: records__doctor
+    location.column: prop__name

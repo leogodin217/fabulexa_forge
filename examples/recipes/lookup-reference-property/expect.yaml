@@ -1,0 +1,12 @@
+tables:
+  dim_patient:
+    columns: [patient_id, patient_name, doctor_name]
+    row_count: 2
+    contains_rows:
+      # Both patients reference doctor d001 → doctor_name "Dr. Carter" inline
+      - patient_id: p001
+        patient_name: Alice
+        doctor_name: Dr. Carter
+      - patient_id: p002
+        patient_name: Bob
+        doctor_name: Dr. Carter

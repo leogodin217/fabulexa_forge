@@ -1,0 +1,26 @@
+# Recipe: streaming / identity-tombstone
+# ============================================================
+# Stream a kind's lifecycle with NO properties — identity and lifecycle only.
+# `properties: []` carries just the record id in the after-image, so the stream
+# is the pure create/delete signal.
+#
+# This is where the delete (`d`) event shows up. A record that is deactivated in
+# the base layer emits a `d` at its deactivated_at instant; the after-image is
+# null (a log-compaction tombstone) and the key is the record id — so a
+# downstream compacted topic collapses the record's create+delete to nothing.
+# A record that is still active emits only its `c`.
+#
+# Fixture world (recipe emit):
+#   records__admission — a001 active (never deactivated)
+#                        a002 deactivated at 2*DAY
+#
+# Output (one admission.jsonl stream):
+#   seq 1  c a001  after {record_id: a001}      (active -> create only)
+#   seq 2  c a002  after {record_id: a002}
+#   seq 3  d a002  after null                    (deactivated -> tombstone)
+
+content: state-changes
+
+kinds:
+  - kind: admission
+    properties: []     # identity + lifecycle only — no prop columns in the after-image

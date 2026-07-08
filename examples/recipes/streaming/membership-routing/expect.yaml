@@ -1,0 +1,28 @@
+streams:
+  # topic_template "{owner_kind}.{property}" -> one topic per selected relation
+  queue.waiters:
+    event_count: 3
+    contains_events:
+      - seq: 1
+        op: join
+        kind: queue
+        record_id: q001
+        after.member__patient__id: p001
+      - seq: 3
+        op: join
+        record_id: q001
+        after.member__patient__id: p002
+      - seq: 4
+        op: leave
+        record_id: q001
+        after.member__patient__id: p001
+  patient.visits:
+    event_count: 1
+    contains_events:
+      # the visits join takes seq 2 — global seq spans both relations
+      - seq: 2
+        op: join
+        kind: patient
+        record_id: p001
+        after.member__doctor__id: d001
+        after.elem__slot: morning

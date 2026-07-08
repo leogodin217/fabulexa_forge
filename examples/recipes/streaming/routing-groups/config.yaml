@@ -1,0 +1,31 @@
+# Recipe: streaming / routing-groups
+# ============================================================
+# Merge several rendered topics into one with a `groups` map (many-to-one).
+#
+# Layer B first renders each event's base topic name from `topic_template`
+# (default `{route_table}` -> the sub-type leaf: nurse, physician). A `groups`
+# entry then regroups rendered names into a single target topic: every event
+# whose rendered name is a listed member is re-stamped with the target name.
+#
+# Here both staff sub-types fold into one `clinicians` topic. Because every
+# rendered name (nurse, physician) is absorbed, the only topic that materialises
+# is `clinicians` — the union still carries the full, seq-ordered event stream.
+#
+# Rules: a rendered name belongs to at most one group; a member that no selected
+# route renders is a load-time error (no dangling members).
+#
+# Fixture world (recipe emit):
+#   records__staff — s001 (nurse), s002 (physician); one `c` each.
+#
+# Output — one merged topic carrying both kinds of staff in global seq order:
+#   clinicians.jsonl   c s001 (Nora Vega)  +  c s002 (Owen Reed)
+
+content: state-changes
+
+routing:
+  groups:
+    clinicians: [nurse, physician]   # fold both sub-type topics into one
+
+kinds:
+  - kind: staff
+    properties: [name]

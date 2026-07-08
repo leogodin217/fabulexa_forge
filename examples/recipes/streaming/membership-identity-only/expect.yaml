@@ -1,0 +1,16 @@
+streams:
+  queue__waiters:
+    event_count: 3
+    contains_events:
+      # every after-image is owner identity only — record_id and nothing else
+      - seq: 1
+        op: join
+        record_id: q001
+        after.record_id: q001
+      - seq: 2
+        op: join
+        record_id: q001
+      - seq: 3
+        op: leave
+        record_id: q001
+        after.record_id: q001

@@ -1,0 +1,29 @@
+# Recipe: source-exclude-kind
+# ============================================================
+# `source: {exclude: {kinds: [...]}}` — the real teaching point exclude
+# exists for: dropping a kind's export unit(s) AND EVERY MEMBERSHIP TABLE
+# IT OWNS in one declaration, because a junction table without its owner is
+# not an operational shape (source.md § `exclude` semantics).
+#
+# Excluding `queue` here drops both:
+#   - the `queue` table itself (the reference-genre unit for the kind)
+#   - `queue_waiters` (membership__queue__waiters, owned by queue) — even
+#     though `queue_waiters` was never itself named in the exclude list.
+#
+# Everything else in the bare full dump survives untouched, including
+# `patient_visits` (owned by patient, not queue) and `patient`'s own
+# prop__primary_staff_id / prop__backup_staff_id columns, which still
+# reference `staff` even though staff's own tables (nurse/physician) are
+# present here — exclude only ever touches the EXCLUDED kind's own units;
+# a reference *to* an excluded kind from a surviving table would remain as
+# a plain (now-unjoinable) column, per source.md's documented "restricted
+# extract, not an error" rule (not exercised by this recipe, since queue is
+# not referenced by any surviving prop__ column).
+#
+# Output: every bare-dump table EXCEPT queue and queue_waiters.
+
+mode: source
+
+source:
+  exclude:
+    kinds: [queue]

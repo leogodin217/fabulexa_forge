@@ -1,0 +1,11 @@
+defect_counts:
+  resampled_value: 1
+
+impact_union:
+  - C6
+
+contains_defects:
+  - class: resampled_value
+    rule: resample_name_anchor
+    impact: [C6]
+    location.table: history

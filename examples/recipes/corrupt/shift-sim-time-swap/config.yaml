@@ -1,0 +1,10 @@
+seed: 5
+operations:
+  - kind: shift_sim_time
+    name: swap_name_anchor
+    target:
+      table: history
+      where: { property: name, sim_time: "90" }
+    amount: { count: 1 }
+    shift:
+      kind: swap

@@ -1,0 +1,12 @@
+defect_counts:
+  conflicting_duplicate_row: 1
+
+impact_union:
+  - C6
+  - C9
+
+contains_defects:
+  - class: conflicting_duplicate_row
+    rule: split_brain_actor_name
+    impact: [C6, C9]
+    location.table: records__actor

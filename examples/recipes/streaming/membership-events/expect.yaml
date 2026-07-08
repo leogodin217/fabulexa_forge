@@ -1,0 +1,25 @@
+streams:
+  # Default routing: one topic per membership table, named <owner>__<property>.
+  queue__waiters:
+    event_count: 3
+    contains_events:
+      # closed interval p001 -> a join then a leave, both carrying the full payload
+      - seq: 1
+        op: join
+        kind: queue
+        record_id: q001           # the owner (queue) is the message key
+        after.member__patient__id: p001
+        after.elem__priority: "2"
+      # open interval p002 -> a join only (no synthetic leave); ranks before the
+      # coincident leave at the same instant (join event_class 0 < leave 1)
+      - seq: 2
+        op: join
+        record_id: q001
+        after.member__patient__id: p002
+        after.elem__priority: "1"
+      # the leave carries what left — not a key-only tombstone
+      - seq: 3
+        op: leave
+        record_id: q001
+        after.member__patient__id: p001
+        after.elem__priority: "2"

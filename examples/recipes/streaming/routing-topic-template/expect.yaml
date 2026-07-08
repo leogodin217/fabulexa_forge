@@ -1,0 +1,18 @@
+streams:
+  # The `cdc.` prefix namespaces each leaf topic; stream stems carry the prefix.
+  cdc.nurse:
+    event_count: 1
+    contains_events:
+      - seq: 1
+        op: c
+        kind: staff
+        record_id: s001
+        after.prop__name: Nora Vega
+  cdc.physician:
+    event_count: 1
+    contains_events:
+      - seq: 2
+        op: c
+        kind: staff
+        record_id: s002
+        after.prop__name: Owen Reed

@@ -1,0 +1,12 @@
+seed: 7
+operations:
+  # Ghost doctors: two donor rows cloned under fresh, plausible ids, with
+  # prop__name resampled from the donor pool so each phantom doesn't mirror
+  # its donor. A phantom is isolated by construction -- no series, no
+  # reference, no pin -- so the corrupted emit re-validates fully green.
+  - kind: insert_rows
+    name: ghost_doctors
+    target:
+      table: records__doctor
+      columns: [prop__name]
+    amount: { count: 2 }

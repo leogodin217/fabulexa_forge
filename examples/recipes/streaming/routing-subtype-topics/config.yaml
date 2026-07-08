@@ -1,0 +1,31 @@
+# Recipe: streaming / routing-subtype-topics
+# ============================================================
+# A sub-typed kind splits into one topic per sub-type — with NO routing block.
+#
+# `staff` is sub-typed in the emit: its `staff_type` discriminator domain in
+# enum_domains is non-empty (values nurse, physician), and every staff record
+# carries the matching `prop__staff_type` value. Sub-typing follows that
+# `<kind>_type` domain, independent of record_roles shape. When a kind is
+# sub-typed, the routing leaf (`route_table`) is the discriminator value per
+# declared sub-type, not the bare kind.
+#
+# The default routing policy is `topic_template: "{route_table}"`. So even with
+# no `routing:` block at all, streaming a sub-typed kind writes one
+# <sub_type>.jsonl per sub-type — here nurse.jsonl and physician.jsonl — instead
+# of a single staff.jsonl. The discriminator is read from the record spine
+# independently of the carried `properties`, so you do NOT have to include
+# staff_type in `properties` for routing to work.
+#
+# Fixture world (recipe emit):
+#   records__staff — s001 Nora Vega (staff_type=nurse), s002 Owen Reed (physician)
+#   Both are type-1 (no history) and never deactivated -> one `c` event each.
+#
+# Output — one topic per sub-type, global seq across the run:
+#   nurse.jsonl       c s001  after {name: Nora Vega}
+#   physician.jsonl   c s002  after {name: Owen Reed}
+
+content: state-changes
+
+kinds:
+  - kind: staff
+    properties: [name]   # staff_type is read from the spine for routing regardless

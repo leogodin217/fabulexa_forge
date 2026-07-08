@@ -1,0 +1,8 @@
+seed: 2
+operations:
+  - kind: null_cells
+    name: null_all_records_names
+    target:
+      category: records
+      columns: [prop__name]
+    amount: { rate: 1.0 }

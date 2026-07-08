@@ -1,0 +1,9 @@
+seed: 3
+operations:
+  - kind: mutate_cells
+    name: actor_type_out_of_domain
+    target:
+      table: records__actor
+      columns: [prop__actor_type]
+    amount: { rate: 1.0 }
+    mutation: { kind: out_of_domain }

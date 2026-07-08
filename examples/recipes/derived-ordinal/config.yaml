@@ -1,0 +1,54 @@
+# Recipe: derived-ordinal
+# ============================================================
+# Demonstrates the ordinal derived column: a ROW_NUMBER() sequence
+# assigned within a partition, ordered by a sibling column.
+#
+# Use cases:
+#   - Number each event per entity (1st, 2nd, 3rd status change)
+#   - Build a "visit number" / "attempt number" surrogate
+#   - Pick the first/last row per group downstream (WHERE seq = 1)
+#
+# The ordinal derived column:
+#   partition_by: a SIBLING output column — the window partition
+#   order_by:     a SIBLING output column — row order within the partition
+#
+# Both names reference OTHER output columns of this same table (not raw
+# base-layer columns). The engine appends record_id as a final, hidden
+# tie-break so the numbering is deterministic even when two rows share an
+# order_by value.
+#
+# Fixture world (recipe emit):
+#   history — 4 patient status changes:
+#     p001: pending@1*DAY, active@2*DAY, discharged@3*DAY
+#     p002: pending@2*DAY
+#
+# Output:
+#   fact_status_event — 4 rows; event_seq numbers each patient's events by time
+#     p001 → 1 (pending), 2 (active), 3 (discharged)
+#     p002 → 1 (pending)
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_status_event
+      role: fact
+      source:
+        grain: history_point   # one row per (record_id, sim_time) status event
+        kind: patient
+        property: status
+      key: [patient_id, event_seq]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: event_time
+          from: sim_time
+        - name: status_value
+          from: value
+        # ordinal: ROW_NUMBER() OVER (PARTITION BY patient_id ORDER BY event_time).
+        # partition_by / order_by name SIBLING output columns above.
+        - name: event_seq
+          derived:
+            ordinal:
+              partition_by: patient_id
+              order_by: event_time

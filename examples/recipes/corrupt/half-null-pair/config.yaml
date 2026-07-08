@@ -1,0 +1,8 @@
+seed: 1
+operations:
+  - kind: null_cells
+    name: null_appointment_doctor_id
+    target:
+      table: membership__actor__appointments
+      columns: [member__doctor__id]
+    amount: { rate: 1.0 }

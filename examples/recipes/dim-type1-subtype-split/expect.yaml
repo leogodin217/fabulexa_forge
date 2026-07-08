@@ -1,0 +1,16 @@
+tables:
+  dim_nurse:
+    columns: [staff_id, name, role_type]
+    row_count: 1
+    contains_rows:
+      - staff_id: s001
+        name: Nora Vega
+        role_type: nurse
+
+  dim_physician:
+    columns: [staff_id, name, role_type]
+    row_count: 1
+    contains_rows:
+      - staff_id: s002
+        name: Owen Reed
+        role_type: physician

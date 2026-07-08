@@ -1,0 +1,21 @@
+streams:
+  # doctor d001 was created earliest (sim_time 50ns) -> it takes the global seq 1,
+  # even though it lands in its own file. seq is global, not per-stream.
+  doctor:
+    event_count: 1
+    contains_events:
+      - seq: 1
+        op: c
+        record_id: d001
+        after.prop__name: Dr. Carter
+  patient:
+    event_count: 4
+    contains_events:
+      - seq: 2
+        op: c
+        record_id: p001
+        after.prop__status: pending
+      - seq: 5
+        op: u
+        record_id: p001
+        after.prop__status: discharged

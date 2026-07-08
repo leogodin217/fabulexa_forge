@@ -1,0 +1,13 @@
+tables:
+  nurse:
+    columns: [id, created_at, active, deactivated_at, updated_at, name]
+    row_count: 1
+    contains_rows:
+      - id: s001
+        name: Nora Vega
+  physician:
+    columns: [id, created_at, active, deactivated_at, updated_at, name]
+    row_count: 1
+    contains_rows:
+      - id: s002
+        name: Owen Reed

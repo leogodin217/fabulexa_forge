@@ -1,0 +1,12 @@
+tables:
+  admission:
+    columns: [id, created_at, active, deactivated_at, updated_at, ward]
+    row_count: 2
+    contains_rows:
+      - id: a001
+        ward: north
+        active: true
+        deactivated_at: null
+      - id: a002
+        ward: south
+        active: false

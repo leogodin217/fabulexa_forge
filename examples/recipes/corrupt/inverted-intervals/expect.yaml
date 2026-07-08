@@ -1,0 +1,11 @@
+defect_counts:
+  inverted_interval: 2
+
+impact_union:
+  - C10
+
+contains_defects:
+  - class: inverted_interval
+    rule: invert_oncall
+    impact: [C10]
+    location.table: membership__actor__oncall

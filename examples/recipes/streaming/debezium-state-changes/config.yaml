@@ -1,0 +1,62 @@
+# Recipe: streaming / debezium-state-changes
+# ============================================================
+# Render the state-changes CDC stream in the Debezium format (`--fmt debezium`).
+#
+# Same events, same `seq`, same canonical order as the jsonl state-changes
+# recipe — only the wire shape changes. Each event becomes a Debezium *value*
+# message, the shape a Debezium connector emits off an OLTP database, so the
+# stream drops straight into a CDC pipeline or teaches the envelope itself.
+#
+# The envelope (one JSON object per line). With `schemas_enable` on (the
+# default) each message is self-describing — `{schema, payload}` — the shape
+# every Debezium-JSON tutorial shows. The `payload` carries:
+#   before / after / source / op / ts_ms / transaction
+#
+# op -> before / after (state-changes is an UPSERT log keyed by record_id):
+#   c  before null            after full row reconstructed at created_sim_time
+#   u  before null            after full row at the event's sim_time
+#   d  before {record_id}     after null     (key-only before under REPLICA
+#                                             IDENTITY DEFAULT — the deleted key
+#                                             stays visible without a separate
+#                                             key message)
+#
+# source — the author-set masquerade identity (connector/name/db/schema/version,
+# all required, no defaults) plus per-event derived fields: `lsn` = the stream
+# `seq`, `table` = the leaf source table (the record kind, here `patient` /
+# `admission`), `ts_ms` = the rebased event time in epoch-milliseconds, `snapshot`
+# = "false", `txId` = null. `transaction` is always null (no transaction grain).
+#
+# ts_ms needs an anchor: the Debezium format is refused without a resolved anchor
+# (epoch-ms cannot be faked). The `rebase` block below pins a UTC origin so each
+# `ts_ms` is deterministic — created p001 (+1 day) -> 2024-01-02T00:00:00Z ->
+# 1704153600000.
+#
+# Fixture world (recipe emit) — two kinds, default routing (one topic per kind):
+#   records__patient   — p001 status pending@1d -> active@2d -> discharged@3d (c+u)
+#                        p002 status pending@2d                                 (c)
+#   records__admission — a001 active                                          (c)
+#                        a002 deactivated @2d   -> the `d` with a key-only before
+#
+# Output — patient.jsonl (c/u upserts) + admission.jsonl (c then a `d` tombstone),
+# interleaved across kinds by one global `seq`.
+
+content: state-changes
+
+debezium:
+  schemas_enable: true            # {schema, payload} self-describing messages (default)
+  source:                         # the masquerade identity — required, no defaults
+    connector: postgres
+    name: hospital
+    db: hospital
+    schema: public
+    version: 2.5.0.Final
+
+kinds:
+  - kind: patient
+    properties: [status]          # type-2 status -> a `u` per change; full after-image
+  - kind: admission
+    properties: []                # identity + lifecycle only -> the `d` before-image
+
+rebase:
+  base_date: 2024-01-01T00:00:00  # pins ts_ms (epoch-ms); Debezium requires an anchor
+  timezone: UTC

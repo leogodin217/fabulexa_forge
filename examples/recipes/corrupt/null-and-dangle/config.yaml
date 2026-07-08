@@ -1,0 +1,15 @@
+seed: 1
+operations:
+  - kind: null_cells
+    name: null_actor_name
+    target:
+      table: records__actor
+      columns: [prop__name]
+    amount: { rate: 1.0 }
+
+  - kind: dangle_reference
+    name: dangle_appointment_doctor
+    target:
+      table: membership__actor__appointments
+      columns: [member__doctor__id]
+    amount: { rate: 1.0 }

@@ -1,0 +1,20 @@
+tables:
+  dim_doctor:
+    columns: [doctor_id, name]
+    row_count: 1
+    contains_rows:
+      - doctor_id: d001
+        name: Dr. Carter
+
+  dim_patient:
+    columns: [patient_id, patient_name, attending_doctor_fk]
+    row_count: 2
+    contains_rows:
+      # p001 was bound to d001 via membership__patient__visits
+      - patient_id: p001
+        patient_name: Alice
+        attending_doctor_fk: d001
+      # p002 had no visit binding → FK resolves to NULL
+      - patient_id: p002
+        patient_name: Bob
+        attending_doctor_fk: null

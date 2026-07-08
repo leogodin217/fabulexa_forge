@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Environments / lock-managed venv
+.venv/
+
+# Export output (never commit generated datasets)
+/out/
+/output/
+
+# Agent-tool isolation worktrees (accumulate, never commit)
+.claude/worktrees/
+
+# Local QA scratch / demo bundles (not part of the package; large, leaky)
+qa/
+
+# Materialized demo emit (rebuilt on demand by `make demo-emit`)
+/dev/demo/emit/
+
+# data bundles (Should be added to release)
+docs/examples/*/bundle/

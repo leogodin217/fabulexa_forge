@@ -1,0 +1,12 @@
+defect_counts:
+  out_of_domain_value: 1
+
+impact_union:
+  - C12
+
+contains_defects:
+  - class: out_of_domain_value
+    rule: actor_type_out_of_domain
+    impact: [C12]
+    location.table: records__actor
+    location.column: prop__actor_type

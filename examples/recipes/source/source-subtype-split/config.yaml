@@ -1,0 +1,38 @@
+# Recipe: source-subtype-split
+# ============================================================
+# The SUB-TYPE SPLIT: an untracked kind whose `record_roles` entry is an
+# OBJECT ({sub_type: role}, not a bare role string) splits into one export
+# unit per DECLARED sub-type — one table per `<kind>_type` enum-domain
+# value, each filtered by the discriminator predicate (source.md § The
+# sub-type split). `staff` here declares both sub-types as `dimension`, so
+# both split units land as the reference genre, but the roles could
+# legitimately differ (a mix of reference/transaction tables from one kind).
+#
+# `exclude.kinds` narrows the bare dump down to the split kind under test
+# (staff) so this recipe's expect.yaml only has to declare the two split
+# tables.
+#
+# Table naming: a split unit's default output table name is the sub-type
+# value itself (`<sub_type>`, not `<kind>_<sub_type>`) — source.md's table
+# name is the identity, since the table already lives in one flat
+# namespace with every other output table.
+#
+# Column shape: the split unit's own `prop__staff_type` discriminator
+# column is DROPPED — it is constant within the table and fully
+# recoverable from the table's identity (its name).
+#
+# Fixture world (recipe emit):
+#   records__staff — 2 records, both role `dimension` in record_roles:
+#                    s001 staff_type=nurse "Nora Vega"
+#                    s002 staff_type=physician "Owen Reed"
+#   enum_domains.staff.staff_type: [nurse, physician]
+#
+# Output:
+#   nurse     — 1 row: s001, no staff_type column
+#   physician — 1 row: s002, no staff_type column
+
+mode: source
+
+source:
+  exclude:
+    kinds: [patient, doctor, admission, queue]

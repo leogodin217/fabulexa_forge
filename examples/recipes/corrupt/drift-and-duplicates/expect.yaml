@@ -1,0 +1,19 @@
+defect_counts:
+  duplicate_row: 1
+  column_rename: 1
+
+impact_union:
+  - C9
+  - C11
+
+contains_defects:
+  - class: duplicate_row
+    rule: duplicate_alice
+    impact: [C9]
+    location.table: records__actor
+
+  - class: column_rename
+    rule: rename_name_column
+    impact: [C11]
+    location.table: records__actor
+    location.column: prop__full_name

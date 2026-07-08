@@ -1,0 +1,20 @@
+seed: 7
+operations:
+  # One schema_drift operation, two actions on records__actor, disjoint columns.
+  #
+  # retype_to: prop__wait_minutes is history_tracked (BIGINT). Its series'
+  # latest pre-slice value is the text "12" (history.value is always VARCHAR).
+  # Casting the column to DOUBLE re-encodes the stored 12 as 12.0, whose
+  # to_csv_text round-trip is "12.0" -- it no longer matches the series'
+  # anchor text "12", so the retype genuinely trips C6 (not just a
+  # beyond-c1-c12 sentinel from an unrelated/non-tracked column -- every
+  # eligible reference column, e.g. prop__doctor_id, is ineligible for
+  # schema_drift in the first place per DriftColumnsNonStructural).
+  #
+  # drop: prop__status is history_tracked (VARCHAR), so dropping it removes a
+  # tracked prop__ column the sidecar catalog no longer describes -- C11.
+  - kind: schema_drift
+    name: retype_wait_minutes_and_drop_status
+    target: { table: records__actor }
+    retype_to: { prop__wait_minutes: DOUBLE }
+    drop: [prop__status]

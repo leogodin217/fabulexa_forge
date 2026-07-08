@@ -1,0 +1,63 @@
+# Recipe: fk-ambiguous-path-hint
+# ============================================================
+# Demonstrates the `path` hint that disambiguates a reference FK when
+# more than one edge reaches the same target kind.
+#
+# A via: reference FK normally finds its hop chain automatically. But when
+# the source kind references the target kind through MORE THAN ONE column,
+# the pathfind is ambiguous and the export fails with:
+#   "ambiguous reference path from 'patient' to 'staff' ... supply `path`".
+# You resolve it by naming the exact hop chain in `path` (ordered prop__
+# columns).
+#
+# The `path` field (on fk via: reference, also available on lookup):
+#   path: [prop__<col>, ...] — the ordered reference columns to traverse
+#         from the source kind to the target kind.
+#
+# Fixture world (recipe emit):
+#   records__patient — BOTH prop__primary_staff_id and prop__backup_staff_id
+#                      reference staff (two edges → ambiguous)
+#     p001 → primary s001, backup s002
+#     p002 → primary s002, backup (none)
+#
+# Output:
+#   dim_staff   — 2 rows (s001 / s002)
+#   dim_patient — 2 rows; primary_staff_fk follows the prop__primary_staff_id edge
+#     p001 → s001, p002 → s002
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: dim_staff
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: staff
+      key: [staff_id]
+      columns:
+        - name: staff_id
+          from: record_id
+        - name: name
+          from: prop__name
+
+    - name: dim_patient
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [patient_id]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: patient_name
+          from: prop__name
+        # Two patient→staff edges exist; `path` selects the primary one.
+        # Drop `path` here and the export fails as ambiguous.
+        - name: primary_staff_fk
+          fk:
+            to: dim_staff
+            via: reference
+            path: [prop__primary_staff_id]

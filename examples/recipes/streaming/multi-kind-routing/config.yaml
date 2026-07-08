@@ -1,0 +1,29 @@
+# Recipe: streaming / multi-kind-routing
+# ============================================================
+# Stream more than one kind in a single run. In S1 each kind routes to its own
+# stream — the `file` sink writes one <kind>.jsonl per selected kind.
+#
+# The teaching point is `seq`: it is a SINGLE global sequence over the whole run,
+# stamped in the canonical total order across all kinds — not reset per stream.
+# So although the events are split into per-kind files, their seq values
+# interleave by event time. A consumer that merges the files back by seq recovers
+# the one true order.
+#
+# Fixture world (recipe emit):
+#   records__doctor  — d001 created very early (sim_time 50ns), no history -> one `c`
+#   records__patient — p001 / p002 status changes (as in the state-changes recipe)
+#
+# Output — global seq spans both streams:
+#   doctor.jsonl    seq 1  c d001
+#   patient.jsonl   seq 2  c p001
+#                   seq 3  c p002
+#                   seq 4  u p001 (active)
+#                   seq 5  u p001 (discharged)
+
+content: state-changes
+
+kinds:
+  - kind: patient
+    properties: [status]
+  - kind: doctor
+    properties: [name]

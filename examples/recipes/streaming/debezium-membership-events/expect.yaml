@@ -1,0 +1,28 @@
+format: debezium
+
+streams:
+  # Default routing: one topic per membership table, named <owner>__<property>.
+  queue__waiters:
+    event_count: 3
+    contains_events:
+      # join p001 — insert-only: envelope op c, before null, the domain op rides
+      # the after-image as the leading `event` column; ts_ms from the anchor (+1d)
+      - op: c
+        before: null
+        after.event: join
+        after.member__patient__id: p001
+        after.elem__priority: "2"
+        source.table: queue__waiters     # the membership leaf table (route_table)
+        ts_ms: 1704153600000             # 2024-01-02T00:00:00Z
+      # join p002 — also a c; ranks before the coincident leave at the same instant
+      - op: c
+        before: null
+        after.event: join
+        after.member__patient__id: p002
+        after.elem__priority: "1"
+      # leave p001 — still a c (append-only), carrying what left; NOT a tombstone
+      - op: c
+        before: null
+        after.event: leave
+        after.member__patient__id: p001
+        after.elem__priority: "2"

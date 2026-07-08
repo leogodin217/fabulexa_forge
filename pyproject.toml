@@ -1,0 +1,87 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "fabulexa-forge"
+version = "0.0.1"
+description = "Downstream exporter + corrupter for Fabulexa composite base-layer emits."
+requires-python = ">=3.11"
+dependencies = [
+    # duckdb pin tracks the upstream producer to guarantee the written base-layer
+    # format is readable. Bump in lockstep with upstream.
+    "duckdb>=1.3,<1.4",
+    "jsonschema>=4.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+    "pyarrow>=15",
+]
+
+[project.optional-dependencies]
+kafka = [
+    "confluent-kafka>=2.3",
+]
+mixer = [
+    "fabulexa-forge[kafka]",
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=4.1",
+    "pytest-randomly>=3.15",
+    "mypy>=1.0",
+    "ruff>=0.8",
+    "types-pyyaml>=6.0.12.20260518",
+    "types-jsonschema>=4.26.0.20260518",
+    # Dev/test only — drives the Kafka dev/integration rig (dev/kafka/). NOT a
+    # package runtime dependency: the streaming Kafka sink that needs a client at
+    # runtime is deferred (streaming S3).
+    "confluent-kafka>=2.3",
+    # Dev/test only — for mixer HTTP surface tests (TestClient) and ASGI server.
+    "fastapi>=0.100",
+    "uvicorn>=0.20",
+    "httpx>=0.24",
+]
+
+# Standalone uv project with its own lock and venv, so anything outside the vendored
+# contract is genuinely absent from the environment — the boundary is enforced by
+# physics, not convention. Run all tooling from the repo root.
+
+[project.scripts]
+fabexport = "fabulexa_export.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fabulexa_export"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"contract/base-format.schema.json" = "fabulexa_export/contract/base-format.schema.json"
+
+[tool.ruff]
+line-length = 88
+# Vendored agent tooling — kept verbatim from upstream, not package source.
+extend-exclude = [".claude"]
+# Honor exclude/extend-exclude even for paths passed explicitly on the command
+# line, as the ruff pre-commit hook does. Without this, `.claude` would be
+# linted/reformatted on commit.
+force-exclude = true
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["exporters", "fabulexa_export"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501"]
+
+[tool.mypy]
+strict = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "kafka: integration tests requiring a running Kafka broker (dev/kafka/). Skipped unless the broker is reachable; run via `make kafka-it`.",
+]

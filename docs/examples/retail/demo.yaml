@@ -1,0 +1,23 @@
+# FabulMixer demo preset — consumer-side flags for the retail demo.
+# ============================================================
+# Demo glue only — read by the demo launcher (`make mixer-demo EXAMPLE=...`), NEVER
+# by `fabexport`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
+# See dev/demo/README.md.
+#
+# Retail topic set (from stream.yaml routing `retail.{route_table}`):
+#   retail.customer         — actor sub-typed to customer (dimension)
+#   retail.product          — entity sub-type (dimension)
+#   retail.infrastructure   — entity sub-type (dimension)
+#   retail.journey_instance — purchase journey (dimension)
+#
+# entity is sub-typed (its `entity_type` domain is [product, infrastructure]), so it
+# splits into retail.product + retail.infrastructure — not a single retail.entity.
+# All four topics are dimensions; there are no fact->dimension edges in this config,
+# so joins is empty. This is a valid pure read-back preset.
+
+windows:
+  - 3600000             # 1h tumbling window
+
+joins: []
+
+consumer_offset: earliest

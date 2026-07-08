@@ -1,0 +1,24 @@
+# StreamConfig — ride-sharing bundle, mixer smoke test
+# ============================================================
+# Drives `fabexport mixer` (and `fabexport stream`) over the ride-sharing emit at
+# docs/examples/ride-sharing/bundle/. Two kinds -> two topics, so the mixer has more
+# than one per-topic dial to lag / mute during the money demo.
+#
+#   content: state-changes  — `history` replayed as an ordered c/u/d CDC stream.
+#   default routing         — `topic_template: "{route_table}"` (the leaf). Topics:
+#       trip              — actor is sub-typed (actor_type=[trip]); its single declared
+#                           sub-type is the route_table leaf, so the topic is `trip`,
+#                           NOT `actor`. Sub-typing follows the `<kind>_type`
+#                           discriminator domain in enum_domains, not record_roles.
+#       journey_instance  — no `<kind>_type` domain -> not sub-typed -> topic = the kind.
+#
+# Anchor resolves from the sidecar runtime (start 2026-01-05, UTC); no rebase needed.
+# Bootstrap is supplied at the CLI (`--bootstrap-servers localhost:9092`).
+
+content: state-changes
+
+kinds:
+  - kind: actor
+    properties: [status, surge_tier]
+  - kind: journey_instance
+    properties: [current_state, complete]

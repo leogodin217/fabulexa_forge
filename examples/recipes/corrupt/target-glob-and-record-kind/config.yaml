@@ -1,0 +1,26 @@
+seed: 3
+operations:
+  # record_kind pools every records/membership table of one record kind,
+  # crossing table categories in a single selector — unlike `category`,
+  # which only ever picks one category. Here `record_kind: actor` pools
+  # records__actor, membership__actor__appointments, and
+  # membership__actor__oncall together; the exact two-name columns list
+  # lets each name resolve against whichever of the pooled tables actually
+  # has it.
+  - kind: dangle_reference
+    name: dangle_actor_doctor_refs
+    target:
+      record_kind: actor
+      columns: [prop__doctor_id, member__doctor__id]
+    amount: { rate: 1.0 }
+
+  # glob resolves by fnmatch pattern over sidecar table names; here
+  # "*doctor*" happens to land on exactly one table (records__doctor),
+  # demonstrating pattern-based single-table resolution as a contrast to
+  # the multi-table record_kind selector above.
+  - kind: null_cells
+    name: null_doctor_name
+    target:
+      glob: "*doctor*"
+      columns: [prop__name]
+    amount: { rate: 1.0 }

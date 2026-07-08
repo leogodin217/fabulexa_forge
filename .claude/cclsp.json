@@ -1,0 +1,27 @@
+{
+  "servers": [
+    {
+      "extensions": [
+        "py",
+        "pyi"
+      ],
+      "command": [
+        "uvx",
+        "--from",
+        "basedpyright==1.39.3",
+        "basedpyright-langserver",
+        "--stdio"
+      ],
+      "rootDir": ".",
+      "restartInterval": 5,
+      "initializationOptions": {
+        "python": {
+          "analysis": {
+            "typeCheckingMode": "off",
+            "diagnosticMode": "openFilesOnly"
+          }
+        }
+      }
+    }
+  ]
+}

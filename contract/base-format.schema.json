@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fabulexa.example/schemas/base-format-v4.schema.json",
+  "title": "Base Format Sidecar (base.json)",
+  "description": "Sidecar manifest enumerating the branches and tables present in a base-layer emit's run.duckdb. Defined by base-format.md, beside this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["base_format_version", "branches", "tables"],
+  "properties": {
+    "base_format_version": {
+      "type": "integer",
+      "description": "Format version. v4 = 4. Reader gates on this; unknown versions must be rejected.",
+      "const": 4
+    },
+    "branches": {
+      "type": "array",
+      "description": "Branches present in the emit, in branch tuple-lexicographic order.",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/branch"
+      }
+    },
+    "tables": {
+      "type": "array",
+      "description": "Tables present in run.duckdb, in DuckDB-catalog order.",
+      "items": {
+        "$ref": "#/$defs/table"
+      }
+    },
+    "runtime": {
+      "$ref": "#/$defs/runtime",
+      "description": "Wallclock anchor for the run. Present only when the scenario declared a runtime calendar; omitted entirely otherwise."
+    },
+    "pinned_ids": {
+      "$ref": "#/$defs/pinned_ids",
+      "description": "Pin identity surface. Present only when the run had pinned actors; omitted entirely otherwise."
+    },
+    "enum_domains": {
+      "$ref": "#/$defs/enum_domains",
+      "description": "Closed-domain registry for string properties (status / category typed properties and synthesized <kind>_type discriminators). Present only when the scenario declared at least one closed-domain string property; omitted entirely otherwise."
+    },
+    "record_roles": {
+      "$ref": "#/$defs/record_roles",
+      "description": "Record-role taxonomy keyed by kind. Present when the emit contains at least one records-category table. The 'actor' entry is an object mapping each declared actor sub-type to its warehouse role ('dimension' or 'fact'); every other kind maps to a single role string. Keys sorted lexicographically. Omitted entirely when absent."
+    }
+  },
+  "$defs": {
+    "branch": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fork_path", "parent", "slice_at"],
+      "properties": {
+        "fork_path": {
+          "type": "string",
+          "description": "@-joined fork path string for this branch.",
+          "minLength": 1
+        },
+        "parent": {
+          "type": ["string", "null"],
+          "description": "@-joined fork path of the parent branch, or null for a root (single-segment) branch."
+        },
+        "slice_at": {
+          "type": "integer",
+          "description": "sim_time of the slice emitted for this branch.",
+          "minimum": 0
+        }
+      }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["timezone", "start_datetime"],
+      "properties": {
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone string.",
+          "minLength": 1
+        },
+        "start_datetime": {
+          "type": "string",
+          "description": "ISO-8601 tz-aware datetime corresponding to sim_time = 0.",
+          "minLength": 1
+        }
+      }
+    },
+    "pinned_ids": {
+      "type": "object",
+      "description": "Nested {<kind>: {<label>: <id-string>}}. Maps an author-declared (kind, label) pin to the id portion of the minted record id, equality-joinable against records__<kind>.record_id.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "description": "Per-kind label-to-id map.",
+        "minProperties": 1,
+        "additionalProperties": {
+          "type": "string",
+          "description": "Id portion of the record id minted for this (kind, label).",
+          "minLength": 1
+        }
+      }
+    },
+    "enum_domains": {
+      "type": "object",
+      "description": "Nested {<kind>: {<property>: [<option>, ...]}}. Authoritative list of allowed string values for each closed-domain property. Keys at both levels are sorted lexicographically; option lists preserve declaration order.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "description": "Per-kind property-to-options map.",
+        "minProperties": 1,
+        "additionalProperties": {
+          "type": "array",
+          "description": "Allowed string values for this closed-domain property, in declaration order.",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "record_roles": {
+      "type": "object",
+      "description": "Nested record-role taxonomy. Keys are kind names, sorted lexicographically. The 'actor' value is an object mapping sub-type name to role string; all other values are role strings.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "oneOf": [
+          {
+            "type": "string",
+            "enum": ["dimension", "fact"],
+            "description": "Role string for a non-actor, non-machinery records-category kind."
+          },
+          {
+            "type": "object",
+            "description": "Per-sub-type role map for the 'actor' kind.",
+            "minProperties": 1,
+            "additionalProperties": {
+              "type": "string",
+              "enum": ["dimension", "fact"]
+            }
+          }
+        ]
+      }
+    },
+    "table": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "category", "columns", "rows"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "DuckDB table name.",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["fixed", "records", "membership"],
+          "description": "Table category. 'fixed' tables (firings, history) have spec-defined columns. 'records' tables are parameterized per record kind. 'membership' tables project collection-struct property intervals."
+        },
+        "record_kind": {
+          "type": "string",
+          "description": "Record kind name. Required iff category=='records' or category=='membership'. Equals the middle component of name after 'records__' or 'membership__'.",
+          "minLength": 1
+        },
+        "property": {
+          "type": "string",
+          "description": "Property name. Required iff category=='membership'. Equals the suffix of name after 'membership__<kind>__'.",
+          "minLength": 1
+        },
+        "columns": {
+          "type": "array",
+          "description": "Columns in DuckDB-catalog order.",
+          "items": {
+            "$ref": "#/$defs/column"
+          },
+          "minItems": 1
+        },
+        "rows": {
+          "type": "integer",
+          "description": "Row count of the table.",
+          "minimum": 0
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"category": {"const": "records"}}
+          },
+          "then": {
+            "required": ["record_kind"]
+          }
+        },
+        {
+          "if": {
+            "properties": {"category": {"const": "membership"}}
+          },
+          "then": {
+            "required": ["record_kind", "property"]
+          }
+        },
+        {
+          "if": {
+            "properties": {"category": {"const": "fixed"}}
+          },
+          "then": {
+            "not": {"required": ["record_kind"]}
+          }
+        }
+      ]
+    },
+    "column": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "DuckDB column name."
+        },
+        "type": {
+          "type": "string",
+          "minLength": 1,
+          "description": "DuckDB type literal. Producers using the recommended mapping (base-format.md) will use BIGINT, DOUBLE, BOOLEAN, VARCHAR, BLOB. Producers MAY use other DuckDB types as long as conformance C2 (DuckDB catalog matches sidecar) holds."
+        },
+        "nullable": {
+          "type": "boolean",
+          "default": true,
+          "description": "DuckDB column nullability. Optional. Omittable when consistent with the spec's nullability rules."
+        },
+        "references": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Record kind that this column points at, when the source schema declared a record-to-record reference. Present iff the column is a foreign-key projection: a single VARCHAR carrying the id portion of a record id, equality-joinable against records__<references>.record_id. Omitted for all other columns."
+        },
+        "history_tracked": {
+          "type": "boolean",
+          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present only on records-category prop__<name> columns emitted by a base_format_version: 4 producer that supports this attribute. Omitted on structural, provenance, fixed-table, and membership columns."
+        }
+      }
+    }
+  }
+}

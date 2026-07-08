@@ -1,0 +1,15 @@
+tables:
+  dim_patient:
+    columns: [patient_id, name, status, valid_from, valid_to]
+    row_count: 4
+    contains_rows:
+      # p001 open/current version (discharged) — valid_to is null
+      - patient_id: p001
+        name: Alice
+        status: discharged
+        valid_to: null
+      # p002 open/current version (pending) — valid_to is null
+      - patient_id: p002
+        name: Bob
+        status: pending
+        valid_to: null

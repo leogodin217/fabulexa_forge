@@ -1,0 +1,39 @@
+# Recipe: dim-type1-from-records
+# ============================================================
+# Demonstrates how to build a Type-1 (current-snapshot) dimension
+# from a records__<kind> source with no history tracking.
+#
+# A Type-1 dim emits ONE row per record — the current state.
+# Unlike SCD-2, it carries no valid_from/valid_to version history:
+# when the source data changes, the row is replaced in place.
+#
+# Contrast with dim-scd2-from-records, which uses grain: records
+# with scd: type2 to emit one row per (record, version) pair from
+# the history table. Here scd: type1 produces a stable snapshot.
+#
+# Fixture world (recipe emit):
+#   records__doctor — 1 doctor; prop__name is NOT history-tracked
+#                     (no entry in the history table for doctor)
+#
+# Output:
+#   dim_doctor — one row per doctor record (1 row total)
+#                The "current" name is whatever is in records__doctor.
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: dim_doctor
+      role: dim
+      scd: type1          # Type-1: one row per record, current state only
+      source:
+        grain: records    # drive rows from records__doctor
+        kind: doctor
+      key: [doctor_id]
+      columns:
+        # Natural record identity — the stable business key
+        - name: doctor_id
+          from: record_id
+        # Type-1 property: the current value, overwritten on change
+        - name: name
+          from: prop__name

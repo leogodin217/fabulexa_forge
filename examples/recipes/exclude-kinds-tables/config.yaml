@@ -1,0 +1,46 @@
+# Recipe: exclude-kinds-tables
+# ============================================================
+# Demonstrates the `exclude:` block: declare base-layer kinds and
+# sidecar tables that this export deliberately leaves out.
+#
+# IMPORTANT — exclude is a GUARD, not a filter. It does not remove output
+# tables (you simply don't declare them). What it does is FAIL the export
+# loudly if any declared table tries to source an excluded kind or sidecar
+# table. It encodes author intent ("this warehouse is patients-only") so a
+# later edit that accidentally pulls in doctor/staff/history is caught at
+# load time instead of silently widening the dataset.
+#
+# The exclude block (under `dimensional:`):
+#   kinds:  base-layer kind names no declared table may source
+#   tables: sidecar (source) table names no declared table may source
+#
+# Fixture world (recipe emit):
+#   kinds: patient, doctor, staff   |   tables include history,
+#   membership__patient__visits, records__doctor, records__staff
+#
+# Output:
+#   dim_patient — 2 rows. Only patient is exported; declaring any doctor/staff
+#                 table, or sourcing history / the visits membership, would now
+#                 raise an ExportError instead of exporting.
+
+mode: dimensional
+
+dimensional:
+  # Guardrails: nothing in this export may source these kinds or tables.
+  exclude:
+    kinds: [doctor, staff]
+    tables: [history, membership__patient__visits]
+
+  tables:
+    - name: dim_patient
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [patient_id]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: patient_name
+          from: prop__name

@@ -1,0 +1,22 @@
+# Recipe: source-rename-table
+# ============================================================
+# `source: {rename: [...]}` overrides one table's derived default output
+# name. Every `rename` key is SIDECAR/SOURCE IDENTITY — the base sidecar
+# table name (`records__<kind>` or `membership__<K>__<p>`), never the
+# derived output name — so the entry below targets `records__queue`
+# (the queue kind's records table), NOT the string `queue` (its default
+# output name).
+#
+# This is a bare full dump otherwise: every table exports exactly as it
+# does in `source-changelog-from-history`, except `queue`'s output table
+# is named `triage_desk` instead of the default `queue`.
+#
+# Output: identical to the unrenamed bare dump, but with `queue` -> renamed
+# to `triage_desk` (and the default name `queue` no longer present).
+
+mode: source
+
+source:
+  rename:
+    - table: records__queue
+      name: triage_desk

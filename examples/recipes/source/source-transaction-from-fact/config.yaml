@@ -1,0 +1,36 @@
+# Recipe: source-transaction-from-fact
+# ============================================================
+# The TRANSACTION genre: an untracked kind whose resolved warehouse role is
+# `fact` (record_roles: {admission: fact}). No history_tracked prop__
+# column, so role decides: `fact` maps to transaction (source.md §
+# Classification).
+#
+# `exclude.kinds` narrows the bare dump down to the one kind under test
+# (admission) so this recipe's expect.yaml only has to declare one table —
+# see the `source-exclude-kind` recipe for exclude's real teaching point.
+#
+# NOTE — teaching point confirmed by an actual run: reference and
+# transaction share the exact same column set (source.md § The reference
+# and transaction renders — "differing only in genre label ... not a
+# schema difference"). This recipe's admission table has the identical
+# shape as `source-reference-from-dimension`'s doctor table (id /
+# created_at / active / deactivated_at / updated_at / <payload>); the only
+# difference is the *meaning* the consumer assigns the genre label — join
+# a reference, aggregate a transaction. There is no `op` column here
+# either, and no schema assertion this recipe could make that the
+# reference recipe doesn't already make identically.
+#
+# Fixture world (recipe emit):
+#   records__admission — identity + lifecycle kind, one type-1 prop__ward,
+#                        no history. a001 active (create only, ward=north);
+#                        a002 deactivated@2d (create then delete, ward=south).
+#
+# Output:
+#   admission — 2 rows: a001 active/no deactivated_at, a002 inactive with
+#               deactivated_at set.
+
+mode: source
+
+source:
+  exclude:
+    kinds: [patient, doctor, staff, queue]

@@ -1,0 +1,53 @@
+# Recipe: lookup-reference-property
+# ============================================================
+# Demonstrates the lookup column: enrich a row with a type-1 scalar
+# property of a RELATED record, reached by following a reference edge.
+#
+# Contrast with dim-with-fk-reference:
+#   - fk    carries the related record's IDENTITY (its record_id) — you JOIN
+#           later to get attributes.
+#   - lookup carries the related record's ATTRIBUTE VALUE inline (denormalized).
+# Both follow the same labeled `references` edge; they differ in what they emit.
+#
+# The lookup column:
+#   property: the property to project (resolves to prop__<property> on the
+#             terminal kind)
+#   to:       the terminal kind to reach via reference-edge pathfind
+#             (omit for a zero-hop self-lookup on a non-records grain)
+#   path:     optional explicit hop chain — only when the pathfind is ambiguous
+#             (see fk-ambiguous-path-hint)
+#
+# Only TYPE-1 (history_tracked: false) properties are lookup-able, and lookup
+# is not allowed on scd: type2 tables — a lookup reads a single current value,
+# not a version history.
+#
+# Fixture world (recipe emit):
+#   records__patient — prop__doctor_id references doctor d001 (single edge)
+#   records__doctor  — d001 / prop__name = "Dr. Carter" (type-1)
+#
+# Output:
+#   dim_patient — 2 rows; doctor_name resolves to "Dr. Carter" for both patients
+#                 (both reference d001). No `path` needed: exactly one edge
+#                 patient → doctor exists.
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: dim_patient
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [patient_id]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: patient_name
+          from: prop__name
+        # lookup: follow patient.prop__doctor_id → doctor, project prop__name.
+        - name: doctor_name
+          lookup:
+            to: doctor
+            property: name

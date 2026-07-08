@@ -1,0 +1,33 @@
+# Recipe: streaming / rebase-ts
+# ============================================================
+# Every event carries a `ts` — the wallclock instant of its sim_time. By default
+# `ts` is rendered through the emit's runtime anchor. Add a `rebase` block to
+# choose your own wallclock origin and timezone (the same block the dimensional
+# exporter uses). The stream's events and seq are unchanged — only `ts` moves.
+#
+# `ts` is an offset-bearing ISO-8601 string: the absolute instant projected into
+# the chosen zone. Asia/Kolkata (+05:30, no DST) makes the offset visible and
+# keeps the value deterministic forever.
+#
+#   origin  = 2030-06-01T00:00:00 in Asia/Kolkata  (= 2030-05-31T18:30:00Z)
+#   event @ +1 day (p001 create) -> 2030-06-02T00:00:00+05:30
+#
+# Fixture world (recipe emit):
+#   records__patient — p001 status pending@1d -> active@2d -> discharged@3d
+#                      p002 status pending@2d
+#
+# Output (patient.jsonl) — same 4 events as state-changes, with rebased ts:
+#   seq 1  c p001  ts 2030-06-02T00:00:00+05:30
+#   seq 2  c p002  ts 2030-06-03T00:00:00+05:30
+#   seq 3  u p001  ts 2030-06-03T00:00:00+05:30
+#   seq 4  u p001  ts 2030-06-04T00:00:00+05:30
+
+content: state-changes
+
+kinds:
+  - kind: patient
+    properties: [status]
+
+rebase:
+  base_date: 2030-06-01T00:00:00
+  timezone: Asia/Kolkata

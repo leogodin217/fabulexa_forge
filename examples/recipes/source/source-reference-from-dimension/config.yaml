@@ -1,0 +1,37 @@
+# Recipe: source-reference-from-dimension
+# ============================================================
+# The REFERENCE genre: an untracked kind whose resolved warehouse role is
+# `dimension` (record_roles: {doctor: dimension}). No history_tracked
+# prop__ column, so tracked-ness does not apply — role decides, and
+# `dimension` maps to reference (source.md § Classification).
+#
+# `exclude.kinds` is used here purely to narrow the bare full dump down to
+# the one kind under test (doctor), so this recipe's expect.yaml only has
+# to declare one table. It is a guard, not a filter (see the
+# `source-exclude-kind` recipe for exclude's real teaching point — dropping
+# a kind and the membership tables it owns).
+#
+# Reference column shape (source.md § Operational presentation defaults):
+#   id             — record_id, verbatim
+#   created_at     — created_sim_time, wallclock TIMESTAMP
+#   active         — verbatim
+#   deactivated_at — wallclock TIMESTAMP, null iff active
+#   updated_at     — last_mutation_sim_time, wallclock TIMESTAMP
+#   name           — prop__name, prefix-stripped
+# No `op` column — a reference table is the faithful current-state records
+# relation, not a change log; the genre label alone tells the consumer to
+# JOIN it rather than replay it.
+#
+# Fixture world (recipe emit):
+#   records__doctor — 1 record, d001 "Dr. Carter", created_sim_time=50ns —
+#                     close enough to the runtime anchor (2024-01-01T00:00:00Z)
+#                     that the rendered wallclock truncates to that instant.
+#
+# Output:
+#   doctor — 1 row: d001, Dr. Carter, active, no op column.
+
+mode: source
+
+source:
+  exclude:
+    kinds: [patient, staff, admission, queue]

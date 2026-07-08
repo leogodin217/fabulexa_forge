@@ -1,0 +1,11 @@
+defect_counts:
+  reordered_event: 2
+
+impact_union:
+  - C6
+
+contains_defects:
+  - class: reordered_event
+    rule: swap_name_anchor
+    impact: [C6]
+    location.table: history

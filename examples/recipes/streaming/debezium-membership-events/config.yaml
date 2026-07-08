@@ -1,0 +1,54 @@
+# Recipe: streaming / debezium-membership-events
+# ============================================================
+# Render the membership-events log in the Debezium format (`--fmt debezium`).
+#
+# Membership-events are an APPEND-ONLY event log, not an upsert log, so the
+# Debezium rendering differs from state-changes: every join AND every leave is a
+# canonical INSERT — envelope `op` is always `c`, `before` is always null, `after`
+# is never null. This is the faithful Debezium shape of an owner-keyed event table
+# (an Outbox / Event-Router connector emits `op: c` for every row); there is no
+# `d` and no key-only tombstone.
+#
+# The domain op rides the after-image as its leading `event` column:
+#   join  -> envelope op c, after {event: "join",  record_id, <element fields>}
+#   leave -> envelope op c, after {event: "leave", record_id, <element fields>}
+#
+# After `event` and the owner `record_id` come the selected element fields, in
+# `fields` declaration order, exactly as the jsonl membership-events `after`:
+#   - a scalar f    -> elem__<f>            (priority -> elem__priority)
+#   - a reference f -> member__<f>__kind / member__<f>__id
+#                      (patient -> member__patient__kind / __id)
+#
+# source/lsn/ts_ms/table derive exactly as for state-changes: `table` is the
+# membership leaf table (route_table = <owner>__<property> = queue__waiters),
+# `lsn` = `seq`, `ts_ms` = the rebased event time. A resolved anchor is required
+# (epoch-ms); the `rebase` block pins a UTC origin.
+#
+# Fixture world (recipe emit):
+#   membership__queue__waiters on owner q001 —
+#     p001 priority 2: joined@1d, left@2d   (closed interval -> join + leave)
+#     p002 priority 1: joined@2d, open      (open interval   -> join only)
+#
+# Output (one queue__waiters.jsonl stream, global seq order) — three insert
+# messages: join p001 (+1d), join p002 (+2d), leave p001 (+2d, ranks after the
+# coincident join).
+
+content: membership-events
+
+debezium:
+  schemas_enable: true            # {schema, payload}; `event` rides the after-image
+  source:
+    connector: postgres
+    name: hospital
+    db: hospital
+    schema: public
+    version: 2.5.0.Final
+
+memberships:
+  - owner_kind: queue
+    property: waiters
+    fields: [patient, priority]   # bare element-schema names; the sidecar maps each
+
+rebase:
+  base_date: 2024-01-01T00:00:00  # pins ts_ms; Debezium requires an anchor
+  timezone: UTC

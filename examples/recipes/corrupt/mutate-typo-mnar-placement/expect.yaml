@@ -1,0 +1,12 @@
+defect_counts:
+  typo_value: 1
+
+impact_union:
+  - C6
+
+contains_defects:
+  - class: typo_value
+    rule: typo_active_actor_name
+    impact: [C6]
+    location.table: records__actor
+    location.column: prop__name
