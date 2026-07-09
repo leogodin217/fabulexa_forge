@@ -184,11 +184,11 @@ canonical doc:
 
 ## Phase 6 — Mechanical tail
 
-1. **Obsidian forward-notes** — `python3 .claude/skills/note/cli.py list --tags forward-note --area <shipped-area>`.
+1. **Obsidian forward-notes** — `python3 ~/.claude/skills/note/cli.py list --tags forward-note --area <shipped-area>`.
    For each: `note status <slug> complete` (research; set `conclusion`) or
    `note status <slug> answered` (questions; set `answered-by`).
 2. **Delete** the `pending/<name>.md` file(s).
-3. `python3 .claude/skills/note/cli.py lint` — catch broken `related-notes`
+3. `python3 ~/.claude/skills/note/cli.py lint` — catch broken `related-notes`
    wikilinks.
 
 ## Phase 7 — Summary

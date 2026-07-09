@@ -36,7 +36,7 @@ The user provides one of:
 1. **Load context:**
    - `{package}/docs/CAPABILITIES.md` — current capability status
    - `{package}/docs/architecture/README.md` — architecture overview + reading order (router)
-   - **Obsidian forward-notes for the area:** `python3 .claude/skills/note/cli.py list --type research --area <package-area>`. Read each result's body and front-matter; entries tagged `forward-note` carry forward-looking design hypotheses, scale-roadmap context, and "may change" guidance. **For an unbuilt subsystem with no package yet** (e.g., a generative exporter) `--area` won't match — search `cross-cutting` plus the closest existing related areas.
+   - **Obsidian forward-notes for the area:** `python3 ~/.claude/skills/note/cli.py list --type research --area <package-area>`. Read each result's body and front-matter; entries tagged `forward-note` carry forward-looking design hypotheses, scale-roadmap context, and "may change" guidance. **For an unbuilt subsystem with no package yet** (e.g., a generative exporter) `--area` won't match — search `cross-cutting` plus the closest existing related areas.
    - If user provided an issue path, read that too
 
 2. **Write Problem and Solution sections:**
