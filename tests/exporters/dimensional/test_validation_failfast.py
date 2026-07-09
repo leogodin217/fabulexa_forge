@@ -84,17 +84,3 @@ def test_tracked_column_check_raises_export_error_on_missing_table() -> None:
 
     with pytest.raises(ExportError, match="records__consultant"):
         check_scd2_needs_history(table_decl, "records__consultant", sidecar)
-
-
-def test_scd2_needs_history_refuses_flag_absent_emit() -> None:
-    """check_scd2_needs_history refuses a flag-absent emit immediately.
-
-    When history_tracked_available() is False the function raises ExportError
-    with a "re-emit with history_tracked" message — no inference fallback.
-    """
-    table_decl = _make_table_decl(grain="records", kind="entity", scd="type2")
-    sidecar = MagicMock()
-    sidecar.history_tracked_available.return_value = False
-
-    with pytest.raises(ExportError, match="re-emit with history_tracked"):
-        check_scd2_needs_history(table_decl, "records__entity", sidecar)

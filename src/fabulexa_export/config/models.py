@@ -7,12 +7,48 @@ Each model enforces its own structural constraints via `@model_validator`.
 from __future__ import annotations
 
 import math
+import re
 import string
 from datetime import datetime
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
+
+from fabulexa_export._sql import is_recognized_sql_type
+
+# ---------------------------------------------------------------------------
+# Identifier validation (author-supplied names spliced into SQL / filenames)
+# ---------------------------------------------------------------------------
+
+_SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+# Kafka-convention topic name: also safe as a filename stem (no separator,
+# no traversal), so a `groups` target can never escape the jsonl output dir.
+_TOPIC_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _require_sql_identifier(value: str, context: str) -> None:
+    """Reject an author-supplied name that is not a plain SQL identifier.
+
+    Names accepted here are later spliced into SQL identifiers and output
+    filenames; the pattern forecloses quote break-out and path traversal at
+    config load (Principle #7: invalid config errors at load time).
+
+    Args:
+        value: The author-supplied name to check.
+        context: Prefix for the error message (e.g. "table 'x': name").
+
+    Raises:
+        ValueError: `value` does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+    """
+    if not _SQL_IDENTIFIER_RE.fullmatch(value):
+        raise ValueError(
+            f"{context} {value!r} must be a valid SQL identifier"
+            " (letters, digits, underscores; not starting with a digit:"
+            " ^[A-Za-z_][A-Za-z0-9_]*$)"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Kafka connection config (streaming sink)
@@ -262,6 +298,16 @@ class ColumnDecl(StrictBaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def name_is_sql_identifier(self) -> Self:
+        """`name` is a plain SQL identifier (it becomes an output column name).
+
+        Raises:
+            ValueError: `name` does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+        """
+        _require_sql_identifier(self.name, "column name")
+        return self
+
 
 class SourceDecl(StrictBaseModel):
     """The grain source binding for one output table."""
@@ -322,6 +368,17 @@ class TableDecl(StrictBaseModel):
     """The ordered list of output column declarations for this table."""
 
     @model_validator(mode="after")
+    def name_is_sql_identifier(self) -> Self:
+        """`name` is a plain SQL identifier (it becomes an output table name
+        spliced into SQL and output filenames).
+
+        Raises:
+            ValueError: `name` does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+        """
+        _require_sql_identifier(self.name, "table name")
+        return self
+
+    @model_validator(mode="after")
     def scd_only_on_dims(self) -> Self:
         """`scd` is set iff role=='dim'; a fact must not declare an SCD class."""
         if self.role == "fact" and self.scd is not None:
@@ -337,6 +394,26 @@ class TableDecl(StrictBaseModel):
             raise ValueError(f"table '{self.name}': 'columns' must not be empty")
         if not self.key:
             raise ValueError(f"table '{self.name}': 'key' must not be empty")
+        return self
+
+    @model_validator(mode="after")
+    def column_names_unique(self) -> Self:
+        """`columns` names no output column twice.
+
+        Raises:
+            ValueError: A column name appears more than once within this table.
+        """
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for col in self.columns:
+            if col.name in seen:
+                duplicates.append(col.name)
+            seen.add(col.name)
+        if duplicates:
+            raise ValueError(
+                f"table '{self.name}': 'columns' contains duplicate column"
+                f" names: {duplicates}"
+            )
         return self
 
 
@@ -417,6 +494,23 @@ class RenameEntry(StrictBaseModel):
                 )
         return self
 
+    @model_validator(mode="after")
+    def rename_targets_are_sql_identifiers(self) -> Self:
+        """Every rename *target* — `name` and each `columns` value — is a plain
+        SQL identifier (targets become output table/column names spliced into
+        SQL and filenames; `table` / `columns` keys are sidecar identities and
+        stay unrestricted).
+
+        Raises:
+            ValueError: A target does not match ^[A-Za-z_][A-Za-z0-9_]*$.
+        """
+        if self.name is not None:
+            _require_sql_identifier(self.name, "RenameEntry.name")
+        if self.columns is not None:
+            for key, value in self.columns.items():
+                _require_sql_identifier(value, f"RenameEntry.columns[{key!r}] target")
+        return self
+
 
 class SourceConfig(StrictBaseModel):
     """The source-mode section: escape hatches over the full-emit dump."""
@@ -482,6 +576,29 @@ class DimensionalConfig(StrictBaseModel):
         """tables must be non-empty."""
         if not self.tables:
             raise ValueError("dimensional.tables must not be empty")
+        return self
+
+    @model_validator(mode="after")
+    def table_names_unique(self) -> Self:
+        """`tables` names no output table twice.
+
+        Two TableDecl entries sharing a name would silently collapse to one
+        output downstream (query specs are keyed on table name), so a
+        duplicate is a load-time error (Principle #7).
+
+        Raises:
+            ValueError: A table name appears more than once.
+        """
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for table in self.tables:
+            if table.name in seen:
+                duplicates.append(table.name)
+            seen.add(table.name)
+        if duplicates:
+            raise ValueError(
+                f"dimensional.tables contains duplicate table names: {duplicates}"
+            )
         return self
 
 
@@ -626,19 +743,28 @@ class RoutingConfig(StrictBaseModel):
         """Validate topic_template and groups.
 
         topic_template must be non-empty with balanced braces and no format-spec or
-        conversion on any placeholder. Every groups target and member must be a
-        non-empty string; a member may appear in at most one group.
+        conversion on any placeholder. Every groups target must be a valid topic
+        name — Kafka convention ^[A-Za-z0-9._-]+$ and not "." or ".." (a target
+        also becomes the jsonl sink's filename stem, so this forecloses path
+        traversal). Every member must be a non-empty string; a member may appear
+        in at most one group.
 
         Raises:
             ValueError: An empty template, a malformed template (unbalanced brace,
-                format-spec, or conversion on a placeholder), an empty topic/member
-                string, or a member shared by two groups.
+                format-spec, or conversion on a placeholder), an empty or invalid
+                target topic name, an empty member string, or a member shared by
+                two groups.
         """
         _validate_topic_template(self.topic_template)
         seen_members: set[str] = set()
         for target, members in self.groups.items():
             if not target:
                 raise ValueError("groups target topic must be a non-empty string")
+            if not _TOPIC_NAME_RE.fullmatch(target) or target in {".", ".."}:
+                raise ValueError(
+                    f"groups target topic {target!r} must be a valid topic name"
+                    " (^[A-Za-z0-9._-]+$ and not '.' or '..')"
+                )
             for member in members:
                 if not member:
                     raise ValueError(
@@ -1275,6 +1401,37 @@ class SchemaDrift(StrictBaseModel):
                 f"schema_drift column keys must be disjoint across"
                 f" rename_to / retype_to / drop; overlaps: {conflicts}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def rename_targets_and_retype_types_valid(self) -> Self:
+        """Every `rename_to` *target* is a plain SQL identifier and every
+        `retype_to` type string is a recognized DuckDB type.
+
+        Targets become column names in the written emit's catalog; type
+        strings are spliced into a CAST — neither may be free-form. Keys are
+        existing-column lookups and stay unrestricted (`ColumnsExist` checks
+        them against the table).
+
+        Raises:
+            ValueError: A rename target does not match
+                ^[A-Za-z_][A-Za-z0-9_]*$, or a retype type is not on the
+                recognized DuckDB type allow-list.
+        """
+        if self.rename_to is not None:
+            for key, value in self.rename_to.items():
+                _require_sql_identifier(
+                    value, f"schema_drift rename_to[{key!r}] target"
+                )
+        if self.retype_to is not None:
+            for key, sql_type in self.retype_to.items():
+                if not is_recognized_sql_type(sql_type):
+                    raise ValueError(
+                        f"schema_drift retype_to[{key!r}]: {sql_type!r} is not"
+                        " a recognized DuckDB type (allowed: VARCHAR[(n)],"
+                        " integer family, DOUBLE/FLOAT/REAL, BOOLEAN,"
+                        " DECIMAL(p,s)/NUMERIC(p,s))"
+                    )
         return self
 
 

@@ -9,7 +9,12 @@ DuckDB output — the same expectation schema test_recipes.py uses, since
 Three gates:
 1. config-load   : load_export_config succeeds for every source recipe.
 2. run-and-assert: open emit -> load config -> resolve anchor -> export_source
-                   -> assert_recipe_output.
+                   -> assert_recipe_output. A `change_delivery: snapshot`
+                   recipe cannot run through export_source (a full export
+                   under snapshot raises SourceSnapshotRequiresWindows), so
+                   it runs the windowed compile with one explicit full-range
+                   window instead — the same specs the CLI's --from/--to
+                   path applies.
 3. corpus guard  : corpus is non-empty; every folder contains exactly the two
                    expected files.
 """
@@ -22,8 +27,13 @@ import pytest
 
 from fabulexa_export.anchor import resolve_effective_anchor
 from fabulexa_export.config.loader import load_export_config
-from fabulexa_export.exporters.source.engine import export_source
+from fabulexa_export.exporters.source.engine import (
+    build_source_query_specs,
+    export_source,
+)
+from fabulexa_export.incremental.windows import Window
 from fabulexa_export.reader.emit import open_emit
+from fabulexa_export.writers.duckdb import write_duckdb_window
 
 from ._harness import (
     RecipeFolder,
@@ -31,6 +41,7 @@ from ._harness import (
     discover_recipes,
     load_expectation,
 )
+from ._recipe_fixture import DAY
 
 _SOURCE_RECIPES_ROOT = (
     Path(__file__).parent.parent.parent / "examples" / "recipes" / "source"
@@ -60,7 +71,14 @@ def test_source_recipe_config_loads(recipe: RecipeFolder) -> None:
 def test_source_recipe_run_and_assert(
     recipe: RecipeFolder, recipe_emit_dir: Path, tmp_path: Path
 ) -> None:
-    """Full round-trip: export the recipe and assert against expect.yaml."""
+    """Full round-trip: export the recipe and assert against expect.yaml.
+
+    Snapshot-delivery recipes require a windowed invocation, so they run
+    one explicit full-range window ([0, 4*DAY) covers every fixture event;
+    fingerprint=None is the explicit-range path — no bookkeeping tables)
+    through the windowed compile + warehouse writer instead of
+    export_source.
+    """
     config = load_export_config(recipe.config_path)
     expectation = load_expectation(recipe.expect_path)
 
@@ -73,7 +91,12 @@ def test_source_recipe_run_and_assert(
             None,
             None,
         )
-        export_source(emit, config, out_path, "duckdb", anchor)
+        if config.source is not None and config.source.change_delivery == "snapshot":
+            window = Window(index=None, start_ns=0, end_ns=4 * DAY, label="full-range")
+            specs = build_source_query_specs(emit, config, anchor, window)
+            write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
+        else:
+            export_source(emit, config, out_path, "duckdb", anchor)
 
     assert_recipe_output(expectation, out_path)
 

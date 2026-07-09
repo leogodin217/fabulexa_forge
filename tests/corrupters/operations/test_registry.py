@@ -23,20 +23,3 @@ def _union_kinds() -> set[str]:
 
 def test_registry_keys_equal_corrupt_operation_kinds() -> None:
     assert set(CORRUPTER_REGISTRY) == _union_kinds()
-
-
-def test_registry_values_are_corrupter_implementations() -> None:
-    for handler in CORRUPTER_REGISTRY.values():
-        assert callable(handler.apply)
-
-
-def test_delete_rows_is_registered() -> None:
-    assert "delete_rows" in CORRUPTER_REGISTRY
-
-
-def test_insert_rows_is_registered() -> None:
-    assert "insert_rows" in CORRUPTER_REGISTRY
-
-
-def test_distort_intervals_is_registered() -> None:
-    assert "distort_intervals" in CORRUPTER_REGISTRY

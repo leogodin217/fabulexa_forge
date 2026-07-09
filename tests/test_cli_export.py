@@ -17,6 +17,9 @@ Covers:
 - change_delivery: snapshot (Unit 3): a --next drip grows the changelog kind's
   snapshot; a full export refuses with SourceSnapshotRequiresWindows; changing
   change_delivery mid-drip trips IncrementalFingerprintMismatch
+- the remaining incremental CLI error funnel: IncrementalAnchorRequired,
+  IncrementalPeriodRegimeMismatch, IncrementalCursorInvalid, and
+  IncrementalRangeInvalid each surface through cmd_export as exit 1
 """
 
 from __future__ import annotations
@@ -925,15 +928,150 @@ def test_no_incremental_flags_full_export_unchanged(
     assert "[" not in captured.out
 
 
-# Exit codes 0 / 3 / 1 are mutually distinguishable
+# Remaining incremental error funnel: anchor/regime/cursor/range errors
 
 
-def test_exit_codes_distinguishable(
+def write_calendar_incremental_config(config_path: Path) -> None:
+    """Write a minimal dimensional config with a calendar incremental block.
+
+    Args:
+        config_path: Path to write the YAML config to.
+    """
+    config_dict: dict[str, object] = {
+        "mode": "dimensional",
+        "incremental": {"period": "day"},
+        "dimensional": {
+            "tables": [
+                {
+                    "name": "dim_entity",
+                    "role": "dim",
+                    "scd": "type1",
+                    "source": {"grain": "records", "kind": "entity"},
+                    "key": ["id"],
+                    "columns": [
+                        {"name": "id", "from": "record_id"},
+                        {"name": "name", "from": "prop__name"},
+                    ],
+                }
+            ]
+        },
+    }
+    config_path.write_text(yaml.dump(config_dict, allow_unicode=True), encoding="utf-8")
+
+
+def test_next_period_without_anchor_exit_1(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Exit codes 0, 3, and 1 are mutually distinguishable."""
-    assert 0 != 3
-    assert 0 != 1
+    """--next with a calendar `period` but no resolvable anchor exits 1
+    (IncrementalAnchorRequired via the funnel)."""
+    emit_dir = build_incremental_emit(tmp_path)  # no runtime block
+    config_path = tmp_path / "config.yaml"
+    write_calendar_incremental_config(config_path)
+    out = tmp_path / "wh.duckdb"
+
+    exit_code = cmd_export(emit_dir, config_path, out, "duckdb", next_window=True)
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "ERROR" in captured.err
+    assert "anchor" in captured.err.lower()
+    assert not out.exists()
+
+
+def test_next_sim_period_with_anchor_exit_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--next with `sim_period_ns` while an anchor resolves (CLI --base-date)
+    exits 1 (IncrementalPeriodRegimeMismatch via the funnel)."""
+    emit_dir = build_incremental_emit(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    write_incremental_config(config_path)  # sim_period_ns regime
+    out = tmp_path / "wh.duckdb"
+
+    exit_code = cmd_export(
+        emit_dir,
+        config_path,
+        out,
+        "duckdb",
+        cli_base_date=datetime(2024, 1, 1, 0, 0, 0),
+        cli_timezone="UTC",
+        next_window=True,
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "ERROR" in captured.err
+    assert "sim_period_ns" in captured.err
+    assert not out.exists()
+
+
+def test_next_foreign_warehouse_exit_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--next into a non-empty warehouse without _export_meta exits 1
+    (IncrementalCursorInvalid via the funnel)."""
+    emit_dir = build_incremental_emit(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    write_incremental_config(config_path)
+    out = tmp_path / "wh.duckdb"
+
+    # A warehouse not created by --next: non-empty catalog, no _export_meta.
+    conn = duckdb.connect(str(out))
+    conn.execute("CREATE TABLE stray (x INTEGER)")
+    conn.close()
+
+    exit_code = cmd_export(emit_dir, config_path, out, "duckdb", next_window=True)
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "ERROR" in captured.err
+    assert "_export_meta" in captured.err
+
+
+def test_from_to_unparseable_sim_offset_exit_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--from that is not an integer ns offset (no anchor resolves) exits 1
+    (IncrementalRangeInvalid via the funnel)."""
+    emit_dir = build_incremental_emit(tmp_path)  # no runtime block
+    config_path = tmp_path / "config.yaml"
+    write_incremental_config(config_path)
+    out = tmp_path / "range_out.duckdb"
+
+    exit_code = cmd_export(
+        emit_dir,
+        config_path,
+        out,
+        "duckdb",
+        range_from="not-a-number",
+        range_to="200",
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "ERROR" in captured.err
+    assert "integer ns offset" in captured.err
+    assert not out.exists()
+
+
+def test_from_to_reversed_order_exit_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--from >= --to exits 1 (IncrementalRangeInvalid via the funnel)."""
+    emit_dir = build_incremental_emit(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    write_incremental_config(config_path)
+    out = tmp_path / "range_out.duckdb"
+
+    exit_code = cmd_export(
+        emit_dir,
+        config_path,
+        out,
+        "duckdb",
+        range_from="200",
+        range_to="100",
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "ERROR" in captured.err
+    assert "strictly before" in captured.err
+    assert not out.exists()
 
 
 # ---------------------------------------------------------------------------

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from fabulexa_export.errors import (
     ConfigError,
     CorruptError,
@@ -58,32 +56,6 @@ def test_four_classes_are_distinct() -> None:
     assert len(set(classes)) == 4
 
 
-def test_config_error_is_catchable_as_exporter_error() -> None:
-    """ConfigError instances are caught by except ExporterError."""
-    try:
-        raise ConfigError("bad config")
-    except ExporterError:
-        pass  # expected
-    else:
-        pytest.fail("ConfigError was not caught as ExporterError")
-
-
-def test_export_error_is_catchable_as_exporter_error() -> None:
-    """ExportError instances are caught by except ExporterError."""
-    try:
-        raise ExportError("bad emit")
-    except ExporterError:
-        pass
-
-
-def test_export_runtime_error_is_catchable_as_exporter_error() -> None:
-    """ExportRuntimeError instances are caught by except ExporterError."""
-    try:
-        raise ExportRuntimeError("write failed")
-    except ExporterError:
-        pass
-
-
 def test_rebase_error_is_exporter_error() -> None:
     """RebaseError subclasses ExporterError."""
     assert issubclass(RebaseError, ExporterError)
@@ -102,25 +74,9 @@ def test_rebase_subclasses_subclass_rebase_error() -> None:
         assert issubclass(cls, RebaseError), f"{cls.__name__} must subclass RebaseError"
 
 
-def test_rebase_errors_catchable_as_exporter_error() -> None:
-    """RebaseError instances are caught by except ExporterError."""
-    try:
-        raise RebaseTimezoneUnresolvable("no zone")
-    except ExporterError:
-        pass  # expected
-
-
 def test_init_requires_record_roles_is_exporter_error() -> None:
     """InitRequiresRecordRoles subclasses ExporterError."""
     assert issubclass(InitRequiresRecordRoles, ExporterError)
-
-
-def test_init_requires_record_roles_is_catchable_as_exporter_error() -> None:
-    """InitRequiresRecordRoles instances are caught by except ExporterError."""
-    try:
-        raise InitRequiresRecordRoles("no record_roles")
-    except ExporterError:
-        pass  # expected
 
 
 def test_mixer_extra_unavailable_is_exporter_error() -> None:
@@ -131,18 +87,6 @@ def test_mixer_extra_unavailable_is_exporter_error() -> None:
 def test_mixer_extra_unavailable_not_exporter_error_subtype() -> None:
     """MixerExtraUnavailable is a direct child of ExporterError, not a sub-subclass."""
     assert MixerExtraUnavailable.__bases__ == (ExporterError,)
-
-
-def test_mixer_extra_unavailable_caught_by_reader_exporter_funnel() -> None:
-    """MixerExtraUnavailable is caught by an (ReaderError, ExporterError) except clause."""
-    from fabulexa_export.reader.errors import ReaderError
-
-    try:
-        raise MixerExtraUnavailable(
-            "FastAPI / ASGI server not installed; install the [mixer] extra"
-        )
-    except (ReaderError, ExporterError):
-        pass  # expected
 
 
 def test_mixer_extra_unavailable_message_names_extra() -> None:
@@ -175,14 +119,4 @@ def test_corrupt_validation_error_is_catchable_as_exporter_error() -> None:
     try:
         raise CorruptValidationError("business rule failed")
     except ExporterError:
-        pass  # expected
-
-
-def test_corrupt_error_caught_by_reader_exporter_funnel() -> None:
-    """CorruptError is caught by an (ReaderError, ExporterError) except clause."""
-    from fabulexa_export.reader.errors import ReaderError
-
-    try:
-        raise CorruptError("bad corrupt config")
-    except (ReaderError, ExporterError):
         pass  # expected

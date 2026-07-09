@@ -18,7 +18,11 @@ from fabulexa_export.errors import (
     IncrementalPeriodRegimeMismatch,
     IncrementalRangeInvalid,
 )
-from fabulexa_export.incremental.windows import derive_window, parse_range
+from fabulexa_export.incremental.windows import (
+    _advance_one_period,
+    derive_window,
+    parse_range,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -134,6 +138,25 @@ def test_derive_window_week_mid_week_anchor() -> None:
     assert w1.label == "w00001_2020-03-09"
 
 
+def test_derive_window_week_monday_midnight_anchor_full_week() -> None:
+    """Anchor exactly on ISO Monday midnight → window 0 is a full 7-day week.
+
+    days_until_monday == 0 must jump a full 7 days (the boundary is *strictly*
+    after the anchor), never 0.
+    """
+    # 2020-03-02 is a Monday; the boundary strictly after is 2020-03-09
+    anchor = _anchor("2020-03-02T00:00:00+00:00", "UTC")
+    w0 = derive_window(0, _week_cfg(), anchor)
+    assert w0.start_ns == 0
+    assert w0.end_ns == 7 * 24 * _NS_PER_HOUR
+    assert w0.label == "w00000_2020-03-02"
+
+    w1 = derive_window(1, _week_cfg(), anchor)
+    assert w1.start_ns == 7 * 24 * _NS_PER_HOUR
+    assert w1.end_ns == 14 * 24 * _NS_PER_HOUR
+    assert w1.label == "w00001_2020-03-09"
+
+
 # ---------------------------------------------------------------------------
 # derive_window — month regime
 # ---------------------------------------------------------------------------
@@ -148,6 +171,64 @@ def test_derive_window_month_mid_month_anchor() -> None:
     # 17 days to 2020-04-01
     assert w0.end_ns == 17 * 24 * _NS_PER_HOUR
     assert w0.label == "w00000_2020-03-15"
+
+
+def test_derive_window_month_day31_anchor_multi_window_advance() -> None:
+    """A Jan-31 anchor advances through leap-February and March correctly."""
+    anchor = _anchor("2020-01-31T00:00:00+00:00", "UTC")
+
+    # Window 0: [Jan-31, Feb-1) — 1 day
+    w0 = derive_window(0, _month_cfg(), anchor)
+    assert w0.start_ns == 0
+    assert w0.end_ns == 1 * 24 * _NS_PER_HOUR
+    assert w0.label == "w00000_2020-01-31"
+
+    # Window 1: [Feb-1, Mar-1) — 29 days (2020 is a leap year)
+    w1 = derive_window(1, _month_cfg(), anchor)
+    assert w1.end_ns - w1.start_ns == 29 * 24 * _NS_PER_HOUR
+    assert w1.label == "w00001_2020-02-01"
+
+    # Window 2: [Mar-1, Apr-1) — 31 days
+    w2 = derive_window(2, _month_cfg(), anchor)
+    assert w2.end_ns - w2.start_ns == 31 * 24 * _NS_PER_HOUR
+    assert w2.label == "w00002_2020-03-01"
+
+
+# ---------------------------------------------------------------------------
+# _advance_one_period — month-end day clamp
+# ---------------------------------------------------------------------------
+
+
+def test_advance_one_period_month_end_clamps_to_28_day_february() -> None:
+    """A day-31 boundary advancing into a 28-day February clamps to the 28th."""
+    tz = ZoneInfo("UTC")
+    jan31 = datetime(2021, 1, 31, tzinfo=tz)
+    advanced = _advance_one_period(jan31, "month", tz)
+    assert (advanced.year, advanced.month, advanced.day) == (2021, 2, 28)
+
+
+def test_advance_one_period_month_end_clamps_to_leap_february() -> None:
+    """A day-31 boundary advancing into a leap-year February clamps to the 29th."""
+    tz = ZoneInfo("UTC")
+    jan31 = datetime(2020, 1, 31, tzinfo=tz)
+    advanced = _advance_one_period(jan31, "month", tz)
+    assert (advanced.year, advanced.month, advanced.day) == (2020, 2, 29)
+
+
+def test_advance_one_period_month_end_clamps_31_to_30_day_month() -> None:
+    """A day-31 boundary advancing into a 30-day month clamps to the 30th."""
+    tz = ZoneInfo("UTC")
+    mar31 = datetime(2020, 3, 31, tzinfo=tz)
+    advanced = _advance_one_period(mar31, "month", tz)
+    assert (advanced.year, advanced.month, advanced.day) == (2020, 4, 30)
+
+
+def test_advance_one_period_month_first_of_month_no_clamp() -> None:
+    """A 1st-of-month boundary (the derive_window case) advances to the next 1st."""
+    tz = ZoneInfo("UTC")
+    feb1 = datetime(2020, 2, 1, tzinfo=tz)
+    advanced = _advance_one_period(feb1, "month", tz)
+    assert (advanced.year, advanced.month, advanced.day) == (2020, 3, 1)
 
 
 # ---------------------------------------------------------------------------

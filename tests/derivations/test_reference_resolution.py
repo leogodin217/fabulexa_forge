@@ -23,6 +23,7 @@ from fabulexa_export.derivations.reference_resolution import (
     _collect_reference_columns,
     _find_all_reference_paths,
     _path_hint_to_cols,
+    _render_typed_literal,
     build_membership_edge_sql,
     build_reference_path_sql,
 )
@@ -88,6 +89,100 @@ def _build_emit(
     }
     (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
     return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# _render_typed_literal — the module-local mirror of
+# exporters.dimensional.columns.render_typed_literal
+# ---------------------------------------------------------------------------
+
+
+def test_render_typed_literal_varchar_single_quoted() -> None:
+    """VARCHAR (and VARCHAR(n)) values render single-quoted, no CAST."""
+    assert _render_typed_literal("lead", "VARCHAR") == "'lead'"
+    assert _render_typed_literal("lead", "VARCHAR(32)") == "'lead'"
+
+
+@pytest.mark.parametrize(
+    "sql_type",
+    [
+        "TINYINT",
+        "SMALLINT",
+        "INTEGER",
+        "BIGINT",
+        "HUGEINT",
+        "UTINYINT",
+        "USMALLINT",
+        "UINTEGER",
+        "UBIGINT",
+        "UHUGEINT",
+    ],
+)
+def test_render_typed_literal_integer_family_cast(sql_type: str) -> None:
+    """Every integer-family type renders as CAST('<value>' AS <type>)."""
+    assert _render_typed_literal("7", sql_type) == f"CAST('7' AS {sql_type})"
+
+
+@pytest.mark.parametrize("sql_type", ["DOUBLE", "FLOAT", "REAL"])
+def test_render_typed_literal_float_family_cast(sql_type: str) -> None:
+    """Every float-family type renders as CAST('<value>' AS <type>)."""
+    assert _render_typed_literal("1.5", sql_type) == f"CAST('1.5' AS {sql_type})"
+
+
+def test_render_typed_literal_boolean_cast() -> None:
+    """BOOLEAN renders as CAST('<value>' AS BOOLEAN)."""
+    assert _render_typed_literal("true", "BOOLEAN") == "CAST('true' AS BOOLEAN)"
+
+
+def test_render_typed_literal_decimal_numeric_cast() -> None:
+    """DECIMAL(...) / NUMERIC(...) prefixes render as CAST with the full type."""
+    assert (
+        _render_typed_literal("9.99", "DECIMAL(10,2)")
+        == "CAST('9.99' AS DECIMAL(10,2))"
+    )
+    assert (
+        _render_typed_literal("9.99", "NUMERIC(8,3)") == "CAST('9.99' AS NUMERIC(8,3))"
+    )
+
+
+def test_render_typed_literal_escapes_quotes_inside_cast() -> None:
+    """Single quotes in the value are '' escaped, in and out of a CAST."""
+    assert _render_typed_literal("o'brien", "VARCHAR") == "'o''brien'"
+    assert _render_typed_literal("o'1", "BIGINT") == "CAST('o''1' AS BIGINT)"
+
+
+def test_render_typed_literal_unrecognized_type_raises() -> None:
+    """An unrecognized SQL type raises ExportError — no silent VARCHAR fallback."""
+    with pytest.raises(ExportError, match="unrecognized SQL type"):
+        _render_typed_literal("x", "TIMESTAMP")
+
+
+def test_render_typed_literal_matches_dimensional_sibling() -> None:
+    """The local mirror stays byte-identical to the exporters.dimensional copy.
+
+    The module docstring pins the two implementations as byte-identical; a
+    divergence in either direction fails here.
+    """
+    from fabulexa_export.exporters.dimensional.columns import render_typed_literal
+
+    cases = [
+        ("lead", "VARCHAR"),
+        ("lead", "VARCHAR(32)"),
+        ("7", "BIGINT"),
+        ("7", "UINTEGER"),
+        ("1.5", "DOUBLE"),
+        ("true", "BOOLEAN"),
+        ("9.99", "DECIMAL(10,2)"),
+        ("9.99", "NUMERIC(8,3)"),
+        ("o'brien", "VARCHAR"),
+    ]
+    for value, sql_type in cases:
+        assert _render_typed_literal(value, sql_type) == render_typed_literal(
+            value, sql_type
+        ), f"divergence for {(value, sql_type)}"
+
+    with pytest.raises(ExportError):
+        render_typed_literal("x", "TIMESTAMP")
 
 
 # ---------------------------------------------------------------------------
@@ -490,6 +585,59 @@ def test_build_membership_edge_sql_with_where_predicate(tmp_path: Path) -> None:
             where_predicate={"elem__role": "lead"},
         )
         result = emit.query(sql, ())
+    assert result == [("team1", "p001")]
+
+
+def test_build_membership_edge_sql_bigint_where_predicate_cast(tmp_path: Path) -> None:
+    """A BIGINT elem__ where_predicate value renders as a CAST and filters rows."""
+    mem_cols: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "elem__rank", "type": "BIGINT"},
+        {"name": "member__person__id", "type": "VARCHAR"},
+        {"name": "member__person__kind", "type": "VARCHAR"},
+    ]
+    owner_cols: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+    ]
+    tables = [
+        _table_spec(
+            "membership__team__members",
+            "membership",
+            mem_cols,
+            2,
+            property_name="members",
+        ),
+        _table_spec("records__team", "records", owner_cols, 1, "team"),
+    ]
+    emit_dir = _build_emit(
+        tmp_path,
+        tables,
+        {
+            "membership__team__members": [
+                ("trunk", "team1", 1, "p001", "person"),
+                ("trunk", "team1", 2, "p002", "person"),
+            ],
+            "records__team": [("trunk", "team1")],
+        },
+        {
+            "membership__team__members": mem_cols,
+            "records__team": owner_cols,
+        },
+    )
+    with open_emit(emit_dir) as emit:
+        sql = build_membership_edge_sql(
+            sidecar=emit.sidecar,
+            fork_path="trunk",
+            owner_kind="team",
+            property_name="members",
+            member_field="person",
+            member_kind="person",
+            where_predicate={"elem__rank": "1"},
+        )
+        result = emit.query(sql, ())
+    assert "CAST('1' AS BIGINT)" in sql
     assert result == [("team1", "p001")]
 
 

@@ -41,10 +41,10 @@ def write_csv(
     Raises:
         ExportRuntimeError: Query execution or file write fails.
     """
-    arrow_table = emit.query_arrow(query, ())
     out_path = output_dir / f"{table_name}.csv"
 
     try:
+        arrow_table = emit.query_arrow(query, ())
         buf = io.StringIO()
         writer = csv.writer(buf)
         writer.writerow(arrow_table.schema.names)

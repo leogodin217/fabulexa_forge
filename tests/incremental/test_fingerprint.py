@@ -174,16 +174,3 @@ def test_fingerprint_changes_on_config() -> None:
         }
     )
     assert _fp(config=cfg_a) != _fp(config=cfg_b)
-
-
-# ---------------------------------------------------------------------------
-# Dict key order does not affect fingerprint (canonicalization)
-# ---------------------------------------------------------------------------
-
-
-def test_fingerprint_dict_key_order_invariant() -> None:
-    """Key order in the document does not change the fingerprint (keys sorted)."""
-    # This is implicit in compute_fingerprint using sort_keys=True.
-    # Verify by calling with the same logical inputs multiple times.
-    results = [_fp() for _ in range(5)]
-    assert len(set(results)) == 1

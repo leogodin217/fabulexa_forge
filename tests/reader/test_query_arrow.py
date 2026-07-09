@@ -111,6 +111,15 @@ def test_query_arrow_non_read_statement_raises(tmp_path: Path) -> None:
             emit.query_arrow("CREATE TABLE x (a INTEGER)", ())
 
 
+def test_query_arrow_after_close_raises_run_database_error(tmp_path: Path) -> None:
+    """query_arrow() on a closed Emit raises RunDatabaseError, not a bare duckdb error."""
+    emit_dir = _emit_with_data(tmp_path)
+    emit = open_emit(emit_dir)
+    emit.close()
+    with pytest.raises(RunDatabaseError, match="query_arrow failed"):
+        emit.query_arrow("SELECT prop__name FROM records__thing", ())
+
+
 def test_query_arrow_row_order_matches_query(tmp_path: Path) -> None:
     """query_arrow respects the ORDER BY of the SQL."""
     import pyarrow as pa

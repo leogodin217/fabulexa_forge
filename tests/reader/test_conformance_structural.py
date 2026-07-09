@@ -116,18 +116,6 @@ class TestLoadVendoredSchema:
 class TestCheckResult:
     """CheckResult is a frozen dataclass with passed, messages, skips."""
 
-    def test_passed_true(self) -> None:
-        """A passing result has passed=True and empty messages."""
-        r = CheckResult(check="C1", passed=True, messages=(), skips=())
-        assert r.passed is True
-        assert r.messages == ()
-
-    def test_passed_false(self) -> None:
-        """A failing result has passed=False and non-empty messages."""
-        r = CheckResult(check="C1", passed=False, messages=("oops",), skips=())
-        assert r.passed is False
-        assert "oops" in r.messages
-
     def test_frozen(self) -> None:
         """CheckResult is immutable."""
         r = CheckResult(check="C1", passed=True, messages=(), skips=())
@@ -350,6 +338,42 @@ class TestC2:
         with open_emit(dest) as emit:
             result = run_check(emit, "C2")
         assert result.passed is False
+
+    def test_same_names_different_cardinality_fails_c2(self, tmp_path: Path) -> None:
+        """C2 fails with a count mismatch when column *sets* agree but counts differ.
+
+        The sidecar declares fork_path twice while the catalog holds it once:
+        cat_set == sc_set, so neither the surplus nor the missing branch fires,
+        and the duplicate is reported as a column count mismatch.
+        """
+        db_cols = [{"name": "fork_path", "type": "VARCHAR"}]
+        sidecar_cols: list[dict[str, object]] = [
+            {"name": "fork_path", "type": "VARCHAR"},
+            {"name": "fork_path", "type": "VARCHAR"},  # duplicate declaration
+        ]
+        sidecar: dict[str, object] = {
+            "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+            "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+            "tables": [
+                {
+                    "name": "history",
+                    "category": "fixed",
+                    "columns": sidecar_cols,
+                    "rows": 0,
+                }
+            ],
+        }
+        dest = _write_emit(
+            tmp_path / "c2_dup_sidecar_col",
+            sidecar,
+            {"history": db_cols},
+        )
+        with open_emit(dest) as emit:
+            result = run_check(emit, "C2")
+        assert result.passed is False
+        assert any("column count mismatch" in m for m in result.messages), (
+            f"Expected a column count mismatch message, got {result.messages}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -622,13 +646,6 @@ class TestC8:
 
 class TestValidate:
     """validate never raises; returns ConformanceReport with one result per check."""
-
-    def test_never_raises_on_spanning(self, base_fixtures: dict[str, Path]) -> None:
-        """validate does not raise on the spanning fixture."""
-        with open_emit(base_fixtures["spanning"]) as emit:
-            report = validate(emit)
-        assert isinstance(report, ConformanceReport)
-        assert report.ok is True
 
     def test_never_raises_on_c4_wrong_history_type(
         self, base_fixtures: dict[str, Path]

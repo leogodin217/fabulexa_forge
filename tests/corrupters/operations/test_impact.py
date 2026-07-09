@@ -352,6 +352,86 @@ class TestSeriesRoundTripFails:
                 state, _FORK_PATH, _SLICE_AT, "actor", "status", "a001"
             )
 
+    def test_conflicting_duplicate_after_matching_original_fails(self) -> None:
+        """Every (fork_path, record_id) match is evaluated — the real check's
+        LEFT JOIN fans the anchor out over a `duplicate_rows` conflicting
+        duplicate; the matching original must not mask it."""
+        state = _state(
+            [_series_row(10, "active")],
+            records_rows=[
+                {"fork_path": "trunk", "record_id": "a001", "prop__status": "active"},
+                {"fork_path": "trunk", "record_id": "a001", "prop__status": "pending"},
+            ],
+        )
+        assert (
+            series_round_trip_fails(
+                state, _FORK_PATH, _SLICE_AT, "actor", "status", "a001"
+            )
+            is True
+        )
+
+    def test_conflicting_duplicate_before_matching_original_fails(self) -> None:
+        state = _state(
+            [_series_row(10, "active")],
+            records_rows=[
+                {"fork_path": "trunk", "record_id": "a001", "prop__status": "pending"},
+                {"fork_path": "trunk", "record_id": "a001", "prop__status": "active"},
+            ],
+        )
+        assert (
+            series_round_trip_fails(
+                state, _FORK_PATH, _SLICE_AT, "actor", "status", "a001"
+            )
+            is True
+        )
+
+    def test_null_cell_duplicate_after_matching_original_fails(self) -> None:
+        state = _state(
+            [_series_row(10, "active")],
+            records_rows=[
+                {"fork_path": "trunk", "record_id": "a001", "prop__status": "active"},
+                {"fork_path": "trunk", "record_id": "a001", "prop__status": None},
+            ],
+        )
+        assert (
+            series_round_trip_fails(
+                state, _FORK_PATH, _SLICE_AT, "actor", "status", "a001"
+            )
+            is True
+        )
+
+    def test_byte_identical_matching_duplicates_pass(self) -> None:
+        state = _state(
+            [_series_row(10, "active")],
+            records_rows=[
+                {"fork_path": "trunk", "record_id": "a001", "prop__status": "active"},
+                {"fork_path": "trunk", "record_id": "a001", "prop__status": "active"},
+            ],
+        )
+        assert (
+            series_round_trip_fails(
+                state, _FORK_PATH, _SLICE_AT, "actor", "status", "a001"
+            )
+            is False
+        )
+
+    def test_prop_type_with_incidental_whitespace_still_evaluated(self) -> None:
+        """The round-trippable gate strips the type literal (a `schema_drift`
+        retype stores it verbatim), matching the real `_check_c6`."""
+        state = _state(
+            [_series_row(10, "active")],
+            records_spec=_records_actor_spec(prop_status_type=" varchar "),
+            records_rows=[
+                {"fork_path": "trunk", "record_id": "a001", "prop__status": "pending"}
+            ],
+        )
+        assert (
+            series_round_trip_fails(
+                state, _FORK_PATH, _SLICE_AT, "actor", "status", "a001"
+            )
+            is True
+        )
+
 
 # ---------------------------------------------------------------------------
 # enumerate_series_units

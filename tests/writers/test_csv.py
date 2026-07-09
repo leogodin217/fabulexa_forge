@@ -89,3 +89,38 @@ def test_write_csv_failure_raises_export_runtime_error(tmp_path: Path) -> None:
         sql = 'SELECT record_id FROM "records__entity"'
         with pytest.raises(ExportRuntimeError):
             write_csv(emit, "t", sql, bad_dir)
+
+
+def test_write_csv_null_value_renders_empty_field(tmp_path: Path) -> None:
+    """A NULL column value renders as an empty CSV field (the _format_value
+    invalid-scalar -> None branch), never the string 'None'."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = (
+            "SELECT record_id, CAST(NULL AS VARCHAR) AS null_col"
+            ' FROM "records__entity" ORDER BY record_id'
+        )
+        count = write_csv(emit, "null_table", sql, out_dir)
+
+    assert count == 2
+    csv_path = out_dir / "null_table.csv"
+    rows = list(csv.reader(csv_path.read_text(encoding="utf-8").splitlines()))
+    assert rows[0] == ["record_id", "null_col"]
+    assert rows[1] == ["e001", ""]
+    assert rows[2] == ["e002", ""]
+
+
+def test_write_csv_query_failure_raises_export_runtime_error(tmp_path: Path) -> None:
+    """A query-execution failure (bad column) raises ExportRuntimeError, per
+    the documented contract — not the reader's RunDatabaseError."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = 'SELECT nonexistent_column FROM "records__entity"'
+        with pytest.raises(ExportRuntimeError):
+            write_csv(emit, "t", sql, out_dir)

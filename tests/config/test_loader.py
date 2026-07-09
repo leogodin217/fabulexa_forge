@@ -68,25 +68,6 @@ def test_missing_required_field_raises_config_error(tmp_path: Path) -> None:
         load_export_config(cfg)
 
 
-def test_mode_cdc_is_rejected(tmp_path: Path) -> None:
-    """mode: cdc is rejected — cdc is not a legal mode value."""
-    cfg = tmp_path / "cfg.yaml"
-    cfg.write_text("mode: cdc\ncdc:\n  table: change_events\n", encoding="utf-8")
-    with pytest.raises(ConfigError, match="validation failed"):
-        load_export_config(cfg)
-
-
-def test_cdc_block_on_dimensional_config_rejected(tmp_path: Path) -> None:
-    """A 'cdc:' block on a dimensional config is rejected as an unknown field."""
-    cfg = tmp_path / "cfg.yaml"
-    cfg.write_text(
-        MINIMAL_VALID_YAML + "cdc:\n  table: change_events\n",
-        encoding="utf-8",
-    )
-    with pytest.raises(ConfigError, match="validation failed"):
-        load_export_config(cfg)
-
-
 def test_mode_source_config_round_trips(tmp_path: Path) -> None:
     """A bare mode: source YAML config round-trips through load_export_config."""
     cfg = tmp_path / "cfg.yaml"

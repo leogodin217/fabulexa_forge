@@ -125,6 +125,20 @@ def test_close_is_idempotent(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# query after close raises RunDatabaseError
+# ---------------------------------------------------------------------------
+
+
+def test_query_after_close_raises_run_database_error(tmp_path: Path) -> None:
+    """query() on a closed Emit raises RunDatabaseError, not a bare duckdb error."""
+    _emit_with_data(tmp_path)
+    emit = open_emit(tmp_path)
+    emit.close()
+    with pytest.raises(RunDatabaseError, match="query failed"):
+        emit.query("SELECT id FROM records__patient", ())
+
+
+# ---------------------------------------------------------------------------
 # Context manager closes on exit
 # ---------------------------------------------------------------------------
 

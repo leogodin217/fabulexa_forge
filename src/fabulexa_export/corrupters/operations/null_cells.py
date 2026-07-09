@@ -20,6 +20,7 @@ from fabulexa_export.corrupters.operations._impact import (
     history_series_exists,
     is_deactivated_at_column,
     is_membership_ref_column,
+    is_round_trippable_type,
     membership_partner_column,
     placement_populations,
     property_name_for_prop_column,
@@ -37,7 +38,6 @@ from fabulexa_export.corrupters.selection import (
 )
 from fabulexa_export.corrupters.state import OperationOutcome
 from fabulexa_export.corrupters.validate import is_nullable_column
-from fabulexa_export.reader.conformance import _ROUND_TRIPPABLE_TYPES
 
 if TYPE_CHECKING:
     import random
@@ -73,7 +73,7 @@ def _cell_impact(
     if column.startswith("prop__"):
         if (
             column_spec.history_tracked
-            and column_spec.type.upper() in _ROUND_TRIPPABLE_TYPES
+            and is_round_trippable_type(column_spec.type)
             and table_spec.record_kind is not None
             and history_series_exists(
                 history_data,

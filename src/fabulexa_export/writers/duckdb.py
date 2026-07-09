@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from fabulexa_export.incremental.windows import Window
     from fabulexa_export.reader.emit import Emit
 
+from fabulexa_export._sql import quote_identifier
 from fabulexa_export.errors import ExportRuntimeError
 
 # Bookkeeping schema version written to _export_meta.
@@ -61,11 +62,12 @@ def write_duckdb(
     row_counts: dict[str, int] = {}
     try:
         for table_name, sql in queries.items():
-            arrow_table = emit.query_arrow(sql, ())
             try:
+                arrow_table = emit.query_arrow(sql, ())
                 out_conn.register("_arrow_src", arrow_table)
                 out_conn.execute(
-                    f'CREATE TABLE "{table_name}" AS SELECT * FROM _arrow_src'
+                    f"CREATE TABLE {quote_identifier(table_name)}"
+                    " AS SELECT * FROM _arrow_src"
                 )
                 out_conn.unregister("_arrow_src")
             except Exception as exc:
@@ -122,7 +124,9 @@ def _create_table_from_arrow(
     """
     arrow_table = emit.query_arrow(sql, ())
     conn.register("_arrow_src", arrow_table)
-    conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM _arrow_src')
+    conn.execute(
+        f"CREATE TABLE {quote_identifier(table_name)} AS SELECT * FROM _arrow_src"
+    )
     conn.unregister("_arrow_src")
     return int(arrow_table.num_rows)
 
@@ -139,7 +143,7 @@ def _append_rows_from_arrow(
     """
     arrow_table = emit.query_arrow(sql, ())
     conn.register("_arrow_src", arrow_table)
-    conn.execute(f'INSERT INTO "{table_name}" SELECT * FROM _arrow_src')
+    conn.execute(f"INSERT INTO {quote_identifier(table_name)} SELECT * FROM _arrow_src")
     conn.unregister("_arrow_src")
     return int(arrow_table.num_rows)
 
@@ -157,8 +161,8 @@ def _replace_table_from_arrow(
     """
     arrow_table = emit.query_arrow(sql, ())
     conn.register("_arrow_src", arrow_table)
-    conn.execute(f'DELETE FROM "{table_name}"')
-    conn.execute(f'INSERT INTO "{table_name}" SELECT * FROM _arrow_src')
+    conn.execute(f"DELETE FROM {quote_identifier(table_name)}")
+    conn.execute(f"INSERT INTO {quote_identifier(table_name)} SELECT * FROM _arrow_src")
     conn.unregister("_arrow_src")
     return int(arrow_table.num_rows)
 
@@ -188,7 +192,7 @@ def _install_view(
     view_sql: str,
 ) -> None:
     """Install (or replace) a view by name with *view_sql* as its SELECT body."""
-    conn.execute(f'CREATE OR REPLACE VIEW "{view_name}" AS {view_sql}')
+    conn.execute(f"CREATE OR REPLACE VIEW {quote_identifier(view_name)} AS {view_sql}")
 
 
 def write_duckdb_window(

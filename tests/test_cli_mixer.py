@@ -6,12 +6,17 @@ Covers:
 - main(["mixer", ...]) dispatches to cmd_mixer with parsed flags
 - --play / --paused mutual exclusion collapsing to cli_playing
 - Setup-phase errors land in the (ReaderError, ExporterError) funnel as exit 1
+- Serving-phase errors (serve_mixer raising KafkaDeliveryError / KafkaConsumeError)
+  land in the second (ReaderError, ExporterError) funnel as exit 1
+- MixerExtraUnavailable: FastAPI not importable -> exit 1 with the install hint
+- --join happy path: 'fact:dim' parses to ('fact', 'dim') through main()
 - Happy path: serve_mixer patched to a no-op coroutine, exit 0
 """
 
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
@@ -21,7 +26,8 @@ import pytest
 import yaml
 
 from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.cli import cmd_mixer, main
+from fabulexa_export.cli import _parse_join_flag, cmd_mixer, main
+from fabulexa_export.errors import KafkaConsumeError, KafkaDeliveryError
 
 # ---------------------------------------------------------------------------
 # Emit / config builder helpers
@@ -953,3 +959,171 @@ def test_cmd_mixer_usage_string_contains_consumer(
     assert code != 0
     captured = capsys.readouterr()
     assert "consumer" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# --join happy path: _parse_join_flag through main()
+# ---------------------------------------------------------------------------
+
+
+def test_parse_join_flag_happy_path() -> None:
+    """_parse_join_flag splits 'fact:dim' into ('fact', 'dim')."""
+    assert _parse_join_flag("orders:customers") == ("orders", "customers")
+
+
+def test_main_join_happy_path_reaches_cmd_mixer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """main() parses each --join 'fact:dim' into a (fact, dim) pair, in order."""
+    import fabulexa_export.cli as cli_mod
+
+    captured: dict[str, Any] = {}
+
+    def _fake_cmd_mixer(*args: Any, **kwargs: Any) -> int:
+        captured.update(kwargs)
+        return 0
+
+    monkeypatch.setattr(cli_mod, "cmd_mixer", _fake_cmd_mixer)
+    code = main(
+        [
+            "mixer",
+            "/no/emit",
+            "/no/config",
+            "--fmt",
+            "jsonl",
+            "--consumer",
+            "--join",
+            "orders:customers",
+            "--join",
+            "shipments:carriers",
+        ]
+    )
+
+    assert code == 0
+    assert captured["cli_joins"] == (
+        ("orders", "customers"),
+        ("shipments", "carriers"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Serving-phase errors: the second (ReaderError, ExporterError) funnel
+# ---------------------------------------------------------------------------
+
+
+def test_serve_mixer_delivery_error_exits_1_via_second_funnel(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A KafkaDeliveryError raised mid-run by serve_mixer lands in the second
+    funnel as exit 1 (setup succeeded; the failure surfaces after asyncio.run)."""
+    emit_dir = _build_minimal_emit(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    _write_stream_config(config_path)
+
+    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+
+    async def _raise_delivery(**kwargs: Any) -> None:
+        raise KafkaDeliveryError("mid-run delivery failure: broker unreachable")
+
+    monkeypatch.setattr(serve_mod, "serve_mixer", _raise_delivery)
+    code = cmd_mixer(
+        emit_dir=emit_dir,
+        config_path=config_path,
+        fmt="jsonl",
+        cli_base_date=None,
+        cli_timezone=None,
+        cli_speed=1.0,
+        cli_playing=False,
+        cli_tick_seconds=0.05,
+        cli_bootstrap_servers="localhost:9092",
+        host="127.0.0.1",
+        port=8765,
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "mid-run delivery failure" in captured.err
+
+
+def test_serve_mixer_consume_error_exits_1_via_second_funnel(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A KafkaConsumeError from the consumer instrument's failure path lands in
+    the second funnel as exit 1."""
+    emit_dir = _build_minimal_emit(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    _write_stream_config(config_path)
+
+    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+
+    async def _raise_consume(**kwargs: Any) -> None:
+        raise KafkaConsumeError("consumer poll failed: broker unreachable")
+
+    monkeypatch.setattr(serve_mod, "serve_mixer", _raise_consume)
+    code = cmd_mixer(
+        emit_dir=emit_dir,
+        config_path=config_path,
+        fmt="jsonl",
+        cli_base_date=None,
+        cli_timezone=None,
+        cli_speed=1.0,
+        cli_playing=False,
+        cli_tick_seconds=0.05,
+        cli_bootstrap_servers="localhost:9092",
+        host="127.0.0.1",
+        port=8765,
+        cli_consumer=True,
+        cli_windows=(60000,),
+        cli_joins=(),
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "consumer poll failed" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# MixerExtraUnavailable: FastAPI not importable
+# ---------------------------------------------------------------------------
+
+
+def test_mixer_extra_unavailable_exits_1_with_install_hint(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With FastAPI unimportable, the real serve_mixer raises
+    MixerExtraUnavailable, which exits 1 with the install-the-extra message."""
+    emit_dir = _build_minimal_emit(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    _write_stream_config(config_path)
+
+    # A None entry in sys.modules makes `import fastapi` raise ImportError,
+    # simulating an absent `mixer` extra; serve_mixer's probe runs before any
+    # Kafka connection is attempted, so no broker is needed.
+    monkeypatch.setitem(sys.modules, "fastapi", None)
+
+    code = cmd_mixer(
+        emit_dir=emit_dir,
+        config_path=config_path,
+        fmt="jsonl",
+        cli_base_date=None,
+        cli_timezone=None,
+        cli_speed=1.0,
+        cli_playing=False,
+        cli_tick_seconds=0.05,
+        cli_bootstrap_servers="localhost:9092",
+        host="127.0.0.1",
+        port=8765,
+    )
+
+    assert code == 1
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.err
+    assert "fabulexa-export[mixer]" in captured.err

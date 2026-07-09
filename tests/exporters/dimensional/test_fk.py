@@ -1699,6 +1699,207 @@ def test_two_reference_fks_on_membership_grain(tmp_path: Path) -> None:
     assert rows["journey_id"] == ["j001", "j001", "j002"]
 
 
+def test_fk_target_dim_declared_after_fact_resolves(tmp_path: Path) -> None:
+    """FK target resolution is declaration-order independent.
+
+    Every other fixture declares the dim before the fact; here the fact comes
+    first and check_fk_target_is_dim must still find the dim by scanning the
+    whole config.tables list.
+    """
+    emit_dir = build_reference_chain_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        dim = _dim("dim_actor", "actor", [_from_col("record_id", "record_id")])
+        fact = _fact(
+            "fact_journey",
+            "records",
+            "journey_instance",
+            [
+                _from_col("record_id", "record_id"),
+                _fk_col("actor_id", "dim_actor", "reference"),
+            ],
+        )
+        config_fact_first = DimensionalConfig(tables=[fact, dim])
+        config_dim_first = DimensionalConfig(tables=[dim, fact])
+
+        specs_fact_first = build_query_specs(emit, config_fact_first, None, None)
+        specs_dim_first = build_query_specs(emit, config_dim_first, None, None)
+
+        fact_spec = next(s for s in specs_fact_first if s.table_name == "fact_journey")
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+
+    # Same fact SQL regardless of where the dim sits in the declaration list
+    dim_first_sql = next(
+        s.sql for s in specs_dim_first if s.table_name == "fact_journey"
+    )
+    assert fact_spec.sql == dim_first_sql
+    # And the FK resolves: j001 → a001, j002 → a002
+    assert dict(zip(rows["record_id"], rows["actor_id"])) == {
+        "j001": "a001",
+        "j002": "a002",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Surrogate target_key + BIGINT elem__ where predicate combined
+# ---------------------------------------------------------------------------
+
+# Actor with presentation_id AND membership with a BIGINT elem__ column, so the
+# CAST-vs-quote where logic and the presentation_id records join stack together.
+
+
+def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
+    """Emit with presentation_id on records__actor + BIGINT elem__priority membership.
+
+    d001 → a001 (PAT_001) at priority=1; d002 → a002 (PAT_002) at priority=2.
+    """
+    import duckdb
+
+    from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__actor", _ACTOR_SURROGATE_COLUMNS))
+    conn.execute(_create_ddl("records__decision", _DECISION_COLUMNS))
+    conn.execute(_create_ddl("membership__decision__bindings", _TYPED_BINDINGS_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", True, 10, "Alice", "PAT_001"],
+    )
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", True, 20, "Bob", "PAT_002"],
+    )
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
+        ["trunk", "d001", True, 10, "j001"],
+    )
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
+        ["trunk", "d002", True, 20, "j002"],
+    )
+    # d001 → a001 (priority=1), d002 → a002 (priority=2)
+    conn.execute(
+        'INSERT INTO "membership__decision__bindings" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 5, "surgeon", 1, "actor", "a001"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__decision__bindings" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 10, "nurse", 2, "actor", "a002"],
+    )
+    conn.close()
+
+    sidecar = {
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+        "tables": [
+            _table_spec(
+                "records__actor", "records", _ACTOR_SURROGATE_COLUMNS, 2, "actor"
+            ),
+            _table_spec(
+                "records__decision", "records", _DECISION_COLUMNS, 2, "decision"
+            ),
+            _table_spec(
+                "membership__decision__bindings",
+                "membership",
+                _TYPED_BINDINGS_COLUMNS,
+                2,
+                "decision",
+                "bindings",
+            ),
+        ],
+    }
+    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    return tmp_path
+
+
+def test_membership_fk_surrogate_with_bigint_where_on_records_grain(
+    tmp_path: Path,
+) -> None:
+    """target_key=presentation_id + BIGINT elem__ where: CAST logic survives layering.
+
+    Combines the surrogate records join with a where predicate on a BIGINT
+    elem__ column — the CAST-vs-quote literal typing must still hold once
+    presentation_id resolution is layered on top.
+    """
+    emit_dir = build_typed_surrogate_membership_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        config = DimensionalConfig(
+            tables=[
+                _dim("dim_actor", "actor", [_from_col("record_id", "record_id")]),
+                _fact(
+                    "fact_decision",
+                    "records",
+                    "decision",
+                    [
+                        _from_col("record_id", "record_id"),
+                        _fk_col(
+                            "actor_id",
+                            "dim_actor",
+                            "membership",
+                            where={"elem__priority": "1"},
+                            target_key="presentation_id",
+                        ),
+                    ],
+                ),
+            ]
+        )
+        specs = build_query_specs(emit, config, None, None)
+        fact_spec = next(s for s in specs if s.table_name == "fact_decision")
+        # BIGINT elem__ where must render as a CAST literal, not a quoted string
+        assert "CAST('1' AS BIGINT)" in fact_spec.sql
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+
+    # d001 (priority=1) → a001 → PAT_001; d002 (priority=2) → NULL
+    by_decision = dict(zip(rows["record_id"], rows["actor_id"]))
+    assert by_decision["d001"] == "PAT_001"
+    assert by_decision["d002"] is None
+
+
+def test_membership_grain_fk_surrogate_with_bigint_source_where(
+    tmp_path: Path,
+) -> None:
+    """Membership grain: BIGINT elem__ source.where + target_key=presentation_id.
+
+    The grain's where predicate (rendered with the CAST-vs-quote literal typing)
+    narrows the bindings while build_membership_fk_expr_on_membership layers the
+    presentation_id records join on top.
+    """
+    emit_dir = build_typed_surrogate_membership_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        config = DimensionalConfig(
+            tables=[
+                _dim("dim_actor", "actor", [_from_col("record_id", "record_id")]),
+                _fact(
+                    "fact_bindings",
+                    "membership",
+                    "decision",
+                    [
+                        _from_col("record_id", "record_id"),
+                        _fk_col(
+                            "actor_id",
+                            "dim_actor",
+                            "membership",
+                            target_key="presentation_id",
+                        ),
+                    ],
+                    property="bindings",
+                    where={"elem__priority": "1"},
+                ),
+            ]
+        )
+        specs = build_query_specs(emit, config, None, None)
+        fact_spec = next(s for s in specs if s.table_name == "fact_bindings")
+        # The grain where on a BIGINT elem__ column renders as a CAST literal
+        assert "CAST('1' AS BIGINT)" in fact_spec.sql
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+
+    # Only the priority=1 binding survives, resolved to its surrogate
+    assert rows["record_id"] == ["d001"]
+    assert rows["actor_id"] == ["PAT_001"]
+
+
 def test_two_membership_fks_on_one_table_do_not_collide(tmp_path: Path) -> None:
     """Two via:membership FKs on one table get per-column JOIN aliases.
 

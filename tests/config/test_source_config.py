@@ -235,3 +235,39 @@ def test_rebase_and_incremental_are_valid_siblings_under_mode_source() -> None:
     assert config.rebase.timezone == "UTC"
     assert config.incremental is not None
     assert config.incremental.period == "day"
+
+
+# ---------------------------------------------------------------------------
+# Rename targets are SQL identifiers (they become output table/column names)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_target",
+    ["../../etc/cron.d/evil", "/etc/evil", 'triage" ; ATTACH', "has space"],
+)
+def test_rename_table_target_not_sql_identifier_raises(bad_target: str) -> None:
+    """A rename entry's output table name outside the identifier pattern raises."""
+    with pytest.raises(ValidationError, match="SQL identifier"):
+        RenameEntry.model_validate({"table": "records__queue", "name": bad_target})
+
+
+def test_rename_column_target_not_sql_identifier_raises() -> None:
+    """A rename entry's output column name with an embedded quote raises."""
+    with pytest.raises(ValidationError, match="SQL identifier"):
+        RenameEntry.model_validate(
+            {"table": "records__location", "columns": {"prop__name": 'na"me'}}
+        )
+
+
+def test_rename_sidecar_keys_stay_unrestricted() -> None:
+    """Only rename *targets* are gated; sidecar-identity keys (table / column
+    keys) keep their full character set (e.g. membership__K__p)."""
+    entry = RenameEntry.model_validate(
+        {
+            "table": "membership__team__members",
+            "name": "team_membership",
+            "columns": {"prop__display_name": "display_name"},
+        }
+    )
+    assert entry.name == "team_membership"

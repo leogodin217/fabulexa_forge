@@ -124,6 +124,10 @@ def build_scd2_sql(
     Tracked columns project from the derivation's pre-computed prop__<p> columns;
     static columns LEFT JOIN the reader records relation on record_id.
 
+    Honors table_decl.source.filter: a discriminator-split source restricts both
+    the derivation's version rows and the records relation to the filtered
+    sub-type's records.
+
     Args:
         table_decl: The output table declaration (scd: type2, grain: records).
         source_table_name: The resolved records__<kind> DuckDB table name.
@@ -141,12 +145,17 @@ def build_scd2_sql(
 
     tracked_props = _collect_tracked_props(sidecar, source_table_name)
 
+    # discriminator_filter from source.filter — a discriminator-split scd: type2
+    # dim must contain only the filtered sub-type's rows.
+    discriminator_filter: dict[str, str] = dict(source.filter) if source.filter else {}
+
     # Compose the versioned-intervals derivation.
     derivation_sql = build_versioned_intervals_sql(
         sidecar=sidecar,
         fork_path=fork_path,
         kind=kind,
         tracked_properties=tracked_props,
+        discriminator_filter=discriminator_filter,
     )
 
     # Compose the reader records relation for static columns.
@@ -154,7 +163,7 @@ def build_scd2_sql(
         sidecar=sidecar,
         fork_path=fork_path,
         kind=kind,
-        discriminator_filter={},
+        discriminator_filter=discriminator_filter,
     )
 
     # Build a lookup of column name -> DuckDB type for the source table.
@@ -214,6 +223,10 @@ def build_scd2_rows_sql(
     Composes the versioned-intervals derivation for version bounds and tracked
     prop__<p> values, and the reader records relation for static columns.
 
+    Honors table_decl.source.filter: a discriminator-split source restricts both
+    the derivation's version rows and the records relation to the filtered
+    sub-type's records.
+
     Args:
         table_decl: The output table declaration (scd: type2, grain: records).
         source_table_name: The resolved records__<kind> DuckDB table name.
@@ -232,12 +245,17 @@ def build_scd2_rows_sql(
 
     tracked_props = _collect_tracked_props(sidecar, source_table_name)
 
+    # discriminator_filter from source.filter — a discriminator-split scd: type2
+    # dim must contain only the filtered sub-type's rows.
+    discriminator_filter: dict[str, str] = dict(source.filter) if source.filter else {}
+
     # Compose the versioned-intervals derivation.
     derivation_sql = build_versioned_intervals_sql(
         sidecar=sidecar,
         fork_path=fork_path,
         kind=kind,
         tracked_properties=tracked_props,
+        discriminator_filter=discriminator_filter,
     )
 
     # Compose the reader records relation for static columns.
@@ -245,7 +263,7 @@ def build_scd2_rows_sql(
         sidecar=sidecar,
         fork_path=fork_path,
         kind=kind,
-        discriminator_filter={},
+        discriminator_filter=discriminator_filter,
     )
 
     source_col_types: dict[str, str] = {

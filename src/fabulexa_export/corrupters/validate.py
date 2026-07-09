@@ -753,11 +753,42 @@ def _apply_drift_to_spec(spec: "TableSpec", operation: SchemaDrift) -> "TableSpe
     return replace(spec, columns=new_columns)
 
 
+def _check_drift_no_target_collision(evolved_spec: "TableSpec", op_index: int) -> None:
+    """DriftNoTargetCollision: the evolved catalog names no column twice.
+
+    Catches both a rename map with two sources sharing a target name, and a
+    rename target that collides with a surviving (untouched) column — either
+    would leave the evolved catalog with a duplicate column name. A pure
+    function of column names, so it belongs in the evolved-schema simulation;
+    `schema_drift.py`'s apply-time check remains as a backstop.
+
+    Args:
+        evolved_spec: The table's TableSpec after folding this drift in.
+        op_index: The operation's 0-based position, for the error message.
+
+    Raises:
+        CorruptValidationError: Two or more columns of `evolved_spec` share a
+            name.
+    """
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for col in evolved_spec.columns:
+        if col.name in seen:
+            duplicates.add(col.name)
+        seen.add(col.name)
+    if duplicates:
+        raise CorruptValidationError(
+            f"operation[{op_index}]: schema_drift rename produces colliding"
+            f" column name(s) {sorted(duplicates)!r} in {evolved_spec.name!r}"
+        )
+
+
 def _validate_schema_drift(
     spec: "TableSpec", operation: SchemaDrift, op_index: int, sidecar: "Sidecar"
 ) -> "TableSpec":
-    """Check ColumnsExist, DriftColumnsNonStructural, and
-    DriftRenamePreservesCategory, then fold the drift into the evolved schema.
+    """Check ColumnsExist, DriftColumnsNonStructural,
+    DriftRenamePreservesCategory, and DriftNoTargetCollision, then fold the
+    drift into the evolved schema.
 
     Args:
         spec: The table's current (evolved) TableSpec.
@@ -769,8 +800,8 @@ def _validate_schema_drift(
         The table's evolved TableSpec after this operation's drift.
 
     Raises:
-        CorruptValidationError: ColumnsExist, DriftColumnsNonStructural, or
-            DriftRenamePreservesCategory fails.
+        CorruptValidationError: ColumnsExist, DriftColumnsNonStructural,
+            DriftRenamePreservesCategory, or DriftNoTargetCollision fails.
     """
     rename_to = operation.rename_to or {}
     retype_to = operation.retype_to or {}
@@ -786,7 +817,9 @@ def _validate_schema_drift(
                 " prop__ / elem__ columns and preserves C1-C5, C10, C12"
             )
     _check_rename_preserves_category(rename_to, op_index)
-    return _apply_drift_to_spec(spec, operation)
+    evolved = _apply_drift_to_spec(spec, operation)
+    _check_drift_no_target_collision(evolved, op_index)
+    return evolved
 
 
 def validate_corrupt_config(config: "CorruptConfig", sidecar: "Sidecar") -> None:
@@ -802,7 +835,8 @@ def validate_corrupt_config(config: "CorruptConfig", sidecar: "Sidecar") -> None
     config-only). `ColumnEntriesMatch` matches target.columns entries (exact
     or fnmatch pattern) against each resolved table's operation-eligible
     columns; `WhereColumnsExist` and `schema_drift`'s exact-name ColumnsExist
-    round out the table. When `placement` is present, `PlacementColumnExists`
+    and evolved-catalog `DriftNoTargetCollision` round out the table. When
+    `placement` is present, `PlacementColumnExists`
     (correlated / clustered_temporal) or `EntityScopedRecordId` checks it
     against the same resolved-table set. A bad config fails cleanly, before
     any table is read or written. The one data-dependent check —

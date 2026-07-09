@@ -21,6 +21,24 @@ def test_routing_config_defaults() -> None:
 
 
 # ---------------------------------------------------------------------------
+# RoutingConfig — table_identity
+# ---------------------------------------------------------------------------
+
+
+def test_routing_config_table_identity_topic_parses() -> None:
+    """The explicit 'topic' table_identity value (resolved topic as Debezium
+    source.table) parses — the non-default arm of the Literal."""
+    rc = RoutingConfig.model_validate({"table_identity": "topic"})
+    assert rc.table_identity == "topic"
+
+
+def test_routing_config_table_identity_unknown_value_raises() -> None:
+    """A table_identity outside Literal['source_table', 'topic'] raises."""
+    with pytest.raises(ValidationError, match="table_identity"):
+        RoutingConfig.model_validate({"table_identity": "resolved_topic"})
+
+
+# ---------------------------------------------------------------------------
 # RoutingConfig — valid templates
 # ---------------------------------------------------------------------------
 
@@ -117,3 +135,34 @@ def test_routing_config_shared_member_raises() -> None:
                 }
             }
         )
+
+
+# ---------------------------------------------------------------------------
+# groups targets follow the Kafka topic-name rule (also forecloses jsonl
+# path traversal — a target becomes the .jsonl filename stem)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_target",
+    [
+        "../../etc/cron.d/evil",
+        "/etc/cron.d/evil",
+        "a/b",
+        "topic name",
+        ".",
+        "..",
+    ],
+)
+def test_routing_config_invalid_group_target_raises(bad_target: str) -> None:
+    """A groups target outside ^[A-Za-z0-9._-]+$ (or '.'/'..') raises."""
+    with pytest.raises(ValidationError, match="valid topic name"):
+        RoutingConfig.model_validate({"groups": {bad_target: ["customer"]}})
+
+
+def test_routing_config_kafka_convention_group_targets_pass() -> None:
+    """Dots, dashes, and underscores are all legal in a topic name."""
+    cfg = RoutingConfig.model_validate(
+        {"groups": {"cdc.public.orders-v2_x": ["orders"]}}
+    )
+    assert "cdc.public.orders-v2_x" in cfg.groups

@@ -211,6 +211,17 @@ def _insert_rows_target(
     return {"kind": "insert_rows", "target": t, "amount": {"rate": 0.5}}
 
 
+def _insert_rows_placement(
+    target: dict[str, object], placement: dict[str, object]
+) -> dict[str, object]:
+    return {
+        "kind": "insert_rows",
+        "target": target,
+        "amount": {"rate": 0.5},
+        "placement": placement,
+    }
+
+
 def _drop_events(target: dict[str, object]) -> dict[str, object]:
     return {"kind": "drop_events", "target": target, "amount": {"rate": 0.5}}
 
@@ -255,6 +266,14 @@ def _distort_intervals(
         "amount": {"rate": 0.5},
         "mode": mode,
     }
+
+
+def _distort_intervals_placement(
+    target: dict[str, object], placement: dict[str, object]
+) -> dict[str, object]:
+    op = _distort_intervals(target)
+    op["placement"] = placement
+    return op
 
 
 def _null_cells_placement(
@@ -463,6 +482,16 @@ def test_column_entries_match_domain_is_reference_columns_for_dangle_reference()
     validate_corrupt_config(config, _sidecar())  # does not raise
 
 
+def test_reference_columns_accepts_records_prop_reference_for_dangle_reference() -> (
+    None
+):
+    """A records prop__ column with references set is eligible for
+    dangle_reference too -- the same ReferenceColumns branch
+    mispoint_reference routes through."""
+    config = _config(_dangle_reference("records__patient", ["prop__doctor_id"]))
+    validate_corrupt_config(config, _sidecar())  # does not raise
+
+
 def test_reference_columns_rejects_non_reference_column_for_mispoint_reference() -> (
     None
 ):
@@ -570,6 +599,47 @@ def test_drift_rename_preserves_category_rejects_cross_category_rename() -> None
     )
     with pytest.raises(CorruptValidationError, match=r"changes .* column category"):
         validate_corrupt_config(config, _sidecar())
+
+
+# ---------------------------------------------------------------------------
+# DriftNoTargetCollision
+# ---------------------------------------------------------------------------
+
+
+def test_drift_no_target_collision_rejects_two_sources_sharing_a_target() -> None:
+    config = _config(
+        _schema_drift(
+            "records__patient",
+            rename_to={"prop__name": "prop__merged", "prop__age": "prop__merged"},
+        )
+    )
+    with pytest.raises(
+        CorruptValidationError, match=r"operation\[0\].*colliding column name"
+    ):
+        validate_corrupt_config(config, _sidecar())
+
+
+def test_drift_no_target_collision_rejects_target_colliding_with_survivor() -> None:
+    config = _config(
+        _schema_drift("records__patient", rename_to={"prop__name": "prop__age"})
+    )
+    with pytest.raises(
+        CorruptValidationError, match=r"operation\[0\].*colliding column name"
+    ):
+        validate_corrupt_config(config, _sidecar())
+
+
+def test_drift_rename_onto_simultaneously_dropped_column_accepted() -> None:
+    """Atomic set semantics: the drop removes prop__age before the rename's
+    target lands, so the evolved catalog carries no duplicate."""
+    config = _config(
+        _schema_drift(
+            "records__patient",
+            rename_to={"prop__name": "prop__age"},
+            drop=["prop__age"],
+        )
+    )
+    validate_corrupt_config(config, _sidecar())  # does not raise
 
 
 # ---------------------------------------------------------------------------
@@ -1052,6 +1122,54 @@ def test_evolved_schema_pattern_matches_column_renamed_into_range() -> None:
     validate_corrupt_config(config, _sidecar())  # does not raise
 
 
+def test_evolved_schema_two_drifts_on_same_table_fold_in_operation_order() -> None:
+    """A rename then a later retype (addressed by the *new* name) fold in
+    operation order: the retype moves the renamed column out of the jitter
+    type gate, so a following jitter target on that name is a dead entry."""
+    config = _config(
+        _schema_drift("records__patient", rename_to={"prop__age": "prop__years"}),
+        _schema_drift("records__patient", retype_to={"prop__years": "VARCHAR"}),
+        _duplicate_rows_jitter("records__patient", ["prop__years"]),
+    )
+    with pytest.raises(
+        CorruptValidationError, match=r"operation\[2\].*matches no eligible column"
+    ):
+        validate_corrupt_config(config, _sidecar())
+
+
+def test_evolved_schema_second_drift_must_address_first_drifts_new_name() -> None:
+    """A second schema_drift on the same table still naming the pre-rename
+    column fails ColumnsExist -- the old name no longer exists in the schema
+    as of that position."""
+    config = _config(
+        _schema_drift("records__patient", rename_to={"prop__age": "prop__years"}),
+        _schema_drift("records__patient", retype_to={"prop__age": "VARCHAR"}),
+    )
+    with pytest.raises(CorruptValidationError, match=r"operation\[1\].*has no column"):
+        validate_corrupt_config(config, _sidecar())
+
+
+def test_evolved_schema_rename_then_rename_chains() -> None:
+    """Two renames chain: the second addresses the first's target, and a
+    following operation sees only the final name."""
+    config = _config(
+        _schema_drift("records__patient", rename_to={"prop__name": "prop__nm"}),
+        _schema_drift("records__patient", rename_to={"prop__nm": "prop__name_v2"}),
+        _null_cells("records__patient", ["prop__name_v2"]),
+    )
+    validate_corrupt_config(config, _sidecar())  # does not raise
+
+    intermediate_name_config = _config(
+        _schema_drift("records__patient", rename_to={"prop__name": "prop__nm"}),
+        _schema_drift("records__patient", rename_to={"prop__nm": "prop__name_v2"}),
+        _null_cells("records__patient", ["prop__nm"]),
+    )
+    with pytest.raises(
+        CorruptValidationError, match=r"operation\[2\].*matches no eligible column"
+    ):
+        validate_corrupt_config(intermediate_name_config, _sidecar())
+
+
 # ---------------------------------------------------------------------------
 # PlacementColumnExists
 # ---------------------------------------------------------------------------
@@ -1502,6 +1620,107 @@ def test_membership_only_target_passes_for_membership_glob() -> None:
 
 def test_membership_only_target_passes_for_exact_membership_table() -> None:
     config = _config(_distort_intervals({"table": "membership__patient__ward"}))
+    validate_corrupt_config(config, _sidecar())  # does not raise
+
+
+# ---------------------------------------------------------------------------
+# Placement rules over insert_rows / distort_intervals
+# ---------------------------------------------------------------------------
+
+
+def test_insert_rows_placement_column_exists_extends_unchanged() -> None:
+    """PlacementColumnExists extends unchanged over insert_rows."""
+    config = _config(
+        _insert_rows_placement(
+            {"table": "records__patient"},
+            {"kind": "correlated", "column": "prop__age", "value": "10", "weight": 2.0},
+        )
+    )
+    validate_corrupt_config(config, _sidecar())  # does not raise
+
+
+def test_insert_rows_placement_column_exists_rejects_missing_column() -> None:
+    config = _config(
+        _insert_rows_placement(
+            {"table": "records__patient"},
+            {"kind": "correlated", "column": "prop__nope", "value": "x", "weight": 2.0},
+        )
+    )
+    with pytest.raises(
+        CorruptValidationError,
+        match=r"operation\[0\].*placement column 'prop__nope'",
+    ):
+        validate_corrupt_config(config, _sidecar())
+
+
+def test_insert_rows_entity_scoped_placement_extends_unchanged() -> None:
+    """EntityScopedRecordId extends unchanged over insert_rows."""
+    config = _config(
+        _insert_rows_placement(
+            {"table": "records__patient"},
+            {"kind": "entity_scoped", "entities": {"count": 1}},
+        )
+    )
+    validate_corrupt_config(config, _sidecar())  # does not raise
+
+
+def test_insert_rows_entity_scoped_rejects_table_lacking_record_id() -> None:
+    table_without_record_id = table_spec(
+        "records__widget",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("prop__val", "VARCHAR"),
+        ),
+        record_kind="widget",
+    )
+    local_sidecar = sidecar((table_without_record_id,))
+    config = _config(
+        _insert_rows_placement(
+            {"table": "records__widget"},
+            {"kind": "entity_scoped", "entities": {"count": 1}},
+        )
+    )
+    with pytest.raises(
+        CorruptValidationError,
+        match=r"operation\[0\].*entity_scoped requires record_id",
+    ):
+        validate_corrupt_config(config, local_sidecar)
+
+
+def test_distort_intervals_placement_column_exists_extends_unchanged() -> None:
+    """PlacementColumnExists extends unchanged over distort_intervals."""
+    config = _config(
+        _distort_intervals_placement(
+            {"table": "membership__patient__ward"},
+            {"kind": "correlated", "column": "elem__slot", "value": "x", "weight": 2.0},
+        )
+    )
+    validate_corrupt_config(config, _sidecar())  # does not raise
+
+
+def test_distort_intervals_placement_column_exists_rejects_missing_column() -> None:
+    config = _config(
+        _distort_intervals_placement(
+            {"table": "membership__patient__ward"},
+            {"kind": "correlated", "column": "elem__nope", "value": "x", "weight": 2.0},
+        )
+    )
+    with pytest.raises(
+        CorruptValidationError,
+        match=r"operation\[0\].*placement column 'elem__nope'",
+    ):
+        validate_corrupt_config(config, _sidecar())
+
+
+def test_distort_intervals_entity_scoped_placement_extends_unchanged() -> None:
+    """EntityScopedRecordId extends unchanged over distort_intervals."""
+    config = _config(
+        _distort_intervals_placement(
+            {"table": "membership__patient__ward"},
+            {"kind": "entity_scoped", "entities": {"count": 1}},
+        )
+    )
     validate_corrupt_config(config, _sidecar())  # does not raise
 
 

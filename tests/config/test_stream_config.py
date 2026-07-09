@@ -457,6 +457,16 @@ def test_debezium_config_schemas_enable_defaults_true() -> None:
     assert cfg.schemas_enable is True
 
 
+def test_debezium_config_schemas_enable_false_parses() -> None:
+    """An explicit schemas_enable: false parses (the bare-payload branch —
+    unwrapped messages, no {schema, payload} envelope)."""
+    cfg = DebeziumConfig.model_validate(
+        {**_make_debezium_config(), "schemas_enable": False}
+    )
+    assert cfg.schemas_enable is False
+    assert cfg.source.connector == "postgresql"
+
+
 def test_debezium_config_missing_source_raises() -> None:
     """Missing source block raises (required field)."""
     with pytest.raises(ValidationError):
@@ -486,21 +496,6 @@ def test_stream_config_debezium_present_parsed() -> None:
         _make_stream_config(debezium=_make_debezium_config())
     )
     assert isinstance(cfg.debezium, DebeziumConfig)
-    assert cfg.debezium.source.schema_ == "public"
-
-
-def test_stream_config_debezium_full_block_parses() -> None:
-    """Full debezium block with all five source fields + schemas_enable parses."""
-    cfg = StreamConfig.model_validate(
-        _make_stream_config(
-            debezium={
-                "schemas_enable": True,
-                "source": _VALID_SOURCE,
-            }
-        )
-    )
-    assert cfg.debezium is not None
-    assert cfg.debezium.schemas_enable is True
     assert cfg.debezium.source.schema_ == "public"
 
 
