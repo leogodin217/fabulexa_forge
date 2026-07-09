@@ -166,6 +166,7 @@ mode, adjust YAML, and run the CLI. They do not write Python.
 | `docs/CAPABILITIES.md` | Feature inventory + status (exporter modes, corrupters, reader) | Tracking what to build / what's shipped |
 | `docs/architecture/README.md` | Design index, package layout, staged roadmap, status | Planning / orientation |
 | `src/fabulexa_export/` | Code is the contract; docstrings + tests own behavior | Implementing |
+| `frontend/README.md` | FabulMixer live-perform UI — an app *over* the library; talks only to the mixer HTTP control API, never the bundle or `contract/` | Working on the mixer / streaming demo |
 
 ## Context Efficiency
 

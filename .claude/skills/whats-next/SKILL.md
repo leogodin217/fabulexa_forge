@@ -19,10 +19,10 @@ Read in this order, stopping early if a clear direction emerges:
 2. `CLAUDE.md` Phase Status — current phase scope.
 3. `docs/sprints/current/` (if present) and the most recent entries in `docs/sprints/archive/`.
 4. `**/docs/architecture/pending/*.md` — every pending design across packages. Use `tools/mdnav` first; only read sections that look relevant.
-5. **Obsidian features:** `python3 .claude/skills/note/cli.py list --type feature` returns proposed features by default; also run `--type feature --status scheduled` to see what is queued for next-up. Each feature carries `area`, `priority` (p0/p1/p2), `depends-on`, and `related-code`. These are explicit future-work candidates — read bodies of high-priority entries and any blocking dependencies.
-6. **Obsidian forward-notes:** `python3 .claude/skills/note/cli.py list --type research`. Skim titles and areas; read bodies of any whose subject relates to current work. These carry deferred design hypotheses, scale-roadmap context, and "may change" guidance that lives out of repo.
+5. **Obsidian features:** `python3 ~/.claude/skills/note/cli.py list --type feature` returns proposed features by default; also run `--type feature --status scheduled` to see what is queued for next-up. Each feature carries `area`, `priority` (p0/p1/p2), `depends-on`, and `related-code`. These are explicit future-work candidates — read bodies of high-priority entries and any blocking dependencies.
+6. **Obsidian forward-notes:** `python3 ~/.claude/skills/note/cli.py list --type research`. Skim titles and areas; read bodies of any whose subject relates to current work. These carry deferred design hypotheses, scale-roadmap context, and "may change" guidance that lives out of repo.
 7. `git log --oneline -20` and `git status` — what just landed, what's uncommitted.
-9. `python3 .claude/skills/note/cli.py list --type finding --status open` — open findings by severity.
+9. `python3 ~/.claude/skills/note/cli.py list --type finding --status open` — open findings by severity.
 
 Do not read implementation source unless a candidate recommendation requires it to assess feasibility. This skill is fast.
 
