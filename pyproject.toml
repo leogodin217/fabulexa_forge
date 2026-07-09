@@ -1,12 +1,31 @@
 [build-system]
-requires = ["hatchling"]
+# >=1.27 for PEP 639 SPDX `license` + `license-files` support.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "fabulexa-forge"
 version = "0.0.1"
 description = "Downstream exporter + corrupter for Fabulexa composite base-layer emits."
+readme = "README.md"
 requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Practical Data Training LLC" }]
+# No `License ::` classifier: the SPDX `license` expression above is authoritative
+# (PEP 639); declaring both is rejected by current packaging tooling.
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
 dependencies = [
     # duckdb pin tracks the upstream producer to guarantee the written base-layer
     # format is readable. Bump in lockstep with upstream.
@@ -49,6 +68,10 @@ dev = [
 # Standalone uv project with its own lock and venv, so anything outside the vendored
 # contract is genuinely absent from the environment — the boundary is enforced by
 # physics, not convention. Run all tooling from the repo root.
+
+[project.urls]
+Homepage = "https://github.com/leogodin217/fabulexa_forge"
+Repository = "https://github.com/leogodin217/fabulexa_forge"
 
 [project.scripts]
 fabexport = "fabulexa_export.cli:main"

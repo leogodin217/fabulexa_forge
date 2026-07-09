@@ -7,8 +7,51 @@ writes differently-shaped datasets (exporters) or realistically-broken base laye
 (corrupters). A downstream consumer of Fabulexa composite base-layer emits — the
 vendored bundle contract is its only coupling.
 
-> **Status: standalone.** Its own repo; the vendored `contract/` is the only coupling.
-> Current stage: reader + conformance (trunk-only). See `docs/architecture/README.md`.
+> **Status: standalone, trunk-only.** Its own repo; the vendored `contract/` is the
+> only coupling. The reader + C1–C12 conformance, the dimensional / source / streaming
+> exporters, the corrupter family, and a live streaming **mixer** have shipped;
+> multi-branch / fork-aware export is deliberately deferred. See
+> [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) for the feature inventory and
+> [`docs/architecture/README.md`](docs/architecture/README.md) for the staged roadmap.
+
+One project, four names: the distribution is `fabulexa-forge`, the importable package
+is `fabulexa_export`, the CLI is `fabexport`, and the docs title it *Fabulexa Composite
+Export*. They are the same thing.
+
+## Install and run
+
+Not yet published to PyPI — clone and run from source with
+[uv](https://docs.astral.sh/uv/):
+
+```bash
+git clone https://github.com/leogodin217/fabulexa_forge
+cd fabulexa_forge
+uv sync                 # resolve this project's own venv
+uv run fabexport --help
+```
+
+`fabexport` is the only entry point. It takes one base-layer emit (`run.duckdb` +
+`base.json`) and either reshapes it (exporters) or breaks it realistically
+(corrupters):
+
+| Verb | What it does |
+|---|---|
+| `validate` | Run C1–C12 conformance checks against an emit. |
+| `export`   | Reshape an emit per an export config (`dimensional` / `source`). |
+| `init`     | Propose a candidate dimensional config from the sidecar. |
+| `stream`   | Replay the base layer as a CDC event stream. |
+| `mixer`    | Replay the base layer as a live, operator-mixable Kafka feed. |
+| `corrupt`  | Inject realistic data-quality defects, with a ground-truth manifest. |
+
+Example — validate an emit, then export it to a DuckDB star schema:
+
+```bash
+uv run fabexport validate path/to/emit
+uv run fabexport export path/to/emit config.yaml out/ --fmt duckdb
+```
+
+Export and corrupter targets are described in YAML — no Python. Learn each feature from
+a minimal, test-guarded [recipe](docs/recipes/README.md).
 
 ## Boundary
 
@@ -32,8 +75,12 @@ make check         # lint + typecheck + tests
 .
 ├── CLAUDE.md                 # principles, boundary, vocabulary
 ├── contract/                 # VENDORED base-layer contract (the only coupling)
-├── docs/architecture/        # design index + staged roadmap
-├── src/fabulexa_export/      # package source
+├── src/fabulexa_export/      # package source — the fabexport CLI + library
 ├── tests/
-└── tools/                    # repo tooling (mdnav, hooks)
+├── examples/recipes/         # minimal, test-guarded author recipes (one per feature)
+├── docs/                     # architecture index, capabilities, recipes, roadmap
+├── dev/                      # local demo + Kafka rig (not shipped in the wheel)
+├── frontend/                 # FabulMixer live-perform UI — a throwaway Vue POC
+├── tools/                    # repo tooling (mdnav, hooks)
+└── .claude/                  # AI-agent skills/config — tracked as a workflow showcase
 ```
