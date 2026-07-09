@@ -130,9 +130,12 @@ def _run(
     emit_dir: Path,
     kind: str,
     tracked: frozenset[str],
+    discriminator_filter: dict[str, str] | None = None,
 ) -> list[tuple[Any, ...]]:
     with open_emit(emit_dir) as emit:
-        sql = build_versioned_intervals_sql(emit.sidecar, "trunk", kind, tracked)
+        sql = build_versioned_intervals_sql(
+            emit.sidecar, "trunk", kind, tracked, discriminator_filter or {}
+        )
         return emit.query(sql, ())
 
 
@@ -375,7 +378,7 @@ class TestErrors:
         with open_emit(tmp_path) as emit:
             with pytest.raises(TableNotFoundError):
                 build_versioned_intervals_sql(
-                    emit.sidecar, "trunk", "item", frozenset({"status"})
+                    emit.sidecar, "trunk", "item", frozenset({"status"}), {}
                 )
 
     def test_versioned_interval_columns_constant(self) -> None:
@@ -385,3 +388,111 @@ class TestErrors:
             "version_start",
             "version_end",
         )
+
+
+# ---------------------------------------------------------------------------
+# ASOF-join shape (regression: the correlated per-row subquery OOM'd)
+# ---------------------------------------------------------------------------
+
+
+class TestAsofShape:
+    """The as-of lookback compiles to ASOF JOINs, not correlated subqueries."""
+
+    def test_sql_uses_asof_join_not_correlated_subquery(self, tmp_path: Path) -> None:
+        """One ASOF LEFT JOIN per tracked property; no per-row lookback subquery.
+
+        Regression for the O(events x history) correlated-subquery pattern that
+        OOM'd row_state_events (~13 GB on one record with ~9.7k history rows).
+        """
+        emit_dir = _build_emit(
+            tmp_path,
+            history_rows=[("trunk", "item", "r1", "status", 10, "a")],
+            record_rows=[("trunk", "r1", True, None, 10, "a", None)],
+        )
+        with open_emit(emit_dir) as emit:
+            sql = build_versioned_intervals_sql(
+                emit.sidecar, "trunk", "item", frozenset({"status", "score"}), {}
+            )
+        assert sql.count("ASOF LEFT JOIN") == 2
+        # The old correlated shape ended each prop expression with this suffix.
+        assert 'ORDER BY "sim_time" DESC LIMIT 1' not in sql
+
+    def test_asof_values_match_correlated_semantics(self, tmp_path: Path) -> None:
+        """ASOF lookback is inclusive at the boundary and NULL before first row."""
+        emit_dir = _build_emit(
+            tmp_path,
+            history_rows=[
+                ("trunk", "item", "r1", "status", 10, "a"),
+                ("trunk", "item", "r1", "score", 20, "7"),
+                ("trunk", "item", "r1", "status", 30, "b"),
+            ],
+            record_rows=[("trunk", "r1", True, None, 30, "b", "7")],
+        )
+        rows = _run(emit_dir, "item", frozenset({"status", "score"}))
+        rows = sorted(rows, key=lambda r: r[_VS])
+        # Columns: record_id, version_start, version_end, prop__status, prop__score
+        # (sidecar declaration order: prop__status before prop__score).
+        assert [(r[_VS], r[3], r[4]) for r in rows] == [
+            (10, "a", None),
+            (20, "a", "7"),
+            (30, "b", "7"),
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Discriminator filter (regression: SCD-2 dropped source.filter)
+# ---------------------------------------------------------------------------
+
+_TYPED_RECORD_COLS: list[dict[str, object]] = _RECORD_COLS + [
+    {"name": "prop__item_type", "type": "VARCHAR"},
+]
+
+
+def _build_typed_emit(tmp_path: Path) -> Path:
+    """Emit with two sub-types (widget r1, gadget r2) and history for both."""
+    return _build_emit(
+        tmp_path,
+        history_rows=[
+            ("trunk", "item", "r1", "status", 10, "a"),
+            ("trunk", "item", "r1", "status", 20, "b"),
+            ("trunk", "item", "r2", "status", 15, "x"),
+        ],
+        record_cols=_TYPED_RECORD_COLS,
+        record_rows=[
+            ("trunk", "r1", True, None, 20, "b", None, "widget"),
+            ("trunk", "r2", True, None, 15, "x", None, "gadget"),
+        ],
+    )
+
+
+class TestDiscriminatorFilter:
+    """discriminator_filter restricts intervals to the matching records."""
+
+    def test_filter_selects_only_matching_subtype(self, tmp_path: Path) -> None:
+        """Only the filtered sub-type's records contribute interval rows."""
+        emit_dir = _build_typed_emit(tmp_path)
+        rows = _run(
+            emit_dir,
+            "item",
+            frozenset({"status"}),
+            {"prop__item_type": "widget"},
+        )
+        assert {r[_REC_ID] for r in rows} == {"r1"}
+        assert len(rows) == 2
+
+    def test_empty_filter_selects_all_records(self, tmp_path: Path) -> None:
+        """An empty filter selects the whole kind (no restriction)."""
+        emit_dir = _build_typed_emit(tmp_path)
+        rows = _run(emit_dir, "item", frozenset({"status"}), {})
+        assert {r[_REC_ID] for r in rows} == {"r1", "r2"}
+
+    def test_filter_no_match_yields_no_rows(self, tmp_path: Path) -> None:
+        """A filter value matching no record yields an empty relation."""
+        emit_dir = _build_typed_emit(tmp_path)
+        rows = _run(
+            emit_dir,
+            "item",
+            frozenset({"status"}),
+            {"prop__item_type": "gizmo"},
+        )
+        assert rows == []

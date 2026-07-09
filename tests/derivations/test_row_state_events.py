@@ -25,6 +25,7 @@ from fabulexa_export.reader.errors import TableNotFoundError
 
 from ._fixtures import (
     _RECORD_COLS_INTERLEAVED,
+    _RECORD_COLS_INTERLEAVED_WITH_PID,
     _RECORD_COLS_WITH_PID,
     _build_emit,
 )
@@ -447,6 +448,70 @@ class TestPresentationId:
         deletes = [r for r in rows if r[_OP] == "d"]
         assert len(deletes) == 1
         assert deletes[0][_N_PREFIX] is None
+
+
+# ---------------------------------------------------------------------------
+# Combined delete-nulling: presentation_id + tracked + current props on one row
+# ---------------------------------------------------------------------------
+
+
+class TestCombinedDeleteNulling:
+    """A 'd' row NULLs presentation_id, tracked props, and current props together."""
+
+    def test_delete_nulls_pid_tracked_and_current_props_simultaneously(
+        self, tmp_path: Path
+    ) -> None:
+        """One deactivated record with a surrogate plus tracked (alpha, gamma)
+        and current (beta) props: the single 'd' row NULLs all four after-image
+        columns at once, while the 'c'/'u' rows carry them all populated."""
+        # Cols: fork_path, record_id, presentation_id, created_sim_time, active,
+        # deactivated_at, last_mutation_sim_time, prop__alpha, prop__beta, prop__gamma
+        emit_dir = _build_emit(
+            tmp_path,
+            record_rows=[("trunk", "r1", 77, 10, False, 50, 30, "a2", "b0", "g1")],
+            history_rows=[
+                ("trunk", "widget", "r1", "alpha", 10, "a1"),
+                ("trunk", "widget", "r1", "alpha", 30, "a2"),
+                ("trunk", "widget", "r1", "gamma", 10, "g1"),
+            ],
+            kind="widget",
+            record_cols=_RECORD_COLS_INTERLEAVED_WITH_PID,
+        )
+        rows = _run(emit_dir, "widget", frozenset({"alpha", "beta", "gamma"}))
+
+        # After-image layout: prefix(4) + presentation_id, prop__alpha,
+        # prop__beta, prop__gamma (sidecar declaration order)
+        pid_idx, alpha_idx, beta_idx, gamma_idx = 4, 5, 6, 7
+        r1_rows = [r for r in rows if r[_REC_ID] == "r1"]
+        assert [r[_OP] for r in r1_rows] == ["c", "u", "d"]
+        create, update, delete = r1_rows
+
+        # 'c' at 10: all after-image columns populated
+        assert create[_EVT] == 10
+        assert (create[pid_idx], create[alpha_idx], create[beta_idx]) == (
+            "77",
+            "a1",
+            "b0",
+        )
+        assert create[gamma_idx] == "g1"
+
+        # 'u' at 30: still all populated, alpha advanced
+        assert update[_EVT] == 30
+        assert (update[pid_idx], update[alpha_idx], update[beta_idx]) == (
+            "77",
+            "a2",
+            "b0",
+        )
+        assert update[gamma_idx] == "g1"
+
+        # 'd' at 50: presentation_id, tracked props, and current prop all NULL
+        # on the SAME row — record_id remains
+        assert delete[_EVT] == 50
+        assert delete[_REC_ID] == "r1"
+        assert delete[pid_idx] is None
+        assert delete[alpha_idx] is None
+        assert delete[beta_idx] is None
+        assert delete[gamma_idx] is None
 
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Callable
 
 import jsonschema
 
+from fabulexa_export._sql import quote_identifier as _quote_identifier
 from fabulexa_export.reader._schema import _load_vendored_schema
 
 if TYPE_CHECKING:
@@ -78,25 +79,6 @@ _PS_RECORDS_PREFIX_COLUMNS: tuple[tuple[str, str], ...] = (
 
 # Valid warehouse roles for C12
 _VALID_ROLES: frozenset[str] = frozenset({"dimension", "fact"})
-
-# ---------------------------------------------------------------------------
-# Identifier quoting helpers
-# ---------------------------------------------------------------------------
-
-_QUOTE_RE = re.compile('"')
-
-
-def _quote_identifier(name: str) -> str:
-    """Wrap a SQL identifier in double quotes, doubling any internal quotes.
-
-    Args:
-        name: The identifier string (table or column name).
-
-    Returns:
-        The DuckDB double-quoted identifier string.
-    """
-    return '"' + _QUOTE_RE.sub('""', name) + '"'
-
 
 # ---------------------------------------------------------------------------
 # Catalog-probe helpers
@@ -286,12 +268,11 @@ def _check_c2(emit: "Emit") -> CheckResult:
                         f"(catalog={cat_type!r}, sidecar={sc_col.type!r})"
                     )
 
-        # Row count check
-        try:
-            actual_rows = _catalog_row_count(emit, tname)
-        except Exception as exc:
-            messages.append(f"table '{tname}': row count query failed: {exc}")
-            continue
+        # Row count check. The table's catalog presence is probed above (the only
+        # thing COUNT(*) needs), so a failure here is operational and propagates
+        # as RunDatabaseError per validate()'s contract — never re-labelled as a
+        # conformance message.
+        actual_rows = _catalog_row_count(emit, tname)
         if actual_rows != table_spec.rows:
             messages.append(
                 f"table '{tname}': row count mismatch "
@@ -648,27 +629,6 @@ def _table_and_col_present(
     return col_name in cat_cols
 
 
-def _catalog_col_type(
-    emit: "Emit",
-    table_name: str,
-    col_name: str,
-) -> str | None:
-    """Return the DuckDB type for a column, or None if not found.
-
-    Args:
-        emit: An open emit.
-        table_name: Table to look up.
-        col_name: Column within that table.
-
-    Returns:
-        The type string, or None.
-    """
-    for name, ctype in _catalog_columns(emit, table_name):
-        if name == col_name:
-            return ctype
-    return None
-
-
 def _check_c6(emit: "Emit") -> CheckResult:
     """C6: history-tracked property round-trip.
 
@@ -703,6 +663,21 @@ def _check_c6(emit: "Emit") -> CheckResult:
         skips.append("history table absent from catalog — C6 skipped")
         return CheckResult(check="C6", passed=True, messages=(), skips=tuple(skips))
 
+    # Probe every history column the queries below reference (a C4 failure when
+    # missing) — validate() never raises on a malformed catalog.
+    history_cat_cols = {name for name, _ in _catalog_columns(emit, "history")}
+    missing_history_cols = [
+        c
+        for c in ("fork_path", "kind", "record_id", "property", "sim_time", "value")
+        if c not in history_cat_cols
+    ]
+    if missing_history_cols:
+        skips.append(
+            f"history table missing columns {missing_history_cols!r} "
+            f"(C4 failure) — C6 skipped"
+        )
+        return CheckResult(check="C6", passed=True, messages=(), skips=tuple(skips))
+
     branches = list(emit.sidecar.branches())
     if not branches:
         skips.append("no sidecar branches — C6 skipped")
@@ -734,7 +709,17 @@ def _check_c6(emit: "Emit") -> CheckResult:
             )
             continue
 
-        prop_col_type = _catalog_col_type(emit, records_table, prop_col)
+        # One catalog probe covers every records-table column the join references:
+        # record_id / fork_path (a C5 failure when missing) and the prop__ column.
+        records_col_types = dict(_catalog_columns(emit, records_table))
+        if "record_id" not in records_col_types or "fork_path" not in records_col_types:
+            skips.append(
+                f"table {records_table!r} missing record_id/fork_path columns — "
+                f"C6 series (kind={kind!r}, property={prop!r}) skipped"
+            )
+            continue
+
+        prop_col_type = records_col_types.get(prop_col)
         if prop_col_type is None:
             skips.append(
                 f"column {prop_col!r} absent from {records_table!r} catalog — "
@@ -930,9 +915,11 @@ def _check_c7_membership_ref_pairs(
     if tname not in catalog_tables:
         return
     cat_cols = {name for name, _ in _catalog_columns(emit, tname)}
-    member_kind_cols = [
+    # sorted: set iteration order is hash-seed-dependent; message order must be
+    # deterministic (Determinism invariant).
+    member_kind_cols = sorted(
         c for c in cat_cols if c.startswith("member__") and c.endswith("__kind")
-    ]
+    )
     for kind_col in member_kind_cols:
         prefix = kind_col[: -len("__kind")]
         id_col = f"{prefix}__id"
@@ -1164,11 +1151,13 @@ def _check_c10(emit: "Emit") -> CheckResult:
         # (fork_path, id) pairs that resolve to no records row — replacing one count
         # query per distinct reference. Resolution is against record *identity*: any
         # row for that (fork_path, record_id) satisfies it regardless of `active`.
-        member_kind_cols = [
+        # sorted: set iteration order is hash-seed-dependent; message/skip order
+        # must be deterministic (Determinism invariant).
+        member_kind_cols = sorted(
             c
             for c in cat_col_names
             if c.startswith("member__") and c.endswith("__kind")
-        ]
+        )
         for kind_col in member_kind_cols:
             prefix = kind_col[: -len("__kind")]
             id_col = f"{prefix}__id"

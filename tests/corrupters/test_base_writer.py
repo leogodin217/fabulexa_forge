@@ -202,6 +202,57 @@ def test_renamed_column_carries_history_tracked_dropped_column_absent(
     assert columns_by_name["prop__full_name"]["history_tracked"] is True
 
 
+def test_fixed_category_table_entry_omits_record_kind_and_property(
+    tmp_path: Path,
+) -> None:
+    """A fixed-category table (record_kind/property None -- `history`) writes a
+    tables[] entry carrying category "fixed" and no record_kind/property keys."""
+    history_spec = table_spec(
+        "history",
+        "fixed",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("kind", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("property", "VARCHAR"),
+            column_spec("sim_time", "BIGINT"),
+            column_spec("value", "VARCHAR"),
+        ),
+    )
+    wt = working_table(
+        history_spec,
+        [
+            {
+                "fork_path": "trunk",
+                "kind": "actor",
+                "record_id": "a001",
+                "property": "status",
+                "sim_time": 5,
+                "value": "active",
+            }
+        ],
+    )
+    state = CorruptState(tables={"history": wt})
+    out_dir = tmp_path / "out"
+    write_base_emit(state, _SOURCE_SIDECAR, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    (table,) = sidecar["tables"]
+    assert table["name"] == "history"
+    assert table["category"] == "fixed"
+    assert table["rows"] == 1
+    assert "record_kind" not in table
+    assert "property" not in table
+    assert [c["name"] for c in table["columns"]] == [
+        "fork_path",
+        "kind",
+        "record_id",
+        "property",
+        "sim_time",
+        "value",
+    ]
+
+
 def test_determinism_byte_identical(tmp_path: Path) -> None:
     state1 = _one_table_state()
     state2 = _one_table_state()
@@ -224,3 +275,99 @@ def test_write_failure_surfaces_export_runtime_error(tmp_path: Path) -> None:
     state = _one_table_state()
     with pytest.raises(ExportRuntimeError):
         write_base_emit(state, _SOURCE_SIDECAR, out_dir)
+
+
+def _two_table_state() -> CorruptState:
+    state = _one_table_state()
+    doctor_spec = table_spec(
+        "records__doctor",
+        "records",
+        (column_spec("fork_path", "VARCHAR"), column_spec("record_id", "VARCHAR")),
+        record_kind="doctor",
+    )
+    doctors = working_table(doctor_spec, [{"fork_path": "trunk", "record_id": "d001"}])
+    tables = dict(state.tables)
+    tables["records__doctor"] = doctors
+    return CorruptState(tables=tables)
+
+
+def test_mid_write_failure_removes_partial_run_duckdb_and_retry_succeeds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A failure while writing a later table removes the partial run.duckdb,
+    so a retry into the same out_dir is not refused as an existing emit."""
+    from fabulexa_export.corrupters import base_writer as base_writer_module
+
+    real_canonical_rows = base_writer_module._canonical_rows
+    calls: list[int] = []
+
+    def flaky_canonical_rows(working: WorkingTable) -> pa.Table:
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("disk full")
+        return real_canonical_rows(working)
+
+    monkeypatch.setattr(base_writer_module, "_canonical_rows", flaky_canonical_rows)
+
+    state = _two_table_state()
+    out_dir = tmp_path / "out"
+    with pytest.raises(ExportRuntimeError, match="disk full"):
+        write_base_emit(state, _SOURCE_SIDECAR, out_dir)
+    assert not (out_dir / "run.duckdb").exists()
+    assert not (out_dir / "base.json").exists()
+
+    monkeypatch.undo()
+    write_base_emit(state, _SOURCE_SIDECAR, out_dir)  # retry is not blocked
+    assert (out_dir / "run.duckdb").exists()
+    assert (out_dir / "base.json").exists()
+
+
+def test_base_json_write_failure_removes_run_duckdb(tmp_path: Path) -> None:
+    """A base.json write failure removes the (complete but sidecar-less, hence
+    unusable) run.duckdb rather than leaving half an emit behind."""
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    # Make base.json a directory so write_text() fails after run.duckdb landed.
+    (out_dir / "base.json").mkdir()
+
+    state = _one_table_state()
+    with pytest.raises(ExportRuntimeError, match="base.json"):
+        write_base_emit(state, _SOURCE_SIDECAR, out_dir)
+    assert not (out_dir / "run.duckdb").exists()
+
+
+def test_bundle_sourced_table_name_with_embedded_quote_is_written_safely(
+    tmp_path: Path,
+) -> None:
+    """A sidecar-sourced table name containing a double-quote (bundle names
+    cannot be pattern-gated) lands as a literal catalog name — the quote never
+    breaks out of the CREATE TABLE / DESCRIBE identifier position."""
+    evil_name = "records__actor\" ; ATTACH '/tmp/x.db' AS x; --"
+    spec = table_spec(
+        evil_name,
+        "records",
+        (column_spec("fork_path", "VARCHAR"), column_spec("record_id", "VARCHAR")),
+        record_kind="actor",
+    )
+    wt = working_table(spec, [{"fork_path": "trunk", "record_id": "a001"}])
+    state = CorruptState(tables={evil_name: wt})
+    out_dir = tmp_path / "out"
+
+    write_base_emit(state, _SOURCE_SIDECAR, out_dir)
+
+    import duckdb
+
+    conn = duckdb.connect(str(out_dir / "run.duckdb"), read_only=True)
+    try:
+        names = {
+            row[0]
+            for row in conn.execute(
+                "SELECT table_name FROM information_schema.tables"
+            ).fetchall()
+        }
+    finally:
+        conn.close()
+    assert evil_name in names
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    assert sidecar["tables"][0]["name"] == evil_name

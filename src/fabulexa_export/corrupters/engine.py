@@ -15,6 +15,7 @@ import random
 from typing import TYPE_CHECKING
 
 from fabulexa_export import __version__
+from fabulexa_export._sql import quote_identifier
 from fabulexa_export.corrupters.base_writer import write_base_emit
 from fabulexa_export.corrupters.fingerprint import fingerprint_config
 from fabulexa_export.corrupters.manifest import DefectSource
@@ -109,7 +110,9 @@ def _materialize_state(emit: "Emit") -> CorruptState:
     """
     tables: dict[str, WorkingTable] = {}
     for table_spec in emit.sidecar.tables():
-        data = emit.query_arrow(f'SELECT * FROM "{table_spec.name}"', ())
+        data = emit.query_arrow(
+            f"SELECT * FROM {quote_identifier(table_spec.name)}", ()
+        )
         tables[table_spec.name] = WorkingTable(spec=table_spec, data=data)
     return CorruptState(tables=tables)
 

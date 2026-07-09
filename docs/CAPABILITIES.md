@@ -47,7 +47,7 @@ base-layer emit (run.duckdb + base.json @ base_format_version 4)
            └─▶ corrupters (base → realistically-broken base)
         │
         ▼
-   datasets (CSV · DuckDB · Parquet)
+   datasets (CSV · DuckDB · Parquet ○ planned)
 ```
 
 The input contract is the vendored base-layer spec (`contract/`). Every feature reads
@@ -259,8 +259,9 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
 
 - ✓ `fabexport validate` *(Stage 1)* — run C1–C12 against an emit.
 - ✓ `fabexport export` *(Stage 2)* — run an export config against an emit,
-  dispatching to the dimensional engine (the sole mode); `--fmt csv|duckdb` selects
-  delivery; `--next` / `--from` / `--to` drive incremental window-at-a-time export.
+  dispatching on `config.mode` to the dimensional or source engine; `--fmt csv|duckdb`
+  selects delivery; `--next` / `--from` / `--to` drive incremental window-at-a-time
+  export.
 - ✓ `fabexport stream` *(Stage 3)* — replay the base layer as a CDC event stream;
   `--fmt jsonl|debezium`, `--sink stdout|file|kafka` (output directory for `file`;
   `--bootstrap-servers` / `FABEXPORT_KAFKA_BOOTSTRAP` for `kafka`), plus the
@@ -270,7 +271,10 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   Kafka feed: an asyncio app that serves the FabulMixer control API (play / pause /
   re-speed the master transport; lag, rate-limit, or mute each topic mid-run) and reads
   producer-side meters back. Kafka-only; `--fmt jsonl|debezium`, `--bootstrap-servers`,
-  `--host` / `--port`, plus launch transport / tick flags. Behind a `[mixer]` install
+  `--host` / `--port`, plus launch transport / tick flags; `--consumer` enables the
+  consumer instrument (`--window` tumbling window sizes in event-time ms, `--join`
+  fact/dimension topic pairings, `--consumer-group` / `--consumer-offset` for the
+  Kafka group id and initial offset). Behind a `[mixer]` install
   extra composing `[kafka]`. See
   [`architecture/mixer-control-plane.md`](architecture/mixer-control-plane.md).
 - ✓ `fabexport init` *(Stage 2)* — propose a candidate dimensional config from the sidecar.

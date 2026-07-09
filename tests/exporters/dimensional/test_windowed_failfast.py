@@ -38,6 +38,7 @@ from fabulexa_export.exporters.dimensional.validation import (
     check_incremental_scd2_identity_key,
     check_incremental_scd2_valid_from_unique,
     check_incremental_slice_column_mutable,
+    validate_table,
 )
 from fabulexa_export.incremental.windows import Window
 from fabulexa_export.reader.sidecar import ColumnSpec, Sidecar
@@ -191,6 +192,89 @@ def test_grain_membership_raises() -> None:
         " incremental export; model interval ends as history_point events",
     ):
         check_incremental_grain_supported(tbl)
+
+
+def _sidecar_with_extra_table(extra_table: dict[str, object]) -> Sidecar:
+    """Return a Sidecar carrying records__entity plus one extra table spec."""
+    raw: dict[str, object] = {
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        "tables": [
+            {
+                "name": "records__entity",
+                "category": "records",
+                "record_kind": "entity",
+                "columns": [{"name": "record_id", "type": "VARCHAR"}],
+                "rows": 0,
+            },
+            extra_table,
+        ],
+    }
+    return Sidecar.from_raw(raw)
+
+
+def test_validate_table_forecloses_dim_membership_grain_under_window() -> None:
+    """validate_table stops a dim with grain=membership under a window at the gate.
+
+    Pins that the IncrementalGrainUnsupported gate (with its own message) fires
+    before build_grain_sql could ever reach its documented-unreachable
+    "not supported with windowed export" branch for a windowed dim.
+    """
+    sidecar = _sidecar_with_extra_table(
+        {
+            "name": "membership__entity__team_members",
+            "category": "membership",
+            "record_kind": "entity",
+            "property": "team_members",
+            "columns": [
+                {"name": "record_id", "type": "VARCHAR"},
+                {"name": "joined_sim_time", "type": "BIGINT"},
+                {"name": "left_sim_time", "type": "BIGINT"},
+                {"name": "member__entity__kind", "type": "VARCHAR"},
+                {"name": "member__entity__id", "type": "VARCHAR"},
+            ],
+            "rows": 0,
+        }
+    )
+    tbl = _make_table("dim_mem", grain="membership", kind="entity", scd=None)
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(
+        ExportError,
+        match="table 'dim_mem': grain 'membership' is not supported with"
+        " incremental export; model interval ends as history_point events",
+    ):
+        validate_table(tbl, config, sidecar, _WINDOW)
+
+
+def test_validate_table_forecloses_dim_history_interval_grain_under_window() -> None:
+    """validate_table stops a dim with grain=history_interval under a window.
+
+    Same foreclosure pin as the membership-grain case: the gate message, not
+    build_grain_sql's unreachable-branch message, is what the author sees.
+    """
+    sidecar = _sidecar_with_extra_table(
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": [
+                {"name": "fork_path", "type": "VARCHAR"},
+                {"name": "kind", "type": "VARCHAR"},
+                {"name": "record_id", "type": "VARCHAR"},
+                {"name": "property", "type": "VARCHAR"},
+                {"name": "sim_time", "type": "BIGINT"},
+                {"name": "value", "type": "VARCHAR"},
+            ],
+            "rows": 0,
+        }
+    )
+    tbl = _make_table("dim_hist", grain="history_interval", kind="entity", scd=None)
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(
+        ExportError,
+        match="table 'dim_hist': grain 'history_interval' is not supported with"
+        " incremental export; model interval ends as history_point events",
+    ):
+        validate_table(tbl, config, sidecar, _WINDOW)
 
 
 def test_grain_records_passes_with_none_window() -> None:

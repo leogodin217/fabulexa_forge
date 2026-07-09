@@ -13,6 +13,7 @@ from fabulexa_export.config.models import (
     ColumnDecl,
     DerivedSpec,
     DimensionalConfig,
+    ElapsedSpec,
     ExcludeDecl,
     ExportConfig,
     FkClause,
@@ -350,6 +351,75 @@ def test_derived_scd_window_and_timestamp_raises() -> None:
         )
 
 
+_ELAPSED_PAYLOAD = {
+    "correlate_on": "attendance_id",
+    "other_where": {"state": "ed_arrival"},
+    "start_source": "last_mutation_sim_time",
+    "end_source": "last_mutation_sim_time",
+    "unit": "minutes",
+}
+
+
+def test_derived_elapsed_alone_parses() -> None:
+    """A DerivedSpec with only `elapsed` set parses into a typed ElapsedSpec."""
+    spec = DerivedSpec.model_validate({"elapsed": _ELAPSED_PAYLOAD})
+    assert spec.elapsed is not None
+    assert spec.elapsed.correlate_on == "attendance_id"
+    assert spec.elapsed.other_where == {"state": "ed_arrival"}
+    assert spec.elapsed.start_source == "last_mutation_sim_time"
+    assert spec.elapsed.end_source == "last_mutation_sim_time"
+    assert spec.elapsed.unit == "minutes"
+    assert spec.ordinal is None
+    assert spec.value_map is None
+    assert spec.timestamp is None
+    assert spec.scd_window is None
+
+
+def test_derived_elapsed_and_timestamp_raises() -> None:
+    """elapsed + timestamp combination raises (exactly_one_derived covers
+    the 'elapsed' arm)."""
+    with pytest.raises(ValidationError, match="exactly one"):
+        DerivedSpec.model_validate(
+            {"elapsed": _ELAPSED_PAYLOAD, "timestamp": {"source": "sim_time"}}
+        )
+
+
+def test_derived_elapsed_and_scd_window_raises() -> None:
+    """elapsed + scd_window combination raises."""
+    with pytest.raises(ValidationError, match="exactly one"):
+        DerivedSpec.model_validate(
+            {"elapsed": _ELAPSED_PAYLOAD, "scd_window": "valid_from"}
+        )
+
+
+# ---------------------------------------------------------------------------
+# ElapsedSpec required fields
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "missing_field",
+    ["correlate_on", "other_where", "start_source", "end_source", "unit"],
+)
+def test_elapsed_spec_missing_required_field_raises(missing_field: str) -> None:
+    """Each ElapsedSpec field is required — omitting any one raises."""
+    payload = {k: v for k, v in _ELAPSED_PAYLOAD.items() if k != missing_field}
+    with pytest.raises(ValidationError, match=missing_field):
+        ElapsedSpec.model_validate(payload)
+
+
+def test_elapsed_spec_unknown_unit_raises() -> None:
+    """A unit outside the Literal['minutes', 'seconds', 'hours'] raises."""
+    with pytest.raises(ValidationError, match="unit"):
+        ElapsedSpec.model_validate({**_ELAPSED_PAYLOAD, "unit": "days"})
+
+
+def test_elapsed_spec_unknown_field_raises() -> None:
+    """An unknown extra field on ElapsedSpec raises (extra='forbid')."""
+    with pytest.raises(ValidationError):
+        ElapsedSpec.model_validate({**_ELAPSED_PAYLOAD, "bogus": "x"})
+
+
 # ---------------------------------------------------------------------------
 # scd_only_on_dims
 # ---------------------------------------------------------------------------
@@ -467,6 +537,21 @@ def test_fk_membership_with_path_raises() -> None:
         )
 
 
+def test_fk_reference_with_path_parses() -> None:
+    """via=reference fk legitimately carries a multi-hop `path` (the
+    reference-edge hop chain documented on FkClause.path)."""
+    fk = FkClause.model_validate(
+        {
+            "to": "dim_patient",
+            "via": "reference",
+            "path": ["prop__encounter", "prop__patient"],
+        }
+    )
+    assert fk.via == "reference"
+    assert fk.path == ["prop__encounter", "prop__patient"]
+    assert fk.target_key == "record_id"
+
+
 def test_fk_membership_member_path_without_as_of_raises() -> None:
     """point-in-time fk with member_path but no as_of raises."""
     with pytest.raises(ValidationError, match="member_path.*requires 'as_of'"):
@@ -522,6 +607,89 @@ def test_empty_value_map_raises() -> None:
     """Empty value_map.map raises."""
     with pytest.raises(ValidationError, match="empty"):
         ValueMapSpec.model_validate({"from": "x", "map": {}})
+
+
+# ---------------------------------------------------------------------------
+# table_names_unique
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_table_names_raise() -> None:
+    """Two TableDecl entries sharing a name raise, naming the duplicate."""
+    with pytest.raises(ValidationError, match=r"duplicate table names.*dim_x"):
+        DimensionalConfig.model_validate(
+            {
+                "tables": [
+                    _make_table(),
+                    _make_table(source=MINIMAL_HISTORY_SOURCE),
+                ]
+            }
+        )
+
+
+def test_duplicate_table_names_across_roles_raise() -> None:
+    """A dim and a fact sharing a name still raise (uniqueness is name-wide)."""
+    with pytest.raises(ValidationError, match=r"duplicate table names.*customer"):
+        DimensionalConfig.model_validate(
+            {
+                "tables": [
+                    _make_table(name="customer"),
+                    _make_table(name="customer", role="fact", scd=None),
+                ]
+            }
+        )
+
+
+def test_distinct_table_names_are_allowed() -> None:
+    """Tables with distinct names pass the uniqueness validator."""
+    dim = DimensionalConfig.model_validate(
+        {"tables": [_make_table(name="dim_a"), _make_table(name="dim_b")]}
+    )
+    assert [t.name for t in dim.tables] == ["dim_a", "dim_b"]
+
+
+# ---------------------------------------------------------------------------
+# column_names_unique
+# ---------------------------------------------------------------------------
+
+
+def test_duplicate_column_names_raise() -> None:
+    """Two ColumnDecl entries sharing a name within one table raise."""
+    with pytest.raises(ValidationError, match=r"duplicate column names.*id"):
+        TableDecl.model_validate(
+            _make_table(
+                columns=[
+                    {"name": "id", "from": "record_id"},
+                    {"name": "id", "from": "prop__status"},
+                ]
+            )
+        )
+
+
+def test_duplicate_column_names_error_names_the_table() -> None:
+    """The duplicate-column error names the enclosing table."""
+    with pytest.raises(ValidationError, match=r"table 'dim_x'"):
+        TableDecl.model_validate(
+            _make_table(
+                columns=[
+                    {"name": "status", "from": "prop__status"},
+                    {"name": "status", "null": True},
+                ]
+            )
+        )
+
+
+def test_distinct_column_names_are_allowed() -> None:
+    """Columns with distinct names pass the uniqueness validator."""
+    t = TableDecl.model_validate(
+        _make_table(
+            columns=[
+                {"name": "id", "from": "record_id"},
+                {"name": "status", "from": "prop__status"},
+            ]
+        )
+    )
+    assert [c.name for c in t.columns] == ["id", "status"]
 
 
 # ---------------------------------------------------------------------------
@@ -753,12 +921,6 @@ def test_export_config_mode_source_with_no_section_is_ok() -> None:
     assert config.source is None
 
 
-def test_export_config_mode_cdc_is_now_rejected() -> None:
-    """mode='cdc' is rejected — cdc is not a legal Literal value."""
-    with pytest.raises(ValidationError):
-        ExportConfig.model_validate({"mode": "cdc", "cdc": {"table": "change_events"}})
-
-
 def test_export_config_cdc_block_rejected_as_unknown_field() -> None:
     """A 'cdc:' block on a dimensional config is rejected as an unknown field."""
     with pytest.raises(ValidationError):
@@ -789,3 +951,48 @@ def test_incremental_with_mode_dimensional_valid() -> None:
         }
     )
     assert cfg.incremental is not None
+
+
+# ---------------------------------------------------------------------------
+# SQL-identifier validation (names spliced into SQL and output filenames)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "../../etc/cron.d/evil",
+        "/etc/cron.d/evil",
+        "orders\" ; ATTACH '/tmp/x.db' AS x; --",
+        "1_starts_with_digit",
+        "has space",
+        "has-dash",
+    ],
+)
+def test_table_name_not_sql_identifier_raises(bad_name: str) -> None:
+    """A TableDecl.name outside ^[A-Za-z_][A-Za-z0-9_]*$ is a load-time error."""
+    with pytest.raises(ValidationError, match="SQL identifier"):
+        TableDecl.model_validate(_make_table(name=bad_name))
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    ['na"me', "col name", "../col", "9lives"],
+)
+def test_column_name_not_sql_identifier_raises(bad_name: str) -> None:
+    """A ColumnDecl.name outside ^[A-Za-z_][A-Za-z0-9_]*$ is a load-time error."""
+    with pytest.raises(ValidationError, match="SQL identifier"):
+        ColumnDecl.model_validate({"name": bad_name, "from": "record_id"})
+
+
+def test_plain_identifier_table_and_column_names_pass() -> None:
+    """Ordinary snake_case names (leading underscore included) still parse."""
+    t = TableDecl.model_validate(
+        _make_table(
+            name="_dim_customer_2",
+            columns=[{"name": "Id_2", "from": "record_id"}],
+            key=["Id_2"],
+        )
+    )
+    assert t.name == "_dim_customer_2"
+    assert t.columns[0].name == "Id_2"

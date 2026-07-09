@@ -22,6 +22,7 @@ from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_export.config.models import (
     ColumnDecl,
     DimensionalConfig,
+    FkClause,
     LookupClause,
     SourceDecl,
     TableDecl,
@@ -1201,6 +1202,135 @@ def test_build_query_specs_raises_for_type2_lookup_fact(tmp_path: Path) -> None:
         )
         with pytest.raises(ExportError):
             build_query_specs(emit, config, None, None)
+
+
+def _build_mixed_fk_lookup_emit(tmp_path: Path) -> Path:
+    """Build an emit where an fk and two lookups share the same hop chain.
+
+    Contains:
+      - records__actor: a001 (Alice, gold), a002 (Bob, silver)
+      - records__journey_instance: j001 → a001, j002 → a002 via prop__actor_id
+
+    All prop__ columns carry history_tracked: false so lookup temporal safety
+    passes.
+    """
+    actor_cols: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
+        {"name": "prop__tier", "type": "VARCHAR", "history_tracked": False},
+    ]
+    journey_cols: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        {
+            "name": "prop__actor_id",
+            "type": "VARCHAR",
+            "references": "actor",
+            "history_tracked": False,
+        },
+    ]
+
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__actor", actor_cols))
+    conn.execute(_create_ddl("records__journey_instance", journey_cols))
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", True, 10, "Alice", "gold"],
+    )
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", True, 20, "Bob", "silver"],
+    )
+    conn.execute(
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
+        ["trunk", "j001", True, 10, "a001"],
+    )
+    conn.execute(
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
+        ["trunk", "j002", True, 20, "a002"],
+    )
+    conn.close()
+
+    sidecar: dict[str, object] = {
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+        "tables": [
+            _table_spec("records__actor", "records", actor_cols, 2, "actor"),
+            _table_spec(
+                "records__journey_instance",
+                "records",
+                journey_cols,
+                2,
+                "journey_instance",
+            ),
+        ],
+    }
+    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    return tmp_path
+
+
+def test_mixed_fk_and_two_lookups_share_hop_chain_no_collision(
+    tmp_path: Path,
+) -> None:
+    """An fk and two lookups on one table share a hop chain without colliding.
+
+    The per-column alias namespacing is proven separately for two FKs
+    (test_fk.py) and two lookups (above); this pins that the two column
+    *kinds* mixed on one table — all traversing the same prop__actor_id hop —
+    still emit distinct aliases and resolve correct, fan-out-free values.
+    """
+    emit_dir = _build_mixed_fk_lookup_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        dim_actor = TableDecl(
+            name="dim_actor",
+            role="dim",
+            scd="type1",
+            key=["record_id"],
+            source=SourceDecl(grain="records", kind="actor"),
+            columns=[_from_col("record_id", "record_id")],
+        )
+        config = DimensionalConfig(
+            tables=[
+                dim_actor,
+                _fact(
+                    "fact_journey",
+                    "records",
+                    "journey_instance",
+                    [
+                        _from_col("record_id", "record_id"),
+                        ColumnDecl(
+                            name="actor_id",
+                            fk=FkClause(to="dim_actor", via="reference"),
+                        ),
+                        _lookup_col("actor_name", "name", to="actor"),
+                        _lookup_col("actor_tier", "tier", to="actor"),
+                    ],
+                ),
+            ]
+        )
+        specs = build_query_specs(emit, config, None, None)
+        fact_spec = next(s for s in specs if s.table_name == "fact_journey")
+
+        # Each column kind keeps its own alias namespace
+        assert '"_fk_actor_id_rp"' in fact_spec.sql
+        assert f'"{_deriv_alias("actor_name")}"' in fact_spec.sql
+        assert f'"{_deriv_alias("actor_tier")}"' in fact_spec.sql
+
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+
+    # Fan-out-free: one output row per journey
+    assert rows["record_id"] == ["j001", "j002"]
+    assert rows["actor_id"] == ["a001", "a002"]
+    assert rows["actor_name"] == ["Alice", "Bob"]
+    assert rows["actor_tier"] == ["gold", "silver"]
 
 
 def test_build_query_specs_deterministic_sql_lookup(tmp_path: Path) -> None:

@@ -15,6 +15,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from fabulexa_export._sql import quote_identifier
 from fabulexa_export.corrupters.selection import build_canonical_order_clause
 from fabulexa_export.errors import ExportRuntimeError
 
@@ -55,7 +56,9 @@ def _canonical_rows(working_table: "WorkingTable") -> "pyarrow.Table":
     """
     import duckdb
 
-    columns_sql = ", ".join(f'"{col.name}"' for col in working_table.spec.columns)
+    columns_sql = ", ".join(
+        quote_identifier(col.name) for col in working_table.spec.columns
+    )
     order_clause = build_canonical_order_clause(working_table)
     conn = duckdb.connect(":memory:")
     try:
@@ -64,6 +67,25 @@ def _canonical_rows(working_table: "WorkingTable") -> "pyarrow.Table":
         return conn.execute(sql).fetch_arrow_table()
     finally:
         conn.close()
+
+
+def _remove_partial_output(out_dir: "Path") -> None:
+    """Best-effort removal of a failed write's partial emit files.
+
+    A partially-written `run.duckdb` (or a dangling `base.json`) left behind
+    by a failed write would trip the engine's refuses-to-overwrite guard on
+    the next run with a misleading "existing emit" error; removing it keeps
+    `out_dir` retryable. Removal errors are swallowed -- the original write
+    failure is the error worth surfacing.
+
+    Args:
+        out_dir: The destination directory the failed write targeted.
+    """
+    for name in ("run.duckdb", "base.json"):
+        try:
+            (out_dir / name).unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _write_run_duckdb(
@@ -75,7 +97,10 @@ def _write_run_duckdb(
     materialization order, itself source-table order -- preserved by dict
     insertion order), each in working-schema column order and canonical
     content row order (`_canonical_rows`). The read-only source is never
-    touched; this always opens a fresh output file.
+    touched; this always opens a fresh output file. On any mid-write failure
+    the partial `run.duckdb` is removed (best-effort) before the error
+    propagates, so a retry into the same `out_dir` is not blocked by the
+    engine's refuses-to-overwrite guard on a file no valid emit produced.
 
     Args:
         state: The final working set after all operations.
@@ -101,23 +126,32 @@ def _write_run_duckdb(
 
     written: dict[str, _WrittenTable] = {}
     try:
-        for table_name, working_table in state.tables.items():
-            try:
-                canonical = _canonical_rows(working_table)
-                conn.register("_arrow_src", canonical)
-                conn.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM _arrow_src')
-                conn.unregister("_arrow_src")
-                described = conn.execute(f'DESCRIBE "{table_name}"').fetchall()
-            except Exception as exc:
-                raise ExportRuntimeError(
-                    f"failed to write table '{table_name}' to {db_path}: {exc}"
-                ) from exc
-            written[table_name] = _WrittenTable(
-                columns=tuple((row[0], row[1]) for row in described),
-                rows=canonical.num_rows,
-            )
-    finally:
-        conn.close()
+        try:
+            for table_name, working_table in state.tables.items():
+                try:
+                    canonical = _canonical_rows(working_table)
+                    conn.register("_arrow_src", canonical)
+                    conn.execute(
+                        f"CREATE TABLE {quote_identifier(table_name)}"
+                        " AS SELECT * FROM _arrow_src"
+                    )
+                    conn.unregister("_arrow_src")
+                    described = conn.execute(
+                        f"DESCRIBE {quote_identifier(table_name)}"
+                    ).fetchall()
+                except Exception as exc:
+                    raise ExportRuntimeError(
+                        f"failed to write table '{table_name}' to {db_path}: {exc}"
+                    ) from exc
+                written[table_name] = _WrittenTable(
+                    columns=tuple((row[0], row[1]) for row in described),
+                    rows=canonical.num_rows,
+                )
+        finally:
+            conn.close()
+    except BaseException:
+        _remove_partial_output(out_dir)
+        raise
     return written
 
 
@@ -187,7 +221,10 @@ def write_base_emit(
     top-level sidecar field -- including `enum_domains` and `record_roles` -- is copied
     verbatim from `source_sidecar_raw`. Regenerating the sidecar from the written
     catalog makes C2 hold by construction; untouched structural columns make C3/C4/C5
-    hold; the copied `branches` makes C8 hold.
+    hold; the copied `branches` makes C8 hold. On any failure after output files start
+    being written, the partial `run.duckdb` / `base.json` are removed (best-effort)
+    before the error propagates, so a retry into the same `out_dir` is not blocked by
+    the engine's refuses-to-overwrite guard.
 
     Args:
         state: The final working set after all operations.
@@ -209,17 +246,25 @@ def write_base_emit(
 
     written = _write_run_duckdb(state, out_dir)
 
-    tables_entries = [
-        _build_table_entry(table_name, working_table, written[table_name])
-        for table_name, working_table in state.tables.items()
-    ]
-    sidecar = dict(source_sidecar_raw)
-    sidecar["tables"] = tables_entries
-
-    base_json_path = out_dir / "base.json"
     try:
-        base_json_path.write_text(
-            json.dumps(sidecar, sort_keys=True, indent=2) + "\n", encoding="utf-8"
-        )
-    except OSError as exc:
-        raise ExportRuntimeError(f"failed to write {base_json_path}: {exc}") from exc
+        tables_entries = [
+            _build_table_entry(table_name, working_table, written[table_name])
+            for table_name, working_table in state.tables.items()
+        ]
+        sidecar = dict(source_sidecar_raw)
+        sidecar["tables"] = tables_entries
+
+        base_json_path = out_dir / "base.json"
+        try:
+            base_json_path.write_text(
+                json.dumps(sidecar, sort_keys=True, indent=2) + "\n", encoding="utf-8"
+            )
+        except OSError as exc:
+            raise ExportRuntimeError(
+                f"failed to write {base_json_path}: {exc}"
+            ) from exc
+    except BaseException:
+        # The run.duckdb just written is only half an emit without its sidecar;
+        # remove it so a retry into the same out_dir is not refused.
+        _remove_partial_output(out_dir)
+        raise

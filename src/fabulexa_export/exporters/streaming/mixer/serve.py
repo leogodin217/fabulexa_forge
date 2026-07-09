@@ -102,8 +102,9 @@ async def serve_mixer(
     When consumer_launch is not None and state.consumer is not None, opens a
     KafkaSource after the sink, starts a second run_consumer task under the same
     lifespan / done-callback wiring. Shutdown cancels both tasks and aclose()s
-    both source and sink. The sink opens before the source; a source-open failure
-    still aclose()s the already-open sink.
+    both source and sink; the source aclose runs even when the sink aclose
+    raises. The sink opens before the source; a source-open failure still
+    aclose()s the already-open sink.
 
     Args:
         state: The shared mutable run state.
@@ -217,9 +218,14 @@ async def serve_mixer(
             except (asyncio.CancelledError, Exception):
                 pass
 
-        await sink.aclose()
-        if source is not None:
-            await source.aclose()
+        # The source must close even when the sink's aclose raises (e.g. a stored
+        # KafkaDeliveryError re-raised on the very failure path that triggered
+        # shutdown); try/finally guarantees that while preserving the sink error.
+        try:
+            await sink.aclose()
+        finally:
+            if source is not None:
+                await source.aclose()
 
     app.router.lifespan_context = _lifespan
 

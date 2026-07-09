@@ -164,6 +164,43 @@ def test_tracked_round_trippable_with_series_nulls_and_declares_c6() -> None:
     assert mutated.column("prop__name").to_pylist() == [None]
 
 
+def test_tracked_type_with_incidental_whitespace_still_declares_c6() -> None:
+    """The round-trippable gate strips the type literal — an earlier
+    `schema_drift` retype stores the author's raw string (e.g. 'VARCHAR ')
+    verbatim on the working spec — matching the real `_check_c6` and the
+    sibling gates in `_impact.py` / `schema_drift.py`."""
+    padded_spec = table_spec(
+        "records__patient",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("prop__name", "VARCHAR ", history_tracked=True),
+        ),
+        record_kind="patient",
+    )
+    history = working_table(
+        _history_spec(),
+        [
+            {
+                "fork_path": _FORK_PATH,
+                "kind": "patient",
+                "record_id": "p1",
+                "property": "name",
+                "sim_time": 10,
+                "value": "Alice",
+            }
+        ],
+    )
+    patients = working_table(
+        padded_spec,
+        [{"fork_path": _FORK_PATH, "record_id": "p1", "prop__name": "Alice"}],
+    )
+    state = CorruptState(tables={"history": history, "records__patient": patients})
+    outcome = _apply(state, "records__patient", ["prop__name"], count=1)
+    assert outcome.defects[0].impact == ("C6",)
+
+
 def test_tracked_column_with_no_series_declares_beyond_c1_c12() -> None:
     state = _state_with_series()
     outcome = _apply(state, "records__patient", ["prop__nickname"], count=1)

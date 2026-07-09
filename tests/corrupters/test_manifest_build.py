@@ -153,6 +153,25 @@ def test_rowref_category_table_mismatch_raises_corrupt_error() -> None:
         _build([record])
 
 
+def test_duplicate_defect_id_raises_corrupt_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The UniqueDefectId guard raises CorruptError on an id collision.
+
+    A genuine collision needs two SHA-256 payloads hashing identically, so the
+    guard is forced synthetically: derive_defect_id is monkeypatched to a
+    constant, making the second record's id collide with the first's."""
+    from fabulexa_export.corrupters import manifest_build as manifest_build_module
+
+    monkeypatch.setattr(
+        manifest_build_module,
+        "derive_defect_id",
+        lambda record, ordinal: "0" * 64,
+    )
+    with pytest.raises(CorruptError, match="duplicate defect_id"):
+        _build([_record(), _record()])
+
+
 def test_well_formed_records_table_accepted() -> None:
     """A well-formed records__<kind> table with a matching category builds
     cleanly."""

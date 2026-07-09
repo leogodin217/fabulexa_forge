@@ -414,6 +414,22 @@ def test_atomicity_bad_sql_rolls_back(tmp_path: Path) -> None:
     assert _row_count(out_path, "_export_windows") == windows_before
 
 
+def test_connect_failure_raises_export_runtime_error(tmp_path: Path) -> None:
+    """Failing to open the warehouse file itself (missing parent directory)
+    raises ExportRuntimeError from the outer connect branch, before any
+    transaction begins; no output file appears."""
+    emit_dir = _build_fact_emit(tmp_path)
+    bad_path = tmp_path / "nonexistent" / "deeply" / "warehouse.duckdb"
+    w0 = _make_window(0, 15, index=0)
+
+    with open_emit(emit_dir) as emit:
+        specs = build_query_specs(emit, _fact_dim_config(), None, w0)
+        with pytest.raises(ExportRuntimeError, match="failed to open warehouse DuckDB"):
+            write_duckdb_window(emit, specs, bad_path, w0, fingerprint="fp")
+
+    assert not bad_path.exists()
+
+
 # ---------------------------------------------------------------------------
 # Tests: fingerprint=None (range path)
 # ---------------------------------------------------------------------------
@@ -477,23 +493,6 @@ def test_empty_window_still_logs_window_row(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Tests: returned row counts
 # ---------------------------------------------------------------------------
-
-
-def test_row_counts_returned_per_table(tmp_path: Path) -> None:
-    """Returns per-table rows written this window."""
-    emit_dir = _build_fact_emit(tmp_path)
-    out_path = tmp_path / "warehouse.duckdb"
-    window = _make_window(0, 15, index=0)
-
-    with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, window)
-        result = write_duckdb_window(emit, specs, out_path, window, fingerprint="fp")
-
-    # e001 has last_mutation_sim_time=10, within [0, 15)
-    # type-1 dim snapshot returns 3 (all rows) but only e001 in window predicate?
-    # Actually type-1 dim uses replace (full snapshot), so row count = full snapshot
-    assert "dim_entity" in result
-    assert isinstance(result["dim_entity"], int)
 
 
 def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:

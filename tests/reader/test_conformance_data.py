@@ -446,6 +446,44 @@ def test_c6_latest_pre_slice_tiebreak_is_deterministic(tmp_path: Path) -> None:
     assert first.messages == second.messages
 
 
+def test_c6_skips_when_records_table_absent_from_catalog(tmp_path: Path) -> None:
+    """C6 skips (passes) a series whose records__<kind> table is absent entirely.
+
+    history carries a (kind='ghost', property='name') series but no records__ghost
+    table exists in the catalog. C6 records a skip for the series and passes —
+    the missing table is C2/C9 territory, never a raise out of validate().
+    """
+    dest = tmp_path / "c6_absent_records"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+        ["trunk", "ghost", "g001", "name", 10, "Casper"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 1,
+            },
+        ]
+    )
+    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C6")
+
+    assert result.passed, f"C6 should pass (skip), got messages={result.messages}"
+    assert any(
+        "records__ghost" in s and "absent from catalog" in s for s in result.skips
+    ), f"Expected a skip for absent records__ghost, got skips={result.skips}"
+
+
 # ---------------------------------------------------------------------------
 # C7: NULL all-or-none
 # ---------------------------------------------------------------------------
@@ -777,6 +815,53 @@ def test_c9_fails_wrong_count(tmp_path: Path) -> None:
     assert result.passed
 
 
+def test_c9_skips_when_records_table_missing_key_columns(tmp_path: Path) -> None:
+    """C9 skips (passes) when records__<kind> lacks record_id/fork_path columns.
+
+    The table exists in the catalog, so the absent-table failure branch does not
+    fire; the missing key columns are probed before querying, recorded as a skip,
+    and never raised out of validate() (the malformed shape is C5 territory).
+    """
+    # records__actor present but with neither record_id nor fork_path
+    broken_actor_cols: list[dict[str, object]] = [
+        {"name": "prop__name", "type": "VARCHAR"},
+    ]
+    dest = tmp_path / "c9_missing_key_cols"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", broken_actor_cols))
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 0,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": broken_actor_cols,
+                "rows": 0,
+            },
+        ]
+    )
+    sidecar["pinned_ids"] = {"actor": {"alice": "a001"}}
+    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C9")
+
+    assert result.passed, f"C9 should pass (skip), got messages={result.messages}"
+    assert any("pin resolution skipped" in s for s in result.skips), (
+        f"Expected a pin-resolution skip, got skips={result.skips}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # C10: membership integrity
 # ---------------------------------------------------------------------------
@@ -1051,6 +1136,61 @@ def test_c10_set_based_isolates_dangling_reference(tmp_path: Path) -> None:
     assert "d001" not in dangling[0]
 
 
+def test_c10_skips_kind_column_without_matching_id_column(tmp_path: Path) -> None:
+    """C10 skips (passes) a member__X__kind column with no matching member__X__id.
+
+    The half-pair is probed before any reference query, recorded as a skip, and
+    never raised out of validate() (the malformed pair shape is C2 territory).
+    """
+    # Membership table with member__doctor__kind but no member__doctor__id
+    half_pair_cols: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "joined_sim_time", "type": "BIGINT"},
+        {"name": "left_sim_time", "type": "BIGINT"},
+        {"name": "member__doctor__kind", "type": "VARCHAR"},
+    ]
+    dest = tmp_path / "c10_half_pair_col"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("membership__actor__appointments", half_pair_cols))
+    conn.execute(
+        "INSERT INTO membership__actor__appointments VALUES (?, ?, ?, NULL, ?)",
+        ["trunk", "a001", 10, "doctor"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 0,
+            },
+            {
+                "name": "membership__actor__appointments",
+                "category": "membership",
+                "record_kind": "actor",
+                "property": "appointments",
+                "columns": half_pair_cols,
+                "rows": 1,
+            },
+        ]
+    )
+    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C10")
+
+    assert result.passed, f"C10 should pass (skip), got messages={result.messages}"
+    assert any(
+        "member__doctor__id" in s and "member reference check skipped" in s
+        for s in result.skips
+    ), f"Expected a half-pair skip naming member__doctor__id, got skips={result.skips}"
+
+
 # ---------------------------------------------------------------------------
 # Boundary fixtures: history_duplicate_tick and refs_dangling
 # ---------------------------------------------------------------------------
@@ -1259,32 +1399,8 @@ def test_c12_passes_when_actor_is_bare_string_kind(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# validate() returns exactly twelve results in C1..C12 order
+# validate() report shape
 # ---------------------------------------------------------------------------
-
-
-def test_validate_returns_twelve_results(
-    base_fixtures: dict[str, Path],
-) -> None:
-    """validate(emit) returns exactly twelve CheckResults in C1..C12 order."""
-    with open_emit(base_fixtures["spanning"]) as emit:
-        report = validate(emit)
-    assert len(report.results) == 12
-    ids = [r.check for r in report.results]
-    assert ids == [
-        "C1",
-        "C2",
-        "C3",
-        "C4",
-        "C5",
-        "C6",
-        "C7",
-        "C8",
-        "C9",
-        "C10",
-        "C11",
-        "C12",
-    ]
 
 
 def test_validate_no_duplicates(

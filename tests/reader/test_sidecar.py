@@ -206,6 +206,88 @@ def test_from_raw_enum_domains_absent() -> None:
     assert sidecar.enum_domains() == {}
 
 
+# ---------------------------------------------------------------------------
+# pinned_ids / enum_domains lenient parse — malformed nested entries dropped
+# ---------------------------------------------------------------------------
+
+
+def test_pinned_ids_non_string_id_dropped_valid_siblings_kept() -> None:
+    """A non-string id under a pinned label is dropped; valid siblings survive."""
+    raw = _minimal_raw(
+        pinned_ids={"patient": {"alice": "uuid-alice", "bob": 42, "carol": None}}
+    )
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.pinned_ids() == {"patient": {"alice": "uuid-alice"}}
+
+
+def test_pinned_ids_non_dict_labels_drops_kind() -> None:
+    """A kind whose labels value is not a dict is dropped entirely."""
+    raw = _minimal_raw(
+        pinned_ids={
+            "patient": "not-a-dict",
+            "doctor": {"dana": "uuid-dana"},
+        }
+    )
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.pinned_ids() == {"doctor": {"dana": "uuid-dana"}}
+
+
+def test_pinned_ids_all_ids_invalid_keeps_kind_with_empty_mapping() -> None:
+    """A kind whose ids are all non-string keeps the kind key with an empty inner map."""
+    raw = _minimal_raw(pinned_ids={"patient": {"alice": 1, "bob": True}})
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.pinned_ids() == {"patient": {}}
+
+
+def test_pinned_ids_non_dict_block_returns_empty() -> None:
+    """A pinned_ids block that is not a dict parses to an empty mapping."""
+    raw = _minimal_raw(pinned_ids="not-a-dict")
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.pinned_ids() == {}
+
+
+def test_enum_domains_non_list_options_drops_property() -> None:
+    """A property whose options value is not a list is dropped; siblings survive."""
+    raw = _minimal_raw(
+        enum_domains={
+            "patient": {
+                "status": ["active", "discharged"],
+                "tier": "not-a-list",
+            }
+        }
+    )
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.enum_domains() == {"patient": {"status": ("active", "discharged")}}
+
+
+def test_enum_domains_non_string_option_dropped_from_list() -> None:
+    """Non-string entries within an options list are dropped, keeping the rest."""
+    raw = _minimal_raw(
+        enum_domains={"patient": {"status": ["active", 42, None, "discharged"]}}
+    )
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.enum_domains() == {"patient": {"status": ("active", "discharged")}}
+
+
+def test_enum_domains_non_dict_props_drops_kind() -> None:
+    """A kind whose properties value is not a dict is dropped entirely."""
+    raw = _minimal_raw(
+        enum_domains={
+            "patient": "not-a-dict",
+            "doctor": {"specialty": ["surgery"]},
+        }
+    )
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.enum_domains() == {"doctor": {"specialty": ("surgery",)}}
+
+
+def test_enum_domains_non_dict_block_returns_empty() -> None:
+    """An enum_domains block that is not a dict parses to an empty mapping."""
+    raw = _minimal_raw(enum_domains=["not", "a", "dict"])
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.enum_domains() == {}
+
+
 def test_from_raw_references_carried_through() -> None:
     """references field is carried through to ColumnSpec."""
     sidecar = Sidecar.from_raw(_full_raw())

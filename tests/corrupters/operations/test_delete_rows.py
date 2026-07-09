@@ -305,6 +305,39 @@ def test_wake_c10_surviving_membership_reference_declares_c10() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Wake union: one deletion tripping several codes at once
+# ---------------------------------------------------------------------------
+
+
+def test_wake_union_pinned_and_orphaned_series_declares_c6_and_c9() -> None:
+    """One deletion that is both pinned (C9) and orphans a round-trip-failing
+    series (C6) declares the union of both codes on the single defect."""
+    state = _state(
+        patients=[_patient_row("p1", age=30), _patient_row("p2", age=40)],
+        history_rows=[_history_row("patient", "p1", "age", 10, "30")],
+    )
+    sc = _sidecar(pinned_ids={"patient": {"alice": "p1"}})
+    op = _op("records__patient", Amount(count=1), where={"record_id": "p1"})
+    outcome = _apply(state, op, sc, random.Random(1))
+    assert outcome.defects[0].impact == ("C6", "C9")
+
+
+def test_wake_union_all_three_codes_sorted_tuple() -> None:
+    """A deletion that is pinned, orphans a series, AND leaves a surviving
+    membership reference declares all three codes as one sorted tuple
+    (lexicographic: 'C10' < 'C6' < 'C9')."""
+    state = _state(
+        patients=[_patient_row("p1", age=30), _patient_row("p2", age=40)],
+        history_rows=[_history_row("patient", "p1", "age", 10, "30")],
+        ward_rows=[_ward_row("p2", 10, "patient", "p1")],
+    )
+    sc = _sidecar(pinned_ids={"patient": {"alice": "p1"}})
+    op = _op("records__patient", Amount(count=1), where={"record_id": "p1"})
+    outcome = _apply(state, op, sc, random.Random(1))
+    assert outcome.defects[0].impact == ("C10", "C6", "C9")
+
+
+# ---------------------------------------------------------------------------
 # Contributes-nothing consequences and membership-row deletion
 # ---------------------------------------------------------------------------
 

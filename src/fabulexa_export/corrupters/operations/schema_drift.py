@@ -12,16 +12,18 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
+from fabulexa_export._sql import is_recognized_sql_type, quote_identifier
 from fabulexa_export.config.models import SchemaDrift
 from fabulexa_export.corrupters.manifest import DefectRecord
 from fabulexa_export.corrupters.operations._impact import (
     column_locator,
+    is_round_trippable_type,
     property_name_for_prop_column,
 )
 from fabulexa_export.corrupters.state import OperationOutcome, WorkingTable
 from fabulexa_export.corrupters.validate import _apply_drift_to_spec
 from fabulexa_export.errors import CorruptValidationError
-from fabulexa_export.reader.conformance import _ROUND_TRIPPABLE_TYPES, to_csv_text
+from fabulexa_export.reader.conformance import to_csv_text
 
 if TYPE_CHECKING:
     import random
@@ -37,7 +39,10 @@ def _check_no_name_collisions(evolved_spec: "TableSpec", table_name: str) -> Non
 
     Catches both a rename map with two sources sharing a target name, and a
     rename target that collides with a surviving (untouched) column — either
-    would leave the evolved catalog with a duplicate column name.
+    would leave the evolved catalog with a duplicate column name. An
+    apply-time backstop: `validate_corrupt_config`'s evolved-schema
+    simulation (`_check_drift_no_target_collision`) already rejects this at
+    load time.
 
     Args:
         evolved_spec: The table's TableSpec after folding this drift in.
@@ -85,10 +90,17 @@ def _cast_column(
     """
     import duckdb
 
+    if not is_recognized_sql_type(target_type):
+        raise CorruptValidationError(
+            f"schema_drift on {table_name!r}: cannot retype {column!r} to"
+            f" {target_type!r}: not a recognized DuckDB type"
+        )
+
     conn = duckdb.connect(":memory:")
     try:
         conn.register("working", data)
-        sql = f'SELECT CAST("{column}" AS {target_type}) AS "{column}" FROM working'
+        cq = quote_identifier(column)
+        sql = f"SELECT CAST({cq} AS {target_type}) AS {cq} FROM working"
         try:
             result = conn.execute(sql).fetch_arrow_table()
         except duckdb.Error as exc:
@@ -184,7 +196,7 @@ def _retype_trips_c6(
     """
     if not col_spec.history_tracked:
         return False
-    if target_type.upper().strip() not in _ROUND_TRIPPABLE_TYPES:
+    if not is_round_trippable_type(target_type):
         return False
     if table_spec.record_kind is None:
         return False

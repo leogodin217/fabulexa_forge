@@ -315,11 +315,14 @@ def build_history_interval_sql(
     property_name = source.property or ""
 
     # Build the versioned-intervals derivation for the single tracked property.
+    # No discriminator filter: source.filter is records-grain-only (the config
+    # model rejects it on history_interval), so the whole kind is selected.
     derivation_sql = build_versioned_intervals_sql(
         sidecar=sidecar,
         fork_path=fork_path,
         kind=kind,
         tracked_properties=frozenset({property_name}),
+        discriminator_filter={},
     )
 
     prop_col = f"prop__{property_name}"
@@ -475,6 +478,40 @@ def _find_window_key_output_col(
     return None
 
 
+def _require_window_key_output_col(
+    table_decl: "TableDecl",
+    raw_key: str,
+) -> str:
+    """Resolve the output column projecting the grain's raw window key, or fail.
+
+    Windowed fact export filters on the output column that projects the grain's
+    raw window key. When no declared column projects it, fail fast with a clear
+    pre-flight error: falling back to the raw key name would either hit an
+    opaque DuckDB binder error (the outer WHERE referencing a column absent from
+    the projection) or silently window on an unrelated output column that
+    happens to carry the raw key's name.
+
+    Args:
+        table_decl: The output table declaration.
+        raw_key: The grain's raw window-key column name.
+
+    Returns:
+        The output column name that projects raw_key.
+
+    Raises:
+        ExportError: No declared column projects raw_key.
+    """
+    key_col = _find_window_key_output_col(table_decl, raw_key)
+    if key_col is None:
+        raise ExportError(
+            f"table '{table_decl.name}': windowed export requires an output"
+            f" column projecting the grain's window key '{raw_key}'"
+            f" (from: {raw_key}, or derived: timestamp with source: {raw_key});"
+            " declare one so the window predicate can bind to it"
+        )
+    return key_col
+
+
 def build_grain_sql(
     table_decl: "TableDecl",
     source_table_name: str,
@@ -588,10 +625,7 @@ def build_grain_sql(
         full_sql = build_records_sql(
             table_decl, source_table_name, anchor, fork_path, config, sidecar
         )
-        key_col = _find_window_key_output_col(table_decl, raw_key)
-        if key_col is None:
-            # Fall back to raw column name (always present on the grain)
-            key_col = raw_key
+        key_col = _require_window_key_output_col(table_decl, raw_key)
         windowed_sql = _wrap_with_window_predicate(
             full_sql, key_col, window.start_ns, window.end_ns
         )
@@ -602,9 +636,7 @@ def build_grain_sql(
         full_sql = build_history_point_sql(
             table_decl, anchor, fork_path, config, sidecar
         )
-        key_col = _find_window_key_output_col(table_decl, raw_key)
-        if key_col is None:
-            key_col = raw_key
+        key_col = _require_window_key_output_col(table_decl, raw_key)
         windowed_sql = _wrap_with_window_predicate(
             full_sql, key_col, window.start_ns, window.end_ns
         )

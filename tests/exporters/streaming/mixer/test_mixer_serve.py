@@ -620,6 +620,58 @@ class TestConsumerTaskStartsAndShutdown:
         assert fake_sink.aclose_count == 1
         assert fake_source.aclose_count == 1
 
+    def test_source_aclosed_when_sink_aclose_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A raising sink.aclose() still aclose()s the source; the sink error survives.
+
+        Regression guard: shutdown used to run `await sink.aclose()` unguarded, so a
+        stored KafkaDeliveryError re-raised there skipped source.aclose() and leaked
+        the consumer (never leaving its group) on exactly the failure path that
+        triggered shutdown. The try/finally must close the source AND preserve the
+        original sink exception.
+        """
+        sink_err = KafkaDeliveryError("stored delivery failure re-raised at aclose")
+
+        class _RaisingAcloseSink(_FakeSink):
+            async def aclose(self) -> None:
+                self.aclose_count += 1
+                raise sink_err
+
+        fake_sink = _RaisingAcloseSink()
+        fake_source = _FakeSource()
+        server = _FakeServer()
+
+        _install_fake_uvicorn(monkeypatch, server)
+        _install_fake_sink(monkeypatch, fake_sink)
+        _install_fake_source(monkeypatch, fake_source)
+
+        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+
+        monkeypatch.setattr(
+            sched_mod, "schedule_releases", _make_noop_schedule_releases()
+        )
+
+        async def _slow_consumer(**kwargs: Any) -> None:
+            await asyncio.sleep(9999)
+
+        from fabulexa_export.exporters.streaming.mixer import consumer as consumer_mod
+
+        monkeypatch.setattr(consumer_mod, "run_consumer", _slow_consumer)
+
+        state = _make_run_state_with_consumer()
+
+        with pytest.raises(KafkaDeliveryError) as exc_info:
+            _run(
+                _call_serve_mixer_with_consumer(state, server, _make_consumer_launch())
+            )
+
+        # The original sink exception is preserved...
+        assert exc_info.value is sink_err
+        # ...and the source was still closed despite the sink failure.
+        assert fake_sink.aclose_count == 1
+        assert fake_source.aclose_count == 1
+
 
 class TestConsumerTaskFailureFlipsShould_exit:
     """A KafkaConsumeError from run_consumer flips should_exit and is re-raised."""

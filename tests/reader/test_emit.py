@@ -60,39 +60,3 @@ def test_emit_record_roles_returns_record_roles_instance(tmp_path: Path) -> None
     with open_emit(emit_dir) as emit:
         rr = emit.sidecar.record_roles()
         assert isinstance(rr, RecordRoles)
-
-
-def test_emit_record_roles_kinds(tmp_path: Path) -> None:
-    """emit.sidecar.record_roles().kinds() matches the sidecar block keys."""
-    emit_dir = write_emit(tmp_path, sidecar=_sidecar_with_record_roles())
-    with open_emit(emit_dir) as emit:
-        rr = emit.sidecar.record_roles()
-        assert rr is not None
-        assert set(rr.kinds()) == {"actor", "entity", "asset"}
-
-
-def test_emit_record_roles_is_subtyped_actor(tmp_path: Path) -> None:
-    """emit.sidecar.record_roles().is_subtyped('actor') is True."""
-    emit_dir = write_emit(tmp_path, sidecar=_sidecar_with_record_roles())
-    with open_emit(emit_dir) as emit:
-        rr = emit.sidecar.record_roles()
-        assert rr is not None
-        assert rr.is_subtyped("actor") is True
-
-
-def test_emit_record_roles_role_of_bare_string_kind(tmp_path: Path) -> None:
-    """emit.sidecar.record_roles().role_of('entity', None) == 'dimension'."""
-    emit_dir = write_emit(tmp_path, sidecar=_sidecar_with_record_roles())
-    with open_emit(emit_dir) as emit:
-        rr = emit.sidecar.record_roles()
-        assert rr is not None
-        assert rr.role_of("entity", None) == "dimension"
-
-
-def test_emit_record_roles_role_of_object_kind(tmp_path: Path) -> None:
-    """emit.sidecar.record_roles().role_of('actor', 'trip') == 'fact'."""
-    emit_dir = write_emit(tmp_path, sidecar=_sidecar_with_record_roles())
-    with open_emit(emit_dir) as emit:
-        rr = emit.sidecar.record_roles()
-        assert rr is not None
-        assert rr.role_of("actor", "trip") == "fact"

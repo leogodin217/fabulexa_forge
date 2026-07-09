@@ -22,6 +22,7 @@ from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_export.anchor import resolve_effective_anchor
 from fabulexa_export.config.models import ExportConfig
 from fabulexa_export.errors import (
+    ExportRuntimeError,
     IncrementalConfigMissing,
     IncrementalFingerprintMismatch,
     IncrementalRangeTargetExists,
@@ -647,6 +648,117 @@ def test_next_against_range_artifact_raises(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         with pytest.raises(IncrementalCursorInvalid, match="_export_meta"):
             export_incremental_next(emit, config_with_inc, out, "duckdb", None)
+
+
+# ---------------------------------------------------------------------------
+# CSV error rollback: a write failure discards the staging dir; a rename
+# failure raises ExportRuntimeError — for both --from/--to and --next paths.
+# ---------------------------------------------------------------------------
+
+
+def _patch_write_csv_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make every write_csv call fail (the driver imports it at call time)."""
+
+    def _boom(emit: Emit, table_name: str, query: str, output_dir: Path) -> int:
+        raise ExportRuntimeError("simulated CSV write failure")
+
+    monkeypatch.setattr("fabulexa_export.writers.csv.write_csv", _boom)
+
+
+def _patch_staging_rename_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Make Path.rename fail for .tmp_* staging directories only."""
+    real_rename = Path.rename
+
+    def _fail_rename(self: Path, target: str | Path) -> Path:
+        if self.name.startswith(".tmp_"):
+            raise OSError("simulated rename failure")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", _fail_rename)
+
+
+def test_range_csv_write_failure_discards_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--from/--to CSV: a mid-export write failure removes the staging dir and
+    the partial output never appears at out."""
+    emit_dir = _build_emit(tmp_path)
+    config = _simple_config(with_incremental=False)
+    out = tmp_path / "range_drop"
+    window = Window(index=None, start_ns=0, end_ns=100, label="r_ns0_ns100")
+
+    _patch_write_csv_failure(monkeypatch)
+
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(ExportRuntimeError, match="simulated CSV write failure"):
+            export_window(emit, config, out, "csv", None, window, None)
+
+    assert not out.exists()
+    assert not (tmp_path / ".tmp_r_ns0_ns100").exists()
+
+
+def test_next_csv_write_failure_discards_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--next CSV: a mid-export write failure removes the staging dir; no drop
+    dir appears and no cursor is written."""
+    emit_dir = _build_emit(tmp_path)
+    config = _simple_config()
+    out = tmp_path / "drops"
+
+    _patch_write_csv_failure(monkeypatch)
+
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(ExportRuntimeError, match="simulated CSV write failure"):
+            export_incremental_next(emit, config, out, "csv", None)
+
+    label = "w00000_ns0"
+    assert not (out / f".tmp_{label}").exists()
+    assert not (out / label).exists()
+    assert not (out / ".fabexport-cursor.json").exists()
+
+
+def test_range_csv_rename_failure_raises_and_discards_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--from/--to CSV: staging_dir.rename(out) failing raises
+    ExportRuntimeError, removes the staging dir, and out never appears."""
+    emit_dir = _build_emit(tmp_path)
+    config = _simple_config(with_incremental=False)
+    out = tmp_path / "range_drop"
+    window = Window(index=None, start_ns=0, end_ns=100, label="r_ns0_ns100")
+
+    _patch_staging_rename_failure(monkeypatch)
+
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(ExportRuntimeError, match="failed to rename staging dir"):
+            export_window(emit, config, out, "csv", None, window, None)
+
+    assert not out.exists()
+    assert not (tmp_path / ".tmp_r_ns0_ns100").exists()
+
+
+def test_next_csv_rename_failure_raises_no_drop_no_cursor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--next CSV: staging_dir.rename(drop_dir) failing raises
+    ExportRuntimeError; no drop dir appears, no cursor is written, and the
+    leftover .tmp_* staging dir awaits the next staging's discard."""
+    emit_dir = _build_emit(tmp_path)
+    config = _simple_config()
+    out = tmp_path / "drops"
+
+    _patch_staging_rename_failure(monkeypatch)
+
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(ExportRuntimeError, match="failed to rename staging dir"):
+            export_incremental_next(emit, config, out, "csv", None)
+
+    label = "w00000_ns0"
+    assert not (out / label).exists()
+    assert not (out / ".fabexport-cursor.json").exists()
+    # The leftover staging dir is documented to be discarded at the NEXT staging
+    assert (out / f".tmp_{label}").exists()
 
 
 # ---------------------------------------------------------------------------

@@ -107,6 +107,26 @@ def test_env_value_is_stripped() -> None:
     assert result == "env:9092"
 
 
+def test_config_value_is_stripped() -> None:
+    """Config-block bootstrap string is stripped when returned.
+
+    Regression guard: the config branch used to return the raw pydantic value
+    unstripped, unlike the CLI and env branches — contradicting the docstring's
+    'the returned string is stripped' promise. A YAML value with stray
+    whitespace (multi-line block, copy-paste) must normalize identically to the
+    same value supplied via --bootstrap-servers or FABEXPORT_KAFKA_BOOTSTRAP.
+    """
+    from fabulexa_export.config.models import KafkaConfig
+
+    config = KafkaConfig(bootstrap_servers="  config:9092  ")
+    result = resolve_bootstrap_servers(
+        config_kafka=config,
+        cli_bootstrap_servers=None,
+        env_bootstrap_servers=None,
+    )
+    assert result == "config:9092"
+
+
 # ---------------------------------------------------------------------------
 # Blank fall-through
 # ---------------------------------------------------------------------------
@@ -822,6 +842,52 @@ def test_preexisting_topic_one_partition_used_as_is(
 
 
 # ---------------------------------------------------------------------------
+# write_kafka_stream — generic topic-creation failure
+# ---------------------------------------------------------------------------
+
+
+def test_topic_creation_generic_failure_raises_delivery_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-already-exists KafkaException during topic creation → KafkaDeliveryError.
+
+    Covers the generic branch of _ensure_topics (err.code() != 36): a genuine
+    creation failure — broker unreachable, auth failure — must surface as
+    KafkaDeliveryError naming the topic and chained from the KafkaException,
+    not propagate as the raw confluent_kafka exception and not route through
+    the TOPIC_ALREADY_EXISTS partition-count check.
+    """
+    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+
+    # Code 7 (REQUEST_TIMED_OUT) — any code other than 36 takes the generic branch.
+    creation_error = _FakeKafkaException(_FakeKafkaError(7))
+
+    class _FailingAdmin(_FakeAdminClient):
+        def __init__(self, cfg: dict[str, Any]) -> None:
+            super().__init__(
+                cfg,
+                topic_futures={"bad_topic": _make_topic_future(creation_error)},
+            )
+
+    spy_ck = _make_fake_ck(admin_cls=_FailingAdmin)
+    monkeypatch.setitem(sys.modules, "confluent_kafka", spy_ck)
+    monkeypatch.setitem(sys.modules, "confluent_kafka.admin", spy_ck.admin)
+
+    with pytest.raises(
+        KafkaDeliveryError, match="failed to create topic 'bad_topic'"
+    ) as exc_info:
+        write_kafka_stream(
+            events=[],
+            render_value=_render_value,
+            anchor=_make_anchor(),
+            bootstrap_servers="localhost:9092",
+            topic_set=("bad_topic",),
+            paced=False,
+        )
+    assert exc_info.value.__cause__ is creation_error
+
+
+# ---------------------------------------------------------------------------
 # write_kafka_stream — paced vs unpaced produce identical tuples
 # ---------------------------------------------------------------------------
 
@@ -867,6 +933,100 @@ def test_paced_and_unpaced_produce_identical_tuples(
     assert len(unpaced_producers) == 1
     assert len(paced_producers) == 1
     assert unpaced_producers[0].produced == paced_producers[0].produced
+
+
+# ---------------------------------------------------------------------------
+# write_kafka_stream — poll(0) on every iteration; BufferError surfacing
+# ---------------------------------------------------------------------------
+
+
+class _PollCountingProducer(_FakeProducer):
+    """Producer that counts poll() calls."""
+
+    def __init__(self, cfg: dict[str, Any]) -> None:
+        super().__init__(cfg)
+        self.poll_count = 0
+
+    def poll(self, timeout: float) -> int:
+        self.poll_count += 1
+        return super().poll(timeout)
+
+
+@pytest.mark.parametrize("paced", [False, True])
+def test_poll_called_every_iteration_regardless_of_paced(
+    monkeypatch: pytest.MonkeyPatch, paced: bool
+) -> None:
+    """producer.poll(0) runs once per produced event in BOTH paced and unpaced runs.
+
+    Regression guard: poll(0) used to run only when paced=True, so an unpaced run
+    (--fast / no clock) never serviced the local delivery-report queue and
+    producer.produce() would eventually raise BufferError once librdkafka's
+    queue.buffering.max.messages filled.
+    """
+    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+
+    producers: list[_PollCountingProducer] = []
+
+    class _SpyPollProducer(_PollCountingProducer):
+        def __init__(self, cfg: dict[str, Any]) -> None:
+            super().__init__(cfg)
+            producers.append(self)
+
+    spy_ck = _make_fake_ck(producer_cls=_SpyPollProducer)
+    monkeypatch.setitem(sys.modules, "confluent_kafka", spy_ck)
+    monkeypatch.setitem(sys.modules, "confluent_kafka.admin", spy_ck.admin)
+
+    events = [_make_event(i, f"r{i}", "t") for i in range(1, 4)]
+    write_kafka_stream(
+        events=events,
+        render_value=_render_value,
+        anchor=_make_anchor(),
+        bootstrap_servers="localhost:9092",
+        topic_set=("t",),
+        paced=paced,
+    )
+
+    assert len(producers) == 1
+    assert producers[0].poll_count == len(events)
+
+
+@pytest.mark.parametrize("paced", [False, True])
+def test_produce_buffererror_raises_delivery_error(
+    monkeypatch: pytest.MonkeyPatch, paced: bool
+) -> None:
+    """A BufferError from produce() (local queue full) → KafkaDeliveryError.
+
+    Regression guard: the raw confluent_kafka BufferError used to propagate
+    uncaught, contradicting the docstring's promise that a produce failure
+    surfaces as KafkaDeliveryError.
+    """
+    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+
+    class _FullQueueProducer(_FakeProducer):
+        def produce(
+            self,
+            topic: str,
+            key: bytes,
+            value: bytes,
+            timestamp: int,
+            on_delivery: Callable[..., None],
+        ) -> None:
+            raise BufferError("Local: Queue full")
+
+    spy_ck = _make_fake_ck(producer_cls=_FullQueueProducer)
+    monkeypatch.setitem(sys.modules, "confluent_kafka", spy_ck)
+    monkeypatch.setitem(sys.modules, "confluent_kafka.admin", spy_ck.admin)
+
+    with pytest.raises(KafkaDeliveryError, match="queue is full") as exc_info:
+        write_kafka_stream(
+            events=[_make_event(1, "r1", "t")],
+            render_value=_render_value,
+            anchor=_make_anchor(),
+            bootstrap_servers="localhost:9092",
+            topic_set=("t",),
+            paced=paced,
+        )
+    assert isinstance(exc_info.value.__cause__, BufferError)
 
 
 # ---------------------------------------------------------------------------

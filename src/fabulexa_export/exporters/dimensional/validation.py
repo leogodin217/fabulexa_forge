@@ -4,7 +4,8 @@ Enforces all business rules at build_query_specs time:
 SourceTableExists, KeyColumnsDeclared, ProjectionColumnExists,
 OrdinalRefsSiblings, TimestampSourceAvailable, DiscriminatorValueObserved,
 ExcludedKindNotSourced, ExcludedTableNotSourced, FkTargetIsDim,
-ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory.
+ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
+Scd2ColumnModeSupported.
 
 The SingleBranch rule is enforced by derivations.require_single_branch (the
 stage-wide guard); dimensional calls it but does not own it.
@@ -515,6 +516,53 @@ def check_scd2_needs_history(
         )
 
 
+def check_scd2_column_mode_supported(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+) -> None:
+    """Enforce Scd2ColumnModeSupported: type2 columns use only implemented modes.
+
+    The SCD-2 type2 builder implements exactly three column modes: from, null,
+    and derived: scd_window. Any other mode — fk, correlation, or a derived
+    ordinal / value_map / timestamp / elapsed — would render as NULL on every
+    row: accepted config, silently wrong data (Principle #7). Reject at
+    validate time instead. (lookup is gated separately by LookupColumnSafety.)
+
+    Args:
+        col_decl: The column declaration.
+        table_decl: The output table declaration (mode gate applies iff
+            scd: type2; also used for error messages).
+
+    Raises:
+        ExportError: The column uses an unimplemented mode on an scd: type2
+            table.
+    """
+    if table_decl.scd != "type2":
+        return
+
+    mode: str | None = None
+    if col_decl.fk is not None:
+        mode = "fk"
+    elif col_decl.correlation is not None:
+        mode = "correlation"
+    elif col_decl.derived is not None and col_decl.derived.scd_window is None:
+        if col_decl.derived.ordinal is not None:
+            mode = "derived: ordinal"
+        elif col_decl.derived.value_map is not None:
+            mode = "derived: value_map"
+        elif col_decl.derived.timestamp is not None:
+            mode = "derived: timestamp"
+        elif col_decl.derived.elapsed is not None:
+            mode = "derived: elapsed"
+
+    if mode is not None:
+        raise ExportError(
+            f"table '{table_decl.name}' column '{col_decl.name}':"
+            f" {mode} is not supported on an scd: type2 table; type2 columns"
+            " support only from, null, and derived: scd_window"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Incremental business-rule gates
 # ---------------------------------------------------------------------------
@@ -972,7 +1020,7 @@ def validate_table(
     KeyColumnsDeclared, ProjectionColumnExists, OrdinalRefsSiblings,
     TimestampSourceAvailable, DiscriminatorValueObserved, FkTargetIsDim,
     ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
-    LookupColumnSafety.
+    Scd2ColumnModeSupported, LookupColumnSafety.
 
     When window is not None, also runs the ten incremental gates:
     IncrementalGrainUnsupported, IncrementalElapsedUnsupported,
@@ -1036,6 +1084,7 @@ def validate_table(
     is_type2_dim = table_decl.role == "dim" and table_decl.scd == "type2"
 
     for col_decl in table_decl.columns:
+        check_scd2_column_mode_supported(col_decl, table_decl)
         check_projection_column_exists(col_decl, table_decl, surface)
         check_ordinal_refs_siblings(col_decl, table_decl)
         check_timestamp_source_available(col_decl, table_decl, source, surface)

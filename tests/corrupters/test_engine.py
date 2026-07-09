@@ -202,6 +202,22 @@ def test_refuses_populated_out_dir(tmp_path: Path) -> None:
             corrupt_emit(emit, config, out_dir)
 
 
+def test_refuses_out_dir_holding_only_base_json(tmp_path: Path) -> None:
+    """The refuses-to-overwrite guard trips on a base.json alone -- the second
+    arm of the `or` -- with no run.duckdb present."""
+    emit_dir = _spanning_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "base.json").write_text("{}", encoding="utf-8")
+    config = _four_operation_config()
+
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(CorruptValidationError, match="refuses to overwrite"):
+            corrupt_emit(emit, config, out_dir)
+
+    assert not (out_dir / "run.duckdb").exists()
+
+
 def test_business_rule_failure_writes_nothing(tmp_path: Path) -> None:
     emit_dir = _spanning_emit(tmp_path)
     out_dir = tmp_path / "out"

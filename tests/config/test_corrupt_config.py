@@ -333,6 +333,23 @@ def test_delete_rows_unknown_field_rejected() -> None:
         )
 
 
+def test_delete_rows_kind_accepted_by_corrupt_operation_union() -> None:
+    """The CorruptOperation union parses a delete_rows operation."""
+    config = CorruptConfig.model_validate(
+        {
+            "seed": 1,
+            "operations": [
+                {
+                    "kind": "delete_rows",
+                    "target": _TARGET_NO_COLUMNS,
+                    "amount": {"rate": 0.02},
+                }
+            ],
+        }
+    )
+    assert isinstance(config.operations[0], DeleteRows)
+
+
 # ---------------------------------------------------------------------------
 # InsertRows
 # ---------------------------------------------------------------------------
@@ -383,6 +400,23 @@ def test_insert_rows_unknown_field_rejected() -> None:
                 "bogus": "x",
             }
         )
+
+
+def test_insert_rows_kind_accepted_by_corrupt_operation_union() -> None:
+    """The CorruptOperation union parses an insert_rows operation."""
+    config = CorruptConfig.model_validate(
+        {
+            "seed": 1,
+            "operations": [
+                {
+                    "kind": "insert_rows",
+                    "target": _TARGET_NO_COLUMNS,
+                    "amount": {"count": 25},
+                }
+            ],
+        }
+    )
+    assert isinstance(config.operations[0], InsertRows)
 
 
 # ---------------------------------------------------------------------------
@@ -1173,6 +1207,65 @@ def test_correlated_parses() -> None:
     assert placement.weight == 3.0
 
 
+def test_placement_clustered_temporal_dict_parses_through_union() -> None:
+    """A raw {'kind': 'clustered_temporal', ...} placement dict parses through
+    CorruptConfig.model_validate into a typed ClusteredTemporal (the
+    discriminator mapping, not direct model construction)."""
+    config = CorruptConfig.model_validate(
+        {
+            "seed": 1,
+            "operations": [
+                {
+                    "kind": "null_cells",
+                    "target": _TARGET_WITH_COLUMNS,
+                    "amount": {"count": 1},
+                    "placement": {
+                        "kind": "clustered_temporal",
+                        "column": "prop__sim_time",
+                        "clusters": 3,
+                        "width": 500,
+                    },
+                }
+            ],
+        }
+    )
+    op = config.operations[0]
+    assert isinstance(op, NullCells)
+    assert isinstance(op.placement, ClusteredTemporal)
+    assert op.placement.column == "prop__sim_time"
+    assert op.placement.clusters == 3
+    assert op.placement.width == 500
+
+
+def test_placement_correlated_dict_parses_through_union() -> None:
+    """A raw {'kind': 'correlated', ...} placement dict parses through
+    CorruptConfig.model_validate into a typed Correlated."""
+    config = CorruptConfig.model_validate(
+        {
+            "seed": 1,
+            "operations": [
+                {
+                    "kind": "null_cells",
+                    "target": _TARGET_WITH_COLUMNS,
+                    "amount": {"count": 1},
+                    "placement": {
+                        "kind": "correlated",
+                        "column": "prop__status",
+                        "value": "active",
+                        "weight": 3.0,
+                    },
+                }
+            ],
+        }
+    )
+    op = config.operations[0]
+    assert isinstance(op, NullCells)
+    assert isinstance(op.placement, Correlated)
+    assert op.placement.column == "prop__status"
+    assert op.placement.value == "active"
+    assert op.placement.weight == 3.0
+
+
 def test_placement_unknown_kind_rejected() -> None:
     """An unknown placement `kind` is rejected by the discriminator."""
     with pytest.raises(ValidationError):
@@ -1442,3 +1535,82 @@ def test_load_corrupt_config_valid_file_returns_model(tmp_path: Path) -> None:
     assert isinstance(result, CorruptConfig)
     assert result.seed == 42
     assert len(result.operations) == 4
+
+
+# ---------------------------------------------------------------------------
+# schema_drift rename targets / retype types are gated at config load
+# ---------------------------------------------------------------------------
+
+
+def test_schema_drift_rename_target_not_sql_identifier_raises() -> None:
+    """A rename_to target with an embedded quote is a load-time config error."""
+    with pytest.raises(ValidationError, match="SQL identifier"):
+        SchemaDrift(
+            kind="schema_drift",
+            target=Target(table="records__actor"),
+            rename_to={"prop__name": 'prop__na"me'},
+        )
+
+
+def test_schema_drift_retype_type_not_on_allow_list_raises() -> None:
+    """A retype_to type string off the DuckDB allow-list is a load-time error
+    (never spliced into SQL)."""
+    with pytest.raises(ValidationError, match="not.*recognized DuckDB type"):
+        SchemaDrift(
+            kind="schema_drift",
+            target=Target(table="records__actor"),
+            retype_to={"status": "INTEGER); ATTACH '/tmp/x.db' AS x; --"},
+        )
+
+
+def test_schema_drift_allow_listed_retype_types_pass() -> None:
+    """Recognized DuckDB types (bare and parameterized) still parse."""
+    op = SchemaDrift(
+        kind="schema_drift",
+        target=Target(table="records__actor"),
+        retype_to={
+            "prop__a": "DOUBLE",
+            "prop__b": "VARCHAR(10)",
+            "prop__c": "DECIMAL(9,2)",
+            "prop__d": "BOOLEAN",
+        },
+    )
+    assert op.retype_to is not None and len(op.retype_to) == 4
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # Single-statement injection riding the VARCHAR( prefix: closes the
+        # CAST paren, appends a table function, comments out the rest.
+        "VARCHAR(10)) AS x FROM read_csv('/etc/hostname') --",
+        "DECIMAL(9,2)) || (SELECT 1) --",
+        # Any trailing text after the closing paren is off-grammar.
+        "NUMERIC(1) x",
+        # Non-digit parameter is off-grammar.
+        "VARCHAR(abc)",
+        "VARCHAR()",
+    ],
+)
+def test_schema_drift_retype_parameterized_prefix_payloads_rejected(
+    payload: str,
+) -> None:
+    """A parameterized-type prefix must not admit trailing SQL: the allow-list
+    matches an anchored VARCHAR(n) / DECIMAL(p[,s]) / NUMERIC(p[,s]) grammar,
+    never a prefix."""
+    with pytest.raises(ValidationError, match="not.*recognized DuckDB type"):
+        SchemaDrift(
+            kind="schema_drift",
+            target=Target(table="records__actor"),
+            retype_to={"prop__a": payload},
+        )
+
+
+def test_schema_drift_retype_parameterized_inner_whitespace_still_passes() -> None:
+    """The anchored grammar tolerates whitespace inside the parens."""
+    op = SchemaDrift(
+        kind="schema_drift",
+        target=Target(table="records__actor"),
+        retype_to={"prop__a": "VARCHAR( 10 )", "prop__b": "DECIMAL(9, 2)"},
+    )
+    assert op.retype_to is not None and len(op.retype_to) == 2

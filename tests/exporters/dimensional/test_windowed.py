@@ -507,6 +507,93 @@ def test_records_fact_row_exactly_on_end_ns_in_next_window(tmp_path: Path) -> No
     assert ids == ["e002"]
 
 
+def _make_records_fact_timestamp_key_config(
+    table_name: str = "fact_entity",
+) -> DimensionalConfig:
+    """Records fact whose ONLY window-key projection is a derived: timestamp column."""
+    return DimensionalConfig(
+        tables=[
+            TableDecl(
+                name=table_name,
+                role="fact",
+                source=SourceDecl(grain="records", kind="entity"),
+                key=["id"],
+                columns=[
+                    ColumnDecl(name="id", **{"from": "record_id"}),
+                    ColumnDecl(name="name", **{"from": "prop__name"}),
+                    ColumnDecl(
+                        name="event_ts",
+                        derived=DerivedSpec(
+                            timestamp=TimestampSpec(source="last_mutation_sim_time")
+                        ),
+                    ),
+                ],
+            )
+        ]
+    )
+
+
+def test_records_fact_windowed_timestamp_key_filters_half_open(tmp_path: Path) -> None:
+    """Window key wrapped in derived: timestamp (no anchor): half-open filter holds.
+
+    The window predicate binds to the derived: timestamp output column, which
+    without an anchor carries the raw ns source value — rows filter exactly as
+    with a plain from: projection of the raw key.
+    """
+    emit_dir = _build_records_emit(tmp_path)
+    config = _make_records_fact_timestamp_key_config()
+    # window [10, 25): includes e001 (t=10) and e002 (t=20), excludes e003 (t=30)
+    window = _make_window(start_ns=10, end_ns=25)
+    with open_emit(emit_dir) as emit:
+        specs = build_query_specs(emit, config, None, window)
+        assert len(specs) == 1
+        assert specs[0].write_mode == "append"
+        result = emit.query_arrow(specs[0].sql, ())
+
+    ids = sorted(result.column("id").to_pylist())
+    assert ids == ["e001", "e002"]
+    # No anchor: the timestamp-derived key column carries the raw ns values
+    assert sorted(result.column("event_ts").to_pylist()) == [10, 20]
+
+
+def test_records_fact_windowed_timestamp_key_predicate_uses_raw_ns(
+    tmp_path: Path,
+) -> None:
+    """Window key via derived: timestamp: WHERE binds the raw-ns-carrying column.
+
+    Without an anchor the derived: timestamp column projects the raw ns source
+    ("_grain"."last_mutation_sim_time" AS "event_ts"); the outer window
+    predicate must bind to that output column, and windowed rows must carry
+    values identical to the full export.
+    """
+    emit_dir = _build_records_emit(tmp_path)
+    config = _make_records_fact_timestamp_key_config()
+    window = _make_window(start_ns=10, end_ns=25)
+
+    with open_emit(emit_dir) as emit:
+        full_specs = build_query_specs(emit, config, None, None)
+        windowed_specs = build_query_specs(emit, config, None, window)
+
+        sql = windowed_specs[0].sql
+        # The inner SELECT projects the raw ns source under the key column name
+        assert '"_grain"."last_mutation_sim_time" AS "event_ts"' in sql
+        # The outer window predicate binds to that output column, half-open
+        assert '"_windowed"."event_ts" >= 10' in sql
+        assert '"_windowed"."event_ts" < 25' in sql
+
+        full_rows = emit.query_arrow(full_specs[0].sql, ()).to_pydict()
+        windowed_rows = emit.query_arrow(windowed_specs[0].sql, ()).to_pydict()
+
+    full_by_id = {
+        full_rows["id"][i]: (full_rows["name"][i], full_rows["event_ts"][i])
+        for i in range(len(full_rows["id"]))
+    }
+    for i, rid in enumerate(windowed_rows["id"]):
+        assert (windowed_rows["name"][i], windowed_rows["event_ts"][i]) == full_by_id[
+            rid
+        ]
+
+
 # ---------------------------------------------------------------------------
 # history_point fact: window predicate on sim_time
 # ---------------------------------------------------------------------------

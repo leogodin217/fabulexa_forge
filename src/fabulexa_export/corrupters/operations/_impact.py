@@ -74,6 +74,25 @@ order `resolve_c6_anchor` / `series_round_trip_fails` take, so a key unpacks
 directly into either call. Shared by `drop_events` and `shift_sim_time`."""
 
 
+def is_round_trippable_type(type_string: str) -> bool:
+    """Whether `type_string` names a C6 round-trippable column type.
+
+    The one normalization every C6-mirroring gate shares — `.upper().strip()`
+    against `_ROUND_TRIPPABLE_TYPES`, exactly the real `_check_c6`'s own
+    comparison. A `schema_drift` retype stores the author's raw type literal
+    verbatim on the working spec, so incidental whitespace must not change
+    the verdict.
+
+    Args:
+        type_string: A DuckDB type literal, as carried on a ColumnSpec or an
+            author's `retype_to` value.
+
+    Returns:
+        True iff the normalized type is one C6 round-trips.
+    """
+    return type_string.upper().strip() in _ROUND_TRIPPABLE_TYPES
+
+
 def series_key(row: "Mapping[str, object]") -> SeriesKey:
     """A history row's series identity, for anchor/round-trip/timeline lookups."""
     kind = row["kind"]
@@ -699,9 +718,12 @@ def series_round_trip_fails(
     view, an absent `records__<kind>` working table, an absent or
     non-round-trippable `prop__<property>` column (per the current
     `WorkingTable.spec`, honoring earlier `schema_drift`) cannot fail; a
-    missing records row or a NULL records cell fails; otherwise the anchor's
-    value is compared against `to_csv_text(records cell)` with the same
-    codec and the same `_ROUND_TRIPPABLE_TYPES` gate C6 uses.
+    missing records row fails; otherwise EVERY records row matching
+    (fork_path, record_id) is evaluated — the real check's LEFT JOIN fans the
+    anchor out over duplicates (e.g. a `duplicate_rows` conflicting
+    duplicate), so one NULL cell or one `to_csv_text(records cell)` mismatch
+    (same codec, same `_ROUND_TRIPPABLE_TYPES` gate C6 uses) fails the
+    series even when another matching row round-trips.
 
     Args:
         state: The shared working set, as of after the calling operation.
@@ -739,27 +761,24 @@ def series_round_trip_fails(
     col_spec = columns_by_name.get(prop_col)
     if col_spec is None:
         return False
-    if col_spec.type.upper().strip() not in _ROUND_TRIPPABLE_TYPES:
+    if not is_round_trippable_type(col_spec.type):
         return False
 
     records_data = records_working.data
     fork_paths = records_data.column("fork_path")
     record_ids = records_data.column("record_id")
     cell_column = records_data.column(prop_col)
-    cell_value: object = None
     row_found = False
     for i in range(records_data.num_rows):
-        if fork_paths[i].as_py() == fork_path and record_ids[i].as_py() == record_id:
-            cell_value = cell_column[i].as_py()
-            row_found = True
-            break
-    if not row_found:
-        return True
-    if cell_value is None:
-        return True
-
-    encoded = to_csv_text(cell_value, col_spec.type)
-    return anchor[1] != encoded
+        if fork_paths[i].as_py() != fork_path or record_ids[i].as_py() != record_id:
+            continue
+        row_found = True
+        cell_value: object = cell_column[i].as_py()
+        if cell_value is None:
+            return True
+        if anchor[1] != to_csv_text(cell_value, col_spec.type):
+            return True
+    return not row_found
 
 
 def branch_slice_at(sidecar: "Sidecar", fork_path: str) -> int:

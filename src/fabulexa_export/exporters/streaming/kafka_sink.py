@@ -72,7 +72,7 @@ def resolve_bootstrap_servers(
     if cli_bootstrap_servers is not None and cli_bootstrap_servers.strip():
         return cli_bootstrap_servers.strip()
     if config_kafka is not None:
-        return config_kafka.bootstrap_servers
+        return config_kafka.bootstrap_servers.strip()
     if env_bootstrap_servers is not None and env_bootstrap_servers.strip():
         return env_bootstrap_servers.strip()
     raise KafkaBootstrapUnresolvable(_KAFKA_BOOTSTRAP_UNRESOLVABLE_MSG)
@@ -220,8 +220,11 @@ def write_kafka_stream(
     events_per_topic with count 0.
 
     paced=True serves delivery incrementally as each event arrives (the pacer governs
-    arrival); paced=False produces all events then flushes once. Produced keys, values,
-    timestamps, topics, and per-partition order are identical across both modes.
+    arrival); paced=False produces all events then flushes once. In both modes
+    producer.poll(0) runs after every produce, servicing delivery reports and draining
+    the local queue so an unpaced run never overflows librdkafka's buffer. Produced
+    keys, values, timestamps, topics, and per-partition order are identical across both
+    modes.
 
     confluent-kafka (Producer + admin AdminClient/NewTopic) is imported lazily inside
     this function only; the import never runs at package import time.
@@ -244,7 +247,8 @@ def write_kafka_stream(
     Raises:
         KafkaClientUnavailable: confluent-kafka is not importable (the `kafka` extra is
             not installed).
-        KafkaDeliveryError: connection, topic creation, produce, or flush fails; a
+        KafkaDeliveryError: connection, topic creation, produce (including a full
+            local producer queue, surfaced from BufferError), or flush fails; a
             delivery callback reports failure; flush leaves unacked messages; or a
             pre-existing topic has a partition count other than 1.
     """
@@ -278,17 +282,24 @@ def write_kafka_stream(
         value_bytes = render_value(event)
         timestamp_ms = rebased_epoch_ms(event.event_sim_time, anchor)
 
-        producer.produce(
-            event.topic,
-            key=key_bytes,
-            value=value_bytes,
-            timestamp=timestamp_ms,
-            on_delivery=on_delivery,
-        )
+        try:
+            producer.produce(
+                event.topic,
+                key=key_bytes,
+                value=value_bytes,
+                timestamp=timestamp_ms,
+                on_delivery=on_delivery,
+            )
+        except BufferError as exc:
+            raise KafkaDeliveryError(
+                f"Kafka producer local queue is full: {exc}"
+            ) from exc
         counts[event.topic] += 1
 
-        if paced:
-            producer.poll(0)
+        # Service delivery reports on every iteration, paced or not, so the local
+        # queue drains; without this an unpaced run overflows librdkafka's buffer
+        # (queue.buffering.max.messages) and produce() raises BufferError.
+        producer.poll(0)
 
     unacked = producer.flush()
     if delivery_errors:

@@ -5,9 +5,13 @@ from __future__ import annotations
 import random
 
 import pytest
+from pydantic import ValidationError
 
 from fabulexa_export.config.models import SchemaDrift, Target
-from fabulexa_export.corrupters.operations.schema_drift import SchemaDriftCorrupter
+from fabulexa_export.corrupters.operations.schema_drift import (
+    SchemaDriftCorrupter,
+    _cast_column,
+)
 from fabulexa_export.corrupters.state import CorruptState
 from fabulexa_export.errors import CorruptValidationError
 
@@ -266,15 +270,45 @@ def test_retype_impossible_cast_raises_corrupt_validation_error() -> None:
         _apply(corrupt_state, op)
 
 
-def test_retype_unrecognized_type_raises_corrupt_validation_error() -> None:
+def test_retype_unrecognized_type_rejected_at_config_load() -> None:
+    """An unrecognized retype_to type is a config error at model construction
+    (the allow-list gate), never reaching the apply-time SQL splice."""
+    with pytest.raises(ValidationError):
+        SchemaDrift(
+            kind="schema_drift",
+            target=Target(table="records__patient"),
+            retype_to={"prop__notes": "NOTATYPE"},
+        )
+
+
+def test_cast_column_guards_unrecognized_type_before_sql_splice() -> None:
+    """_cast_column itself refuses a free-form type string (defense in depth
+    behind the config-load allow-list) — an injection payload never reaches
+    the SQL text."""
     state = _state()
-    op = SchemaDrift(
-        kind="schema_drift",
-        target=Target(table="records__patient"),
-        retype_to={"prop__notes": "NOTATYPE"},
-    )
+    data = state.tables["records__patient"].data
     with pytest.raises(CorruptValidationError):
-        _apply(state, op)
+        _cast_column(
+            data,
+            "prop__notes",
+            "INTEGER); ATTACH '/tmp/x.db' AS x; --",
+            "records__patient",
+        )
+
+
+def test_cast_column_guards_parameterized_prefix_payload() -> None:
+    """A single-statement payload riding the VARCHAR( prefix (closes the CAST
+    paren, appends a table function, comments out the rest) is refused by the
+    anchored type grammar — it must never reach the SQL text."""
+    state = _state()
+    data = state.tables["records__patient"].data
+    with pytest.raises(CorruptValidationError):
+        _cast_column(
+            data,
+            "prop__notes",
+            "VARCHAR(10)) AS x FROM read_csv('/etc/hostname') --",
+            "records__patient",
+        )
 
 
 # ---------------------------------------------------------------------------

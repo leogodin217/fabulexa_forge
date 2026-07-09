@@ -42,17 +42,26 @@ def test_two_branch_emit_raises_export_error() -> None:
         require_single_branch(sidecar)
 
 
-def test_two_branch_emit_error_contains_branch_count() -> None:
-    """Two-branch emit error message contains 'has 2 branches'."""
+def test_zero_branch_sidecar_raises_export_error() -> None:
+    """Zero-branch sidecar raises ExportError (the n == 0 direction of n != 1).
+
+    Sidecar.from_raw rejects an empty branches list at parse time, so the
+    zero-branch Sidecar is constructed directly to exercise the guard's own
+    defensive handling of an empty branches tuple.
+    """
     from fabulexa_export.derivations import require_single_branch
 
-    sidecar = _make_sidecar(
-        [
-            {"fork_path": "trunk", "parent": None, "slice_at": 0},
-            {"fork_path": "trunk@b", "parent": "trunk", "slice_at": 50},
-        ]
+    sidecar = Sidecar(
+        raw={},
+        base_format_version=SUPPORTED_BASE_FORMAT_VERSION,
+        branches=(),
+        tables=(),
+        runtime=None,
+        pinned_ids={},
+        enum_domains={},
+        record_roles=None,
     )
-    with pytest.raises(ExportError, match="has 2 branches"):
+    with pytest.raises(ExportError, match="emit has 0 branches"):
         require_single_branch(sidecar)
 
 

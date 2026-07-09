@@ -393,15 +393,6 @@ def test_cmd_init_writes_to_stdout(
     assert "dimensional" in captured.out
 
 
-def test_cmd_init_output_contains_mode(tmp_path: Path) -> None:
-    """Generated config output contains mode: dimensional."""
-    emit_dir = build_bare_dim_emit(tmp_path / "emit")
-    out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
-    content = out_path.read_text(encoding="utf-8")
-    assert "mode: dimensional" in content
-
-
 def test_main_init_dispatches(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -423,15 +414,6 @@ def test_main_init_stdout(tmp_path: Path, capsys: pytest.CaptureFixture[str]) ->
     assert exit_code == 0
     assert "mode: dimensional" in captured.out
     assert "dim_location" in captured.out
-
-
-def test_main_validate_still_works(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """main(['validate', ...]) still dispatches correctly."""
-    missing = tmp_path / "no_emit"
-    exit_code = main(["validate", str(missing)])
-    assert exit_code != 0
 
 
 # ---------------------------------------------------------------------------

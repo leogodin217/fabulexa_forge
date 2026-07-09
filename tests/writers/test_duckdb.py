@@ -114,3 +114,42 @@ def test_write_duckdb_failure_raises_export_runtime_error(tmp_path: Path) -> Non
         sql = 'SELECT record_id FROM "records__entity"'
         with pytest.raises(ExportRuntimeError):
             write_duckdb(emit, {"t": sql}, bad_path)
+
+
+def test_write_duckdb_query_failure_raises_export_runtime_error(
+    tmp_path: Path,
+) -> None:
+    """A query-execution failure (bad column) raises ExportRuntimeError, per
+    the documented contract — not the reader's RunDatabaseError."""
+    emit_dir = build_test_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+
+    with open_emit(emit_dir) as emit:
+        sql = 'SELECT nonexistent_column FROM "records__entity"'
+        with pytest.raises(ExportRuntimeError, match="failed to write table 't'"):
+            write_duckdb(emit, {"t": sql}, out_path)
+
+
+def test_write_duckdb_quotes_embedded_quote_in_table_name(tmp_path: Path) -> None:
+    """A table name containing a double-quote lands as a literal catalog name;
+    the embedded quote never breaks out of the identifier position."""
+    emit_dir = build_test_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+    evil_name = "orders\" ; ATTACH '/tmp/x.db' AS x; --"
+
+    with open_emit(emit_dir) as emit:
+        sql = 'SELECT record_id FROM "records__entity" ORDER BY record_id'
+        result = write_duckdb(emit, {evil_name: sql}, out_path)
+
+    assert result == {evil_name: 2}
+    out_conn = duckdb.connect(str(out_path), read_only=True)
+    try:
+        names = {
+            row[0]
+            for row in out_conn.execute(
+                "SELECT table_name FROM information_schema.tables"
+            ).fetchall()
+        }
+    finally:
+        out_conn.close()
+    assert evil_name in names

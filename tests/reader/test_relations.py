@@ -284,6 +284,36 @@ def test_history_relation_written_by_columns_included() -> None:
     assert '"written_by_agent"' in sql
 
 
+def test_history_relation_absent_history_table_falls_back_to_fixed_six() -> None:
+    """When the sidecar has no history table, only the six fixed columns are emitted.
+
+    history is a contract-guaranteed fixed-category table; its absence is a
+    conformance failure, but the builder still emits a well-formed SELECT over
+    exactly the six fixed columns (TableNotFoundError fallback branch).
+    """
+    sidecar_raw: dict[str, object] = {
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+        "tables": [
+            {
+                "name": "firings",
+                "category": "fixed",
+                "columns": [
+                    {"name": "fork_path", "type": "VARCHAR"},
+                    {"name": "sim_time", "type": "BIGINT"},
+                ],
+                "rows": 0,
+            },
+        ],
+    }
+    sidecar = Sidecar.from_raw(sidecar_raw)
+    sql = build_history_relation_sql(sidecar, "trunk", "entity", "state", None)
+    expected_cols = '"fork_path", "kind", "record_id", "property", "sim_time", "value"'
+    assert sql.startswith(f"SELECT {expected_cols} ")
+    assert 'FROM "history"' in sql
+    assert "\"fork_path\" = 'trunk'" in sql
+
+
 def test_history_relation_filtered_to_kind_and_property() -> None:
     """build_history_relation_sql filters by kind and property."""
     sidecar = _make_sidecar()

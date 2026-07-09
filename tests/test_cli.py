@@ -5,6 +5,8 @@ Covers:
 - validate on a non-conforming emit (C4 wrong history type): non-zero exit, failing check printed
 - validate on wrong_version emit: non-zero exit, UnsupportedBaseFormatVersionError
 - validate on a missing directory: non-zero exit, EmitNotFoundError
+- _print_check_result renders the messages (' — ...') and skips (' [skips: N]')
+  branches when a validate run produces such CheckResults
 - [project.scripts] fabexport entry resolves to cli:main
 """
 
@@ -98,6 +100,78 @@ def test_validate_missing_dir_exits_nonzero(
     assert exit_code != 0
     # EmitNotFoundError message should appear in stderr
     assert "not found" in captured.err.lower() or "emit" in captured.err.lower()
+
+
+def test_validate_prints_messages_and_skips(
+    cli_fixtures: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A validate run whose results carry messages and skips renders both
+    formatting branches: ' — {message}' and ' [skips: N]'."""
+    import fabulexa_export.cli as cli_mod
+    from fabulexa_export.reader.conformance import CheckResult, ConformanceReport
+    from fabulexa_export.reader.emit import Emit
+
+    report = ConformanceReport(
+        results=(
+            CheckResult(
+                check="C1",
+                passed=True,
+                messages=(),
+                skips=("part one skipped", "part two skipped"),
+            ),
+            CheckResult(
+                check="C2",
+                passed=False,
+                messages=("first failure detail",),
+                skips=(),
+            ),
+        )
+    )
+
+    def _fake_validate(emit: Emit) -> ConformanceReport:
+        return report
+
+    monkeypatch.setattr(cli_mod, "validate", _fake_validate)
+    exit_code = main(["validate", str(cli_fixtures["spanning"])])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "  C1: PASS  [skips: 2]" in captured.out
+    assert "  C2: FAIL  — first failure detail" in captured.out
+    assert "FAIL: 1 check(s) failed: C2" in captured.out
+
+
+def test_validate_all_pass_with_skips_exits_zero(
+    cli_fixtures: dict[str, Path],
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Skips are informational: an all-pass report with skips still exits 0."""
+    import fabulexa_export.cli as cli_mod
+    from fabulexa_export.reader.conformance import CheckResult, ConformanceReport
+    from fabulexa_export.reader.emit import Emit
+
+    report = ConformanceReport(
+        results=(
+            CheckResult(
+                check="C9",
+                passed=True,
+                messages=(),
+                skips=("pin resolution skipped",),
+            ),
+        )
+    )
+
+    def _fake_validate(emit: Emit) -> ConformanceReport:
+        return report
+
+    monkeypatch.setattr(cli_mod, "validate", _fake_validate)
+    exit_code = main(["validate", str(cli_fixtures["spanning"])])
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "  C9: PASS  [skips: 1]" in captured.out
+    assert "PASS: all 1 checks passed" in captured.out
 
 
 def test_console_script_entry_resolves() -> None:

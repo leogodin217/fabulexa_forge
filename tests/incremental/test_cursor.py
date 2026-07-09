@@ -111,6 +111,22 @@ def test_duckdb_read_returns_cursor_with_correct_next_index(tmp_path: Path) -> N
     assert result.next_window_index == 3
 
 
+def test_duckdb_meta_present_zero_window_rows_next_index_is_0(tmp_path: Path) -> None:
+    """_export_meta present but _export_windows empty → next_window_index = 0.
+
+    The MAX(window_index) query returns a NULL row for an empty table; that
+    defaults the drip position to window 0 rather than raising.
+    """
+    wh = tmp_path / "warehouse.duckdb"
+    _make_warehouse(wh, with_meta=True, num_windows=0)
+
+    result = read_cursor(wh, "duckdb", _WINDOW_ZERO_LABEL)
+    assert result is not None
+    assert result.fingerprint == _FINGERPRINT
+    assert result.cursor_format_version == _CURRENT_CURSOR_FORMAT_VERSION
+    assert result.next_window_index == 0
+
+
 def test_duckdb_read_single_window_next_index_is_1(tmp_path: Path) -> None:
     """One window row → next_window_index = 1."""
     wh = tmp_path / "warehouse.duckdb"

@@ -124,6 +124,21 @@ def test_value_map_type_varchar_for_string_values() -> None:
     assert _value_map_duckdb_type({"a": "x", "b": "y"}) == "VARCHAR"
 
 
+def test_value_map_type_varchar_for_bool_values() -> None:
+    """Bool map values infer VARCHAR despite isinstance(True, int) being True."""
+    assert _value_map_duckdb_type({"a": True, "b": False}) == "VARCHAR"
+
+
+def test_value_map_type_varchar_for_int_then_bool_values() -> None:
+    """A bool after ints forces VARCHAR — the bool guard beats BIGINT inference."""
+    assert _value_map_duckdb_type({"a": 1, "b": True}) == "VARCHAR"
+
+
+def test_value_map_type_varchar_for_float_then_bool_values() -> None:
+    """A bool after a float forces VARCHAR, not DOUBLE."""
+    assert _value_map_duckdb_type({"a": 2.5, "b": True}) == "VARCHAR"
+
+
 def test_build_value_map_expr_maps_known_values() -> None:
     """value_map generates CASE with typed WHEN clauses and typed NULL else."""
     col = ColumnDecl(
