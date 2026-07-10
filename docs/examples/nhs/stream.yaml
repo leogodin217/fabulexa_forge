@@ -1,6 +1,6 @@
 # StreamConfig — NHS bundle, mixer/stream preset
 # ============================================================
-# Drives `fabexport mixer docs/examples/nhs/bundle <this>` (and `fabexport stream …`
+# Drives `fabulexa-forge mixer docs/examples/nhs/bundle <this>` (and `fabulexa-forge stream …`
 # for a non-Kafka dry run). The NHS bundle is primarily a *non-streaming* fixture
 # (its main use is dimensional export / conformance); this config exists so the
 # `EXAMPLE=nhs` mixer preset is complete and runnable, not as a showcase.

@@ -12,8 +12,8 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from fabulexa_export.errors import IncrementalCursorInvalid
-from fabulexa_export.incremental.cursor import (
+from fabulexa_forge.errors import IncrementalCursorInvalid
+from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
     Cursor,
     read_cursor,
@@ -170,7 +170,7 @@ def test_csv_fresh_only_dot_entries(tmp_path: Path) -> None:
     """Only dot-entries (hidden files) → None (fresh target)."""
     drops = tmp_path / "drops"
     drops.mkdir()
-    (drops / ".fabexport-cursor.json").write_text("{}")
+    (drops / ".fabulexa-forge-cursor.json").write_text("{}")
     result = read_cursor(drops, "csv", _WINDOW_ZERO_LABEL)
     assert result is None
 
@@ -256,7 +256,7 @@ def test_csv_cursor_json_keys_are_exact_field_names(tmp_path: Path) -> None:
     )
     write_csv_cursor(drops, cursor)
 
-    raw = json.loads((drops / ".fabexport-cursor.json").read_text())
+    raw = json.loads((drops / ".fabulexa-forge-cursor.json").read_text())
     assert set(raw.keys()) == {
         "cursor_format_version",
         "fingerprint",
@@ -273,7 +273,7 @@ def test_csv_unknown_cursor_format_version_raises(tmp_path: Path) -> None:
     drops.mkdir()
     (drops / _WINDOW_ZERO_LABEL).mkdir()
 
-    (drops / ".fabexport-cursor.json").write_text(
+    (drops / ".fabulexa-forge-cursor.json").write_text(
         json.dumps(
             {
                 "cursor_format_version": 999,
@@ -292,7 +292,7 @@ def test_csv_unparseable_json_raises(tmp_path: Path) -> None:
     drops = tmp_path / "drops"
     drops.mkdir()
     (drops / _WINDOW_ZERO_LABEL).mkdir()
-    (drops / ".fabexport-cursor.json").write_text("NOT JSON {{{")
+    (drops / ".fabulexa-forge-cursor.json").write_text("NOT JSON {{{")
 
     with pytest.raises(IncrementalCursorInvalid, match="invalid JSON"):
         read_cursor(drops, "csv", _WINDOW_ZERO_LABEL)

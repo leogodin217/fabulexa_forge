@@ -9,7 +9,7 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
 _CONTRACT = Path(__file__).resolve().parent.parent / "contract"
 

@@ -74,13 +74,13 @@ Homepage = "https://github.com/leogodin217/fabulexa_forge"
 Repository = "https://github.com/leogodin217/fabulexa_forge"
 
 [project.scripts]
-fabexport = "fabulexa_export.cli:main"
+fabulexa-forge = "fabulexa_forge.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/fabulexa_export"]
+packages = ["src/fabulexa_forge"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"contract/base-format.schema.json" = "fabulexa_export/contract/base-format.schema.json"
+"contract/base-format.schema.json" = "fabulexa_forge/contract/base-format.schema.json"
 
 [tool.ruff]
 line-length = 88
@@ -95,7 +95,7 @@ force-exclude = true
 select = ["E", "F", "I"]
 
 [tool.ruff.lint.isort]
-known-first-party = ["exporters", "fabulexa_export"]
+known-first-party = ["exporters", "fabulexa_forge"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["E501"]

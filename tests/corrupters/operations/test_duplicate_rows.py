@@ -7,7 +7,7 @@ import random
 import pyarrow as pa
 import pytest
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     Distribution,
     DuplicateRows,
@@ -19,15 +19,15 @@ from fabulexa_export.config.models import (
     NullCells,
     Target,
 )
-from fabulexa_export.corrupters.operations._mutations import (
+from fabulexa_forge.corrupters.operations._mutations import (
     apply_typo_int,
     apply_typo_str,
 )
-from fabulexa_export.corrupters.operations.duplicate_rows import DuplicateRowsCorrupter
-from fabulexa_export.corrupters.operations.null_cells import NullCellsCorrupter
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.errors import CorruptValidationError
-from fabulexa_export.reader.sidecar import BranchEntry, RecordRoles, Sidecar
+from fabulexa_forge.corrupters.operations.duplicate_rows import DuplicateRowsCorrupter
+from fabulexa_forge.corrupters.operations.null_cells import NullCellsCorrupter
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.errors import CorruptValidationError
+from fabulexa_forge.reader.sidecar import BranchEntry, RecordRoles, Sidecar
 
 from .._helpers import (
     FixedSampleRandom,

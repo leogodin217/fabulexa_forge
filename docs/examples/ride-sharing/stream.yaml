@@ -1,6 +1,6 @@
 # StreamConfig — ride-sharing bundle, mixer smoke test
 # ============================================================
-# Drives `fabexport mixer` (and `fabexport stream`) over the ride-sharing emit at
+# Drives `fabulexa-forge mixer` (and `fabulexa-forge stream`) over the ride-sharing emit at
 # docs/examples/ride-sharing/bundle/. Two kinds -> two topics, so the mixer has more
 # than one per-topic dial to lag / mute during the money demo.
 #

@@ -38,7 +38,7 @@ When the contract changes, update this doc first, then both mirrors.
   load and re-fetched after each mutation; it is not polled.
 - **No determinism guarantee.** This API drives the FabulMixer driver, which is
   deliberately wall-clock- and operator-driven and therefore non-deterministic. It is
-  a *separate* surface from the deterministic, byte-identical `fabexport stream`.
+  a *separate* surface from the deterministic, byte-identical `fabulexa-forge stream`.
 
 ## Data model
 
@@ -171,7 +171,7 @@ The number of channel strips is **not fixed** — it equals the number of topics
 routing surface resolves for the loaded emit + `StreamConfig`/`RoutingConfig`. It
 varies per emit and per config; neither side hardcodes a count. The backend's
 enumeration entry point is `build_topic_set(config, record_roles)`
-(`src/fabulexa_export/exporters/streaming/engine.py`) — the same set `fabexport
+(`src/fabulexa_forge/exporters/streaming/engine.py`) — the same set `fabulexa-forge
 stream` materializes.
 
 - `GET /state.topics` is the **authoritative, complete** topic set. The frontend

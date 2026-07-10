@@ -13,16 +13,16 @@ from pathlib import Path
 import pytest
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DimensionalConfig,
     FkClause,
     SourceDecl,
     TableDecl,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.engine import build_query_specs
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.reader.emit import open_emit
 
 # ---------------------------------------------------------------------------
 # FK emit fixture helpers
@@ -118,7 +118,7 @@ def build_reference_chain_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -234,7 +234,7 @@ def build_ambiguous_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -760,7 +760,7 @@ def build_typed_membership_emit(tmp_path: Path) -> Path:
     """Emit with actor + membership that has a BIGINT elem__ column."""
     import duckdb
 
-    from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -912,7 +912,7 @@ def build_surrogate_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -1255,7 +1255,7 @@ def build_pit_membership_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -1754,7 +1754,7 @@ def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))

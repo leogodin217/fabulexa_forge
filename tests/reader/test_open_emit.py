@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from fabulexa_export.reader import (
+from fabulexa_forge.reader import (
     Emit,
     EmitNotFoundError,
     RunDatabaseError,

@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from fabulexa_export.config.models import ExportConfig, RenameEntry, SourceConfig
+from fabulexa_forge.config.models import ExportConfig, RenameEntry, SourceConfig
 
 # ---------------------------------------------------------------------------
 # Bare mode: source parses

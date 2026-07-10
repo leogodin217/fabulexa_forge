@@ -7,14 +7,14 @@ from collections.abc import Mapping, Sequence
 import pyarrow as pa
 import pytest
 
-from fabulexa_export.corrupters.operations._impact import (
+from fabulexa_forge.corrupters.operations._impact import (
     enumerate_series_units,
     membership_kind_id_pairs,
     resolve_c6_anchor,
     series_round_trip_fails,
 )
-from fabulexa_export.corrupters.state import CorruptState, WorkingTable
-from fabulexa_export.errors import CorruptError
+from fabulexa_forge.corrupters.state import CorruptState, WorkingTable
+from fabulexa_forge.errors import CorruptError
 
 from .._helpers import column_spec, table_spec, working_table
 

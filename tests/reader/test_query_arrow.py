@@ -6,15 +6,15 @@ from pathlib import Path
 
 import pytest
 
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.reader.errors import RunDatabaseError
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.errors import RunDatabaseError
 
 from ._emit_helpers import write_emit
 
 
 def _emit_with_data(tmp_path: Path) -> Path:
     """Write a minimal emit with a records__thing table containing one row."""
-    from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
     sidecar = {
         "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,

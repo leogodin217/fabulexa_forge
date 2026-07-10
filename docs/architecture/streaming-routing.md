@@ -16,14 +16,14 @@ streaming exporter itself is documented in [`streaming.md`](streaming.md); this 
 the routing contract it composes.
 
 **Source:**
-[`exporters/streaming/routing.py`](../../src/fabulexa_export/exporters/streaming/routing.py)
+[`exporters/streaming/routing.py`](../../src/fabulexa_forge/exporters/streaming/routing.py)
 (Layer A — `route_attributes` for state-changes, `membership_route_attributes` for
 membership-events — plus the Layer B functions),
-[`config/models.py`](../../src/fabulexa_export/config/models.py) (`RoutingConfig`,
+[`config/models.py`](../../src/fabulexa_forge/config/models.py) (`RoutingConfig`,
 `StreamKindSelection.types`), the routing business rules in
-[`engine.py`](../../src/fabulexa_export/exporters/streaming/engine.py)
+[`engine.py`](../../src/fabulexa_forge/exporters/streaming/engine.py)
 (`_validate_routing_rules`) and
-[`driver.py`](../../src/fabulexa_export/exporters/streaming/driver.py).
+[`driver.py`](../../src/fabulexa_forge/exporters/streaming/driver.py).
 Tests:
 [`tests/exporters/streaming/test_routing.py`](../../tests/exporters/streaming/test_routing.py),
 [`tests/exporters/streaming/test_routing_engine.py`](../../tests/exporters/streaming/test_routing_engine.py),
@@ -71,7 +71,7 @@ The per-event `sub_type` comes from one `resolve_subtype_index` map
 each event the engine looks up the event's `record_id` in that kind's index, then calls
 `route_attributes`. Non-sub-typed kinds skip the index and pass `sub_type=None`. The
 field set and signatures are the contract of
-[`routing.py`](../../src/fabulexa_export/exporters/streaming/routing.py).
+[`routing.py`](../../src/fabulexa_forge/exporters/streaming/routing.py).
 
 ### Layer A — `route_table` (the logical source table)
 
@@ -262,7 +262,7 @@ depends on kind + selected properties, not on sub-type).
 ## Validation Rules
 
 **Parse-time** (Pydantic, in
-[`config/models.py`](../../src/fabulexa_export/config/models.py)):
+[`config/models.py`](../../src/fabulexa_forge/config/models.py)):
 `RoutingConfig.groups_well_formed` requires a non-empty `topic_template` with balanced
 braces and no format-spec or conversion on any placeholder (checked with
 `string.Formatter().parse`), every `groups` target/member a non-empty string, and no
@@ -365,7 +365,7 @@ What routing deliberately does not own:
 | [`streaming.md`](streaming.md) | The streaming exporter that composes this routing surface — the `content × format × sink` model, the cross-source merge and `seq`, the Debezium format whose `source.table` `table_identity` governs |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface routing reads the record spine and the `Sidecar.subtype_values` discriminator oracle (sub-typed-ness) through |
 | [`config-docstrings.md`](config-docstrings.md) | The three-channel docstring convention `RoutingConfig` / `StreamKindSelection` follow |
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | The `RoutingConfig` / `StreamKindSelection` grammar these semantics bind |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The `RoutingConfig` / `StreamKindSelection` grammar these semantics bind |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles, the isolation boundary, vocabulary |

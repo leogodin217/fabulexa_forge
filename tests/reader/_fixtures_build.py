@@ -15,7 +15,7 @@ from pathlib import Path
 
 import duckdb
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
 # ---------------------------------------------------------------------------
 # Column lists — match base-format.md exactly (sanitised: no firings, no provenance)

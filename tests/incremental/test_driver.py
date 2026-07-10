@@ -18,28 +18,28 @@ from exporters.source._source_fixtures import (
     build_windowed_source_test_emit,
     windowed_test_windows,
 )
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.anchor import resolve_effective_anchor
-from fabulexa_export.config.models import ExportConfig
-from fabulexa_export.errors import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.config.models import ExportConfig
+from fabulexa_forge.errors import (
     ExportRuntimeError,
     IncrementalConfigMissing,
     IncrementalFingerprintMismatch,
     IncrementalRangeTargetExists,
 )
-from fabulexa_export.incremental.cursor import (
+from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
     Cursor,
     read_cursor,
     write_csv_cursor,
 )
-from fabulexa_export.incremental.driver import (
+from fabulexa_forge.incremental.driver import (
     IncrementalOutcome,
     export_incremental_next,
     export_window,
 )
-from fabulexa_export.incremental.windows import Window
-from fabulexa_export.reader.emit import Emit, open_emit
+from fabulexa_forge.incremental.windows import Window
+from fabulexa_forge.reader.emit import Emit, open_emit
 
 # ---------------------------------------------------------------------------
 # Emit + config builders
@@ -414,7 +414,7 @@ def test_csv_crash_recovery_restart(tmp_path: Path) -> None:
     config_incremental = config.incremental
     assert config_incremental is not None
     # Compute window-0 label
-    from fabulexa_export.incremental.windows import derive_window
+    from fabulexa_forge.incremental.windows import derive_window
 
     w0 = derive_window(0, config_incremental, None)
     (out / w0.label).mkdir()
@@ -626,7 +626,7 @@ def test_range_csv_fresh_creates_standalone_artifact(tmp_path: Path) -> None:
     assert out.exists()
     assert "dim_entity" in row_counts
     # No cursor file
-    assert not (out / ".fabexport-cursor.json").exists()
+    assert not (out / ".fabulexa-forge-cursor.json").exists()
 
 
 def test_next_against_range_artifact_raises(tmp_path: Path) -> None:
@@ -643,7 +643,7 @@ def test_next_against_range_artifact_raises(tmp_path: Path) -> None:
     # Now try --next on the same artifact
     config_with_inc = _simple_config(with_incremental=True)
 
-    from fabulexa_export.errors import IncrementalCursorInvalid
+    from fabulexa_forge.errors import IncrementalCursorInvalid
 
     with open_emit(emit_dir) as emit:
         with pytest.raises(IncrementalCursorInvalid, match="_export_meta"):
@@ -662,7 +662,7 @@ def _patch_write_csv_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(emit: Emit, table_name: str, query: str, output_dir: Path) -> int:
         raise ExportRuntimeError("simulated CSV write failure")
 
-    monkeypatch.setattr("fabulexa_export.writers.csv.write_csv", _boom)
+    monkeypatch.setattr("fabulexa_forge.writers.csv.write_csv", _boom)
 
 
 def _patch_staging_rename_failure(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -715,7 +715,7 @@ def test_next_csv_write_failure_discards_staging(
     label = "w00000_ns0"
     assert not (out / f".tmp_{label}").exists()
     assert not (out / label).exists()
-    assert not (out / ".fabexport-cursor.json").exists()
+    assert not (out / ".fabulexa-forge-cursor.json").exists()
 
 
 def test_range_csv_rename_failure_raises_and_discards_staging(
@@ -756,7 +756,7 @@ def test_next_csv_rename_failure_raises_no_drop_no_cursor(
 
     label = "w00000_ns0"
     assert not (out / label).exists()
-    assert not (out / ".fabexport-cursor.json").exists()
+    assert not (out / ".fabulexa-forge-cursor.json").exists()
     # The leftover staging dir is documented to be discarded at the NEXT staging
     assert (out / f".tmp_{label}").exists()
 
@@ -768,7 +768,7 @@ def test_next_csv_rename_failure_raises_no_drop_no_cursor(
 
 def test_duckdb_drip_equals_full_export(tmp_path: Path) -> None:
     """After draining, dim_entity in warehouse equals full-export warehouse (type-1 dim)."""
-    from fabulexa_export.exporters.dimensional.engine import export_dimensional
+    from fabulexa_forge.exporters.dimensional.engine import export_dimensional
 
     emit_dir = _build_emit(tmp_path)
     config = _simple_config()
@@ -814,7 +814,7 @@ def test_csv_drip_equals_full_export(tmp_path: Path) -> None:
     """All CSV drops multiset-equal the full export for a type-1 dim (replace)."""
     import csv
 
-    from fabulexa_export.exporters.dimensional.engine import export_dimensional
+    from fabulexa_forge.exporters.dimensional.engine import export_dimensional
 
     emit_dir = _build_emit(tmp_path)
     config = _simple_config()
@@ -891,8 +891,8 @@ def test_csv_determinism_byte_identical_drops(tmp_path: Path) -> None:
             assert fa.read_bytes() == fb.read_bytes()
 
     # Cursor files are identical
-    cursor_a = (out_a / ".fabexport-cursor.json").read_bytes()
-    cursor_b = (out_b / ".fabexport-cursor.json").read_bytes()
+    cursor_a = (out_a / ".fabulexa-forge-cursor.json").read_bytes()
+    cursor_b = (out_b / ".fabulexa-forge-cursor.json").read_bytes()
     assert cursor_a == cursor_b
 
 
@@ -1067,7 +1067,7 @@ def test_source_mode_fingerprint_mismatch_on_source_config_change(
 
 def derive_window_zero_label(config: ExportConfig) -> str:
     """Compute the window-0 label for a sim-time-regime config (no anchor)."""
-    from fabulexa_export.incremental.windows import derive_window
+    from fabulexa_forge.incremental.windows import derive_window
 
     assert config.incremental is not None
     w0 = derive_window(0, config.incremental, None)

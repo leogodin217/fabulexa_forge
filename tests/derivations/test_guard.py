@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.errors import ExportError
-from fabulexa_export.reader.sidecar import Sidecar
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.reader.sidecar import Sidecar
 
 
 def _make_sidecar(branches: list[dict[str, object]]) -> Sidecar:
@@ -21,7 +21,7 @@ def _make_sidecar(branches: list[dict[str, object]]) -> Sidecar:
 
 def test_single_branch_returns_fork_path() -> None:
     """require_single_branch on a single-branch emit returns the fork_path."""
-    from fabulexa_export.derivations import require_single_branch
+    from fabulexa_forge.derivations import require_single_branch
 
     sidecar = _make_sidecar([{"fork_path": "trunk", "parent": None, "slice_at": 100}])
     result = require_single_branch(sidecar)
@@ -30,7 +30,7 @@ def test_single_branch_returns_fork_path() -> None:
 
 def test_two_branch_emit_raises_export_error() -> None:
     """Two-branch emit raises ExportError with the unified SingleBranch message."""
-    from fabulexa_export.derivations import require_single_branch
+    from fabulexa_forge.derivations import require_single_branch
 
     sidecar = _make_sidecar(
         [
@@ -49,7 +49,7 @@ def test_zero_branch_sidecar_raises_export_error() -> None:
     zero-branch Sidecar is constructed directly to exercise the guard's own
     defensive handling of an empty branches tuple.
     """
-    from fabulexa_export.derivations import require_single_branch
+    from fabulexa_forge.derivations import require_single_branch
 
     sidecar = Sidecar(
         raw={},
@@ -70,10 +70,10 @@ def test_layer_direction_guard_imports() -> None:
     import importlib
     import sys
 
-    mod = importlib.import_module("fabulexa_export.derivations.guard")
+    mod = importlib.import_module("fabulexa_forge.derivations.guard")
     for name, submod in sys.modules.items():
-        if name.startswith("fabulexa_export.exporters") or name.startswith(
-            "fabulexa_export.config"
+        if name.startswith("fabulexa_forge.exporters") or name.startswith(
+            "fabulexa_forge.config"
         ):
             assert submod not in vars(mod).values(), (
                 f"derivations.guard must not import from {name}"

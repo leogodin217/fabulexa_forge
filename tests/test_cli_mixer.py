@@ -1,4 +1,4 @@
-"""Tests for `fabexport mixer` CLI verb.
+"""Tests for `fabulexa-forge mixer` CLI verb.
 
 Covers:
 - Flag-level usage checks (exit 1, before any emit opens):
@@ -25,9 +25,9 @@ import duckdb
 import pytest
 import yaml
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.cli import _parse_join_flag, cmd_mixer, main
-from fabulexa_export.errors import KafkaConsumeError, KafkaDeliveryError
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.cli import _parse_join_flag, cmd_mixer, main
+from fabulexa_forge.errors import KafkaConsumeError, KafkaDeliveryError
 
 # ---------------------------------------------------------------------------
 # Emit / config builder helpers
@@ -471,7 +471,7 @@ def test_happy_path_exit_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     config_path = tmp_path / "config.yaml"
     _write_stream_config(config_path)
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _noop_serve(**kwargs: Any) -> None:
         pass
@@ -507,7 +507,7 @@ def test_main_dispatches_to_mixer(
     config_path = tmp_path / "config.yaml"
     _write_stream_config(config_path)
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     monkeypatch.setattr(serve_mod, "serve_mixer", AsyncMock(return_value=None))
     code = main(
@@ -533,7 +533,7 @@ def test_main_play_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 
     captured_state: dict[str, Any] = {}
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _capture_serve(**kwargs: Any) -> None:
         captured_state.update(kwargs)
@@ -567,7 +567,7 @@ def test_main_paused_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
 
     captured_state: dict[str, Any] = {}
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _capture_serve(**kwargs: Any) -> None:
         captured_state.update(kwargs)
@@ -727,7 +727,7 @@ def test_join_bad_topic_exits_1_via_funnel(
     config_path = tmp_path / "config.yaml"
     _write_stream_config(config_path)
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _noop_serve(**kwargs: Any) -> None:
         pass
@@ -770,7 +770,7 @@ def test_consumer_sets_state_and_launch(
 
     captured: dict[str, Any] = {}
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _capture(**kwargs: Any) -> None:
         captured.update(kwargs)
@@ -814,7 +814,7 @@ def test_consumer_explicit_group_id(
 
     captured: dict[str, Any] = {}
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _capture(**kwargs: Any) -> None:
         captured.update(kwargs)
@@ -856,7 +856,7 @@ def test_producer_only_state_consumer_none(
 
     captured: dict[str, Any] = {}
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _capture(**kwargs: Any) -> None:
         captured.update(kwargs)
@@ -898,7 +898,7 @@ def test_cmd_mixer_consumer_flags_parse(
 
     captured: dict[str, Any] = {}
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _capture(**kwargs: Any) -> None:
         captured.update(kwargs)
@@ -975,7 +975,7 @@ def test_main_join_happy_path_reaches_cmd_mixer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """main() parses each --join 'fact:dim' into a (fact, dim) pair, in order."""
-    import fabulexa_export.cli as cli_mod
+    import fabulexa_forge.cli as cli_mod
 
     captured: dict[str, Any] = {}
 
@@ -1022,7 +1022,7 @@ def test_serve_mixer_delivery_error_exits_1_via_second_funnel(
     config_path = tmp_path / "config.yaml"
     _write_stream_config(config_path)
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _raise_delivery(**kwargs: Any) -> None:
         raise KafkaDeliveryError("mid-run delivery failure: broker unreachable")
@@ -1059,7 +1059,7 @@ def test_serve_mixer_consume_error_exits_1_via_second_funnel(
     config_path = tmp_path / "config.yaml"
     _write_stream_config(config_path)
 
-    import fabulexa_export.exporters.streaming.mixer.serve as serve_mod
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
 
     async def _raise_consume(**kwargs: Any) -> None:
         raise KafkaConsumeError("consumer poll failed: broker unreachable")

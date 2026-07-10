@@ -12,9 +12,9 @@ from pathlib import Path
 import pytest
 
 from exporters._emit_fixtures import build_test_emit
-from fabulexa_export.errors import ExportRuntimeError
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.writers.csv import write_csv
+from fabulexa_forge.errors import ExportRuntimeError
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.writers.csv import write_csv
 
 
 def test_write_csv_writes_header_and_rows(tmp_path: Path) -> None:

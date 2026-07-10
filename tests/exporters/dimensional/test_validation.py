@@ -13,7 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from exporters._emit_fixtures import build_test_emit
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
     DimensionalConfig,
@@ -22,8 +22,8 @@ from fabulexa_export.config.models import (
     TableDecl,
     TimestampSpec,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.validation import (
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.validation import (
     check_excluded_kind_not_sourced,
     check_excluded_table_not_sourced,
     check_key_columns_declared,
@@ -34,7 +34,7 @@ from fabulexa_export.exporters.dimensional.validation import (
     check_timestamp_source_available,
     validate_table,
 )
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.reader.emit import open_emit
 
 
 def _make_table_decl(
@@ -131,7 +131,7 @@ def test_projection_from_valid(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         col = ColumnDecl(name="id", **{"from": "record_id"})
         tbl = _make_table_decl(columns=[col])
-        from fabulexa_export.exporters.dimensional.validation import (
+        from fabulexa_forge.exporters.dimensional.validation import (
             _grain_projectable_surface,
             _resolve_source_table_name,
         )
@@ -147,7 +147,7 @@ def test_projection_from_missing_raises(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         col = ColumnDecl(name="x", **{"from": "nonexistent_column"})
         tbl = _make_table_decl(columns=[col], key=["x"])
-        from fabulexa_export.exporters.dimensional.validation import (
+        from fabulexa_forge.exporters.dimensional.validation import (
             _grain_projectable_surface,
             _resolve_source_table_name,
         )
@@ -167,7 +167,7 @@ def test_value_map_from_missing_raises(tmp_path: Path) -> None:
             derived=DerivedSpec(value_map={"from": "ghost_col", "map": {"a": 1}}),
         )
         tbl = _make_table_decl(columns=[col], key=["x"])
-        from fabulexa_export.exporters.dimensional.validation import (
+        from fabulexa_forge.exporters.dimensional.validation import (
             _grain_projectable_surface,
             _resolve_source_table_name,
         )
@@ -226,7 +226,7 @@ def test_timestamp_source_sim_time_on_history(tmp_path: Path) -> None:
             columns=[col],
             key=["ts"],
         )
-        from fabulexa_export.exporters.dimensional.validation import (
+        from fabulexa_forge.exporters.dimensional.validation import (
             _grain_projectable_surface,
             _resolve_source_table_name,
         )
@@ -254,7 +254,7 @@ def test_created_by_sim_time_on_records_raises(tmp_path: Path) -> None:
             columns=[col],
             key=["ts"],
         )
-        from fabulexa_export.exporters.dimensional.validation import (
+        from fabulexa_forge.exporters.dimensional.validation import (
             _grain_projectable_surface,
             _resolve_source_table_name,
         )
@@ -279,7 +279,7 @@ def test_lead_sim_time_on_records_raises(tmp_path: Path) -> None:
             columns=[col],
             key=["ts"],
         )
-        from fabulexa_export.exporters.dimensional.validation import (
+        from fabulexa_forge.exporters.dimensional.validation import (
             _grain_projectable_surface,
             _resolve_source_table_name,
         )
@@ -304,7 +304,7 @@ def test_joined_sim_time_off_membership_raises(tmp_path: Path) -> None:
             columns=[col],
             key=["ts"],
         )
-        from fabulexa_export.exporters.dimensional.validation import (
+        from fabulexa_forge.exporters.dimensional.validation import (
             _grain_projectable_surface,
             _resolve_source_table_name,
         )
@@ -331,7 +331,7 @@ def test_discriminator_value_observed_warns(tmp_path: Path) -> None:
         )
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
-            from fabulexa_export.exporters.dimensional.validation import (
+            from fabulexa_forge.exporters.dimensional.validation import (
                 check_discriminator_value_observed,
             )
 

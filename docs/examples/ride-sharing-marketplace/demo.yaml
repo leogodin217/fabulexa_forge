@@ -1,7 +1,7 @@
 # FabulMixer demo preset — consumer-side flags for the ride-sharing-marketplace demo.
 # ============================================================
 # Demo glue only — read by the demo launcher (`make mixer-demo EXAMPLE=...`), NEVER
-# by `fabexport`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
+# by `fabulexa-forge`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
 # See dev/demo/README.md.
 #
 # The joins reference TOPIC names produced by stream.yaml's routing (driver, rider,

@@ -14,8 +14,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.config.models import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
     DimensionalConfig,
@@ -26,8 +26,8 @@ from fabulexa_export.config.models import (
     TableDecl,
     TimestampSpec,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.validation import (
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.validation import (
     check_incremental_elapsed_unsupported,
     check_incremental_filter_column_mutable,
     check_incremental_fk_membership_unsupported,
@@ -40,8 +40,8 @@ from fabulexa_export.exporters.dimensional.validation import (
     check_incremental_slice_column_mutable,
     validate_table,
 )
-from fabulexa_export.incremental.windows import Window
-from fabulexa_export.reader.sidecar import ColumnSpec, Sidecar
+from fabulexa_forge.incremental.windows import Window
+from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar
 
 if TYPE_CHECKING:
     pass

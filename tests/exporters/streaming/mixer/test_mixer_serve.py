@@ -9,13 +9,13 @@ from typing import Any
 
 import pytest
 
-from fabulexa_export.errors import (
+from fabulexa_forge.errors import (
     KafkaConsumeError,
     KafkaDeliveryError,
     MixerExtraUnavailable,
 )
-from fabulexa_export.exporters.streaming.mixer.consumer import ConsumerLaunch
-from fabulexa_export.exporters.streaming.mixer.run_state import MixerRunState
+from fabulexa_forge.exporters.streaming.mixer.consumer import ConsumerLaunch
+from fabulexa_forge.exporters.streaming.mixer.run_state import MixerRunState
 
 from ._helpers import _make_consumer_run_state, _make_run_state
 
@@ -133,7 +133,7 @@ def _install_fake_sink(
     fake_sink: _FakeSink,
     counter: list[int] | None = None,
 ) -> None:
-    from fabulexa_export.exporters.streaming.mixer import sink as sink_mod
+    from fabulexa_forge.exporters.streaming.mixer import sink as sink_mod
 
     monkeypatch.setattr(sink_mod, "KafkaSink", _make_fake_sink_cls(fake_sink, counter))
 
@@ -157,7 +157,7 @@ class TestMixerExtraUnavailableBeforeSink:
         monkeypatch.setitem(sys.modules, "uvicorn", None)  # type: ignore[misc]
 
         # Also patch KafkaSink.open to track if it was called
-        from fabulexa_export.exporters.streaming.mixer import sink as sink_mod
+        from fabulexa_forge.exporters.streaming.mixer import sink as sink_mod
 
         monkeypatch.setattr(sink_mod, "KafkaSink", _make_fake_sink_cls(fake_sink))
 
@@ -202,7 +202,7 @@ class TestTaskFailureFlipsShoudlExit:
             call_count += 1
             raise delivery_err
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(sched_mod, "schedule_releases", _failing_schedule_releases)
 
@@ -236,7 +236,7 @@ class TestCleanInterrupt:
             # Simulates an indefinitely-running loop that will be cancelled at shutdown.
             await asyncio.sleep(9999)
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(sched_mod, "schedule_releases", _slow_schedule_releases)
 
@@ -263,7 +263,7 @@ class TestDrainedRun:
             # All buffers empty — returns without releasing anything.
             return
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(sched_mod, "schedule_releases", _drain_immediately)
 
@@ -287,7 +287,7 @@ class TestLifespanBehavior:
         _install_fake_uvicorn(monkeypatch, server)
         _install_fake_sink(monkeypatch, fake_sink)
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(
             sched_mod, "schedule_releases", _make_noop_schedule_releases()
@@ -307,7 +307,7 @@ class TestLifespanBehavior:
         _install_fake_uvicorn(monkeypatch, server)
         _install_fake_sink(monkeypatch, fake_sink)
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(
             sched_mod, "schedule_releases", _make_noop_schedule_releases()
@@ -325,7 +325,7 @@ class TestLifespanBehavior:
         _install_fake_uvicorn(monkeypatch, server)
         _install_fake_sink(monkeypatch, fake_sink)
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(
             sched_mod, "schedule_releases", _make_noop_schedule_releases()
@@ -351,7 +351,7 @@ def _make_noop_schedule_releases() -> Any:
 
 async def _call_serve_mixer(state: MixerRunState, server: _FakeServer) -> None:
     """Call serve_mixer with the patched fake server in scope."""
-    from fabulexa_export.exporters.streaming.mixer.serve import serve_mixer
+    from fabulexa_forge.exporters.streaming.mixer.serve import serve_mixer
 
     return await serve_mixer(
         state=state,
@@ -374,7 +374,7 @@ async def serve_mixer_under_test(
     port: int,
 ) -> None:
     """Thin wrapper used in tests that need to run serve_mixer directly."""
-    from fabulexa_export.exporters.streaming.mixer.serve import serve_mixer
+    from fabulexa_forge.exporters.streaming.mixer.serve import serve_mixer
 
     return await serve_mixer(
         state=state,
@@ -461,7 +461,7 @@ def _install_fake_source(
     fake_source: _FakeSource,
     counter: list[int] | None = None,
 ) -> None:
-    from fabulexa_export.exporters.streaming.mixer import source as source_mod
+    from fabulexa_forge.exporters.streaming.mixer import source as source_mod
 
     monkeypatch.setattr(
         source_mod, "KafkaSource", _make_fake_source_cls(fake_source, counter)
@@ -474,7 +474,7 @@ async def _call_serve_mixer_with_consumer(
     consumer_launch: ConsumerLaunch | None = None,
 ) -> None:
     """Call serve_mixer with consumer_launch passed through."""
-    from fabulexa_export.exporters.streaming.mixer.serve import serve_mixer
+    from fabulexa_forge.exporters.streaming.mixer.serve import serve_mixer
 
     return await serve_mixer(
         state=state,
@@ -508,7 +508,7 @@ class TestConsumerLaunchNone:
         _install_fake_sink(monkeypatch, fake_sink)
         _install_fake_source(monkeypatch, fake_source)
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(
             sched_mod, "schedule_releases", _make_noop_schedule_releases()
@@ -537,11 +537,11 @@ class TestConsumerLaunchNone:
         async def _fake_run_consumer(**kwargs: Any) -> None:
             consumer_called[0] = True
 
-        from fabulexa_export.exporters.streaming.mixer import consumer as consumer_mod
+        from fabulexa_forge.exporters.streaming.mixer import consumer as consumer_mod
 
         monkeypatch.setattr(consumer_mod, "run_consumer", _fake_run_consumer)
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(
             sched_mod, "schedule_releases", _make_noop_schedule_releases()
@@ -567,7 +567,7 @@ class TestConsumerTaskStartsAndShutdown:
         _install_fake_sink(monkeypatch, fake_sink, open_counter)
         _install_fake_source(monkeypatch, fake_source, open_counter)
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(
             sched_mod, "schedule_releases", _make_noop_schedule_releases()
@@ -576,7 +576,7 @@ class TestConsumerTaskStartsAndShutdown:
         async def _slow_consumer(**kwargs: Any) -> None:
             await asyncio.sleep(9999)
 
-        from fabulexa_export.exporters.streaming.mixer import consumer as consumer_mod
+        from fabulexa_forge.exporters.streaming.mixer import consumer as consumer_mod
 
         monkeypatch.setattr(consumer_mod, "run_consumer", _slow_consumer)
 
@@ -601,7 +601,7 @@ class TestConsumerTaskStartsAndShutdown:
         _install_fake_sink(monkeypatch, fake_sink)
         _install_fake_source(monkeypatch, fake_source)
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(
             sched_mod, "schedule_releases", _make_noop_schedule_releases()
@@ -610,7 +610,7 @@ class TestConsumerTaskStartsAndShutdown:
         async def _slow_consumer(**kwargs: Any) -> None:
             await asyncio.sleep(9999)
 
-        from fabulexa_export.exporters.streaming.mixer import consumer as consumer_mod
+        from fabulexa_forge.exporters.streaming.mixer import consumer as consumer_mod
 
         monkeypatch.setattr(consumer_mod, "run_consumer", _slow_consumer)
 
@@ -646,7 +646,7 @@ class TestConsumerTaskStartsAndShutdown:
         _install_fake_sink(monkeypatch, fake_sink)
         _install_fake_source(monkeypatch, fake_source)
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(
             sched_mod, "schedule_releases", _make_noop_schedule_releases()
@@ -655,7 +655,7 @@ class TestConsumerTaskStartsAndShutdown:
         async def _slow_consumer(**kwargs: Any) -> None:
             await asyncio.sleep(9999)
 
-        from fabulexa_export.exporters.streaming.mixer import consumer as consumer_mod
+        from fabulexa_forge.exporters.streaming.mixer import consumer as consumer_mod
 
         monkeypatch.setattr(consumer_mod, "run_consumer", _slow_consumer)
 
@@ -688,7 +688,7 @@ class TestConsumerTaskFailureFlipsShould_exit:
 
         consume_err = KafkaConsumeError("simulated consume failure")
 
-        from fabulexa_export.exporters.streaming.mixer import scheduler as sched_mod
+        from fabulexa_forge.exporters.streaming.mixer import scheduler as sched_mod
 
         monkeypatch.setattr(
             sched_mod, "schedule_releases", _make_noop_schedule_releases()
@@ -697,7 +697,7 @@ class TestConsumerTaskFailureFlipsShould_exit:
         async def _failing_consumer(**kwargs: Any) -> None:
             raise consume_err
 
-        from fabulexa_export.exporters.streaming.mixer import consumer as consumer_mod
+        from fabulexa_forge.exporters.streaming.mixer import consumer as consumer_mod
 
         monkeypatch.setattr(consumer_mod, "run_consumer", _failing_consumer)
 
@@ -732,7 +732,7 @@ class TestSourceOpenOrdering:
             async def open(cls, **kwargs: Any) -> "_FailingKafkaSource":
                 raise source_err
 
-        from fabulexa_export.exporters.streaming.mixer import source as source_mod
+        from fabulexa_forge.exporters.streaming.mixer import source as source_mod
 
         monkeypatch.setattr(source_mod, "KafkaSource", _FailingKafkaSource)
 

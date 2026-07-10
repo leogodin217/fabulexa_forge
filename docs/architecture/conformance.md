@@ -1,11 +1,11 @@
 # Conformance (C1–C12)
 
 **Status:** Implemented. Code is the contract — see
-[`conformance.py`](../../src/fabulexa_export/reader/conformance.py),
-[`_schema.py`](../../src/fabulexa_export/reader/_schema.py),
-[`cli.py`](../../src/fabulexa_export/cli.py), and
+[`conformance.py`](../../src/fabulexa_forge/reader/conformance.py),
+[`_schema.py`](../../src/fabulexa_forge/reader/_schema.py),
+[`cli.py`](../../src/fabulexa_forge/cli.py), and
 [`tests/reader/`](../../tests/reader/). Public API:
-[`reader/__init__.py`](../../src/fabulexa_export/reader/__init__.py) —
+[`reader/__init__.py`](../../src/fabulexa_forge/reader/__init__.py) —
 `validate`, `run_check`, `CheckResult`, `ConformanceReport`.
 
 `validate(emit)` assesses whether a base-layer emit conforms to the base-format
@@ -15,7 +15,7 @@ reference conformance checker — reading the **vendored** v4 JSON Schema and qu
 already-open DuckDB connection — so that passing the producer's reference checker and
 passing this one are independent facts that must agree. `validate` is the one place
 in the export package that *distrusts* the emit. The CLI verb
-`fabexport validate <emit_dir>` runs it and exits non-zero on any failing check. It
+`fabulexa-forge validate <emit_dir>` runs it and exits non-zero on any failing check. It
 depends on nothing outside the vendored `contract/`.
 
 ```
@@ -31,9 +31,9 @@ open_emit(emit_dir) ─► Emit ─► validate(emit) ─► ConformanceReport (
 
 | Module | Owns |
 |---|---|
-| [`conformance.py`](../../src/fabulexa_export/reader/conformance.py) | `validate`, `run_check`, `CheckResult`, `ConformanceReport`, the twelve checks, the pinned spec (PS) column lists, the `to_csv_text` codec, identifier quoting |
-| [`_schema.py`](../../src/fabulexa_export/reader/_schema.py) | Loads the vendored v4 JSON Schema from package data (the C1 input); reads only the vendored `contract/`, no other tree |
-| [`cli.py`](../../src/fabulexa_export/cli.py) | `fabexport validate` — the thin verb over `open_emit` → `validate` → report → exit code |
+| [`conformance.py`](../../src/fabulexa_forge/reader/conformance.py) | `validate`, `run_check`, `CheckResult`, `ConformanceReport`, the twelve checks, the pinned spec (PS) column lists, the `to_csv_text` codec, identifier quoting |
+| [`_schema.py`](../../src/fabulexa_forge/reader/_schema.py) | Loads the vendored v4 JSON Schema from package data (the C1 input); reads only the vendored `contract/`, no other tree |
+| [`cli.py`](../../src/fabulexa_forge/cli.py) | `fabulexa-forge validate` — the thin verb over `open_emit` → `validate` → report → exit code |
 
 ## Boundary
 
@@ -167,7 +167,7 @@ direct validation of the unmodified schema and drops step 1.
 | C12 | Record-role registry consistency (semantic check, classed with C6/C7/C9/C10/C11) | every emitted records-category kind appears in `record_roles`; every role value is in `{"dimension","fact"}`; every distinct `prop__actor_type` in `records__actor` data is declared in `record_roles["actor"]`. Coverage, not exactness — the `actor` object MAY declare unused sub-types. Skips when `record_roles` is absent (below) |
 
 The full algorithms are the check functions in
-[`conformance.py`](../../src/fabulexa_export/reader/conformance.py); the negative- and
+[`conformance.py`](../../src/fabulexa_forge/reader/conformance.py); the negative- and
 positive-fixture tests in [`tests/reader/`](../../tests/reader/) are the worked
 examples. `run_check(emit, check_id)` runs a single named check (used by
 targeted negative-fixture tests) and is self-contained: a data-reading check run in
@@ -245,7 +245,7 @@ as the producer's guarantee, not re-derived.
 
 ### CLI surface
 
-`fabexport validate <emit_dir>` is the thin verb: `open_emit` → `validate` → print the
+`fabulexa-forge validate <emit_dir>` is the thin verb: `open_emit` → `validate` → print the
 report → exit code.
 
 | Condition | Result |
@@ -255,7 +255,7 @@ report → exit code.
 | `open_emit` raises (missing files, bad JSON, unsupported version, bad structure, unreadable DB) | print the reader error; exit non-zero |
 
 The reader has no educator-facing YAML config — it reads an emit, it does not describe
-a scenario. `fabexport validate` is its only user surface.
+a scenario. `fabulexa-forge validate` is its only user surface.
 
 ## Invariants
 

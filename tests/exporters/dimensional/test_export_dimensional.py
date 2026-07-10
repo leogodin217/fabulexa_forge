@@ -15,8 +15,8 @@ import duckdb
 import pytest
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.config.models import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
     DimensionalConfig,
@@ -26,9 +26,9 @@ from fabulexa_export.config.models import (
     SourceDecl,
     TableDecl,
 )
-from fabulexa_export.errors import ExportRuntimeError
-from fabulexa_export.exporters.dimensional.engine import export_dimensional
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.errors import ExportRuntimeError
+from fabulexa_forge.exporters.dimensional.engine import export_dimensional
+from fabulexa_forge.reader.emit import open_emit
 
 # ---------------------------------------------------------------------------
 # Emit fixture for export_dimensional tests

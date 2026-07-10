@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import random
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     DropEvents,
     Target,
 )
-from fabulexa_export.corrupters.operations.drop_events import DropEventsCorrupter
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.reader.sidecar import BranchEntry, Sidecar
+from fabulexa_forge.corrupters.operations.drop_events import DropEventsCorrupter
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.reader.sidecar import BranchEntry, Sidecar
 
 from .._helpers import CallOrderRandom, column_spec, sidecar, table_spec, working_table
 

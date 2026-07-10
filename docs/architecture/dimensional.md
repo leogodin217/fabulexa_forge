@@ -1,11 +1,11 @@
 # Dimensional Exporter
 
 **Status:** Implemented. Code is the contract — see
-[`exporters/dimensional/`](../../src/fabulexa_export/exporters/dimensional/),
-[`config/`](../../src/fabulexa_export/config/),
-[`writers/`](../../src/fabulexa_export/writers/), and
+[`exporters/dimensional/`](../../src/fabulexa_forge/exporters/dimensional/),
+[`config/`](../../src/fabulexa_forge/config/),
+[`writers/`](../../src/fabulexa_forge/writers/), and
 [`tests/exporters/dimensional/`](../../tests/exporters/dimensional/). Public API:
-[`exporters/dimensional/engine.py`](../../src/fabulexa_export/exporters/dimensional/engine.py).
+[`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py).
 
 The `mode: dimensional` exporter reshapes one base-layer emit into a star schema —
 `dim_*` + `fact_*` tables, typed columns, SCD-2 — declaratively and
@@ -24,8 +24,8 @@ consults it. It reads through the Stage-1 reader only.
 ```
 emit (run.duckdb + base.json @ v4)
    │  (reader: Emit + Sidecar; trunk-only — sole branch)
-   ├─ fabexport init   ─▶ commented candidate export config (sidecar-driven)
-   └─ fabexport export ─▶ build_query_specs → one QuerySpec per declared table
+   ├─ fabulexa-forge init   ─▶ commented candidate export config (sidecar-driven)
+   └─ fabulexa-forge export ─▶ build_query_specs → one QuerySpec per declared table
           dim  → SCD-2 wide (versioned-intervals) | Type-1 sub-type split
           fact → records grain (filtered) | history point | history interval | membership grain
           FK   → labeled-edge pathfind { reference | membership }
@@ -41,18 +41,18 @@ emit (run.duckdb + base.json @ v4)
 
 | Module | Owns |
 |---|---|
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | The two-tier config grammar (`ExportConfig`, `DimensionalConfig`, `TableDecl`, `SourceDecl`, `ColumnDecl`, `FkClause`, `DerivedSpec`, …) and its parse-time validators |
-| [`config/loader.py`](../../src/fabulexa_export/config/loader.py) | `load_export_config` — YAML → validated `ExportConfig` |
-| [`exporters/dimensional/engine.py`](../../src/fabulexa_export/exporters/dimensional/engine.py) | `build_query_specs`, `export_dimensional`, `QuerySpec` — the compile + dispatch entry points. `build_query_specs` takes an optional `window`, and `QuerySpec` carries `write_mode` / `view_name` / `view_sql`, for the windowed compile path ([`incremental.md`](incremental.md)) |
-| [`exporters/dimensional/grains.py`](../../src/fabulexa_export/exporters/dimensional/grains.py) | `build_grain_sql` and the four per-grain SQL builders — composing the reader faithful-read and versioned-intervals relations |
-| [`exporters/dimensional/scd.py`](../../src/fabulexa_export/exporters/dimensional/scd.py) | `build_scd2_sql` — the SCD-2 wide reconstruction, composing the versioned-intervals derivation and the reader records relation |
-| [`exporters/dimensional/fk.py`](../../src/fabulexa_export/exporters/dimensional/fk.py) | `build_fk_expr` — the labeled-edge pathfind, composing the reference-path and membership-edge derivations |
-| [`exporters/dimensional/columns.py`](../../src/fabulexa_export/exporters/dimensional/columns.py) | `build_column_expr` — the six column source modes |
-| [`exporters/dimensional/lookup.py`](../../src/fabulexa_export/exporters/dimensional/lookup.py) | `build_lookup_expr`, `check_lookup_temporal_safety` — the `lookup` mode (composing the reference-path derivation, terminal `prop__<property>`) and its type-1 temporal-safety business rule |
-| [`exporters/dimensional/validation.py`](../../src/fabulexa_export/exporters/dimensional/validation.py) | The business rules run against the sidecar before any SQL is emitted |
-| [`exporters/dimensional/init.py`](../../src/fabulexa_export/exporters/dimensional/init.py) | `generate_init_config` — the sidecar-driven candidate-config proposer |
-| [`writers/duckdb.py`](../../src/fabulexa_export/writers/duckdb.py), [`writers/csv.py`](../../src/fabulexa_export/writers/csv.py) | The two output adapters; both read input through `Emit.query_arrow` |
-| [`errors.py`](../../src/fabulexa_export/errors.py) | The export-pipeline error hierarchy (`ExporterError` → `ConfigError` / `ExportError` / `ExportRuntimeError`) |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The two-tier config grammar (`ExportConfig`, `DimensionalConfig`, `TableDecl`, `SourceDecl`, `ColumnDecl`, `FkClause`, `DerivedSpec`, …) and its parse-time validators |
+| [`config/loader.py`](../../src/fabulexa_forge/config/loader.py) | `load_export_config` — YAML → validated `ExportConfig` |
+| [`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py) | `build_query_specs`, `export_dimensional`, `QuerySpec` — the compile + dispatch entry points. `build_query_specs` takes an optional `window`, and `QuerySpec` carries `write_mode` / `view_name` / `view_sql`, for the windowed compile path ([`incremental.md`](incremental.md)) |
+| [`exporters/dimensional/grains.py`](../../src/fabulexa_forge/exporters/dimensional/grains.py) | `build_grain_sql` and the four per-grain SQL builders — composing the reader faithful-read and versioned-intervals relations |
+| [`exporters/dimensional/scd.py`](../../src/fabulexa_forge/exporters/dimensional/scd.py) | `build_scd2_sql` — the SCD-2 wide reconstruction, composing the versioned-intervals derivation and the reader records relation |
+| [`exporters/dimensional/fk.py`](../../src/fabulexa_forge/exporters/dimensional/fk.py) | `build_fk_expr` — the labeled-edge pathfind, composing the reference-path and membership-edge derivations |
+| [`exporters/dimensional/columns.py`](../../src/fabulexa_forge/exporters/dimensional/columns.py) | `build_column_expr` — the six column source modes |
+| [`exporters/dimensional/lookup.py`](../../src/fabulexa_forge/exporters/dimensional/lookup.py) | `build_lookup_expr`, `check_lookup_temporal_safety` — the `lookup` mode (composing the reference-path derivation, terminal `prop__<property>`) and its type-1 temporal-safety business rule |
+| [`exporters/dimensional/validation.py`](../../src/fabulexa_forge/exporters/dimensional/validation.py) | The business rules run against the sidecar before any SQL is emitted |
+| [`exporters/dimensional/init.py`](../../src/fabulexa_forge/exporters/dimensional/init.py) | `generate_init_config` — the sidecar-driven candidate-config proposer |
+| [`writers/duckdb.py`](../../src/fabulexa_forge/writers/duckdb.py), [`writers/csv.py`](../../src/fabulexa_forge/writers/csv.py) | The two output adapters; both read input through `Emit.query_arrow` |
+| [`errors.py`](../../src/fabulexa_forge/errors.py) | The export-pipeline error hierarchy (`ExporterError` → `ConfigError` / `ExportError` / `ExportRuntimeError`) |
 
 ## Boundary
 
@@ -126,7 +126,7 @@ no target schema, so it does not infer the column's intended type (Principle #7)
 every pad is `VARCHAR` and any retype is a downstream concern.
 
 Field shapes are defined by the Pydantic grammar in
-[`config/models.py`](../../src/fabulexa_export/config/models.py); the meaning of each
+[`config/models.py`](../../src/fabulexa_forge/config/models.py); the meaning of each
 field is the semantics below.
 
 ### Grain sources
@@ -360,7 +360,7 @@ rendered timestamp", § Determinism and ordering) applied to ordinals, and it is
 makes the ordinal sound under windowed export, where a rendered-µs ordering could let a
 same-microsecond tie count a row that lands in the next window (see
 [`incremental.md`](incremental.md)). The amendment is implemented in
-[`columns.py`](../../src/fabulexa_export/exporters/dimensional/columns.py)
+[`columns.py`](../../src/fabulexa_forge/exporters/dimensional/columns.py)
 (`_find_raw_ns_source_for_ordinal`).
 
 A `value_map` column is **typed from its map's values**, and its generated `CASE`
@@ -498,7 +498,7 @@ so ordering on the interval start (raw ns) is what makes that grain deterministi
 
 ### `init` inference contract
 
-[`generate_init_config`](../../src/fabulexa_export/exporters/dimensional/init.py) reads
+[`generate_init_config`](../../src/fabulexa_forge/exporters/dimensional/init.py) reads
 the emit and emits a **commented candidate config** the author edits — a starting point
 (~70–80% on a clean scenario) whose every `role` / `scd` proposal is author-authoritative,
 confirmed or flipped, never a decision the engine enforces.
@@ -517,7 +517,7 @@ signal.
 re-validate — and relies on these guarantees:
 
 - `record_roles` is present whenever the emit carries ≥ 1 records kind; its absence raises
-  [`InitRequiresRecordRoles`](../../src/fabulexa_export/errors.py) before any proposal is
+  [`InitRequiresRecordRoles`](../../src/fabulexa_forge/errors.py) before any proposal is
   built, a fail-fast on malformed input rather than a degraded inference mode.
 - C12 guarantees every emitted records kind is covered, so `init` does not re-check coverage.
 - `record_roles["actor"]`'s keys are the **declared** sub-type set — a superset of the
@@ -604,7 +604,7 @@ that does not fit *this* emit) raise `ExportError` at `build_query_specs` before
 SQL is emitted.
 
 Parse-time validation is the Pydantic model validators in
-[`config/models.py`](../../src/fabulexa_export/config/models.py): exactly one column
+[`config/models.py`](../../src/fabulexa_forge/config/models.py): exactly one column
 source mode; exactly one `derived` sub-field; `scd` set iff `role == dim`; source
 fields matching the grain (`property` required for history/membership, `filter` only
 on records, `where` only on membership, `value` only on `history_point`); membership
@@ -615,7 +615,7 @@ The `SingleBranch` guard is the derivations layer's `require_single_branch`
 ([`derivations.md`](derivations.md)), invoked from `export_dimensional` before the
 sidecar business rules — one implementation shared with every other mode, with one
 error message. The remaining business rules run against the sidecar in
-[`validation.py`](../../src/fabulexa_export/exporters/dimensional/validation.py):
+[`validation.py`](../../src/fabulexa_forge/exporters/dimensional/validation.py):
 
 | Rule | Checks |
 |---|---|
@@ -791,7 +791,7 @@ What the dimensional exporter deliberately does not own:
 | [`derivations.md`](derivations.md) | The interpretive layer this mode composes — versioned-intervals and reference-resolution; the source of the shared `require_single_branch` guard |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — `query_arrow`, the `history_tracked` flag, the faithful-read builders, the per-type decode contract |
 | [`conformance.md`](conformance.md) | The C1–C12 contract the input is trusted to satisfy |
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | The config grammar these semantics bind |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The config grammar these semantics bind |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The input contract (table categories, `references`, membership, `history_tracked`) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |

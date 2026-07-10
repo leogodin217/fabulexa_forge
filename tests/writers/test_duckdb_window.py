@@ -17,20 +17,20 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.config.models import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
     DimensionalConfig,
     SourceDecl,
     TableDecl,
 )
-from fabulexa_export.errors import ExportRuntimeError
-from fabulexa_export.exporters.dimensional.engine import build_query_specs
-from fabulexa_export.exporters.query_spec import QuerySpec
-from fabulexa_export.incremental.windows import Window
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.writers.duckdb import write_duckdb_window
+from fabulexa_forge.errors import ExportRuntimeError
+from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.query_spec import QuerySpec
+from fabulexa_forge.incremental.windows import Window
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.writers.duckdb import write_duckdb_window
 
 # ---------------------------------------------------------------------------
 # Shared column declarations

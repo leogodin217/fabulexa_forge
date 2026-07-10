@@ -13,16 +13,16 @@ from typing import Any
 import duckdb
 import pytest
 
-from fabulexa_export.derivations.membership_events import (
+from fabulexa_forge.derivations.membership_events import (
     EVENT_CLASS_JOIN,
     EVENT_CLASS_LEAVE,
     MEMBERSHIP_EVENT_COLUMNS,
     build_membership_events_sql,
     resolve_membership_columns,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.reader.errors import TableNotFoundError
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.errors import TableNotFoundError
 
 SUPPORTED_VERSION = 4
 FORK_PATH = "trunk"

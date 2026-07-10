@@ -18,8 +18,8 @@ import duckdb
 import pytest
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.config.models import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DimensionalConfig,
     FkClause,
@@ -27,16 +27,16 @@ from fabulexa_export.config.models import (
     SourceDecl,
     TableDecl,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.columns import build_column_expr
-from fabulexa_export.exporters.dimensional.engine import build_query_specs
-from fabulexa_export.exporters.dimensional.lookup import (
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.columns import build_column_expr
+from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.dimensional.lookup import (
     build_lookup_expr,
     check_lookup_temporal_safety,
 )
-from fabulexa_export.exporters.dimensional.validation import validate_table
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.reader.sidecar import Sidecar
+from fabulexa_forge.exporters.dimensional.validation import validate_table
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
 # Column / table spec helpers

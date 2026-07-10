@@ -1,4 +1,4 @@
-"""Tests for the fabexport CLI (Phase 6).
+"""Tests for the fabulexa-forge CLI (Phase 6).
 
 Covers:
 - validate on a conforming emit: exit 0, per-check PASS summary
@@ -7,7 +7,7 @@ Covers:
 - validate on a missing directory: non-zero exit, EmitNotFoundError
 - _print_check_result renders the messages (' — ...') and skips (' [skips: N]')
   branches when a validate run produces such CheckResults
-- [project.scripts] fabexport entry resolves to cli:main
+- [project.scripts] fabulexa-forge entry resolves to cli:main
 """
 
 from __future__ import annotations
@@ -22,8 +22,8 @@ from reader._fixtures_build import (
     build_wrong_version,
 )
 
-from fabulexa_export.cli import main
-from fabulexa_export.reader.errors import (
+from fabulexa_forge.cli import main
+from fabulexa_forge.reader.errors import (
     UnsupportedBaseFormatVersionError,
 )
 
@@ -109,9 +109,9 @@ def test_validate_prints_messages_and_skips(
 ) -> None:
     """A validate run whose results carry messages and skips renders both
     formatting branches: ' — {message}' and ' [skips: N]'."""
-    import fabulexa_export.cli as cli_mod
-    from fabulexa_export.reader.conformance import CheckResult, ConformanceReport
-    from fabulexa_export.reader.emit import Emit
+    import fabulexa_forge.cli as cli_mod
+    from fabulexa_forge.reader.conformance import CheckResult, ConformanceReport
+    from fabulexa_forge.reader.emit import Emit
 
     report = ConformanceReport(
         results=(
@@ -148,9 +148,9 @@ def test_validate_all_pass_with_skips_exits_zero(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Skips are informational: an all-pass report with skips still exits 0."""
-    import fabulexa_export.cli as cli_mod
-    from fabulexa_export.reader.conformance import CheckResult, ConformanceReport
-    from fabulexa_export.reader.emit import Emit
+    import fabulexa_forge.cli as cli_mod
+    from fabulexa_forge.reader.conformance import CheckResult, ConformanceReport
+    from fabulexa_forge.reader.emit import Emit
 
     report = ConformanceReport(
         results=(
@@ -175,9 +175,9 @@ def test_validate_all_pass_with_skips_exits_zero(
 
 
 def test_console_script_entry_resolves() -> None:
-    """fabexport console script entry point resolves to cli:main."""
+    """fabulexa-forge console script entry point resolves to cli:main."""
     pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
     with pyproject_path.open("rb") as f:
         data = tomllib.load(f)
     scripts = data["project"]["scripts"]
-    assert scripts["fabexport"] == "fabulexa_export.cli:main"
+    assert scripts["fabulexa-forge"] == "fabulexa_forge.cli:main"

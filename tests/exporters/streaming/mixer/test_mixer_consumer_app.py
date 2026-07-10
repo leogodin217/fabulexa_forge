@@ -7,8 +7,8 @@ import sys
 import pytest
 from fastapi.testclient import TestClient
 
-from fabulexa_export.errors import MixerExtraUnavailable
-from fabulexa_export.exporters.streaming.mixer.app import (
+from fabulexa_forge.errors import MixerExtraUnavailable
+from fabulexa_forge.exporters.streaming.mixer.app import (
     build_app,
     derive_consumer_meters,
 )

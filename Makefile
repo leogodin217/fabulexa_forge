@@ -75,7 +75,7 @@ mixer-demo:
 	dev/demo/run.sh $(EXAMPLE)
 else
 mixer-demo: demo-emit
-	uv run fabexport mixer $(DEMO_EMIT) $(DEMO_CONFIG) \
+	uv run fabulexa-forge mixer $(DEMO_EMIT) $(DEMO_CONFIG) \
 	  --fmt jsonl --bootstrap-servers $(BOOTSTRAP) $(MIXER_FLAGS)
 endif
 

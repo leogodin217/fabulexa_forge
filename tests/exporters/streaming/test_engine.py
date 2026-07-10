@@ -15,21 +15,21 @@ from zoneinfo import ZoneInfo
 import duckdb
 import pytest
 
-from fabulexa_export.anchor import EffectiveAnchor
-from fabulexa_export.config.models import (
+from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.config.models import (
     MembershipSelection,
     RoutingConfig,
     StreamConfig,
     StreamKindSelection,
 )
-from fabulexa_export.derivations.membership_events import resolve_membership_columns
-from fabulexa_export.derivations.row_state_events import resolve_stream_columns
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.streaming.engine import (
+from fabulexa_forge.derivations.membership_events import resolve_membership_columns
+from fabulexa_forge.derivations.row_state_events import resolve_stream_columns
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
     iter_stream_events,
 )
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import _ddl
 

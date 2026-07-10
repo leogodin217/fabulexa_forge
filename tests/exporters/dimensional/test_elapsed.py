@@ -17,20 +17,20 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.config.models import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
     ElapsedSpec,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.columns import (
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.columns import (
     build_elapsed_expr,
 )
-from fabulexa_export.exporters.dimensional.validation import (
+from fabulexa_forge.exporters.dimensional.validation import (
     check_elapsed_columns_exist,
 )
-from fabulexa_export.reader.sidecar import Sidecar
+from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -198,7 +198,7 @@ def test_elapsed_absent_other_where_key_raises_export_error() -> None:
             )
         ),
     )
-    from fabulexa_export.config.models import SourceDecl, TableDecl
+    from fabulexa_forge.config.models import SourceDecl, TableDecl
 
     table_decl = TableDecl(
         name="fact_ed_assessment",
@@ -332,7 +332,7 @@ def test_build_elapsed_expr_seconds_divisor() -> None:
 
 
 def _make_table_decl_with(col: ColumnDecl) -> "object":
-    from fabulexa_export.config.models import SourceDecl, TableDecl
+    from fabulexa_forge.config.models import SourceDecl, TableDecl
 
     return TableDecl(
         name="fact_ed_assessment",

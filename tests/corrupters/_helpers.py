@@ -13,8 +13,8 @@ from typing import Mapping, Sequence
 
 import pyarrow as pa
 
-from fabulexa_export.corrupters.state import WorkingTable
-from fabulexa_export.reader.sidecar import BranchEntry, ColumnSpec, Sidecar, TableSpec
+from fabulexa_forge.corrupters.state import WorkingTable
+from fabulexa_forge.reader.sidecar import BranchEntry, ColumnSpec, Sidecar, TableSpec
 
 _PA_TYPES: dict[str, pa.DataType] = {
     "BIGINT": pa.int64(),

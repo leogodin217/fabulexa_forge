@@ -1,4 +1,4 @@
-"""Tests for `fabexport export` CLI verb.
+"""Tests for `fabulexa-forge export` CLI verb.
 
 Covers:
 - fmt not in {csv,duckdb}: non-zero + usage message on stderr, before emit opens
@@ -34,9 +34,9 @@ import yaml
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from exporters.source._source_fixtures import build_day_scale_source_emit
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.cli import cmd_export, main
-from fabulexa_export.config.models import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.cli import cmd_export, main
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DimensionalConfig,
     ExportConfig,

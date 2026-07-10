@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.reader import RecordRoles, open_emit
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.reader import RecordRoles, open_emit
 
 from ._emit_helpers import write_emit
 

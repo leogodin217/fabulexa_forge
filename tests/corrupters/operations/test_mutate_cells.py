@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 
 import pytest
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     Correlated,
     MutateCells,
@@ -25,10 +25,10 @@ from fabulexa_export.config.models import (
     MutationWhitespace,
     Target,
 )
-from fabulexa_export.corrupters.operations.mutate_cells import MutateCellsCorrupter
-from fabulexa_export.corrupters.state import CorruptState, OperationOutcome
-from fabulexa_export.errors import CorruptError, CorruptValidationError
-from fabulexa_export.reader.sidecar import BranchEntry, RecordRoles, Sidecar, TableSpec
+from fabulexa_forge.corrupters.operations.mutate_cells import MutateCellsCorrupter
+from fabulexa_forge.corrupters.state import CorruptState, OperationOutcome
+from fabulexa_forge.errors import CorruptError, CorruptValidationError
+from fabulexa_forge.reader.sidecar import BranchEntry, RecordRoles, Sidecar, TableSpec
 
 from .._helpers import column_spec, table_spec, working_table
 

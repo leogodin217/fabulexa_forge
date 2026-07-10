@@ -20,8 +20,8 @@ import pytest
 import yaml
 
 from exporters.streaming._helpers import _ddl
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.cli import cmd_stream
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.cli import cmd_stream
 
 from ._harness import bootstrap_servers, consume, delete_topic, skip_reason
 
@@ -146,7 +146,7 @@ def fresh_topic(kafka_bootstrap: str) -> Any:
     topics: list[str] = []
 
     def _make() -> str:
-        t = f"fabexport.cli.{uuid.uuid4().hex[:12]}"
+        t = f"fabulexa-forge.cli.{uuid.uuid4().hex[:12]}"
         topics.append(t)
         return t
 

@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import pytest
 
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.streaming.mixer.consumer import (
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.streaming.mixer.consumer import (
     ConsumerRunState,
     IngestedRecord,
     JoinSpec,

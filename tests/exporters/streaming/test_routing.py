@@ -13,16 +13,16 @@ from typing import Any
 import duckdb
 import pytest
 
-from fabulexa_export.config.models import RoutingConfig
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.streaming.routing import (
+from fabulexa_forge.config.models import RoutingConfig
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.streaming.routing import (
     enumerate_topics,
     membership_route_attributes,
     resolve_subtype_index,
     resolve_topic,
     route_attributes,
 )
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import _ddl
 

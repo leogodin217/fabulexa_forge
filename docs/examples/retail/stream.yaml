@@ -1,6 +1,6 @@
 # StreamConfig — retail bundle, mixer smoke test (<kind>_type sub-type routing)
 # ============================================================
-# Drives `fabexport mixer` / `fabexport stream` over the retail emit at
+# Drives `fabulexa-forge mixer` / `fabulexa-forge stream` over the retail emit at
 # docs/examples/retail/bundle/.
 #
 # Sub-typing is driven by the `<kind>_type` discriminator domain in enum_domains,

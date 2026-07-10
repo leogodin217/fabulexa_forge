@@ -26,10 +26,10 @@ from pathlib import Path
 import pytest
 from reader._fixtures_build import build_membership_intervals
 
-from fabulexa_export.config.loader import load_corrupt_config
-from fabulexa_export.corrupters.engine import corrupt_emit
-from fabulexa_export.reader import conformance
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.config.loader import load_corrupt_config
+from fabulexa_forge.corrupters.engine import corrupt_emit
+from fabulexa_forge.reader import conformance
+from fabulexa_forge.reader.emit import open_emit
 
 from ._harness import (
     RecipeFolder,

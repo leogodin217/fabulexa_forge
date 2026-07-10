@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fabulexa_export.errors import KafkaClientUnavailable, KafkaDeliveryError
-from fabulexa_export.exporters.streaming.types import StreamEvent
+from fabulexa_forge.errors import KafkaClientUnavailable, KafkaDeliveryError
+from fabulexa_forge.exporters.streaming.types import StreamEvent
 
 from .._helpers import make_anchor
 
@@ -208,7 +208,7 @@ def _install_fake_ck(
 
 def test_open_pre_creates_all_topics(monkeypatch: pytest.MonkeyPatch) -> None:
     """open() pre-creates every topic with 1 partition / RF 1 via _ensure_topics."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     admins: list[_FakeAdminClient] = []
 
@@ -241,7 +241,7 @@ def test_open_pre_creates_all_topics(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_open_creates_idempotent_producer(monkeypatch: pytest.MonkeyPatch) -> None:
     """open() creates an idempotent fully-acked producer."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     producers: list[_FakeProducer] = []
 
@@ -273,7 +273,7 @@ def test_open_raises_kafka_client_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """open() raises KafkaClientUnavailable when confluent-kafka is not importable."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     monkeypatch.setitem(sys.modules, "confluent_kafka", None)
     monkeypatch.setitem(sys.modules, "confluent_kafka.admin", None)
@@ -294,7 +294,7 @@ def test_open_raises_kafka_delivery_error_on_topic_creation_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """open() raises KafkaDeliveryError when topic creation fails."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     class _FailingAdmin(_FakeAdminClient):
         def create_topics(
@@ -325,7 +325,7 @@ def test_open_raises_kafka_delivery_error_on_wrong_partition_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """open() raises KafkaDeliveryError when a pre-existing topic has != 1 partition."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     class _MultiPartAdmin(_FakeAdminClient):
         def create_topics(
@@ -366,8 +366,8 @@ def test_open_raises_kafka_delivery_error_on_wrong_partition_count(
 
 def test_deliver_keys_by_record_id(monkeypatch: pytest.MonkeyPatch) -> None:
     """deliver() keys the message as encode_pinned({"record_id": ...}) (UTF-8)."""
-    from fabulexa_export.exporters.streaming.encoding import encode_pinned
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.encoding import encode_pinned
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     producers: list[_FakeProducer] = []
 
@@ -399,7 +399,7 @@ def test_deliver_keys_by_record_id(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_deliver_values_render_value(monkeypatch: pytest.MonkeyPatch) -> None:
     """deliver() values the message from render_value(event)."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     producers: list[_FakeProducer] = []
 
@@ -433,8 +433,8 @@ def test_deliver_timestamps_rebased_epoch_ms(monkeypatch: pytest.MonkeyPatch) ->
     """deliver() timestamps the message with rebased_epoch_ms(event.event_sim_time, anchor)."""
     from datetime import datetime, timezone
 
-    from fabulexa_export.exporters.streaming.debezium import rebased_epoch_ms
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     producers: list[_FakeProducer] = []
 
@@ -468,7 +468,7 @@ def test_deliver_timestamps_rebased_epoch_ms(monkeypatch: pytest.MonkeyPatch) ->
 
 def test_deliver_produces_to_correct_topic(monkeypatch: pytest.MonkeyPatch) -> None:
     """deliver() produces to event.topic."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     producers: list[_FakeProducer] = []
 
@@ -501,7 +501,7 @@ def test_deliver_raises_before_produce_when_delivery_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """deliver() raises KafkaDeliveryError before produce when error list is non-empty."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     fake_ck = _make_fake_ck()
     _install_fake_ck(monkeypatch, fake_ck)
@@ -540,7 +540,7 @@ def test_deliver_raises_after_produce_when_delivery_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """deliver() raises KafkaDeliveryError after produce+poll when error is reported."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     producers: list[_FakeProducer] = []
 
@@ -575,7 +575,7 @@ def test_aclose_flushes_and_is_safe_after_no_delivery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """aclose() flushes the producer; safe when no events were delivered."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     producers: list[_FakeProducer] = []
 
@@ -607,7 +607,7 @@ def test_aclose_flushes_and_is_safe_after_no_delivery(
 
 def test_aclose_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
     """aclose() is safe to call twice — second call is a no-op."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     producers: list[_FakeProducer] = []
 
@@ -640,7 +640,7 @@ def test_aclose_is_idempotent(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_aclose_raises_on_unacked_messages(monkeypatch: pytest.MonkeyPatch) -> None:
     """aclose() raises KafkaDeliveryError when flush leaves unacked messages."""
-    from fabulexa_export.exporters.streaming.mixer.sink import KafkaSink
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
     class _UnackedProducer(_FakeProducer):
         def flush(self) -> int:

@@ -18,7 +18,7 @@ from typing import Any
 import duckdb
 import pytest
 
-from fabulexa_export.derivations.reference_resolution import (
+from fabulexa_forge.derivations.reference_resolution import (
     REFERENCE_RESOLUTION_COLUMNS,
     _collect_reference_columns,
     _find_all_reference_paths,
@@ -27,8 +27,8 @@ from fabulexa_export.derivations.reference_resolution import (
     build_membership_edge_sql,
     build_reference_path_sql,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.reader.emit import open_emit
 
 SUPPORTED_VERSION = 4
 
@@ -163,7 +163,7 @@ def test_render_typed_literal_matches_dimensional_sibling() -> None:
     The module docstring pins the two implementations as byte-identical; a
     divergence in either direction fails here.
     """
-    from fabulexa_export.exporters.dimensional.columns import render_typed_literal
+    from fabulexa_forge.exporters.dimensional.columns import render_typed_literal
 
     cases = [
         ("lead", "VARCHAR"),

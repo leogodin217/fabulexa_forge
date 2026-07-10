@@ -1,7 +1,7 @@
 # Derivations Layer
 
 **Status:** Implemented. Code is the contract — see
-[`derivations/`](../../src/fabulexa_export/derivations/)
+[`derivations/`](../../src/fabulexa_forge/derivations/)
 (`versioned_intervals.py`, `reference_resolution.py`, `row_state_events.py`,
 `membership_events.py`, `state_at.py`, `guard.py`),
 [`tests/derivations/`](../../tests/derivations/).
@@ -57,7 +57,7 @@ exporters     — modes compose a derivation + a representation step + a writer
   holds no connection; the calling mode materializes it through `Emit.query` /
   `Emit.query_arrow`.
 - **Forbidden imports.** A derivation imports only the reader,
-  [`errors.py`](../../src/fabulexa_export/errors.py), and stdlib — never
+  [`errors.py`](../../src/fabulexa_forge/errors.py), and stdlib — never
   `exporters.*` and never `config`. Importing *from* this layer is open in the
   other direction — any higher layer (a mode, or `config` for parse-time
   validation against a derivation's canonical column list) may import a

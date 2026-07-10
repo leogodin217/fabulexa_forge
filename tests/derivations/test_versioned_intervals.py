@@ -12,12 +12,12 @@ from typing import Any
 import duckdb
 import pytest
 
-from fabulexa_export.derivations.versioned_intervals import (
+from fabulexa_forge.derivations.versioned_intervals import (
     VERSIONED_INTERVAL_COLUMNS,
     build_versioned_intervals_sql,
 )
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.reader.errors import TableNotFoundError
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.errors import TableNotFoundError
 
 SUPPORTED_VERSION = 4
 

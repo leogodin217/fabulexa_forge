@@ -47,7 +47,7 @@ and [`../../docs/architecture/mixer-control-plane.md`](../../docs/architecture/m
 Pass `EXAMPLE=<name>` to `make mixer-demo` to use a bundled preset instead of the
 fixture path. This calls `dev/demo/run.sh <name>`, which resolves the triple
 (`bundle/`, `stream.yaml`, `demo.yaml`) from `docs/examples/<name>/` and exec-replaces
-itself with `uv run fabexport mixer ...`.
+itself with `uv run fabulexa-forge mixer ...`.
 
 Available presets:
 

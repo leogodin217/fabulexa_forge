@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.config.models import ExcludeDecl, RenameEntry, SourceConfig
-from fabulexa_export.errors import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.config.models import ExcludeDecl, RenameEntry, SourceConfig
+from fabulexa_forge.errors import (
     ExportError,
     SourceExcludeUnresolved,
     SourceHistoryTrackedRequired,
@@ -21,8 +21,8 @@ from fabulexa_export.errors import (
     SourceRoleUnknown,
     SourceSubtypesUndeclared,
 )
-from fabulexa_export.exporters.source.plan import build_source_plan
-from fabulexa_export.reader.sidecar import Sidecar
+from fabulexa_forge.exporters.source.plan import build_source_plan
+from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
 # Sidecar-building helpers

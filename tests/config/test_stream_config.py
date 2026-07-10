@@ -8,8 +8,8 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from fabulexa_export.config.loader import load_stream_config
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.loader import load_stream_config
+from fabulexa_forge.config.models import (
     ClockConfig,
     DebeziumConfig,
     DebeziumSourceIdentity,
@@ -20,7 +20,7 @@ from fabulexa_export.config.models import (
     StreamConfig,
     StreamKindSelection,
 )
-from fabulexa_export.errors import ConfigError
+from fabulexa_forge.errors import ConfigError
 
 # ---------------------------------------------------------------------------
 # StreamKindSelection

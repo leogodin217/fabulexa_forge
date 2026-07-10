@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import pytest
 
-from fabulexa_export.config.models import CorruptConfig
-from fabulexa_export.corrupters.validate import validate_corrupt_config
-from fabulexa_export.errors import CorruptValidationError
-from fabulexa_export.reader.sidecar import Sidecar, TableSpec
+from fabulexa_forge.config.models import CorruptConfig
+from fabulexa_forge.corrupters.validate import validate_corrupt_config
+from fabulexa_forge.errors import CorruptValidationError
+from fabulexa_forge.reader.sidecar import Sidecar, TableSpec
 
 from ._helpers import column_spec, sidecar, table_spec
 

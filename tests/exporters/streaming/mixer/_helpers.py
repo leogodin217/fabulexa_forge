@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 
-from fabulexa_export.exporters.streaming.mixer.consumer import (
+from fabulexa_forge.exporters.streaming.mixer.consumer import (
     ConsumerControlState,
     ConsumerDials,
     ConsumerJobShape,
@@ -13,14 +13,14 @@ from fabulexa_export.exporters.streaming.mixer.consumer import (
     JoinSpec,
     WindowSpec,
 )
-from fabulexa_export.exporters.streaming.mixer.run_state import MixerRunState
-from fabulexa_export.exporters.streaming.mixer.scheduler import (
+from fabulexa_forge.exporters.streaming.mixer.run_state import MixerRunState
+from fabulexa_forge.exporters.streaming.mixer.scheduler import (
     ControlState,
     FrontierState,
     TopicDials,
     Transport,
 )
-from fabulexa_export.exporters.streaming.types import StreamEvent
+from fabulexa_forge.exporters.streaming.types import StreamEvent
 
 from .._helpers import make_anchor
 

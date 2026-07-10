@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from fabulexa_export.anchor import EffectiveAnchor
+from fabulexa_forge.anchor import EffectiveAnchor
 
 _UTC = timezone.utc
 

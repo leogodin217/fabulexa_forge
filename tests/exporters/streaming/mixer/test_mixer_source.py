@@ -9,8 +9,8 @@ from typing import Any
 
 import pytest
 
-from fabulexa_export.errors import KafkaClientUnavailable, KafkaConsumeError
-from fabulexa_export.exporters.streaming.mixer.consumer import (
+from fabulexa_forge.errors import KafkaClientUnavailable, KafkaConsumeError
+from fabulexa_forge.exporters.streaming.mixer.consumer import (
     ConsumerControlState,
     ConsumerJobShape,
     ConsumerState,
@@ -18,7 +18,7 @@ from fabulexa_export.exporters.streaming.mixer.consumer import (
     run_consumer,
     seed_consumer_run,
 )
-from fabulexa_export.exporters.streaming.mixer.source import (
+from fabulexa_forge.exporters.streaming.mixer.source import (
     KafkaSource,
     _open_consumer_blocking,
 )

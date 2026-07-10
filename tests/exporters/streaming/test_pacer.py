@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from fabulexa_export.config.models import ClockConfig
-from fabulexa_export.errors import ClockSpeedUnresolvable, ExporterError
-from fabulexa_export.exporters.streaming.pacer import (
+from fabulexa_forge.config.models import ClockConfig
+from fabulexa_forge.errors import ClockSpeedUnresolvable, ExporterError
+from fabulexa_forge.exporters.streaming.pacer import (
     ResolvedClock,
     pace_events,
     resolve_clock,
 )
-from fabulexa_export.exporters.streaming.types import StreamEvent
+from fabulexa_forge.exporters.streaming.types import StreamEvent
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -302,7 +302,7 @@ def test_pace_events_empty_input_no_sleeps_empty_output() -> None:
 
 def test_clock_speed_unresolvable_is_exporter_error() -> None:
     """ClockSpeedUnresolvable is an ExporterError (not ExportError)."""
-    from fabulexa_export.errors import ExportError
+    from fabulexa_forge.errors import ExportError
 
     err = ClockSpeedUnresolvable("test")
     assert isinstance(err, ExporterError)
@@ -316,9 +316,9 @@ def test_clock_speed_unresolvable_is_exporter_error() -> None:
 
 def test_three_names_importable_from_streaming_package() -> None:
     """ResolvedClock, resolve_clock, pace_events importable from streaming."""
-    from fabulexa_export.exporters.streaming import ResolvedClock as RC
-    from fabulexa_export.exporters.streaming import pace_events as pe
-    from fabulexa_export.exporters.streaming import resolve_clock as rc
+    from fabulexa_forge.exporters.streaming import ResolvedClock as RC
+    from fabulexa_forge.exporters.streaming import pace_events as pe
+    from fabulexa_forge.exporters.streaming import resolve_clock as rc
 
     assert RC is ResolvedClock
     assert rc is resolve_clock

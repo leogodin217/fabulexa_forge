@@ -11,17 +11,17 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from fabulexa_export._sql import render_typed_literal
-from fabulexa_export.anchor import EffectiveAnchor
-from fabulexa_export.config.models import (
+from fabulexa_forge._sql import render_typed_literal
+from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
     OrdinalSpec,
     TimestampSpec,
     ValueMapSpec,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.columns import (
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.columns import (
     _value_map_duckdb_type,
     build_column_expr,
     build_correlation_expr,

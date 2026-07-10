@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from fabulexa_export.config.loader import load_export_config
-from fabulexa_export.errors import ConfigError
+from fabulexa_forge.config.loader import load_export_config
+from fabulexa_forge.errors import ConfigError
 
 MINIMAL_VALID_YAML = textwrap.dedent("""\
     mode: dimensional

@@ -29,8 +29,8 @@ from pathlib import Path
 
 import duckdb
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.incremental.windows import Window
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.incremental.windows import Window
 
 _MS = 1_000_000  # one "tick" — 1 millisecond in sim-time nanoseconds.
 

@@ -9,7 +9,7 @@ export default defineConfig({
     // FabulMixer driver. Default mode is `mock` and needs no backend.
     proxy: {
       '/api': {
-        // `fabexport mixer` defaults to --port 8765 (cli.py). Match it so a
+        // `fabulexa-forge mixer` defaults to --port 8765 (cli.py). Match it so a
         // default backend launch works with no extra flags.
         target: 'http://localhost:8765',
         changeOrigin: true,

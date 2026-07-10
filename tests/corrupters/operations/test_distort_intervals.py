@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 import pytest
 from reader._fixtures_build import build_membership_intervals
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     Correlated,
@@ -27,21 +27,21 @@ from fabulexa_export.config.models import (
     SchemaDrift,
     Target,
 )
-from fabulexa_export.corrupters.engine import corrupt_emit
-from fabulexa_export.corrupters.operations.delete_rows import DeleteRowsCorrupter
-from fabulexa_export.corrupters.operations.distort_intervals import (
+from fabulexa_forge.corrupters.engine import corrupt_emit
+from fabulexa_forge.corrupters.operations.delete_rows import DeleteRowsCorrupter
+from fabulexa_forge.corrupters.operations.distort_intervals import (
     DistortIntervalsCorrupter,
     enumerate_interval_units,
     enumerate_member_timelines,
 )
-from fabulexa_export.corrupters.operations.duplicate_rows import DuplicateRowsCorrupter
-from fabulexa_export.corrupters.operations.mutate_cells import MutateCellsCorrupter
-from fabulexa_export.corrupters.operations.null_cells import NullCellsCorrupter
-from fabulexa_export.corrupters.operations.schema_drift import SchemaDriftCorrupter
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.errors import CorruptError
-from fabulexa_export.reader import conformance, open_emit
-from fabulexa_export.reader.sidecar import BranchEntry, Sidecar
+from fabulexa_forge.corrupters.operations.duplicate_rows import DuplicateRowsCorrupter
+from fabulexa_forge.corrupters.operations.mutate_cells import MutateCellsCorrupter
+from fabulexa_forge.corrupters.operations.null_cells import NullCellsCorrupter
+from fabulexa_forge.corrupters.operations.schema_drift import SchemaDriftCorrupter
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.errors import CorruptError
+from fabulexa_forge.reader import conformance, open_emit
+from fabulexa_forge.reader.sidecar import BranchEntry, Sidecar
 
 from .._helpers import (
     CallOrderRandom,
@@ -55,7 +55,7 @@ from .._helpers import (
 if TYPE_CHECKING:
     import pyarrow as pa
 
-    from fabulexa_export.corrupters.state import OperationOutcome
+    from fabulexa_forge.corrupters.state import OperationOutcome
 
 _FORK_PATH = "trunk"
 _SLICE_AT = 100

@@ -12,11 +12,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from fabulexa_export.anchor import EffectiveAnchor
-from fabulexa_export.config.models import ColumnDecl, DerivedSpec, ValueMapSpec
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.columns import build_column_expr
-from fabulexa_export.reader.errors import TableNotFoundError
+from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.config.models import ColumnDecl, DerivedSpec, ValueMapSpec
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.columns import build_column_expr
+from fabulexa_forge.reader.errors import TableNotFoundError
 
 
 def _anchor() -> EffectiveAnchor:

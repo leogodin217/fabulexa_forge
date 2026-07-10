@@ -1,7 +1,7 @@
 # Writers
 
 **Status:** Implemented. Code is the contract — see
-[`writers/`](../../src/fabulexa_export/writers/)
+[`writers/`](../../src/fabulexa_forge/writers/)
 (`csv.py`, `duckdb.py`) and
 [`tests/writers/`](../../tests/writers/). Public API: `write_csv`,
 `write_duckdb`.

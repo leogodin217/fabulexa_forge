@@ -18,8 +18,8 @@ from unittest.mock import patch
 import duckdb
 import pytest
 
-from fabulexa_export.anchor import EffectiveAnchor
-from fabulexa_export.config.models import (
+from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.config.models import (
     DebeziumConfig,
     DebeziumSourceIdentity,
     MembershipSelection,
@@ -27,17 +27,17 @@ from fabulexa_export.config.models import (
     StreamConfig,
     StreamKindSelection,
 )
-from fabulexa_export.errors import (
+from fabulexa_forge.errors import (
     ExportError,
     ExportRuntimeError,
 )
-from fabulexa_export.exporters.streaming.driver import (
+from fabulexa_forge.exporters.streaming.driver import (
     build_kafka_render_value,
     stream_export,
 )
-from fabulexa_export.exporters.streaming.pacer import ResolvedClock
-from fabulexa_export.exporters.streaming.types import StreamEvent, StreamOutcome
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.exporters.streaming.pacer import ResolvedClock
+from fabulexa_forge.exporters.streaming.types import StreamEvent, StreamOutcome
+from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import _ddl, _membership_table_spec, make_anchor
 
@@ -629,7 +629,7 @@ class TestKafkaRequiresAnchor:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -655,7 +655,7 @@ class TestKafkaRequiresAnchor:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -691,7 +691,7 @@ class TestKafkaJsonlRenderValue:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -714,8 +714,8 @@ class TestKafkaJsonlRenderValue:
         assert len(events) == 1
 
         # Compare to what the file sink would write (minus the newline)
-        from fabulexa_export.exporters.streaming.encoding import encode_pinned
-        from fabulexa_export.exporters.streaming.jsonl import render_jsonl_object
+        from fabulexa_forge.exporters.streaming.encoding import encode_pinned
+        from fabulexa_forge.exporters.streaming.jsonl import render_jsonl_object
 
         for event in events:
             expected = encode_pinned(render_jsonl_object(event)).encode("utf-8")
@@ -723,7 +723,7 @@ class TestKafkaJsonlRenderValue:
 
     def test_topic_set_matches_build_topic_set(self, tmp_path: Path) -> None:
         """write_kafka_stream receives topic_set == build_topic_set(config)."""
-        from fabulexa_export.exporters.streaming.engine import build_topic_set
+        from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
         emit_dir = _build_emit_with_events(tmp_path / "emit", "item")
         config = _make_config("item")
@@ -731,7 +731,7 @@ class TestKafkaJsonlRenderValue:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -765,7 +765,7 @@ class TestKafkaDebeziumRules:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -792,7 +792,7 @@ class TestKafkaDebeziumRules:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -815,13 +815,13 @@ class TestKafkaDebeziumRules:
         debezium_cfg = config.debezium
         assert debezium_cfg is not None and debezium_cfg.schemas_enable is True
 
-        from fabulexa_export.config.models import RoutingConfig
-        from fabulexa_export.exporters.streaming.debezium import (
+        from fabulexa_forge.config.models import RoutingConfig
+        from fabulexa_forge.exporters.streaming.debezium import (
             _serialize_message,
             rebased_epoch_ms,
             render_debezium_message,
         )
-        from fabulexa_export.exporters.streaming.driver import _build_value_schemas
+        from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
 
         routing = config.routing if config.routing is not None else RoutingConfig()
         with open_emit(emit_dir) as emit2:
@@ -871,7 +871,7 @@ class TestKafkaPacedDelivery:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -898,7 +898,7 @@ class TestKafkaPacedDelivery:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -1495,7 +1495,7 @@ class TestMembershipDebeziumKafka:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -1522,7 +1522,7 @@ class TestMembershipDebeziumKafka:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -1552,7 +1552,7 @@ class TestMembershipDebeziumKafka:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -1572,13 +1572,13 @@ class TestMembershipDebeziumKafka:
         render_value: Callable[[StreamEvent], bytes] = call["render_value"]
         assert len(events) >= 1
 
-        from fabulexa_export.config.models import RoutingConfig as _RoutingConfig
-        from fabulexa_export.exporters.streaming.debezium import (
+        from fabulexa_forge.config.models import RoutingConfig as _RoutingConfig
+        from fabulexa_forge.exporters.streaming.debezium import (
             _serialize_message,
             rebased_epoch_ms,
             render_debezium_message,
         )
-        from fabulexa_export.exporters.streaming.driver import _build_value_schemas
+        from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
 
         routing = config.routing if config.routing is not None else _RoutingConfig()
         debezium_cfg = config.debezium
@@ -1619,7 +1619,7 @@ class TestMembershipDebeziumKafka:
         captured: list[dict[str, Any]] = []
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
@@ -1658,8 +1658,8 @@ class TestBuildKafkaRenderValueJsonl:
 
     def test_jsonl_bytes_match_file_line_minus_newline(self, tmp_path: Path) -> None:
         """fmt='jsonl' render_value bytes == encode_pinned(render_jsonl_object(event))."""
-        from fabulexa_export.exporters.streaming.encoding import encode_pinned
-        from fabulexa_export.exporters.streaming.jsonl import render_jsonl_object
+        from fabulexa_forge.exporters.streaming.encoding import encode_pinned
+        from fabulexa_forge.exporters.streaming.jsonl import render_jsonl_object
 
         emit_dir = _build_emit_with_events(tmp_path / "emit", "item")
         config = _make_config("item")
@@ -1667,13 +1667,13 @@ class TestBuildKafkaRenderValueJsonl:
 
         with open_emit(emit_dir) as emit:
             routing = _make_routing()
-            from fabulexa_export.exporters.streaming.engine import build_topic_set
+            from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
             topic_set = build_topic_set(config, emit.sidecar)
             render = build_kafka_render_value(
                 emit, config, "jsonl", anchor, routing, topic_set
             )
-            from fabulexa_export.exporters.streaming.engine import iter_stream_events
+            from fabulexa_forge.exporters.streaming.engine import iter_stream_events
 
             events = list(iter_stream_events(emit, config, anchor))
 
@@ -1695,7 +1695,7 @@ class TestBuildKafkaRenderValueDebezium:
 
         with open_emit(emit_dir) as emit:
             routing = _make_routing()
-            from fabulexa_export.exporters.streaming.engine import build_topic_set
+            from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
             topic_set = build_topic_set(config, emit.sidecar)
             with pytest.raises(ExportError, match="debezium.*config block"):
@@ -1716,7 +1716,7 @@ class TestBuildKafkaRenderValueDebezium:
         anchor = _make_anchor()
 
         with open_emit(emit_dir) as emit:
-            from fabulexa_export.exporters.streaming.engine import build_topic_set
+            from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
             topic_set = build_topic_set(config, emit.sidecar)
             with pytest.raises(ExportError, match="merges membership tables"):
@@ -1726,12 +1726,12 @@ class TestBuildKafkaRenderValueDebezium:
 
     def test_debezium_bytes_match_file_line_minus_newline(self, tmp_path: Path) -> None:
         """fmt='debezium' render_value bytes == file line bytes (no trailing newline)."""
-        from fabulexa_export.exporters.streaming.debezium import (
+        from fabulexa_forge.exporters.streaming.debezium import (
             _serialize_message,
             rebased_epoch_ms,
             render_debezium_message,
         )
-        from fabulexa_export.exporters.streaming.driver import _build_value_schemas
+        from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
 
         emit_dir = _build_emit_with_events(tmp_path / "emit", "item")
         config = _make_debezium_stream_config("item", schemas_enable=True)
@@ -1739,7 +1739,7 @@ class TestBuildKafkaRenderValueDebezium:
         routing = _make_routing()
 
         with open_emit(emit_dir) as emit:
-            from fabulexa_export.exporters.streaming.engine import (
+            from fabulexa_forge.exporters.streaming.engine import (
                 build_topic_set,
                 iter_stream_events,
             )

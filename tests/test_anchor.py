@@ -1,4 +1,4 @@
-"""Tests for EffectiveAnchor resolution in fabulexa_export.anchor."""
+"""Tests for EffectiveAnchor resolution in fabulexa_forge.anchor."""
 
 from __future__ import annotations
 
@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from fabulexa_export.anchor import resolve_effective_anchor
-from fabulexa_export.config.models import RebaseConfig
-from fabulexa_export.errors import (
+from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.config.models import RebaseConfig
+from fabulexa_forge.errors import (
     RebaseDateNotNaive,
     RebaseDateUnresolvable,
     RebaseInvalidRuntimeAnchor,
@@ -17,7 +17,7 @@ from fabulexa_export.errors import (
     RebaseTimezoneUnresolvable,
     RebaseUnknownTimezone,
 )
-from fabulexa_export.reader.sidecar import RuntimeAnchor
+from fabulexa_forge.reader.sidecar import RuntimeAnchor
 
 # ---------------------------------------------------------------------------
 # Helpers

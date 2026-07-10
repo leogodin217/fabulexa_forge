@@ -1,4 +1,4 @@
-"""Tests for `fabexport stream` CLI verb.
+"""Tests for `fabulexa-forge stream` CLI verb.
 
 Covers:
 - main(["stream", ...]) routes to cmd_stream
@@ -25,9 +25,9 @@ import pytest
 import yaml
 
 from exporters.streaming._helpers import _membership_table_spec
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.cli import cmd_stream, main
-from fabulexa_export.exporters.streaming.types import StreamOutcome
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.cli import cmd_stream, main
+from fabulexa_forge.exporters.streaming.types import StreamOutcome
 
 # ---------------------------------------------------------------------------
 # Emit / config builder helpers
@@ -988,7 +988,7 @@ class TestKafkaSinkUsageChecks:
         _write_kafka_stream_config(config_path, ["actor"])
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream_ok,
         ):
             rc = cmd_stream(
@@ -1033,7 +1033,7 @@ class TestKafkaBootstrapPrecedence:
             return StreamOutcome(total_events=0, events_per_topic={t: 0 for t in ts})
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_capture_bs,
         ):
             with patch.dict(os.environ, {"FABEXPORT_KAFKA_BOOTSTRAP": "env:9092"}):
@@ -1071,7 +1071,7 @@ class TestKafkaBootstrapPrecedence:
             return StreamOutcome(total_events=0, events_per_topic={t: 0 for t in ts})
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_capture_bs,
         ):
             with patch.dict(os.environ, {"FABEXPORT_KAFKA_BOOTSTRAP": "env:9092"}):
@@ -1107,7 +1107,7 @@ class TestKafkaBootstrapPrecedence:
             return StreamOutcome(total_events=0, events_per_topic={t: 0 for t in ts})
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_capture_bs,
         ):
             with patch.dict(os.environ, {"FABEXPORT_KAFKA_BOOTSTRAP": "env:9092"}):
@@ -1170,7 +1170,7 @@ class TestKafkaSinkEndToEndFake:
         _write_kafka_stream_config(config_path, ["actor"])
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=_fake_write_kafka_stream_ok,
         ):
             rc = cmd_stream(
@@ -1194,14 +1194,14 @@ class TestKafkaSinkEndToEndFake:
         """KafkaClientUnavailable → exit 1."""
         from datetime import datetime
 
-        from fabulexa_export.errors import KafkaClientUnavailable
+        from fabulexa_forge.errors import KafkaClientUnavailable
 
         emit_dir = _build_spanning_emit(tmp_path / "emit")
         config_path = tmp_path / "stream.yaml"
         _write_kafka_stream_config(config_path, ["actor"])
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=KafkaClientUnavailable("no kafka"),
         ):
             rc = cmd_stream(
@@ -1224,14 +1224,14 @@ class TestKafkaSinkEndToEndFake:
         """KafkaDeliveryError → exit 1."""
         from datetime import datetime
 
-        from fabulexa_export.errors import KafkaDeliveryError
+        from fabulexa_forge.errors import KafkaDeliveryError
 
         emit_dir = _build_spanning_emit(tmp_path / "emit")
         config_path = tmp_path / "stream.yaml"
         _write_kafka_stream_config(config_path, ["actor"])
 
         with patch(
-            "fabulexa_export.exporters.streaming.kafka_sink.write_kafka_stream",
+            "fabulexa_forge.exporters.streaming.kafka_sink.write_kafka_stream",
             side_effect=KafkaDeliveryError("delivery failed"),
         ):
             rc = cmd_stream(

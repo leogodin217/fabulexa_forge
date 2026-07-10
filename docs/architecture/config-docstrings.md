@@ -1,6 +1,6 @@
 # Config field-documentation convention
 
-How the export-config Pydantic models (`src/fabulexa_export/config/models.py`) carry
+How the export-config Pydantic models (`src/fabulexa_forge/config/models.py`) carry
 their documentation. A **developer** convention — the audience for every channel below
 is a developer reading the code, never the YAML author. Authors learn the config from
 **recipes** (worked example configs); the models are the developer reference.

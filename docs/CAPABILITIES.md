@@ -22,17 +22,17 @@ against a base-layer emit today.
 **Stage** tags reference the roadmap in
 [`architecture/README.md`](architecture/README.md) (1 reader · 2 dimensional ·
 3 source/base/streaming · 4 corrupter · 5 queue-state + point-in-time). The Stage-1 reader +
-conformance (`fabexport validate`) and the Stage-2 dimensional exporter (`fabexport
+conformance (`fabulexa-forge validate`) and the Stage-2 dimensional exporter (`fabulexa-forge
 export` + `init`, CSV + DuckDB) have shipped, along with two cross-mode surfaces —
 timestamp rebasing and incremental export, both wired over the dimensional and source
 modes. The derivations layer (versioned-intervals + reference-resolution +
 row-state-events + membership-events + state-at residents, the single-branch guard)
 has shipped, composed by the dimensional, streaming, and source modes. The Stage-3
-streaming exporter (`fabexport stream` — `state-changes` `c`/`u`/`d` CDC and
+streaming exporter (`fabulexa-forge stream` — `state-changes` `c`/`u`/`d` CDC and
 `membership-events` `join`/`leave` content) and the Stage-3 source exporter
 (`mode: source` — the change-log/reference/transaction/junction genre trichotomy,
 `change_delivery: snapshot`) have shipped, as has the Stage-4 corrupter family
-(`fabexport corrupt`); the remaining Stage-3 mode (base) and Stage 5
+(`fabulexa-forge corrupt`); the remaining Stage-3 mode (base) and Stage 5
 (queue-state + point-in-time export) are planned.
 
 ---
@@ -65,7 +65,7 @@ See [`architecture/reader.md`](architecture/reader.md) and
   `base_format_version` the vendored contract does not define (no auto-upgrade).
 - ✓ **Typed accessors** — tables, columns, branches, `runtime` anchor, `pinned_ids`,
   `enum_domains`, per-column `references` — all read from the sidecar, never hard-coded.
-- ✓ **Conformance C1–C12** — reimplemented independently of the producer (`fabexport
+- ✓ **Conformance C1–C12** — reimplemented independently of the producer (`fabulexa-forge
   validate <emit_dir>`). The producer's reference conformance checker is a reference to
   read, never a dependency.
 - ✓ **Record-role registry accessor** — `Sidecar.record_roles()` exposes the optional
@@ -115,7 +115,7 @@ Each mode reads the same emit and writes a different target shape.
   themselves" pattern lands naturally. CSV + DuckDB output. See
   [`architecture/source.md`](architecture/source.md). *Teaches:
   source-to-warehouse ETL, CDC.*
-- ◐ **streaming** *(Stage 3)* — `fabexport stream` replays the base layer as an ordered
+- ◐ **streaming** *(Stage 3)* — `fabulexa-forge stream` replays the base layer as an ordered
   event stream over two content axes. `state-changes` replays `history` + the records spine
   as a `c`/`u`/`d` CDC stream, one event per record state change; `membership-events` replays
   the `membership__<K>__<p>` interval tables, unpivoting each interval into a `join` (always)
@@ -257,17 +257,17 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
 
 ## CLI
 
-- ✓ `fabexport validate` *(Stage 1)* — run C1–C12 against an emit.
-- ✓ `fabexport export` *(Stage 2)* — run an export config against an emit,
+- ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C12 against an emit.
+- ✓ `fabulexa-forge export` *(Stage 2)* — run an export config against an emit,
   dispatching on `config.mode` to the dimensional or source engine; `--fmt csv|duckdb`
   selects delivery; `--next` / `--from` / `--to` drive incremental window-at-a-time
   export.
-- ✓ `fabexport stream` *(Stage 3)* — replay the base layer as a CDC event stream;
+- ✓ `fabulexa-forge stream` *(Stage 3)* — replay the base layer as a CDC event stream;
   `--fmt jsonl|debezium`, `--sink stdout|file|kafka` (output directory for `file`;
   `--bootstrap-servers` / `FABEXPORT_KAFKA_BOOTSTRAP` for `kafka`), plus the
   shared `--base-date` / `--timezone` anchor overrides. See
   [`architecture/streaming.md`](architecture/streaming.md).
-- ✓ `fabexport mixer` *(Stage 3)* — replay the base layer as a live, operator-mixable
+- ✓ `fabulexa-forge mixer` *(Stage 3)* — replay the base layer as a live, operator-mixable
   Kafka feed: an asyncio app that serves the FabulMixer control API (play / pause /
   re-speed the master transport; lag, rate-limit, or mute each topic mid-run) and reads
   producer-side meters back. Kafka-only; `--fmt jsonl|debezium`, `--bootstrap-servers`,
@@ -277,8 +277,8 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   Kafka group id and initial offset). Behind a `[mixer]` install
   extra composing `[kafka]`. See
   [`architecture/mixer-control-plane.md`](architecture/mixer-control-plane.md).
-- ✓ `fabexport init` *(Stage 2)* — propose a candidate dimensional config from the sidecar.
-- ✓ `fabexport corrupt` *(Stage 4)* — `fabexport corrupt <emit_dir> --config <corrupt.yaml>
+- ✓ `fabulexa-forge init` *(Stage 2)* — propose a candidate dimensional config from the sidecar.
+- ✓ `fabulexa-forge corrupt` *(Stage 4)* — `fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml>
   --out <out_dir>`: apply a corrupter config, writing the broken `run.duckdb` +
   regenerated `base.json` plus `defects.json` (always written; no suppress flag). See
   [`architecture/corrupters.md`](architecture/corrupters.md).
