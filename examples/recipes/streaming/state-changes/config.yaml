@@ -3,7 +3,7 @@
 # The canonical change-data-capture (CDC) stream: replay a record kind's
 # lifecycle as one event per state change, newest state reconstructed in full.
 #
-# `fabexport stream` emits, per record:
+# `fabulexa-forge stream` emits, per record:
 #   c (create) — once, at created_sim_time
 #   u (update) — once per distinct history timestamp strictly after creation
 #   d (delete) — once, at deactivated_at (only if the record was deactivated)

@@ -13,8 +13,8 @@ from reader._fixtures_build import (
     build_spanning,
 )
 
-from fabulexa_export import __version__
-from fabulexa_export.config.models import (
+from fabulexa_forge import __version__
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     Correlated,
@@ -35,11 +35,11 @@ from fabulexa_export.config.models import (
     SchemaDrift,
     Target,
 )
-from fabulexa_export.corrupters.engine import corrupt_emit
-from fabulexa_export.corrupters.fingerprint import fingerprint_config
-from fabulexa_export.errors import CorruptValidationError
-from fabulexa_export.reader import conformance
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.corrupters.engine import corrupt_emit
+from fabulexa_forge.corrupters.fingerprint import fingerprint_config
+from fabulexa_forge.errors import CorruptValidationError
+from fabulexa_forge.reader import conformance
+from fabulexa_forge.reader.emit import open_emit
 
 
 def _four_operation_config(seed: int = 42) -> CorruptConfig:
@@ -982,7 +982,7 @@ def test_emptying_one_table_is_a_noop_for_a_later_operation(tmp_path: Path) -> N
 def test_deleted_record_ids_never_reaches_output(tmp_path: Path) -> None:
     """The tombstone set is written by delete_rows and starts empty on every
     fresh CorruptState, but is never a field of any output artifact."""
-    from fabulexa_export.corrupters.state import CorruptState
+    from fabulexa_forge.corrupters.state import CorruptState
 
     assert CorruptState(tables={}).deleted_record_ids == {}
 

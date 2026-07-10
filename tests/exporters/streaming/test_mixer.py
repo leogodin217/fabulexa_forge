@@ -11,13 +11,13 @@ from typing import Any
 import duckdb
 import pytest
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     MembershipSelection,
     StreamConfig,
     StreamKindSelection,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.streaming.mixer import (
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.streaming.mixer import (
     ControlState,
     FrontierState,
     TopicDials,
@@ -26,8 +26,8 @@ from fabulexa_export.exporters.streaming.mixer import (
     schedule_releases,
     seed_mixer_run,
 )
-from fabulexa_export.exporters.streaming.types import StreamEvent
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.exporters.streaming.types import StreamEvent
+from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import _ddl
 
@@ -151,7 +151,7 @@ def test_frontier_state_is_mutable() -> None:
 
 def test_phase1_names_importable_from_streaming_package() -> None:
     """Transport, TopicDials, ControlState, FrontierState, advance import from streaming."""
-    from fabulexa_export.exporters.streaming import (  # noqa: F401
+    from fabulexa_forge.exporters.streaming import (  # noqa: F401
         ControlState,
         FrontierState,
         TopicDials,
@@ -830,8 +830,8 @@ def _make_transport(playing: bool = True, speed: float = 1.0) -> Transport:
 
 
 def test_seed_mixer_run_importable_from_streaming_package() -> None:
-    """seed_mixer_run is importable from fabulexa_export.exporters.streaming."""
-    from fabulexa_export.exporters.streaming import seed_mixer_run as _smr  # noqa: F401
+    """seed_mixer_run is importable from fabulexa_forge.exporters.streaming."""
+    from fabulexa_forge.exporters.streaming import seed_mixer_run as _smr  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
@@ -841,7 +841,7 @@ def test_seed_mixer_run_importable_from_streaming_package() -> None:
 
 def test_seed_buffer_keys_equal_topic_set(tmp_path: Path) -> None:
     """One FIFO buffer per topic; buffer key set equals build_topic_set exactly."""
-    from fabulexa_export.exporters.streaming.engine import build_topic_set
+    from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
     rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", rows)
@@ -952,7 +952,7 @@ def test_seed_control_transport_preserved(tmp_path: Path) -> None:
 
 def test_seed_control_topics_one_per_topic_in_order(tmp_path: Path) -> None:
     """ControlState.topics has one entry per topic in build_topic_set order."""
-    from fabulexa_export.exporters.streaming.engine import build_topic_set
+    from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
     rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", rows)
@@ -1011,7 +1011,7 @@ def test_seed_topic_dials_content_stamped(tmp_path: Path) -> None:
 
 def test_seed_frontier_state_fresh(tmp_path: Path) -> None:
     """FrontierState: frontier_sim_time is None; edges and delivery_edges all None."""
-    from fabulexa_export.exporters.streaming.engine import build_topic_set
+    from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
     rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", rows)
@@ -1148,8 +1148,8 @@ def test_seed_membership_events_content_stamped(tmp_path: Path) -> None:
 
 
 def test_schedule_releases_importable_from_streaming_package() -> None:
-    """schedule_releases is importable from fabulexa_export.exporters.streaming."""
-    from fabulexa_export.exporters.streaming import (  # noqa: F401
+    """schedule_releases is importable from fabulexa_forge.exporters.streaming."""
+    from fabulexa_forge.exporters.streaming import (  # noqa: F401
         schedule_releases as _sr,
     )
 

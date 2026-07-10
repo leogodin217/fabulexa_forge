@@ -1,11 +1,11 @@
 # Incremental Export
 
 **Status:** Implemented. Code is the contract — see
-[`incremental/`](../../src/fabulexa_export/incremental/),
-[`exporters/dimensional/engine.py`](../../src/fabulexa_export/exporters/dimensional/engine.py),
-[`writers/duckdb.py`](../../src/fabulexa_export/writers/duckdb.py), and
+[`incremental/`](../../src/fabulexa_forge/incremental/),
+[`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py),
+[`writers/duckdb.py`](../../src/fabulexa_forge/writers/duckdb.py), and
 [`tests/incremental/`](../../tests/incremental/). Public API:
-[`incremental/driver.py`](../../src/fabulexa_export/incremental/driver.py).
+[`incremental/driver.py`](../../src/fabulexa_forge/incremental/driver.py).
 
 A cross-mode driver that exports a run **a window at a time** — one calendar period or
 one sim-time interval per invocation — instead of the whole run in one shot. It wraps
@@ -27,7 +27,7 @@ emit (run.duckdb + base.json @ v4)
    │  (reader: Emit + Sidecar; trunk-only — sole branch)
    │  anchor: the one EffectiveAnchor cmd_export resolves (see anchor.md)
    ▼
- fabexport export … --next         fabexport export … --from V --to V
+ fabulexa-forge export … --next         fabulexa-forge export … --from V --to V
    │  read cursor → derive next       │  parse range (no cursor)
    ▼  window → range export           ▼  window → range export
        build_query_specs(…, window) → one QuerySpec per table
@@ -40,7 +40,7 @@ emit (run.duckdb + base.json @ v4)
  warehouse.duckdb (grows in place,      out/ one drop dir per window
    one txn/window)                        w00000_2020-03-01/  dim_*.csv fact_*.csv
    dim_* fact_* + SCD-2 views            w00001_2020-03-02/  …
-   _export_meta _export_windows          .fabexport-cursor.json
+   _export_meta _export_windows          .fabulexa-forge-cursor.json
    (cursor atomic with data)            (cursor sidecar; re-run overwrites a drop)
 ```
 
@@ -50,17 +50,17 @@ emit (run.duckdb + base.json @ v4)
 
 | Module | Owns |
 |---|---|
-| [`incremental/windows.py`](../../src/fabulexa_export/incremental/windows.py) | `Window`, `derive_window`, `parse_range` — pure window math (calendar boundaries through the anchor, or sim-time arithmetic) and range parsing |
-| [`incremental/driver.py`](../../src/fabulexa_export/incremental/driver.py) | `export_incremental_next`, `export_window`, `IncrementalOutcome` — cursor read/advance, drained detection, drop staging, range orchestration |
-| [`incremental/cursor.py`](../../src/fabulexa_export/incremental/cursor.py) | `Cursor`, `read_cursor`, `write_csv_cursor` — the cursor of record per `fmt` and the fresh/lost classification |
-| [`incremental/fingerprint.py`](../../src/fabulexa_export/incremental/fingerprint.py) | `compute_fingerprint` — the SHA-256 drip-identity digest |
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | `IncrementalConfig` — the cross-mode `incremental` cadence block (sibling of `mode` and `rebase`) and its parse-time validator |
-| [`exporters/query_spec.py`](../../src/fabulexa_export/exporters/query_spec.py) | `QuerySpec` (`write_mode` / `view_name` / `view_sql`) and `write_query_specs` — the mode-neutral compiled-table shape and full-export write dispatch every mode's windowed compile produces and this driver consumes |
-| [`exporters/dimensional/engine.py`](../../src/fabulexa_export/exporters/dimensional/engine.py) | `build_query_specs(…, window)` — the dimensional windowed compile |
-| [`exporters/dimensional/validation.py`](../../src/fabulexa_export/exporters/dimensional/validation.py) | The ten window-gated business rules, run only when a `window` is present |
-| [`exporters/source/engine.py`](../../src/fabulexa_export/exporters/source/engine.py) | `build_source_query_specs(…, window)` — the source windowed compile; see [`source.md`](source.md) § Incremental composition for its per-genre window membership |
-| [`writers/duckdb.py`](../../src/fabulexa_export/writers/duckdb.py) | `write_duckdb_window` — one-transaction-per-window append/replace, view installs, bookkeeping tables |
-| [`errors.py`](../../src/fabulexa_export/errors.py) | `IncrementalError` and its subclasses (config, regime, fingerprint, cursor, range) |
+| [`incremental/windows.py`](../../src/fabulexa_forge/incremental/windows.py) | `Window`, `derive_window`, `parse_range` — pure window math (calendar boundaries through the anchor, or sim-time arithmetic) and range parsing |
+| [`incremental/driver.py`](../../src/fabulexa_forge/incremental/driver.py) | `export_incremental_next`, `export_window`, `IncrementalOutcome` — cursor read/advance, drained detection, drop staging, range orchestration |
+| [`incremental/cursor.py`](../../src/fabulexa_forge/incremental/cursor.py) | `Cursor`, `read_cursor`, `write_csv_cursor` — the cursor of record per `fmt` and the fresh/lost classification |
+| [`incremental/fingerprint.py`](../../src/fabulexa_forge/incremental/fingerprint.py) | `compute_fingerprint` — the SHA-256 drip-identity digest |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `IncrementalConfig` — the cross-mode `incremental` cadence block (sibling of `mode` and `rebase`) and its parse-time validator |
+| [`exporters/query_spec.py`](../../src/fabulexa_forge/exporters/query_spec.py) | `QuerySpec` (`write_mode` / `view_name` / `view_sql`) and `write_query_specs` — the mode-neutral compiled-table shape and full-export write dispatch every mode's windowed compile produces and this driver consumes |
+| [`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py) | `build_query_specs(…, window)` — the dimensional windowed compile |
+| [`exporters/dimensional/validation.py`](../../src/fabulexa_forge/exporters/dimensional/validation.py) | The ten window-gated business rules, run only when a `window` is present |
+| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `build_source_query_specs(…, window)` — the source windowed compile; see [`source.md`](source.md) § Incremental composition for its per-genre window membership |
+| [`writers/duckdb.py`](../../src/fabulexa_forge/writers/duckdb.py) | `write_duckdb_window` — one-transaction-per-window append/replace, view installs, bookkeeping tables |
+| [`errors.py`](../../src/fabulexa_forge/errors.py) | `IncrementalError` and its subclasses (config, regime, fingerprint, cursor, range) |
 
 ## Boundary
 
@@ -73,7 +73,7 @@ emit (run.duckdb + base.json @ v4)
 - **Output.** Per `fmt`: a single `.duckdb` warehouse file that **grows in place** (one
   transaction per window, data plus the `_export_meta` / `_export_windows` cursor
   committed together), or a directory holding **one drop sub-directory per window**
-  plus an `out/.fabexport-cursor.json` sidecar. An explicit range writes a standalone
+  plus an `out/.fabulexa-forge-cursor.json` sidecar. An explicit range writes a standalone
   artifact with no bookkeeping tables.
 - **Wraps the pure range export.** The driver computes a window and calls the
   active mode's windowed compile (`build_query_specs` or `build_source_query_specs`)
@@ -198,7 +198,7 @@ field.
 | `fmt` | Cursor of record | Atomicity |
 |---|---|---|
 | `duckdb` | `_export_meta` (`cursor_format_version`, `fingerprint`) + `_export_windows` (one row per emitted window: `window_index`, `label`, `start_ns`, `end_ns`); next index = `max(window_index) + 1` | Committed in the **same transaction** as the window's data — cursor/data drift is impossible |
-| `csv` | `out/.fabexport-cursor.json` — keys are exactly the `Cursor` field names | Window staged in `out/.tmp_<label>`, atomically renamed to `out/<label>`, then the cursor is written. A crash between rename and cursor write re-derives the same window and overwrites the identical drop — idempotent |
+| `csv` | `out/.fabulexa-forge-cursor.json` — keys are exactly the `Cursor` field names | Window staged in `out/.tmp_<label>`, atomically renamed to `out/<label>`, then the cursor is written. A crash between rename and cursor write re-derives the same window and overwrites the identical drop — idempotent |
 
 The **fingerprint** is a SHA-256 over a canonical JSON document (UTF-8, sorted keys,
 compact separators, no NaN/Infinity) of: the parsed `ExportConfig` (model dump), the
@@ -316,8 +316,8 @@ reads but does not redefine.
 ## Validation Rules
 
 Field shapes are defined by the Pydantic grammar in
-[`config/models.py`](../../src/fabulexa_export/config/models.py); error message text is
-owned by [`exporters/dimensional/validation.py`](../../src/fabulexa_export/exporters/dimensional/validation.py)
+[`config/models.py`](../../src/fabulexa_forge/config/models.py); error message text is
+owned by [`exporters/dimensional/validation.py`](../../src/fabulexa_forge/exporters/dimensional/validation.py)
 and [`tests/incremental/`](../../tests/incremental/). The rules below state *what* is
 rejected and *when*.
 

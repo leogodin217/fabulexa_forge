@@ -1,17 +1,17 @@
 # Source Exporter
 
 **Status:** Implemented. Code is the contract — see
-[`exporters/source/`](../../src/fabulexa_export/exporters/source/)
+[`exporters/source/`](../../src/fabulexa_forge/exporters/source/)
 (`plan.py`, `renders.py`, `engine.py`, `columns.py`),
-[`derivations/state_at.py`](../../src/fabulexa_export/derivations/state_at.py),
-[`config/models.py`](../../src/fabulexa_export/config/models.py) (`SourceConfig`,
+[`derivations/state_at.py`](../../src/fabulexa_forge/derivations/state_at.py),
+[`config/models.py`](../../src/fabulexa_forge/config/models.py) (`SourceConfig`,
 `RenameEntry`), and
 [`tests/exporters/source/`](../../tests/exporters/source/),
 [`tests/derivations/test_state_at.py`](../../tests/derivations/test_state_at.py),
 [`tests/integration/test_corrupt_source.py`](../../tests/integration/test_corrupt_source.py).
-Public API: [`exporters/source/engine.py`](../../src/fabulexa_export/exporters/source/engine.py)
+Public API: [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py)
 (`export_source`, `build_source_query_specs`) and
-[`exporters/source/plan.py`](../../src/fabulexa_export/exporters/source/plan.py)
+[`exporters/source/plan.py`](../../src/fabulexa_forge/exporters/source/plan.py)
 (`build_source_plan`).
 
 The `mode: source` exporter renders the entire emit as one faithful operational
@@ -53,17 +53,17 @@ writers (CSV | DuckDB — both via Emit.query_arrow)
 
 | Module | Owns |
 |---|---|
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | `ExportConfig.mode: Literal["dimensional", "source"]`, `ExportConfig.source: SourceConfig \| None`; `SourceConfig` (`change_delivery`, `exclude`, `rename`) and `RenameEntry`; the two-sided `mode_section_matches` validator and `SourceConfig` / `RenameEntry`'s own parse-time validators |
-| [`exporters/source/plan.py`](../../src/fabulexa_export/exporters/source/plan.py) | `SourceTableSpec`; `build_source_plan` — the genre trichotomy classification, the untracked-only sub-type split, `exclude`, presentation defaults (delivery-dependent for a change-log kind), `rename` resolution, the collision and reserved-name checks |
-| [`exporters/source/columns.py`](../../src/fabulexa_export/exporters/source/columns.py) | The shared `prop__<p>` scalar-property lookup `plan.py` and `renders.py` both need, so neither duplicates it |
-| [`exporters/source/renders.py`](../../src/fabulexa_export/exporters/source/renders.py) | `build_render_sql` / `build_snapshot_render_sql` — the four genre renders (change-log via the row-state-events fold, reference/transaction via the faithful records relation, junction via the faithful membership relation, snapshot via the state-at derivation), each carrying its genre's total `ORDER BY` and wallclock rendering through the shared anchor renderer |
-| [`exporters/source/engine.py`](../../src/fabulexa_export/exporters/source/engine.py) | `export_source`, `build_source_query_specs` — plan → per-genre render → optional windowing (`write_mode` by genre) → dispatch to the shared writer |
-| [`exporters/query_spec.py`](../../src/fabulexa_export/exporters/query_spec.py) | `QuerySpec`, `write_query_specs` — the mode-neutral compiled-table shape and full-export write dispatch every mode's `export_*` entry point shares. Relocated out of the dimensional engine so a second mode can compile to the same writer-ready shape without a cross-mode import |
-| [`exporters/reserved_names.py`](../../src/fabulexa_export/exporters/reserved_names.py) | `is_reserved_table_name` / `is_reserved_column_name` — the cross-mode bookkeeping-name check both dimensional's and source's plan-time collision resolution call |
-| [`derivations/state_at.py`](../../src/fabulexa_export/derivations/state_at.py) | `build_state_at_sql`, `STATE_AT_COLUMNS` — the point-in-time row reconstruction snapshot delivery composes; owned by [`derivations.md`](derivations.md) § The state-at derivation |
-| [`derivations/row_state_events.py`](../../src/fabulexa_export/derivations/row_state_events.py) | `build_row_state_events_sql` — the change-log render's composed fold; owned by [`derivations.md`](derivations.md) § The row-state-events derivation |
-| [`errors.py`](../../src/fabulexa_export/errors.py) | The `Source*` error hierarchy (`ExportError` subclasses) |
-| [`cli.py`](../../src/fabulexa_export/cli.py) | `cmd_export` — dispatches on `config.mode` to `export_dimensional` or `export_source` |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `ExportConfig.mode: Literal["dimensional", "source"]`, `ExportConfig.source: SourceConfig \| None`; `SourceConfig` (`change_delivery`, `exclude`, `rename`) and `RenameEntry`; the two-sided `mode_section_matches` validator and `SourceConfig` / `RenameEntry`'s own parse-time validators |
+| [`exporters/source/plan.py`](../../src/fabulexa_forge/exporters/source/plan.py) | `SourceTableSpec`; `build_source_plan` — the genre trichotomy classification, the untracked-only sub-type split, `exclude`, presentation defaults (delivery-dependent for a change-log kind), `rename` resolution, the collision and reserved-name checks |
+| [`exporters/source/columns.py`](../../src/fabulexa_forge/exporters/source/columns.py) | The shared `prop__<p>` scalar-property lookup `plan.py` and `renders.py` both need, so neither duplicates it |
+| [`exporters/source/renders.py`](../../src/fabulexa_forge/exporters/source/renders.py) | `build_render_sql` / `build_snapshot_render_sql` — the four genre renders (change-log via the row-state-events fold, reference/transaction via the faithful records relation, junction via the faithful membership relation, snapshot via the state-at derivation), each carrying its genre's total `ORDER BY` and wallclock rendering through the shared anchor renderer |
+| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `export_source`, `build_source_query_specs` — plan → per-genre render → optional windowing (`write_mode` by genre) → dispatch to the shared writer |
+| [`exporters/query_spec.py`](../../src/fabulexa_forge/exporters/query_spec.py) | `QuerySpec`, `write_query_specs` — the mode-neutral compiled-table shape and full-export write dispatch every mode's `export_*` entry point shares. Relocated out of the dimensional engine so a second mode can compile to the same writer-ready shape without a cross-mode import |
+| [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py) | `is_reserved_table_name` / `is_reserved_column_name` — the cross-mode bookkeeping-name check both dimensional's and source's plan-time collision resolution call |
+| [`derivations/state_at.py`](../../src/fabulexa_forge/derivations/state_at.py) | `build_state_at_sql`, `STATE_AT_COLUMNS` — the point-in-time row reconstruction snapshot delivery composes; owned by [`derivations.md`](derivations.md) § The state-at derivation |
+| [`derivations/row_state_events.py`](../../src/fabulexa_forge/derivations/row_state_events.py) | `build_row_state_events_sql` — the change-log render's composed fold; owned by [`derivations.md`](derivations.md) § The row-state-events derivation |
+| [`errors.py`](../../src/fabulexa_forge/errors.py) | The `Source*` error hierarchy (`ExportError` subclasses) |
+| [`cli.py`](../../src/fabulexa_forge/cli.py) | `cmd_export` — dispatches on `config.mode` to `export_dimensional` or `export_source` |
 
 ## Boundary
 
@@ -446,10 +446,10 @@ delivery. The `genre` label stays `changelog` — it selects the render — whil
 ## Validation Rules
 
 Field shapes are defined by the Pydantic grammar in
-[`config/models.py`](../../src/fabulexa_export/config/models.py); business-rule
+[`config/models.py`](../../src/fabulexa_forge/config/models.py); business-rule
 message text is owned by
-[`exporters/source/plan.py`](../../src/fabulexa_export/exporters/source/plan.py) and
-[`exporters/source/engine.py`](../../src/fabulexa_export/exporters/source/engine.py).
+[`exporters/source/plan.py`](../../src/fabulexa_forge/exporters/source/plan.py) and
+[`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py).
 The rules below state *what* is rejected and *when*.
 
 **Parse-time (Pydantic).**

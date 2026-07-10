@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     Correlated,
@@ -12,8 +12,8 @@ from fabulexa_export.config.models import (
     NullCells,
     Target,
 )
-from fabulexa_export.corrupters.operations.null_cells import NullCellsCorrupter
-from fabulexa_export.corrupters.state import CorruptState
+from fabulexa_forge.corrupters.operations.null_cells import NullCellsCorrupter
+from fabulexa_forge.corrupters.state import CorruptState
 
 from .._helpers import CallOrderRandom, column_spec, sidecar, table_spec, working_table
 

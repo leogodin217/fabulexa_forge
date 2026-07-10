@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import random
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     EntityScoped,
     FreezeSeries,
     Target,
 )
-from fabulexa_export.corrupters.operations.freeze_series import FreezeSeriesCorrupter
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.reader.sidecar import BranchEntry, Sidecar
+from fabulexa_forge.corrupters.operations.freeze_series import FreezeSeriesCorrupter
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.reader.sidecar import BranchEntry, Sidecar
 
 from .._helpers import (
     CallOrderRandom,

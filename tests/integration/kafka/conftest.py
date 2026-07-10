@@ -47,7 +47,7 @@ def rig(kafka_bootstrap: str) -> Iterator[RigRunner]:
     def _run(
         envelopes: list[Envelope], *, schemas_enable: bool = False
     ) -> list[Consumed]:
-        topic = f"fabexport.rig.{uuid.uuid4().hex[:12]}"
+        topic = f"fabulexa-forge.rig.{uuid.uuid4().hex[:12]}"
         create_single_partition_topic(kafka_bootstrap, topic)
         created.append(topic)
         produce(kafka_bootstrap, topic, envelopes, schemas_enable)

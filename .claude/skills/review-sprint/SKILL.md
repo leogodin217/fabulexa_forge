@@ -44,7 +44,7 @@ review-sprint missed cross-cutting smells.
 
 ### Tier 2 — load before consistency checks (§2, §4, §7)
 
-5. **Sibling source files in every subpackage of `src/fabulexa_export/` the sprint touched.** Required
+5. **Sibling source files in every subpackage of `src/fabulexa_forge/` the sprint touched.** Required
    for duplicate-helper detection: a new helper looks fine in the diff
    and identical to a pre-existing helper two files away.
 6. **Existing test files for those subpackages.** Required for test-value
@@ -113,11 +113,11 @@ caller; otherwise the whole chain is dead.
 
 ### 2. Consistency / DRY Check
 
-**Requires tier-2 context** (sibling source files in every touched subpackage of `src/fabulexa_export/`).
+**Requires tier-2 context** (sibling source files in every touched subpackage of `src/fabulexa_forge/`).
 
 For every new top-level definition the sprint added — function, class,
 constant, type alias — ask whether something with the same purpose already
-exists in the `src/fabulexa_export/` tree.
+exists in the `src/fabulexa_forge/` tree.
 
 ```bash
 # 1. List new top-level definitions added this sprint.
@@ -227,7 +227,7 @@ count is constructible from the test setup.
 
 ```bash
 # Get coverage for new files only
-uv run pytest --cov=src/fabulexa_export --cov-report=term-missing
+uv run pytest --cov=src/fabulexa_forge --cov-report=term-missing
 
 # Check files added this sprint
 git diff --name-only --diff-filter=A <diff-base>...HEAD
@@ -315,7 +315,7 @@ For each contract the spec adds:
    (tier-2 context). Does one already do this? If yes, the spec should
    have prescribed reuse, not a new helper. Flag as a *spec-time miss*
    even if the implementation faithfully built what the spec said.
-2. **New constant / type?** Search the `src/fabulexa_export/` tree for siblings. Is the new
+2. **New constant / type?** Search the `src/fabulexa_forge/` tree for siblings. Is the new
    name redundant with an existing one (e.g. `_FOO_INT_OFFSETS` vs an
    inline tuple in the only call site)?
 3. **New test fixture builder?** Does an existing test file already

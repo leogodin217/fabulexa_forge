@@ -10,14 +10,14 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fabulexa_export.errors import (
+from fabulexa_forge.errors import (
     ExporterError,
     ExportRuntimeError,
     KafkaBootstrapUnresolvable,
     KafkaClientUnavailable,
     KafkaDeliveryError,
 )
-from fabulexa_export.exporters.streaming.kafka_sink import resolve_bootstrap_servers
+from fabulexa_forge.exporters.streaming.kafka_sink import resolve_bootstrap_servers
 
 from ._helpers import make_anchor as _shared_make_anchor
 
@@ -53,7 +53,7 @@ def test_kafka_delivery_error_is_exporter_error() -> None:
 
 def test_cli_wins_over_config_and_env() -> None:
     """CLI bootstrap wins over config block and env variable."""
-    from fabulexa_export.config.models import KafkaConfig
+    from fabulexa_forge.config.models import KafkaConfig
 
     config = KafkaConfig(bootstrap_servers="config:9092")
     result = resolve_bootstrap_servers(
@@ -66,7 +66,7 @@ def test_cli_wins_over_config_and_env() -> None:
 
 def test_config_wins_over_env_when_no_cli() -> None:
     """Config block bootstrap wins over env when CLI is absent."""
-    from fabulexa_export.config.models import KafkaConfig
+    from fabulexa_forge.config.models import KafkaConfig
 
     config = KafkaConfig(bootstrap_servers="config:9092")
     result = resolve_bootstrap_servers(
@@ -116,7 +116,7 @@ def test_config_value_is_stripped() -> None:
     whitespace (multi-line block, copy-paste) must normalize identically to the
     same value supplied via --bootstrap-servers or FABEXPORT_KAFKA_BOOTSTRAP.
     """
-    from fabulexa_export.config.models import KafkaConfig
+    from fabulexa_forge.config.models import KafkaConfig
 
     config = KafkaConfig(bootstrap_servers="  config:9092  ")
     result = resolve_bootstrap_servers(
@@ -134,7 +134,7 @@ def test_config_value_is_stripped() -> None:
 
 def test_blank_cli_falls_through_to_config() -> None:
     """A blank (whitespace-only) CLI value falls through to the config block."""
-    from fabulexa_export.config.models import KafkaConfig
+    from fabulexa_forge.config.models import KafkaConfig
 
     config = KafkaConfig(bootstrap_servers="config:9092")
     result = resolve_bootstrap_servers(
@@ -147,7 +147,7 @@ def test_blank_cli_falls_through_to_config() -> None:
 
 def test_empty_cli_falls_through_to_config() -> None:
     """An empty CLI string falls through to the config block."""
-    from fabulexa_export.config.models import KafkaConfig
+    from fabulexa_forge.config.models import KafkaConfig
 
     config = KafkaConfig(bootstrap_servers="config:9092")
     result = resolve_bootstrap_servers(
@@ -396,7 +396,7 @@ def _make_event(
     presentation_id: str | None = None,
 ) -> Any:
     """Return a minimal StreamEvent."""
-    from fabulexa_export.exporters.streaming.types import StreamEvent
+    from fabulexa_forge.exporters.streaming.types import StreamEvent
 
     return StreamEvent(
         seq=seq,
@@ -427,7 +427,7 @@ def _run_write(
     monkeypatch: pytest.MonkeyPatch,
 ) -> tuple[Any, list[_FakeAdminClient], list[_FakeProducer]]:
     """Run write_kafka_stream with a fake confluent_kafka, return outcome + spies."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     admins: list[_FakeAdminClient] = []
     producers: list[_FakeProducer] = []
@@ -519,7 +519,7 @@ def test_produce_topic_is_event_topic(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_produce_key_is_record_id_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
     """Produce key = encode_pinned({"record_id": event.record_id}) UTF-8 bytes."""
-    from fabulexa_export.exporters.streaming.encoding import encode_pinned
+    from fabulexa_forge.exporters.streaming.encoding import encode_pinned
 
     events = [_make_event(1, "abc-123", "topic_a", presentation_id="pres-999")]
     outcome, _, producers = _run_write(
@@ -556,7 +556,7 @@ def test_produce_key_never_presentation_id(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_produce_key_for_delete_op(monkeypatch: pytest.MonkeyPatch) -> None:
     """Delete (op='d') events also use encode_pinned({"record_id": ...}) as key."""
-    from fabulexa_export.exporters.streaming.encoding import encode_pinned
+    from fabulexa_forge.exporters.streaming.encoding import encode_pinned
 
     events = [_make_event(1, "r1", "topic_a", op="d")]
     outcome, _, producers = _run_write(
@@ -589,7 +589,7 @@ def test_produce_value_is_render_value_output(monkeypatch: pytest.MonkeyPatch) -
 
 def test_produce_timestamp_is_rebased_epoch_ms(monkeypatch: pytest.MonkeyPatch) -> None:
     """Produce timestamp = rebased_epoch_ms(event.event_sim_time, anchor)."""
-    from fabulexa_export.exporters.streaming.debezium import rebased_epoch_ms
+    from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
 
     sim_time = 5_000_000_000  # 5 seconds in nanoseconds
     events = [_make_event(1, "r1", "topic_a", event_sim_time=sim_time)]
@@ -630,7 +630,7 @@ def test_producer_is_idempotent_acks_all(monkeypatch: pytest.MonkeyPatch) -> Non
 
 def test_flush_called_before_return(monkeypatch: pytest.MonkeyPatch) -> None:
     """flush() is called before write_kafka_stream returns."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     flush_called = False
 
@@ -659,7 +659,7 @@ def test_unacked_at_flush_raises_delivery_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Unacked message count at flush raises KafkaDeliveryError."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     class _UnackedProducer(_FakeProducer):
         def flush(self) -> int:
@@ -684,7 +684,7 @@ def test_delivery_callback_error_raises_delivery_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A delivery callback reporting error → KafkaDeliveryError."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     class _ErrorProducer(_FakeProducer):
         def __init__(self, cfg: dict[str, Any]) -> None:
@@ -717,7 +717,7 @@ def test_loop_entry_delivery_error_raised_before_second_event(
     from the flush-time check tested by test_delivery_callback_error_raises_delivery_error
     (single event) and test_unacked_at_flush_raises_delivery_error.
     """
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     class _ImmediateErrorProducer(_FakeProducer):
         """Producer whose first produce() immediately fires the error callback."""
@@ -752,7 +752,7 @@ def test_preexisting_topic_wrong_partitions_raises(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pre-existing topic with partition count ≠ 1 → KafkaDeliveryError naming topic."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     already_exists_error = _FakeKafkaException(_FakeKafkaError(36))
 
@@ -783,7 +783,7 @@ def test_preexisting_topic_wrong_partitions_message_includes_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """KafkaDeliveryError for wrong partition count names the partition count."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     already_exists_error = _FakeKafkaException(_FakeKafkaError(36))
 
@@ -814,7 +814,7 @@ def test_preexisting_topic_one_partition_used_as_is(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pre-existing topic with exactly 1 partition is used as-is (no error)."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     already_exists_error = _FakeKafkaException(_FakeKafkaError(36))
 
@@ -857,7 +857,7 @@ def test_topic_creation_generic_failure_raises_delivery_error(
     not propagate as the raw confluent_kafka exception and not route through
     the TOPIC_ALREADY_EXISTS partition-count check.
     """
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     # Code 7 (REQUEST_TIMED_OUT) — any code other than 36 takes the generic branch.
     creation_error = _FakeKafkaException(_FakeKafkaError(7))
@@ -896,7 +896,7 @@ def test_paced_and_unpaced_produce_identical_tuples(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """paced=True and paced=False produce identical (topic, key, value, timestamp) tuples."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     events = [
         _make_event(1, "r1", "topic_a", event_sim_time=0),
@@ -963,7 +963,7 @@ def test_poll_called_every_iteration_regardless_of_paced(
     producer.produce() would eventually raise BufferError once librdkafka's
     queue.buffering.max.messages filled.
     """
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     producers: list[_PollCountingProducer] = []
 
@@ -1000,7 +1000,7 @@ def test_produce_buffererror_raises_delivery_error(
     uncaught, contradicting the docstring's promise that a produce failure
     surfaces as KafkaDeliveryError.
     """
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     class _FullQueueProducer(_FakeProducer):
         def produce(
@@ -1038,7 +1038,7 @@ def test_client_unavailable_when_confluent_kafka_is_none(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """KafkaClientUnavailable raised when sys.modules['confluent_kafka'] = None."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     monkeypatch.setitem(sys.modules, "confluent_kafka", None)  # type: ignore[arg-type]
 
@@ -1067,7 +1067,7 @@ def test_client_unavailable_when_confluent_kafka_import_fails(
     import importlib.abc
     import importlib.machinery
 
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     class _BlockConfluent(importlib.abc.MetaPathFinder):
         def find_spec(
@@ -1123,7 +1123,7 @@ def test_write_kafka_stream_does_not_require_pre_imported_admin(
     runs — exactly what _import_confluent_kafka_checked now does. The old code
     (bare attribute access) would raise AttributeError here.
     """
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     # Build a fake confluent_kafka WITHOUT .admin attribute pre-set
     ck_no_admin = _FakeCKModule("confluent_kafka")

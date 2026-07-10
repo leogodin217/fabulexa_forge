@@ -1,7 +1,7 @@
 # FabulMixer live-perform config — ride-sharing marketplace (primary demo)
 # ============================================================
-# Drives `fabexport mixer docs/examples/ride-sharing-marketplace/bundle <this>`
-# (and `fabexport stream …` for a non-Kafka dry run). Streams a real 30-day,
+# Drives `fabulexa-forge mixer docs/examples/ride-sharing-marketplace/bundle <this>`
+# (and `fabulexa-forge stream …` for a non-Kafka dry run). Streams a real 30-day,
 # ~129k-event two-sided marketplace emit as `state-changes`, producing FIVE Kafka
 # topics — one channel strip per topic on the board:
 #

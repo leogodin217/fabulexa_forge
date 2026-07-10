@@ -1,7 +1,7 @@
 # FabulMixer demo preset — consumer-side flags for the retail demo.
 # ============================================================
 # Demo glue only — read by the demo launcher (`make mixer-demo EXAMPLE=...`), NEVER
-# by `fabexport`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
+# by `fabulexa-forge`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
 # See dev/demo/README.md.
 #
 # Retail topic set (from stream.yaml routing `retail.{route_table}`):

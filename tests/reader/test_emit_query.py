@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from fabulexa_export.reader import RunDatabaseError, open_emit
+from fabulexa_forge.reader import RunDatabaseError, open_emit
 
 from ._emit_helpers import _minimal_sidecar, write_emit
 

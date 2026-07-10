@@ -13,9 +13,9 @@ import duckdb
 import pytest
 
 from exporters._emit_fixtures import build_test_emit
-from fabulexa_export.errors import ExportRuntimeError
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.writers.duckdb import write_duckdb
+from fabulexa_forge.errors import ExportRuntimeError
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.writers.duckdb import write_duckdb
 
 
 def test_write_duckdb_materializes_rows(tmp_path: Path) -> None:

@@ -1,9 +1,9 @@
 # Effective Anchor
 
 **Status:** Implemented. Code is the contract — see
-[`anchor.py`](../../src/fabulexa_export/anchor.py),
-[`errors.py`](../../src/fabulexa_export/errors.py) (the `Rebase*` hierarchy),
-[`config/models.py`](../../src/fabulexa_export/config/models.py) (`RebaseConfig`),
+[`anchor.py`](../../src/fabulexa_forge/anchor.py),
+[`errors.py`](../../src/fabulexa_forge/errors.py) (the `Rebase*` hierarchy),
+[`config/models.py`](../../src/fabulexa_forge/config/models.py) (`RebaseConfig`),
 and [`tests/test_anchor.py`](../../tests/test_anchor.py). Public API:
 `resolve_effective_anchor`, the `EffectiveAnchor` dataclass, and
 `render_anchor_timestamp_expr` (the SQL renderer every wallclock mode shares).
@@ -11,7 +11,7 @@ and [`tests/test_anchor.py`](../../tests/test_anchor.py). Public API:
 `sim_time` is an integer-nanosecond offset since run start; to become a wallclock
 datetime it needs an origin and a timezone. The effective anchor is the one
 mode-agnostic surface that resolves that origin and zone for a single
-`fabexport export` invocation — combining the emit's sidecar `runtime` block, the
+`fabulexa-forge export` invocation — combining the emit's sidecar `runtime` block, the
 export config's optional `rebase` block, and the CLI `--base-date` / `--timezone`
 overrides into a single `EffectiveAnchor` (or `None`, meaning "no anchor — render
 raw integers"). Every exporter that renders wallclock time reads through this one
@@ -163,7 +163,7 @@ content are this module's contract.
 ## Invariants
 
 1. **Single effective anchor per export invocation.** All timestamp rendering in
-   one `fabexport export` run reads through the one resolved `EffectiveAnchor` (or
+   one `fabulexa-forge export` run reads through the one resolved `EffectiveAnchor` (or
    all render raw integers). No mode resolves its own anchor.
 2. **Monotonic time.** The affine shift preserves strict ordering of `sim_time`
    and of the absolute instant. A *rendered* naive local wall clock may step
@@ -182,7 +182,7 @@ content are this module's contract.
 
 ## Validation Rules
 
-`RebaseConfig` ([`config/models.py`](../../src/fabulexa_export/config/models.py))
+`RebaseConfig` ([`config/models.py`](../../src/fabulexa_forge/config/models.py))
 declares only shape; semantic checks belong to the resolver, so config-supplied
 and CLI-supplied values share one validation path. An empty `rebase: {}` (both
 fields absent) fails the model's `at_least_one_knob` validator at config-load
@@ -192,7 +192,7 @@ resolver — which is why the resolver does not raise it.
 
 Resolution-time business rules (each raises a subclass of `RebaseError`, itself an
 `ExporterError`, so the CLI's `except (ReaderError, ExporterError)` funnel reports
-them with a non-zero exit — see [`errors.py`](../../src/fabulexa_export/errors.py)):
+them with a non-zero exit — see [`errors.py`](../../src/fabulexa_forge/errors.py)):
 
 | Rule | Checks | Error |
 |------|--------|-------|
@@ -267,6 +267,6 @@ them with a non-zero exit — see [`errors.py`](../../src/fabulexa_export/errors
 | [`source.md`](source.md) | § Wallclock timestamps — the anchor's first *mandatory* consumer; every structural sim-time column renders through the same SQL renderer as the dimensional mode. |
 | [`reader.md`](reader.md) | § Surface — `RuntimeAnchor` and the typed sidecar the resolver reads as raw strings. |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | § Branch enumeration and runtime anchor — the vendored contract for the sidecar `runtime` block. |
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | `RebaseConfig` and `ExportConfig.rebase` — the config grammar these semantics bind. |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `RebaseConfig` and `ExportConfig.rebase` — the config grammar these semantics bind. |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap. |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles, the isolation boundary, vocabulary. |

@@ -12,16 +12,16 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.reader.errors import TableNotFoundError
-from fabulexa_export.reader.relations import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.errors import TableNotFoundError
+from fabulexa_forge.reader.relations import (
     build_history_relation_sql,
     build_membership_relation_sql,
     build_records_relation_sql,
     distinct_prop_values,
 )
-from fabulexa_export.reader.sidecar import Sidecar
+from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
 # Helpers

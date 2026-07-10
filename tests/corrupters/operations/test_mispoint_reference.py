@@ -8,16 +8,16 @@ from collections.abc import Sequence
 
 import pytest
 
-from fabulexa_export.config.models import Amount, Correlated, MispointReference, Target
-from fabulexa_export.corrupters.operations.mispoint_reference import (
+from fabulexa_forge.config.models import Amount, Correlated, MispointReference, Target
+from fabulexa_forge.corrupters.operations.mispoint_reference import (
     MispointReferenceCorrupter,
     mispoint_impact,
     resolve_donor_pool,
     resolve_reference_write_anchor,
 )
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.errors import CorruptError
-from fabulexa_export.reader.sidecar import BranchEntry, Sidecar
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.errors import CorruptError
+from fabulexa_forge.reader.sidecar import BranchEntry, Sidecar
 
 from .._helpers import CallOrderRandom, column_spec, sidecar, table_spec, working_table
 

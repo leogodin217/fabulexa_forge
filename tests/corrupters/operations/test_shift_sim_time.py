@@ -6,7 +6,7 @@ import random
 
 import pytest
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     Distribution,
@@ -16,9 +16,9 @@ from fabulexa_export.config.models import (
     ShiftSwap,
     Target,
 )
-from fabulexa_export.corrupters.operations.shift_sim_time import ShiftSimTimeCorrupter
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.reader.sidecar import BranchEntry, Sidecar
+from fabulexa_forge.corrupters.operations.shift_sim_time import ShiftSimTimeCorrupter
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.reader.sidecar import BranchEntry, Sidecar
 
 from .._helpers import CallOrderRandom, column_spec, sidecar, table_spec, working_table
 

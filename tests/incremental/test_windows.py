@@ -11,14 +11,14 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from fabulexa_export.anchor import EffectiveAnchor
-from fabulexa_export.config.models import IncrementalConfig
-from fabulexa_export.errors import (
+from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.config.models import IncrementalConfig
+from fabulexa_forge.errors import (
     IncrementalAnchorRequired,
     IncrementalPeriodRegimeMismatch,
     IncrementalRangeInvalid,
 )
-from fabulexa_export.incremental.windows import (
+from fabulexa_forge.incremental.windows import (
     _advance_one_period,
     derive_window,
     parse_range,

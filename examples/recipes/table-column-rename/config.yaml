@@ -10,7 +10,7 @@
 #   - `from:` names the BASE-LAYER source column, decoupling it from the
 #     output name (e.g. record_id → customer_id, prop__name → full_name).
 #
-# (`fabexport init` PROPOSES prefix-stripped names by reading the sidecar,
+# (`fabulexa-forge init` PROPOSES prefix-stripped names by reading the sidecar,
 # but those are only suggestions — every one is yours to override here.)
 #
 # Fixture world (recipe emit):

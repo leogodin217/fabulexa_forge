@@ -12,19 +12,19 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.reader import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.reader import (
     CheckResult,
     ConformanceReport,
     open_emit,
     run_check,
     validate,
 )
-from fabulexa_export.reader._schema import _load_vendored_schema
-from fabulexa_export.reader.conformance import (
+from fabulexa_forge.reader._schema import _load_vendored_schema
+from fabulexa_forge.reader.conformance import (
     _check_c5_table,
 )
-from fabulexa_export.reader.sidecar import ColumnSpec
+from fabulexa_forge.reader.sidecar import ColumnSpec
 
 from ._fixtures_build import (
     _HISTORY_COLUMNS,

@@ -116,7 +116,7 @@ def _make_stream_event(
     event_sim_time: int = 0,
 ) -> Any:
     """Return a minimal StreamEvent for integration tests."""
-    from fabulexa_export.exporters.streaming.types import StreamEvent
+    from fabulexa_forge.exporters.streaming.types import StreamEvent
 
     return StreamEvent(
         seq=seq,
@@ -134,8 +134,8 @@ def _make_stream_event(
 
 def _render_jsonl(event: Any) -> bytes:
     """Minimal render_value for integration tests: produce JSON of the after-image."""
-    from fabulexa_export.exporters.streaming.debezium import rebased_epoch_ms
-    from fabulexa_export.exporters.streaming.encoding import encode_pinned
+    from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
+    from fabulexa_forge.exporters.streaming.encoding import encode_pinned
 
     anchor = _make_anchor()
     payload = {
@@ -150,7 +150,7 @@ def _render_jsonl(event: Any) -> bytes:
 @pytest.fixture()
 def sink_topic(kafka_bootstrap: str) -> Iterator[str]:
     """A unique single-partition topic for write_kafka_stream tests."""
-    topic = f"fabexport.sink.{uuid.uuid4().hex[:12]}"
+    topic = f"fabulexa-forge.sink.{uuid.uuid4().hex[:12]}"
     create_single_partition_topic(kafka_bootstrap, topic)
     yield topic
     delete_topic(kafka_bootstrap, topic)
@@ -159,7 +159,7 @@ def sink_topic(kafka_bootstrap: str) -> Iterator[str]:
 @pytest.fixture()
 def sink_empty_topic(kafka_bootstrap: str) -> Iterator[str]:
     """A second unique topic for declared-but-empty tests."""
-    topic = f"fabexport.empty.{uuid.uuid4().hex[:12]}"
+    topic = f"fabulexa-forge.empty.{uuid.uuid4().hex[:12]}"
     yield topic
     delete_topic(kafka_bootstrap, topic)
 
@@ -171,7 +171,7 @@ def sink_empty_topic(kafka_bootstrap: str) -> Iterator[str]:
 
 def test_sink_key_is_record_id(kafka_bootstrap: str, sink_topic: str) -> None:
     """write_kafka_stream: every key = pinned {record_id}."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     anchor = _make_anchor()
     events = [
@@ -199,7 +199,7 @@ def test_sink_seq_monotonic_in_consume_order(
     kafka_bootstrap: str, sink_topic: str
 ) -> None:
     """write_kafka_stream: seq is strictly increasing in consume order."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     anchor = _make_anchor()
     events = [
@@ -226,7 +226,7 @@ def test_sink_seq_monotonic_in_consume_order(
 
 def test_sink_upsert_log_shape(kafka_bootstrap: str, sink_topic: str) -> None:
     """write_kafka_stream: first event per record_id is op:c, rest are op:u."""
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     anchor = _make_anchor()
     events = [
@@ -262,8 +262,8 @@ def test_sink_record_timestamp_is_rebased_event_time(
     kafka_bootstrap: str, sink_topic: str
 ) -> None:
     """write_kafka_stream: record timestamp = rebased_epoch_ms(event_sim_time, anchor)."""
-    from fabulexa_export.exporters.streaming.debezium import rebased_epoch_ms
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     anchor = _make_anchor()
     sim_time = 3_600_000_000_000  # 1 hour in nanoseconds
@@ -292,7 +292,7 @@ def test_sink_declared_but_empty_topic_created(
     """write_kafka_stream: a declared-but-empty topic is created and has count 0."""
     from confluent_kafka.admin import AdminClient  # type: ignore[import-untyped]
 
-    from fabulexa_export.exporters.streaming.kafka_sink import write_kafka_stream
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
     anchor = _make_anchor()
     events = [_make_stream_event(1, "r1", sink_topic, event_sim_time=0)]

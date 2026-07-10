@@ -22,7 +22,7 @@ from reader._fixtures_build import (
     build_spanning,
 )
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     CorruptConfig,
@@ -46,9 +46,9 @@ from fabulexa_export.config.models import (
     ShiftSimTime,
     Target,
 )
-from fabulexa_export.corrupters.engine import corrupt_emit
-from fabulexa_export.reader import conformance
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.corrupters.engine import corrupt_emit
+from fabulexa_forge.reader import conformance
+from fabulexa_forge.reader.emit import open_emit
 
 if TYPE_CHECKING:
     from collections.abc import Callable

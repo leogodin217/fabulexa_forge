@@ -13,8 +13,8 @@ import pytest
 import yaml
 from pydantic import ValidationError
 
-from fabulexa_export.config.loader import load_corrupt_config
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.loader import load_corrupt_config
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     Correlated,
@@ -49,7 +49,7 @@ from fabulexa_export.config.models import (
     ShiftSwap,
     Target,
 )
-from fabulexa_export.errors import ConfigError
+from fabulexa_forge.errors import ConfigError
 
 # ---------------------------------------------------------------------------
 # The design doc's § Configuration example

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from typing import get_args
 
-from fabulexa_export.config.models import CorruptOperation
-from fabulexa_export.corrupters.operations import CORRUPTER_REGISTRY
+from fabulexa_forge.config.models import CorruptOperation
+from fabulexa_forge.corrupters.operations import CORRUPTER_REGISTRY
 
 
 def _union_kinds() -> set[str]:

@@ -81,7 +81,7 @@ Facts that shape consumer design:
 
 > **Contract status.** `bundle.json`'s schema is owned upstream
 > (`bundle_format_version: 1`) and is **not** yet vendored in `contract/`. Every
-> `fabexport` verb today takes an emit directory and parses nothing at bundle
+> `fabulexa-forge` verb today takes an emit directory and parses nothing at bundle
 > level. The first feature that traverses a bundle (emit discovery, multi-emit
 > combine) must first vendor the bundle spec into `contract/` under the same
 > explicit re-sync policy as the base format.
@@ -146,7 +146,7 @@ semantic ones deliberately. This is the list of what "them" means:
 and a semantic subset; a defect such as a dangling records-property reference
 passes C1–C12 by design (see
 [`conformance.md`](conformance.md) § Boundaries). The guarantees above hold by
-construction in the emit, not because `fabexport validate` proves them. Design consequence: an exporter may *lean on* these properties
+construction in the emit, not because `fabulexa-forge validate` proves them. Design consequence: an exporter may *lean on* these properties
 (e.g. skip dangling-reference handling) but must not claim to have *verified*
 them.
 

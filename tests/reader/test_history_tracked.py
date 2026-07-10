@@ -6,8 +6,8 @@ from pathlib import Path
 
 import duckdb
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.reader.emit import open_emit
 
 from ._emit_helpers import write_emit
 
@@ -105,7 +105,7 @@ def test_history_tracked_available_false_when_no_column_has_flag(
 
 def test_history_tracked_passes_validate_c1(tmp_path: Path) -> None:
     """A sidecar with history_tracked columns passes C1 conformance (re-vendored schema)."""
-    from fabulexa_export.reader.conformance import validate
+    from fabulexa_forge.reader.conformance import validate
 
     sidecar = _sidecar_with_history_tracked(with_flag=True)
     emit_dir = write_emit(
@@ -205,7 +205,7 @@ def _insert_history_row(db_path: Path, kind: str, prop: str, value: str) -> None
 
 def test_c11_positive_tracked_col_with_history_row_passes(tmp_path: Path) -> None:
     """C11 passes when history row (kind, property) has prop__ col with history_tracked=True."""
-    from fabulexa_export.reader.conformance import run_check
+    from fabulexa_forge.reader.conformance import run_check
 
     sidecar = _build_c11_sidecar(prop_history_tracked=True)
     emit_dir = write_emit(
@@ -235,7 +235,7 @@ def test_c11_positive_tracked_col_with_history_row_passes(tmp_path: Path) -> Non
 
 def test_c11_skip_no_history_tracked_flags(tmp_path: Path) -> None:
     """C11 skips when no records-category prop__ column carries history_tracked."""
-    from fabulexa_export.reader.conformance import run_check
+    from fabulexa_forge.reader.conformance import run_check
 
     # prop_history_tracked=None → omit the field → predates the attribute → skip
     sidecar = _build_c11_sidecar(prop_history_tracked=None)
@@ -266,7 +266,7 @@ def test_c11_skip_no_history_tracked_flags(tmp_path: Path) -> None:
 
 def test_c11_negative_absent_prop_column(tmp_path: Path) -> None:
     """C11 fails when history has (kind, property) but prop__ column absent from sidecar."""
-    from fabulexa_export.reader.conformance import run_check
+    from fabulexa_forge.reader.conformance import run_check
 
     # Build a sidecar with prop__status tracked, but history will have a different prop
     sidecar = _build_c11_sidecar(prop_history_tracked=True)
@@ -297,7 +297,7 @@ def test_c11_negative_absent_prop_column(tmp_path: Path) -> None:
 
 def test_c11_negative_flagged_false(tmp_path: Path) -> None:
     """C11 fails when history row references a prop__ column with history_tracked=False."""
-    from fabulexa_export.reader.conformance import run_check
+    from fabulexa_forge.reader.conformance import run_check
 
     # prop__status has history_tracked=False but appears in history
     sidecar = _build_c11_sidecar(prop_history_tracked=False)
@@ -329,7 +329,7 @@ def test_c11_negative_flagged_false(tmp_path: Path) -> None:
 
 def test_c11_one_directional_no_history_rows(tmp_path: Path) -> None:
     """C11 passes when prop__ column has history_tracked=True but zero history rows."""
-    from fabulexa_export.reader.conformance import run_check
+    from fabulexa_forge.reader.conformance import run_check
 
     # tracked col + no history rows → one-directional; C11 passes
     sidecar = _build_c11_sidecar(prop_history_tracked=True)
@@ -365,7 +365,7 @@ def test_c11_skip_when_history_table_absent(tmp_path: Path) -> None:
     Even though the sidecar declares history_tracked columns, C11 cannot run
     without a history table and must SKIP (not fail) per conformance.py:1403-1407.
     """
-    from fabulexa_export.reader.conformance import run_check
+    from fabulexa_forge.reader.conformance import run_check
 
     # Use include_history_table=False so neither the sidecar nor the DuckDB has history
     sidecar = _build_c11_sidecar(prop_history_tracked=True, include_history_table=False)
@@ -400,7 +400,7 @@ def test_c11_multiple_kinds_partial_failure(tmp_path: Path) -> None:
     - nurse: history row references prop__score which is absent from the sidecar → fails
     C11 must fail overall and the message must name 'score' (the offending property).
     """
-    from fabulexa_export.reader.conformance import run_check
+    from fabulexa_forge.reader.conformance import run_check
 
     sidecar: dict[str, object] = {
         "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
@@ -504,7 +504,7 @@ def test_c11_multiple_kinds_partial_failure(tmp_path: Path) -> None:
 
 def test_c11_message_order_deterministic(tmp_path: Path) -> None:
     """C11 emits failure messages in sorted (kind, property) order."""
-    from fabulexa_export.reader.conformance import run_check
+    from fabulexa_forge.reader.conformance import run_check
 
     # Build a sidecar with prop__status tracked but no other props
     # We'll put two history rows for different properties to test sorting

@@ -8,17 +8,17 @@ from pathlib import Path
 
 import pytest
 
-from fabulexa_export.corrupters.manifest import (
+from fabulexa_forge.corrupters.manifest import (
     DefectManifest,
     DefectRecord,
     DefectSource,
 )
-from fabulexa_export.corrupters.manifest_build import (
+from fabulexa_forge.corrupters.manifest_build import (
     build_defect_manifest,
     derive_defect_id,
     write_defect_manifest,
 )
-from fabulexa_export.errors import CorruptError
+from fabulexa_forge.errors import CorruptError
 
 _SOURCE = DefectSource(sidecar_sha256="a" * 64, base_format_version=4)
 _CONFIG_FINGERPRINT = "b" * 64
@@ -161,7 +161,7 @@ def test_duplicate_defect_id_raises_corrupt_error(
     A genuine collision needs two SHA-256 payloads hashing identically, so the
     guard is forced synthetically: derive_defect_id is monkeypatched to a
     constant, making the second record's id collide with the first's."""
-    from fabulexa_export.corrupters import manifest_build as manifest_build_module
+    from fabulexa_forge.corrupters import manifest_build as manifest_build_module
 
     monkeypatch.setattr(
         manifest_build_module,

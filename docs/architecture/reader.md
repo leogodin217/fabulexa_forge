@@ -1,11 +1,11 @@
 # Base Reader
 
 **Status:** Implemented. Code is the contract — see
-[`emit.py`](../../src/fabulexa_export/reader/emit.py),
-[`sidecar.py`](../../src/fabulexa_export/reader/sidecar.py),
-[`errors.py`](../../src/fabulexa_export/reader/errors.py), and
+[`emit.py`](../../src/fabulexa_forge/reader/emit.py),
+[`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py),
+[`errors.py`](../../src/fabulexa_forge/reader/errors.py), and
 [`tests/reader/`](../../tests/reader/). Public API:
-[`reader/__init__.py`](../../src/fabulexa_export/reader/__init__.py).
+[`reader/__init__.py`](../../src/fabulexa_forge/reader/__init__.py).
 
 The foundation every exporter and corrupter reads through. `open_emit(emit_dir)`
 opens a base-layer emit (`run.duckdb` + `base.json`), version-gates it to
@@ -28,10 +28,10 @@ open_emit(emit_dir)
 
 | Module | Owns |
 |---|---|
-| [`emit.py`](../../src/fabulexa_export/reader/emit.py) | `open_emit`, the `Emit` handle (`query` row-tuples, `query_arrow` columnar, `close`, context manager), the read-only DuckDB open |
-| [`sidecar.py`](../../src/fabulexa_export/reader/sidecar.py) | `Sidecar` and its frozen descriptors `ColumnSpec` / `TableSpec` / `BranchEntry` / `RuntimeAnchor`; the typed `RecordRoles` registry view + `Sidecar.record_roles()`; the per-column `history_tracked` flag + `history_tracked_available()`; the version gate + structural floor (`Sidecar.from_raw`) |
-| [`relations.py`](../../src/fabulexa_export/reader/relations.py) | The faithful-read SQL builders (`build_records_relation_sql`, `build_history_relation_sql`, `build_membership_relation_sql`) and the faithful introspection helper `distinct_prop_values` — the reader's compose-time surface, the sole faithful namer of base tables |
-| [`errors.py`](../../src/fabulexa_export/reader/errors.py) | The reader error hierarchy — operational/structural failures only |
+| [`emit.py`](../../src/fabulexa_forge/reader/emit.py) | `open_emit`, the `Emit` handle (`query` row-tuples, `query_arrow` columnar, `close`, context manager), the read-only DuckDB open |
+| [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) | `Sidecar` and its frozen descriptors `ColumnSpec` / `TableSpec` / `BranchEntry` / `RuntimeAnchor`; the typed `RecordRoles` registry view + `Sidecar.record_roles()`; the per-column `history_tracked` flag + `history_tracked_available()`; the version gate + structural floor (`Sidecar.from_raw`) |
+| [`relations.py`](../../src/fabulexa_forge/reader/relations.py) | The faithful-read SQL builders (`build_records_relation_sql`, `build_history_relation_sql`, `build_membership_relation_sql`) and the faithful introspection helper `distinct_prop_values` — the reader's compose-time surface, the sole faithful namer of base tables |
+| [`errors.py`](../../src/fabulexa_forge/reader/errors.py) | The reader error hierarchy — operational/structural failures only |
 
 ## Boundary
 
@@ -105,7 +105,7 @@ learns what exists by reading the `Sidecar`:
 | Is a kind sub-typed, and into which sub-types? | `Sidecar.subtype_values(kind)` (the `<kind>_type` domain in declaration order; `()` when not sub-typed) |
 
 Field shapes of the descriptors and accessors are the dataclass and method
-definitions in [`sidecar.py`](../../src/fabulexa_export/reader/sidecar.py) — that is
+definitions in [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) — that is
 their authoritative statement, not a restated table here.
 
 ### The record-role registry overlays roles on discovered kinds
@@ -131,7 +131,7 @@ resolver answers for any declared sub-type.
 Consumers reach the registry through `emit.sidecar.record_roles()` — there is no
 `Emit` passthrough — the same way they reach `branches()`, `runtime()`, and
 `tables()`. The method signatures and their `KeyError`/`ValueError` contract are the
-definitions in [`sidecar.py`](../../src/fabulexa_export/reader/sidecar.py).
+definitions in [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py).
 
 ### The discriminator oracle answers sub-typed-ness
 
@@ -162,7 +162,7 @@ caller needing unknown-kind diagnostics resolves the kind first (e.g. streaming'
 misleading `()` here. Totality — against the `KeyError`-raising `RecordRoles`
 accessors — suits a caller that asks for every selected kind, most of which are
 legitimately not sub-typed. The signature is the definition in
-[`sidecar.py`](../../src/fabulexa_export/reader/sidecar.py).
+[`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py).
 
 ### Typed `prop__` columns and DuckDB read-back
 
@@ -212,7 +212,7 @@ package dependency, imported lazily like `duckdb`).
 ### Faithful-read SQL builders
 
 The reader is the **sole faithful namer of base tables**: the compose-time builders in
-[`relations.py`](../../src/fabulexa_export/reader/relations.py) return canonical
+[`relations.py`](../../src/fabulexa_forge/reader/relations.py) return canonical
 `SELECT` strings over a single base table, which a consumer embeds as a subquery and
 materializes through `Emit.query` / `Emit.query_arrow`. Each is sidecar-driven, takes
 only the `Sidecar` (or `Emit`) and plain values — a `fork_path`, a kind, a property, a
@@ -232,7 +232,7 @@ SQL) the `SELECT DISTINCT prop__<property> FROM records__<kind> WHERE … IS NOT
 ORDER BY 1` that the dimensional `init` discriminator fan-out needs — non-`NULL` values
 in the source column's native-type order, so a numeric discriminator is not reordered
 by a Python string sort. Field shapes and the exact SQL are the function definitions in
-[`relations.py`](../../src/fabulexa_export/reader/relations.py).
+[`relations.py`](../../src/fabulexa_forge/reader/relations.py).
 
 These builders are faithful by construction — they name a base table and return its
 rows narrowed only by branch and author predicates. A read that narrows by a
@@ -295,7 +295,7 @@ imposes no implicit ordering.
 2. **Version-gating.** Any `base_format_version` ≠ `SUPPORTED_BASE_FORMAT_VERSION` is
    refused at `open_emit` with `UnsupportedBaseFormatVersionError`. No auto-upgrade,
    no best-effort read. The reader imports
-   [`fabulexa_export.SUPPORTED_BASE_FORMAT_VERSION`](../../src/fabulexa_export/__init__.py)
+   [`fabulexa_forge.SUPPORTED_BASE_FORMAT_VERSION`](../../src/fabulexa_forge/__init__.py)
    as the single source of truth; `4` is never re-declared in the reader.
 3. **Integrity-preservation.** The reader opens `run.duckdb` read-only and never
    writes `base.json`; it fabricates nothing and surfaces exactly what the sidecar
@@ -326,7 +326,7 @@ imposes no implicit ordering.
 
 The reader error hierarchy is operational/structural only; the definitions and the
 `found_version` payload live in
-[`errors.py`](../../src/fabulexa_export/reader/errors.py). Conformance *failures* are
+[`errors.py`](../../src/fabulexa_forge/reader/errors.py). Conformance *failures* are
 never reader errors — they are failing `CheckResult`s (see
 [`conformance.md`](conformance.md)).
 

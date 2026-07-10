@@ -25,15 +25,15 @@ from pathlib import Path
 
 import pytest
 
-from fabulexa_export.anchor import resolve_effective_anchor
-from fabulexa_export.config.loader import load_export_config
-from fabulexa_export.exporters.source.engine import (
+from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.config.loader import load_export_config
+from fabulexa_forge.exporters.source.engine import (
     build_source_query_specs,
     export_source,
 )
-from fabulexa_export.incremental.windows import Window
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.writers.duckdb import write_duckdb_window
+from fabulexa_forge.incremental.windows import Window
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.writers.duckdb import write_duckdb_window
 
 from ._harness import (
     RecipeFolder,

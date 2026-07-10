@@ -13,13 +13,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fabulexa_export.config.models import ColumnDecl, SourceDecl, TableDecl
-from fabulexa_export.exporters.dimensional.grains import (
+from fabulexa_forge.config.models import ColumnDecl, SourceDecl, TableDecl
+from fabulexa_forge.exporters.dimensional.grains import (
     _membership_order_by_columns,
     build_membership_sql,
     build_records_sql,
 )
-from fabulexa_export.reader.errors import TableNotFoundError
+from fabulexa_forge.reader.errors import TableNotFoundError
 
 
 def _make_sidecar_raising(table_name: str) -> MagicMock:
@@ -70,7 +70,7 @@ def _simple_membership_table_decl(where_col: str = "elem__role_name") -> TableDe
 
 def test_membership_order_by_raises_on_missing_table() -> None:
     """_membership_order_by_columns raises ExportError when the source table is absent."""
-    from fabulexa_export.errors import ExportError
+    from fabulexa_forge.errors import ExportError
 
     sidecar = _make_sidecar_raising("membership__missing__tbl")
 

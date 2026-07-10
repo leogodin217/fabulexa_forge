@@ -16,17 +16,17 @@ from pathlib import Path
 
 from reader._fixtures_build import build_spanning
 
-from fabulexa_export.anchor import resolve_effective_anchor
-from fabulexa_export.config.models import (
+from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.config.models import (
     Amount,
     CorruptConfig,
     ExportConfig,
     NullCells,
     Target,
 )
-from fabulexa_export.corrupters.engine import corrupt_emit
-from fabulexa_export.exporters.source.engine import export_source
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.corrupters.engine import corrupt_emit
+from fabulexa_forge.exporters.source.engine import export_source
+from fabulexa_forge.reader.emit import open_emit
 
 
 def _null_doctor_name_config() -> CorruptConfig:

@@ -14,9 +14,9 @@ vendored bundle contract is its only coupling.
 > [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) for the feature inventory and
 > [`docs/architecture/README.md`](docs/architecture/README.md) for the staged roadmap.
 
-One project, four names: the distribution is `fabulexa-forge`, the importable package
-is `fabulexa_export`, the CLI is `fabexport`, and the docs title it *Fabulexa Composite
-Export*. They are the same thing.
+One name throughout: the distribution and the CLI are both `fabulexa-forge`; the
+import package is `fabulexa_forge` — the standard hyphen↔underscore mapping, so
+`pip install fabulexa-forge` then `import fabulexa_forge`.
 
 ## Install and run
 
@@ -27,10 +27,10 @@ Not yet published to PyPI — clone and run from source with
 git clone https://github.com/leogodin217/fabulexa_forge
 cd fabulexa_forge
 uv sync                 # resolve this project's own venv
-uv run fabexport --help
+uv run fabulexa-forge --help
 ```
 
-`fabexport` is the only entry point. It takes one base-layer emit (`run.duckdb` +
+`fabulexa-forge` is the only entry point. It takes one base-layer emit (`run.duckdb` +
 `base.json`) and either reshapes it (exporters) or breaks it realistically
 (corrupters):
 
@@ -46,8 +46,8 @@ uv run fabexport --help
 Example — validate an emit, then export it to a DuckDB star schema:
 
 ```bash
-uv run fabexport validate path/to/emit
-uv run fabexport export path/to/emit config.yaml out/ --fmt duckdb
+uv run fabulexa-forge validate path/to/emit
+uv run fabulexa-forge export path/to/emit config.yaml out/ --fmt duckdb
 ```
 
 Export and corrupter targets are described in YAML — no Python. Learn each feature from
@@ -75,7 +75,7 @@ make check         # lint + typecheck + tests
 .
 ├── CLAUDE.md                 # principles, boundary, vocabulary
 ├── contract/                 # VENDORED base-layer contract (the only coupling)
-├── src/fabulexa_export/      # package source — the fabexport CLI + library
+├── src/fabulexa_forge/      # package source — the fabulexa-forge CLI + library
 ├── tests/
 ├── examples/recipes/         # minimal, test-guarded author recipes (one per feature)
 ├── docs/                     # architecture index, capabilities, recipes, roadmap

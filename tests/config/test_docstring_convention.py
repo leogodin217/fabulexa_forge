@@ -1,6 +1,6 @@
 """Tests enforcing the structural docstring convention for config models.
 
-Verifies that every BaseModel subclass in fabulexa_export.config.models:
+Verifies that every BaseModel subclass in fabulexa_forge.config.models:
 - has no Field(description=...) or accidental use_attribute_docstrings
 - has a one-line class docstring
 - keeps attribute docstrings under the character limit
@@ -22,7 +22,7 @@ from pydantic import BaseModel
 
 ATTR_DOCSTRING_MAX_CHARS = 400
 
-_MODULE_NAME = "fabulexa_export.config.models"
+_MODULE_NAME = "fabulexa_forge.config.models"
 _module = importlib.import_module(_MODULE_NAME)
 _module_source = inspect.getsource(_module)
 _module_tree = ast.parse(_module_source)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from fabulexa_export.config.models import ClockConfig
+from fabulexa_forge.config.models import ClockConfig
 
 
 def test_clock_config_realtime_with_speed_parses() -> None:

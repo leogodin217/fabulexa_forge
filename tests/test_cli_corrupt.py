@@ -1,4 +1,4 @@
-"""Tests for `fabexport corrupt` CLI verb.
+"""Tests for `fabulexa-forge corrupt` CLI verb.
 
 Covers:
 - happy path: exit 0; run.duckdb + base.json + defects.json written; per-operation
@@ -20,8 +20,8 @@ import pytest
 import yaml
 from reader._fixtures_build import build_spanning
 
-from fabulexa_export.cli import cmd_corrupt, main
-from fabulexa_export.config.models import Amount, CorruptConfig, NullCells, Target
+from fabulexa_forge.cli import cmd_corrupt, main
+from fabulexa_forge.config.models import Amount, CorruptConfig, NullCells, Target
 
 
 def _write_config(config_path: Path, config: CorruptConfig) -> None:

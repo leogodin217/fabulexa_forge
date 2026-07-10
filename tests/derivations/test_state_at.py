@@ -11,10 +11,10 @@ from typing import Any
 
 import pytest
 
-from fabulexa_export.derivations.state_at import STATE_AT_COLUMNS, build_state_at_sql
-from fabulexa_export.errors import ExportError
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.reader.errors import TableNotFoundError
+from fabulexa_forge.derivations.state_at import STATE_AT_COLUMNS, build_state_at_sql
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.errors import TableNotFoundError
 
 from ._fixtures import (
     _RECORD_COLS_INTERLEAVED,

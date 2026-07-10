@@ -10,13 +10,13 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from fabulexa_export.config.models import ColumnDecl, SourceDecl, TableDecl
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.validation import (
+from fabulexa_forge.config.models import ColumnDecl, SourceDecl, TableDecl
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.validation import (
     _grain_projectable_surface,
     check_scd2_needs_history,
 )
-from fabulexa_export.reader.errors import TableNotFoundError
+from fabulexa_forge.reader.errors import TableNotFoundError
 
 
 def _make_source(grain: str = "records", kind: str = "entity") -> SourceDecl:

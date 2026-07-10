@@ -5,13 +5,13 @@ from __future__ import annotations
 
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.reader.errors import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.reader.errors import (
     SidecarStructureError,
     TableNotFoundError,
     UnsupportedBaseFormatVersionError,
 )
-from fabulexa_export.reader.sidecar import (
+from fabulexa_forge.reader.sidecar import (
     BranchEntry,
     ColumnSpec,
     RecordRoles,

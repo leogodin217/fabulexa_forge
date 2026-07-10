@@ -96,7 +96,11 @@ def _wrap(payload: dict[str, Any], schemas_enable: bool) -> dict[str, Any]:
     if not schemas_enable:
         return payload
     return {
-        "schema": {"type": "struct", "optional": False, "name": "fabexport.Envelope"},
+        "schema": {
+            "type": "struct",
+            "optional": False,
+            "name": "fabulexa-forge.Envelope",
+        },
         "payload": payload,
     }
 
@@ -133,7 +137,7 @@ def consume(
     consumer = Consumer(
         {
             "bootstrap.servers": bootstrap,
-            "group.id": f"fabexport-rig-{uuid.uuid4().hex}",
+            "group.id": f"fabulexa-forge-rig-{uuid.uuid4().hex}",
             "auto.offset.reset": "earliest",
             "enable.auto.commit": False,
         }

@@ -16,16 +16,16 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from fabulexa_export.anchor import EffectiveAnchor
-from fabulexa_export.config.models import DebeziumSourceIdentity
-from fabulexa_export.errors import ExportRuntimeError
-from fabulexa_export.exporters.streaming.debezium import (
+from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.config.models import DebeziumSourceIdentity
+from fabulexa_forge.errors import ExportRuntimeError
+from fabulexa_forge.exporters.streaming.debezium import (
     build_debezium_value_schema,
     rebased_epoch_ms,
     render_debezium_message,
     write_debezium_stream,
 )
-from fabulexa_export.exporters.streaming.types import StreamEvent
+from fabulexa_forge.exporters.streaming.types import StreamEvent
 
 from ._helpers import make_anchor
 

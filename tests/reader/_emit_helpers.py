@@ -12,7 +12,7 @@ from pathlib import Path
 
 import duckdb
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
 
 def _minimal_sidecar(

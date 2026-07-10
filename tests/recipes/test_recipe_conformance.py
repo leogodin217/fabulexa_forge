@@ -13,8 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fabulexa_export.reader.conformance import validate
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.reader.conformance import validate
+from fabulexa_forge.reader.emit import open_emit
 
 
 def test_recipe_fixture_passes_all_conformance_checks(

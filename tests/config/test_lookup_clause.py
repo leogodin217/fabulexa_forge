@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from fabulexa_export.config.models import ColumnDecl, LookupClause
+from fabulexa_forge.config.models import ColumnDecl, LookupClause
 
 # ---------------------------------------------------------------------------
 # LookupClause

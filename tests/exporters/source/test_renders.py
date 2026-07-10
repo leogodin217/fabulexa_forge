@@ -20,23 +20,23 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
 
-from fabulexa_export.anchor import (
+from fabulexa_forge.anchor import (
     EffectiveAnchor,
     render_anchor_timestamp_expr,
     resolve_effective_anchor,
 )
-from fabulexa_export.config.models import SourceConfig
-from fabulexa_export.derivations.guard import require_single_branch
-from fabulexa_export.derivations.state_at import build_state_at_sql
-from fabulexa_export.exporters.source.plan import SourceTableSpec, build_source_plan
-from fabulexa_export.exporters.source.renders import (
+from fabulexa_forge.config.models import SourceConfig
+from fabulexa_forge.derivations.guard import require_single_branch
+from fabulexa_forge.derivations.state_at import build_state_at_sql
+from fabulexa_forge.exporters.source.plan import SourceTableSpec, build_source_plan
+from fabulexa_forge.exporters.source.renders import (
     build_changelog_render_sql,
     build_junction_render_sql,
     build_records_render_sql,
     build_render_sql,
     build_snapshot_render_sql,
 )
-from fabulexa_export.reader.emit import Emit, open_emit
+from fabulexa_forge.reader.emit import Emit, open_emit
 
 from ._source_fixtures import (
     build_source_test_emit,

@@ -18,9 +18,9 @@ from typing import Any
 import pytest
 import yaml
 
-from fabulexa_export.config.loader import load_stream_config
-from fabulexa_export.exporters.streaming.engine import build_topic_set
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.config.loader import load_stream_config
+from fabulexa_forge.exporters.streaming.engine import build_topic_set
+from fabulexa_forge.reader.emit import open_emit
 
 _EXAMPLES_ROOT = Path(__file__).parent.parent.parent / "docs" / "examples"
 

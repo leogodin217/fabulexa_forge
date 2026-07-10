@@ -18,10 +18,10 @@ from pathlib import Path
 
 import pytest
 
-from fabulexa_export.anchor import resolve_effective_anchor
-from fabulexa_export.config.loader import load_stream_config
-from fabulexa_export.exporters.streaming.driver import stream_export
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.config.loader import load_stream_config
+from fabulexa_forge.exporters.streaming.driver import stream_export
+from fabulexa_forge.reader.emit import open_emit
 
 from ._harness import (
     RecipeFolder,

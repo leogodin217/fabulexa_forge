@@ -56,7 +56,7 @@ Two ways to see messages flow:
   guarantees above directly — key, consume order, record timestamp:
 
   ```bash
-  docker exec fabexport-kafka /opt/kafka/bin/kafka-console-consumer.sh \
+  docker exec fabulexa-forge-kafka /opt/kafka/bin/kafka-console-consumer.sh \
     --bootstrap-server localhost:9092 --topic <topic> --from-beginning \
     --property print.key=true --property print.timestamp=true
   ```

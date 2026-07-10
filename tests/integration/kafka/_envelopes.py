@@ -43,7 +43,7 @@ def _value(
             # downstream connector-pattern-matching tooling works unchanged.
             "version": "2.5.0.Final",
             "connector": "postgresql",
-            "name": "fabexport",
+            "name": "fabulexa-forge",
             "db": "fabulexa",
             "schema": "public",
             "table": _KIND,

@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from fabulexa_export.exporters.streaming.mixer.app import derive_consumer_meters
-from fabulexa_export.exporters.streaming.mixer.consumer import (
+from fabulexa_forge.exporters.streaming.mixer.app import derive_consumer_meters
+from fabulexa_forge.exporters.streaming.mixer.consumer import (
     JoinSpec,
     WindowSpec,
 )

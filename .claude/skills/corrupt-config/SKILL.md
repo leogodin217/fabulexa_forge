@@ -1,13 +1,13 @@
 ---
 name: corrupt-config
-description: Author or edit a Fabulexa CorruptConfig YAML — pick the nearest recipe by operation kind and selector shape, look up only the operation/grammar types you change in the models via cclsp, then run-iterate against an emit until fabexport corrupt exits 0 AND defects.json declares exactly the impact you intended. Use when writing or modifying a corrupter config (null_cells, duplicate_rows, schema_drift, dangle_reference, freeze_series, drop_events, shift_sim_time).
+description: Author or edit a Fabulexa CorruptConfig YAML — pick the nearest recipe by operation kind and selector shape, look up only the operation/grammar types you change in the models via cclsp, then run-iterate against an emit until fabulexa-forge corrupt exits 0 AND defects.json declares exactly the impact you intended. Use when writing or modifying a corrupter config (null_cells, duplicate_rows, schema_drift, dangle_reference, freeze_series, drop_events, shift_sim_time).
 argument-hint: [what defect the corruption should inject]
 ---
 
 # Corrupt-Config Authoring
 
 Produce or edit a `CorruptConfig` YAML that loads, runs, and **declares the defect you
-meant to inject** — `fabexport corrupt` exiting 0 is necessary but not sufficient; see
+meant to inject** — `fabulexa-forge corrupt` exiting 0 is necessary but not sufficient; see
 § Run-iterate.
 
 This is the sibling skill to [`export-config`](../export-config/SKILL.md), scoped to
@@ -25,8 +25,8 @@ via cclsp.
 | Material | What it gives you | How to read it |
 |---|---|---|
 | [`docs/recipes/README.md`](../../docs/recipes/README.md) § Corrupters | **Capability index — the primary copy-adapt source.** One narrow recipe per operation/selector/placement combination (cell-level, row/schema, and family-C temporal defects). | `tools/mdnav` the index, pick the recipe whose defect matches, copy its `config.yaml`. |
-| `src/fabulexa_export/config/models.py` | **Every config type: its fields, types, required/optional, and the cross-field rules.** `Target` (the five-way selector: `table` / `tables` / `glob` / `category` / `record_kind`, exactly one set, plus optional `where` and column entries), `Amount` (`rate` xor `count`), `Distribution`, `Placement` (`entity_scoped` / `clustered_temporal` / `correlated`), and the seven operation models (`NullCells`, `DuplicateRows`, `SchemaDrift`, `DangleReference`, `FreezeSeries`, `DropEvents`, `ShiftSimTime`) plus `ShiftSimTime`'s `kind`-discriminated `ShiftSpec` union (`ShiftOffset` / `ShiftCollide` / `ShiftSwap`). | cclsp ONLY — `find_definition` / `get_hover` on the type name. The class docstring + attribute docstrings + `@model_validator` docstrings carry field meaning and cross-field rules (e.g. `FreezeSeries.cut`'s allowed values, `history`-only targets for family-C operations, `Target`'s exactly-one-selector rule). **Never read the whole file to find one field.** |
-| `fabexport corrupt <emit_dir> --config <cfg> --out <out_dir>` | The authoritative gate (Pydantic load + the full corruption run against an emit). | Run until exit 0, then read `defects.json` — see § Run-iterate. There is no config-only validate verb for `CorruptConfig` either. |
+| `src/fabulexa_forge/config/models.py` | **Every config type: its fields, types, required/optional, and the cross-field rules.** `Target` (the five-way selector: `table` / `tables` / `glob` / `category` / `record_kind`, exactly one set, plus optional `where` and column entries), `Amount` (`rate` xor `count`), `Distribution`, `Placement` (`entity_scoped` / `clustered_temporal` / `correlated`), and the seven operation models (`NullCells`, `DuplicateRows`, `SchemaDrift`, `DangleReference`, `FreezeSeries`, `DropEvents`, `ShiftSimTime`) plus `ShiftSimTime`'s `kind`-discriminated `ShiftSpec` union (`ShiftOffset` / `ShiftCollide` / `ShiftSwap`). | cclsp ONLY — `find_definition` / `get_hover` on the type name. The class docstring + attribute docstrings + `@model_validator` docstrings carry field meaning and cross-field rules (e.g. `FreezeSeries.cut`'s allowed values, `history`-only targets for family-C operations, `Target`'s exactly-one-selector rule). **Never read the whole file to find one field.** |
+| `fabulexa-forge corrupt <emit_dir> --config <cfg> --out <out_dir>` | The authoritative gate (Pydantic load + the full corruption run against an emit). | Run until exit 0, then read `defects.json` — see § Run-iterate. There is no config-only validate verb for `CorruptConfig` either. |
 
 Pick the smallest starting point that already does what you need, by defect kind not
 by size: a missing-value defect on a named column → `null-and-dangle` or
@@ -54,7 +54,7 @@ Family C's three operations (`freeze_series`, `drop_events`, `shift_sim_time`) t
 timeline). Load through `load_corrupt_config` (`config/loader.py`) — the corrupter
 sibling of `load_export_config` / `load_stream_config`.
 
-Run with `fabexport corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>`. The
+Run with `fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>`. The
 output is always `run.duckdb` + `base.json` + `defects.json` into `out_dir`; the verb
 refuses if `out_dir` already holds a `run.duckdb` or `base.json`.
 
@@ -81,7 +81,7 @@ refuses if `out_dir` already holds a `run.duckdb` or `base.json`.
    `tests.recipes._recipe_fixture.build_recipe_emit` fixture is too thin for family C
    but fine for cell/row operations). Then:
    ```bash
-   fabexport corrupt /tmp/some-emit my-corrupt-config.yaml --out /tmp/corrupt-out
+   fabulexa-forge corrupt /tmp/some-emit my-corrupt-config.yaml --out /tmp/corrupt-out
    cat /tmp/corrupt-out/defects.json
    ```
    Exit 0 means the config loaded and every operation ran. **That is not the real
@@ -90,11 +90,11 @@ refuses if `out_dir` already holds a `run.duckdb` or `base.json`.
    defects whose impact never trips a check. Check `defects.json`'s `counts.by_class`
    and each defect's `impact` against your intent, and cross-check independently:
    ```bash
-   fabexport validate /tmp/corrupt-out
+   fabulexa-forge validate /tmp/corrupt-out
    ```
    `validate`'s failing checks should union to the same impact codes the manifest
    declares (excluding the `beyond-c1-c12` sentinel, which never trips a check by
-   design — see `event-outage-window`). A non-zero exit from `fabexport corrupt` names
+   design — see `event-outage-window`). A non-zero exit from `fabulexa-forge corrupt` names
    what failed (a `ConfigError` for a bad/unknown/missing field or a violated
    validator; a `CorruptValidationError` for a business rule the emit violates — e.g. a
    family-C operation targeting a non-`history` table). Fix and re-run.

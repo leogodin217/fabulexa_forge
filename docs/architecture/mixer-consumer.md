@@ -1,7 +1,7 @@
 # Mixer consumer-side instrument
 
 The downstream half of the FabulMixer live performance: an optional, operator-driven
-**pure timing simulator** that runs inside the same `fabexport mixer` asyncio app and
+**pure timing simulator** that runs inside the same `fabulexa-forge mixer` asyncio app and
 makes the downstream *consequence* of a delivery perturbation visible. It subscribes a
 real Kafka consumer to the producer's topic set, pulls each topic at an operator-set
 throttle, and from the per-topic ingestion positions derives a global watermark that
@@ -12,16 +12,16 @@ and watches producer-side meters; this side watches the pipeline freeze. It is g
 the `--consumer` launch flag; absent that flag, a mixer run is producer-only.
 
 **Source:**
-[`exporters/streaming/mixer/`](../../src/fabulexa_export/exporters/streaming/mixer/) —
-[`consumer.py`](../../src/fabulexa_export/exporters/streaming/mixer/consumer.py) (the
+[`exporters/streaming/mixer/`](../../src/fabulexa_forge/exporters/streaming/mixer/) —
+[`consumer.py`](../../src/fabulexa_forge/exporters/streaming/mixer/consumer.py) (the
 runtime dataclasses, `seed_consumer_run`, the pure `ingest`, the async `run_consumer`),
-[`source.py`](../../src/fabulexa_export/exporters/streaming/mixer/source.py)
+[`source.py`](../../src/fabulexa_forge/exporters/streaming/mixer/source.py)
 (`KafkaSource`),
-[`app.py`](../../src/fabulexa_export/exporters/streaming/mixer/app.py)
+[`app.py`](../../src/fabulexa_forge/exporters/streaming/mixer/app.py)
 (`derive_consumer_meters`, the gated consumer routes),
-[`wire.py`](../../src/fabulexa_export/exporters/streaming/mixer/wire.py) (the consumer
+[`wire.py`](../../src/fabulexa_forge/exporters/streaming/mixer/wire.py) (the consumer
 request / response models); the `KafkaConsumeError`
-([`errors.py`](../../src/fabulexa_export/errors.py)). Tests:
+([`errors.py`](../../src/fabulexa_forge/errors.py)). Tests:
 [`tests/exporters/streaming/mixer/`](../../tests/exporters/streaming/mixer/)
 (`test_mixer_consumer.py`, `test_mixer_consumer_app.py`,
 `test_mixer_consumer_meters.py`, `test_mixer_consumer_wire.py`,
@@ -57,7 +57,7 @@ The instrument mirrors the producer's pure-core / async-shell split: a pure per-
 fold (`ingest`, sibling of the scheduler's `advance`) over an async driver
 (`run_consumer`, sibling of `schedule_releases`). The runtime dataclasses, signatures,
 and docstrings are the contract; they live in
-[`consumer.py`](../../src/fabulexa_export/exporters/streaming/mixer/consumer.py). The
+[`consumer.py`](../../src/fabulexa_forge/exporters/streaming/mixer/consumer.py). The
 state split mirrors the producer's: the operator API mutates `ConsumerControlState`
 (the dials); only `ingest` mutates `ConsumerState` (the derived timing state);
 `ConsumerJobShape` is the immutable launch-declared windows / joins / gating set.
@@ -112,7 +112,7 @@ verbatim; emits one window meter per declared window (size, `fired_count`,
 anchor-rendered latest end) and one join meter per declared join (`fact_count`,
 `null_count`, `null_rate = null/fact` or `None`). Topics are reported in
 `ConsumerControlState.topics` order. The response shapes are the consumer wire models in
-[`wire.py`](../../src/fabulexa_export/exporters/streaming/mixer/wire.py); like the
+[`wire.py`](../../src/fabulexa_forge/exporters/streaming/mixer/wire.py); like the
 producer wire models they are plain Pydantic `BaseModel`s (not the config layer's strict
 base) and request bodies set `extra="ignore"`.
 

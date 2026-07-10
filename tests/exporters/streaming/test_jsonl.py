@@ -12,12 +12,12 @@ from typing import Literal
 
 import pytest
 
-from fabulexa_export.errors import ExportRuntimeError
-from fabulexa_export.exporters.streaming.jsonl import (
+from fabulexa_forge.errors import ExportRuntimeError
+from fabulexa_forge.exporters.streaming.jsonl import (
     render_jsonl_object,
     write_jsonl_stream,
 )
-from fabulexa_export.exporters.streaming.types import StreamEvent
+from fabulexa_forge.exporters.streaming.types import StreamEvent
 
 # ---------------------------------------------------------------------------
 # Helpers

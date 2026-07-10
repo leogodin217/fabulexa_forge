@@ -1,8 +1,8 @@
-"""Tests for the ExporterError hierarchy in fabulexa_export.errors."""
+"""Tests for the ExporterError hierarchy in fabulexa_forge.errors."""
 
 from __future__ import annotations
 
-from fabulexa_export.errors import (
+from fabulexa_forge.errors import (
     ConfigError,
     CorruptError,
     CorruptValidationError,
@@ -19,7 +19,7 @@ from fabulexa_export.errors import (
     RebaseTimezoneUnresolvable,
     RebaseUnknownTimezone,
 )
-from fabulexa_export.reader.errors import ReaderError
+from fabulexa_forge.reader.errors import ReaderError
 
 
 def test_exporter_error_is_exception() -> None:

@@ -8,9 +8,9 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from fabulexa_export.corrupters.base_writer import write_base_emit
-from fabulexa_export.corrupters.state import CorruptState, WorkingTable
-from fabulexa_export.errors import ExportRuntimeError
+from fabulexa_forge.corrupters.base_writer import write_base_emit
+from fabulexa_forge.corrupters.state import CorruptState, WorkingTable
+from fabulexa_forge.errors import ExportRuntimeError
 
 from ._helpers import column_spec, table_spec, working_table
 
@@ -296,7 +296,7 @@ def test_mid_write_failure_removes_partial_run_duckdb_and_retry_succeeds(
 ) -> None:
     """A failure while writing a later table removes the partial run.duckdb,
     so a retry into the same out_dir is not refused as an existing emit."""
-    from fabulexa_export.corrupters import base_writer as base_writer_module
+    from fabulexa_forge.corrupters import base_writer as base_writer_module
 
     real_canonical_rows = base_writer_module._canonical_rows
     calls: list[int] = []

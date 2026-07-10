@@ -9,14 +9,14 @@ from collections.abc import Sequence
 import pyarrow as pa
 import pytest
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     Correlated,
     EntityScoped,
     Target,
 )
-from fabulexa_export.corrupters.selection import (
+from fabulexa_forge.corrupters.selection import (
     build_canonical_order_clause,
     build_predicate_clause,
     derive_row_weights,
@@ -26,9 +26,9 @@ from fabulexa_export.corrupters.selection import (
     resolve_population,
     resolve_target_tables,
 )
-from fabulexa_export.corrupters.state import WorkingTable
-from fabulexa_export.errors import CorruptValidationError
-from fabulexa_export.reader.sidecar import ColumnSpec, Sidecar, TableSpec
+from fabulexa_forge.corrupters.state import WorkingTable
+from fabulexa_forge.errors import CorruptValidationError
+from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar, TableSpec
 
 from ._helpers import column_spec, sidecar, table_spec, working_table
 

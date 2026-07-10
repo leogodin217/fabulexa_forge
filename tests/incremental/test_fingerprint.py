@@ -8,9 +8,9 @@ from __future__ import annotations
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fabulexa_export.anchor import EffectiveAnchor
-from fabulexa_export.config.models import ExportConfig
-from fabulexa_export.incremental.fingerprint import compute_fingerprint
+from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.config.models import ExportConfig
+from fabulexa_forge.incremental.fingerprint import compute_fingerprint
 
 # ---------------------------------------------------------------------------
 # Helpers

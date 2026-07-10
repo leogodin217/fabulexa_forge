@@ -12,9 +12,9 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.reader import open_emit, run_check, validate
-from fabulexa_export.reader.conformance import to_csv_text
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.reader import open_emit, run_check, validate
+from fabulexa_forge.reader.conformance import to_csv_text
 
 from ._fixtures_build import (
     _HISTORY_COLUMNS,

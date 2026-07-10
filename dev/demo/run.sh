@@ -5,7 +5,7 @@
 #
 # Resolves the triple (bundle, stream.yaml, demo.yaml) from
 # docs/examples/<example>/, renders consumer flags from demo.yaml, and
-# exec-replaces itself with `uv run fabexport mixer ...`.
+# exec-replaces itself with `uv run fabulexa-forge mixer ...`.
 #
 # Environment:
 #   BOOTSTRAP  Kafka bootstrap servers (default: localhost:9092).
@@ -99,7 +99,7 @@ while IFS= read -r line; do
     fi
 done < "$DEMO"
 
-CMD_PARTS=("uv" "run" "fabexport" "mixer" "$BUNDLE" "$CONFIG" "--fmt" "jsonl" "--bootstrap-servers" "$BOOTSTRAP" "--consumer")
+CMD_PARTS=("uv" "run" "fabulexa-forge" "mixer" "$BUNDLE" "$CONFIG" "--fmt" "jsonl" "--bootstrap-servers" "$BOOTSTRAP" "--consumer")
 if [ "${#EXTRA_FLAGS[@]}" -gt 0 ]; then
     CMD_PARTS+=("${EXTRA_FLAGS[@]}")
 fi

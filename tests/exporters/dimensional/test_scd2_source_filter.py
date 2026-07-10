@@ -19,8 +19,8 @@ import duckdb
 import pytest
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.config.models import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
     DimensionalConfig,
@@ -32,13 +32,13 @@ from fabulexa_export.config.models import (
     TimestampSpec,
     ValueMapSpec,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.engine import build_query_specs
-from fabulexa_export.exporters.dimensional.validation import (
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.dimensional.validation import (
     check_scd2_column_mode_supported,
 )
-from fabulexa_export.incremental.windows import Window
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.incremental.windows import Window
+from fabulexa_forge.reader.emit import open_emit
 
 # ---------------------------------------------------------------------------
 # Emit: actor kind discriminator-split on prop__actor_type

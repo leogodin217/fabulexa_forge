@@ -1,10 +1,10 @@
 # Corrupters
 
 **Status:** Implemented. Code is the contract — see
-[`corrupters/`](../../src/fabulexa_export/corrupters/),
-[`config/`](../../src/fabulexa_export/config/), and
+[`corrupters/`](../../src/fabulexa_forge/corrupters/),
+[`config/`](../../src/fabulexa_forge/config/), and
 [`tests/corrupters/`](../../tests/corrupters/). Public API:
-[`corrupters/engine.py`](../../src/fabulexa_export/corrupters/engine.py) (`corrupt_emit`).
+[`corrupters/engine.py`](../../src/fabulexa_forge/corrupters/engine.py) (`corrupt_emit`).
 
 The corrupter family reads a conformant base-layer emit and writes a realistically-broken
 one: a structurally-conformant (C1–C5, C8) but semantically-broken (C6/C7/C9–C12) base
@@ -93,22 +93,22 @@ out/
 
 | Module | Owns |
 |---|---|
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | `CorruptConfig` and its parts — `Target`, `Amount`, `Distribution`, the twelve operation models (`NullCells`, `DuplicateRows`, `DeleteRows`, `InsertRows`, `SchemaDrift`, `DangleReference`, `MispointReference`, `FreezeSeries`, `DropEvents`, `ShiftSimTime`, `MutateCells`, `DistortIntervals`), `ShiftSimTime`'s `kind`-discriminated `ShiftSpec` union (`ShiftOffset` / `ShiftCollide` / `ShiftSwap`), `MutateCells`'s `kind`-discriminated `MutationSpec` union (eleven members, also `DuplicateRows.mutation`'s vocabulary), and the `kind`-discriminated `CorruptOperation` union |
-| [`config/loader.py`](../../src/fabulexa_export/config/loader.py) | `load_corrupt_config` — the corrupter sibling of `load_export_config` / `load_stream_config`: YAML → validated `CorruptConfig`, hard-bound (corrupting is not a mode) |
-| [`corrupters/validate.py`](../../src/fabulexa_export/corrupters/validate.py) | `validate_corrupt_config` — the emit-dependent business rules, checked against a per-operation evolved-schema simulation |
-| [`corrupters/selection.py`](../../src/fabulexa_export/corrupters/selection.py) | The selection surface: `resolve_target_tables` (five-way table-selector resolution), `match_column_entries` (exact-or-pattern column matching), the canonical-content-order builder every operation and the base-emit writer share, `derive_row_weights` (per-placement row weights), and the two samplers — `draw_sample` (uniform) and `draw_weighted_sample` (placement-weighted) |
-| [`corrupters/state.py`](../../src/fabulexa_export/corrupters/state.py) | `WorkingTable`, `CorruptState`, `OperationOutcome`, `CorruptReport` — the in-flight working set and the per-operation report |
-| [`corrupters/operations/__init__.py`](../../src/fabulexa_export/corrupters/operations/__init__.py) | The `Corrupter` protocol and the `kind → Corrupter` dispatch registry |
-| [`corrupters/operations/`](../../src/fabulexa_export/corrupters/operations/) (`null_cells.py`, `duplicate_rows.py`, `delete_rows.py`, `insert_rows.py`, `schema_drift.py`, `dangle_reference.py`, `mispoint_reference.py`, `freeze_series.py`, `drop_events.py`, `shift_sim_time.py`, `mutate_cells.py`, `distort_intervals.py`) | One handler per operation kind |
-| [`corrupters/operations/_impact.py`](../../src/fabulexa_export/corrupters/operations/_impact.py) | Shared impact-declaration helpers the handlers read the working state through, including the family-C C6-mirror oracle (`resolve_c6_anchor`, `series_round_trip_fails`) `mispoint_reference` also reads for its records-reference impact rule, series enumeration (`enumerate_series_units`), and the C12 actor-sub-type predicate `mutate_cells` reads (`actor_subtype_undeclared`) |
-| [`corrupters/engine.py`](../../src/fabulexa_export/corrupters/engine.py) | `corrupt_emit` — the driver: guard single-branch, verify source conformance, validate the config, materialize the working set, thread the operations, write the output, assemble and write the manifest |
-| [`corrupters/base_writer.py`](../../src/fabulexa_export/corrupters/base_writer.py) | `write_base_emit` — the base-emit writer; the one place in the package that writes base-format knowledge, deliberately kept out of the schema-agnostic `writers/` |
-| [`corrupters/manifest.py`](../../src/fabulexa_export/corrupters/manifest.py) | The manifest value/model types — `ImpactCode`, `RowCategory`, `RowRef`, `Locator` (`ColumnLocator` / `RowLocator` / `CellLocator`), `DefectRecord`, `ManifestDefect`, `DefectSource`, `DefectCounts`, `DefectManifest` |
-| [`corrupters/manifest_build.py`](../../src/fabulexa_export/corrupters/manifest_build.py) | `build_defect_manifest`, `write_defect_manifest`, `derive_defect_id` — canonicalization, id assignment, and byte-deterministic serialization |
-| [`corrupters/fingerprint.py`](../../src/fabulexa_export/corrupters/fingerprint.py) | `fingerprint_config` — the config fingerprint |
-| [`corrupters/defect_manifest.schema.json`](../../src/fabulexa_export/corrupters/defect_manifest.schema.json) | The manifest's published JSON Schema, generated from `DefectManifest.model_json_schema(by_alias=True)`; a drift-guard test regenerates it and asserts byte-equality with the checked-in file |
-| [`errors.py`](../../src/fabulexa_export/errors.py) | `CorruptError(ExporterError)` / `CorruptValidationError(CorruptError)` — a sibling family under the CLI's `(ReaderError, ExporterError)` funnel |
-| [`cli.py`](../../src/fabulexa_export/cli.py) | `cmd_corrupt` — the `fabexport corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>` verb |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `CorruptConfig` and its parts — `Target`, `Amount`, `Distribution`, the twelve operation models (`NullCells`, `DuplicateRows`, `DeleteRows`, `InsertRows`, `SchemaDrift`, `DangleReference`, `MispointReference`, `FreezeSeries`, `DropEvents`, `ShiftSimTime`, `MutateCells`, `DistortIntervals`), `ShiftSimTime`'s `kind`-discriminated `ShiftSpec` union (`ShiftOffset` / `ShiftCollide` / `ShiftSwap`), `MutateCells`'s `kind`-discriminated `MutationSpec` union (eleven members, also `DuplicateRows.mutation`'s vocabulary), and the `kind`-discriminated `CorruptOperation` union |
+| [`config/loader.py`](../../src/fabulexa_forge/config/loader.py) | `load_corrupt_config` — the corrupter sibling of `load_export_config` / `load_stream_config`: YAML → validated `CorruptConfig`, hard-bound (corrupting is not a mode) |
+| [`corrupters/validate.py`](../../src/fabulexa_forge/corrupters/validate.py) | `validate_corrupt_config` — the emit-dependent business rules, checked against a per-operation evolved-schema simulation |
+| [`corrupters/selection.py`](../../src/fabulexa_forge/corrupters/selection.py) | The selection surface: `resolve_target_tables` (five-way table-selector resolution), `match_column_entries` (exact-or-pattern column matching), the canonical-content-order builder every operation and the base-emit writer share, `derive_row_weights` (per-placement row weights), and the two samplers — `draw_sample` (uniform) and `draw_weighted_sample` (placement-weighted) |
+| [`corrupters/state.py`](../../src/fabulexa_forge/corrupters/state.py) | `WorkingTable`, `CorruptState`, `OperationOutcome`, `CorruptReport` — the in-flight working set and the per-operation report |
+| [`corrupters/operations/__init__.py`](../../src/fabulexa_forge/corrupters/operations/__init__.py) | The `Corrupter` protocol and the `kind → Corrupter` dispatch registry |
+| [`corrupters/operations/`](../../src/fabulexa_forge/corrupters/operations/) (`null_cells.py`, `duplicate_rows.py`, `delete_rows.py`, `insert_rows.py`, `schema_drift.py`, `dangle_reference.py`, `mispoint_reference.py`, `freeze_series.py`, `drop_events.py`, `shift_sim_time.py`, `mutate_cells.py`, `distort_intervals.py`) | One handler per operation kind |
+| [`corrupters/operations/_impact.py`](../../src/fabulexa_forge/corrupters/operations/_impact.py) | Shared impact-declaration helpers the handlers read the working state through, including the family-C C6-mirror oracle (`resolve_c6_anchor`, `series_round_trip_fails`) `mispoint_reference` also reads for its records-reference impact rule, series enumeration (`enumerate_series_units`), and the C12 actor-sub-type predicate `mutate_cells` reads (`actor_subtype_undeclared`) |
+| [`corrupters/engine.py`](../../src/fabulexa_forge/corrupters/engine.py) | `corrupt_emit` — the driver: guard single-branch, verify source conformance, validate the config, materialize the working set, thread the operations, write the output, assemble and write the manifest |
+| [`corrupters/base_writer.py`](../../src/fabulexa_forge/corrupters/base_writer.py) | `write_base_emit` — the base-emit writer; the one place in the package that writes base-format knowledge, deliberately kept out of the schema-agnostic `writers/` |
+| [`corrupters/manifest.py`](../../src/fabulexa_forge/corrupters/manifest.py) | The manifest value/model types — `ImpactCode`, `RowCategory`, `RowRef`, `Locator` (`ColumnLocator` / `RowLocator` / `CellLocator`), `DefectRecord`, `ManifestDefect`, `DefectSource`, `DefectCounts`, `DefectManifest` |
+| [`corrupters/manifest_build.py`](../../src/fabulexa_forge/corrupters/manifest_build.py) | `build_defect_manifest`, `write_defect_manifest`, `derive_defect_id` — canonicalization, id assignment, and byte-deterministic serialization |
+| [`corrupters/fingerprint.py`](../../src/fabulexa_forge/corrupters/fingerprint.py) | `fingerprint_config` — the config fingerprint |
+| [`corrupters/defect_manifest.schema.json`](../../src/fabulexa_forge/corrupters/defect_manifest.schema.json) | The manifest's published JSON Schema, generated from `DefectManifest.model_json_schema(by_alias=True)`; a drift-guard test regenerates it and asserts byte-equality with the checked-in file |
+| [`errors.py`](../../src/fabulexa_forge/errors.py) | `CorruptError(ExporterError)` / `CorruptValidationError(CorruptError)` — a sibling family under the CLI's `(ReaderError, ExporterError)` funnel |
+| [`cli.py`](../../src/fabulexa_forge/cli.py) | `cmd_corrupt` — the `fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>` verb |
 
 ## Boundary
 
@@ -1255,7 +1255,7 @@ discriminator.
 
 ### Manifest / validate agreement invariant
 
-Given a **C1–C12-conformant source emit**, the set of check ids `fabexport validate`
+Given a **C1–C12-conformant source emit**, the set of check ids `fabulexa-forge validate`
 reports as failing on the corrupted emit is **contained in** the union of `impact` entries
 across all manifest records, excluding `beyond-c1-c12`
 (`validate_failing ⊆ impact_union`). This **soundness** direction is load-bearing: every
@@ -1479,7 +1479,7 @@ raise `ConfigError`; **business-rule** failures raise `CorruptValidationError` a
 `validate_corrupt_config`, before any table is read or written.
 
 Parse-time validation is the Pydantic model validators in
-[`config/models.py`](../../src/fabulexa_export/config/models.py):
+[`config/models.py`](../../src/fabulexa_forge/config/models.py):
 `Target.exactly_one_selector` (exactly one of `table` / `tables` / `glob` / `category` /
 `record_kind` is set; `tables`, when present, is non-empty and names no table twice);
 `Target.columns` non-empty and unique; `Amount` exactly one of `rate` (0, 1] / `count`

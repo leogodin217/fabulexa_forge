@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import random
 
-from fabulexa_export.config.models import (
+from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
     DangleReference,
     Target,
 )
-from fabulexa_export.corrupters.operations.dangle_reference import (
+from fabulexa_forge.corrupters.operations.dangle_reference import (
     DANGLING_ID_PREFIX,
     DangleReferenceCorrupter,
 )
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.reader.sidecar import Sidecar
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.reader.sidecar import Sidecar
 
 from .._helpers import (
     FixedSampleRandom,

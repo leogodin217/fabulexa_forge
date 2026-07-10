@@ -5,12 +5,12 @@ from __future__ import annotations
 import random
 from collections.abc import Sequence
 
-from fabulexa_export.config.models import Amount, InsertRows, Target
-from fabulexa_export.corrupters.operations._mutations import swap_adjacent
-from fabulexa_export.corrupters.operations.dangle_reference import DANGLING_ID_PREFIX
-from fabulexa_export.corrupters.operations.insert_rows import InsertRowsCorrupter
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.reader.sidecar import BranchEntry, Sidecar
+from fabulexa_forge.config.models import Amount, InsertRows, Target
+from fabulexa_forge.corrupters.operations._mutations import swap_adjacent
+from fabulexa_forge.corrupters.operations.dangle_reference import DANGLING_ID_PREFIX
+from fabulexa_forge.corrupters.operations.insert_rows import InsertRowsCorrupter
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.reader.sidecar import BranchEntry, Sidecar
 
 from .._helpers import (
     CallOrderRandom,

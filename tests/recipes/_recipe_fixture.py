@@ -60,7 +60,7 @@ from pathlib import Path
 
 import duckdb
 
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
 # One whole day in nanoseconds (sim_time unit = ns offset from runtime anchor).
 # 1*DAY → 2024-01-02, 2*DAY → 2024-01-03, 3*DAY → 2024-01-04.
@@ -353,7 +353,7 @@ def build_recipe_emit(dest: Path) -> None:
 
     Writes run.duckdb + base.json. Fully deterministic (no randomness, no
     clock calls). Valid against the vendored contract: ``open_emit(dest)``
-    and ``fabexport validate`` will pass.
+    and ``fabulexa-forge validate`` will pass.
 
     Args:
         dest: Directory to write the emit artifacts into (created if absent).

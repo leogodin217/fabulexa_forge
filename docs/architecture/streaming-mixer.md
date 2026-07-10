@@ -16,12 +16,12 @@ mixer's mutable state, its frontier release scheduler, and its pure-core / async
 contract.
 
 **Source:**
-[`exporters/streaming/mixer/scheduler.py`](../../src/fabulexa_export/exporters/streaming/mixer/scheduler.py)
+[`exporters/streaming/mixer/scheduler.py`](../../src/fabulexa_forge/exporters/streaming/mixer/scheduler.py)
 (`Transport`, `TopicDials`, `ControlState`, `FrontierState`, `seed_mixer_run`, `advance`,
 `schedule_releases`), consuming the streaming engine
-([`engine.py`](../../src/fabulexa_export/exporters/streaming/engine.py):
+([`engine.py`](../../src/fabulexa_forge/exporters/streaming/engine.py):
 `iter_stream_events`, `build_topic_set`) and `StreamEvent`
-([`types.py`](../../src/fabulexa_export/exporters/streaming/types.py)) unchanged.
+([`types.py`](../../src/fabulexa_forge/exporters/streaming/types.py)) unchanged.
 Tests:
 [`tests/exporters/streaming/test_mixer.py`](../../tests/exporters/streaming/test_mixer.py).
 
@@ -47,7 +47,7 @@ Tests:
   *runtime* state layered over an existing `StreamConfig`, not config; it has no YAML
   surface. The only failure path is the engine's existing eager validation, surfaced as
   `ExportError` from `iter_stream_events` at drain time and left unwrapped for the caller.
-- **Does not touch the pacer or `fabexport stream`.** `pace_events` and the streaming CLI
+- **Does not touch the pacer or `fabulexa-forge stream`.** `pace_events` and the streaming CLI
   verb stay deterministic and byte-identical; the mixer adds nothing to them and depends
   on none of their timing.
 
@@ -60,7 +60,7 @@ referential transparency of its return value (invariant 4): it reads a snapshot 
 `control`, mutates `frontier` in place, and pops from `buffers`, then returns the events
 released this tick. The runtime dataclasses (`Transport`, `TopicDials`, `ControlState`,
 `FrontierState`) and the function signatures are defined in
-[`scheduler.py`](../../src/fabulexa_export/exporters/streaming/mixer/scheduler.py).
+[`scheduler.py`](../../src/fabulexa_forge/exporters/streaming/mixer/scheduler.py).
 
 ### The master frontier
 

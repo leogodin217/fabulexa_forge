@@ -7,13 +7,13 @@ import random
 import pytest
 from pydantic import ValidationError
 
-from fabulexa_export.config.models import SchemaDrift, Target
-from fabulexa_export.corrupters.operations.schema_drift import (
+from fabulexa_forge.config.models import SchemaDrift, Target
+from fabulexa_forge.corrupters.operations.schema_drift import (
     SchemaDriftCorrupter,
     _cast_column,
 )
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.errors import CorruptValidationError
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.errors import CorruptValidationError
 
 from .._helpers import column_spec, sidecar, table_spec, working_table
 

@@ -1,4 +1,4 @@
-"""Tests for `fabexport init` CLI verb (record_roles-driven).
+"""Tests for `fabulexa-forge init` CLI verb (record_roles-driven).
 
 Covers:
 - Bare-string dimension kind, no history_tracked -> role: dim, scd: type1 stub
@@ -23,8 +23,8 @@ import duckdb
 import pytest
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.cli import cmd_init, main
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.cli import cmd_init, main
 
 # ---------------------------------------------------------------------------
 # Shared column definitions
@@ -597,7 +597,7 @@ def test_no_likely_internal_comment(tmp_path: Path) -> None:
 
 def test_generated_yaml_loadable_by_load_export_config(tmp_path: Path) -> None:
     """Generated candidate config is valid YAML that load_export_config accepts."""
-    from fabulexa_export.config.loader import load_export_config
+    from fabulexa_forge.config.loader import load_export_config
 
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
@@ -608,7 +608,7 @@ def test_generated_yaml_loadable_by_load_export_config(tmp_path: Path) -> None:
 
 def test_generated_yaml_loadable_scd2(tmp_path: Path) -> None:
     """SCD-2 candidate config is valid YAML that load_export_config accepts."""
-    from fabulexa_export.config.loader import load_export_config
+    from fabulexa_forge.config.loader import load_export_config
 
     emit_dir = build_bare_dim_scd2_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
@@ -618,7 +618,7 @@ def test_generated_yaml_loadable_scd2(tmp_path: Path) -> None:
 
 def test_generated_yaml_loadable_fact(tmp_path: Path) -> None:
     """Fact candidate config is valid YAML that load_export_config accepts."""
-    from fabulexa_export.config.loader import load_export_config
+    from fabulexa_forge.config.loader import load_export_config
 
     emit_dir = build_bare_fact_no_discriminator_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
@@ -628,7 +628,7 @@ def test_generated_yaml_loadable_fact(tmp_path: Path) -> None:
 
 def test_generated_yaml_loadable_object_valued(tmp_path: Path) -> None:
     """Object-valued kind candidate config is valid YAML that load_export_config accepts."""
-    from fabulexa_export.config.loader import load_export_config
+    from fabulexa_forge.config.loader import load_export_config
 
     emit_dir = build_object_valued_actor_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"

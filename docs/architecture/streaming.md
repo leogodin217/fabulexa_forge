@@ -1,16 +1,16 @@
 # Streaming Exporter
 
 **Status:** Implemented. Code is the contract — see
-[`exporters/streaming/`](../../src/fabulexa_export/exporters/streaming/)
+[`exporters/streaming/`](../../src/fabulexa_forge/exporters/streaming/)
 (`types.py`, `engine.py`, `jsonl.py`, `driver.py`),
-[`config/`](../../src/fabulexa_export/config/) (`StreamConfig`,
+[`config/`](../../src/fabulexa_forge/config/) (`StreamConfig`,
 `load_stream_config`), and
 [`tests/exporters/streaming/`](../../tests/exporters/streaming/),
 [`tests/config/test_stream_config.py`](../../tests/config/test_stream_config.py),
 [`tests/test_cli_stream.py`](../../tests/test_cli_stream.py). Public API:
-[`exporters/streaming/__init__.py`](../../src/fabulexa_export/exporters/streaming/__init__.py).
+[`exporters/streaming/__init__.py`](../../src/fabulexa_forge/exporters/streaming/__init__.py).
 
-The `fabexport stream` verb replays the base layer as an ordered, temporally-honest
+The `fabulexa-forge stream` verb replays the base layer as an ordered, temporally-honest
 event stream. It carries two content axes. `state-changes` replays the `history` change
 ledger: the bundle's `history` table is a change-event ledger ordered by `sim_time`, and
 `records__<kind>` carries each record's `created_sim_time` / `deactivated_at` / `active`
@@ -50,20 +50,20 @@ format: jsonl {seq, op, ts, kind, key:{record_id}, after}
 
 | Module | Owns |
 |---|---|
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | `StreamConfig` (the `content` axis and its content-conditional `kinds` / `memberships` selection lists), `StreamKindSelection` (with `types` sub-type scope), `MembershipSelection` (one membership table's owner kind / property / carried fields), the optional `RoutingConfig` policy, the optional `DebeziumConfig` / `DebeziumSourceIdentity` block, and the optional `KafkaConfig` connection block — the top-level streaming envelope and its parse-time validators |
-| [`config/loader.py`](../../src/fabulexa_export/config/loader.py) | `load_stream_config` — YAML → validated `StreamConfig`, hard-bound (no mode dispatch) |
-| [`exporters/streaming/types.py`](../../src/fabulexa_export/exporters/streaming/types.py) | `StreamEvent` (one format-agnostic change event — `op` admits `c`/`u`/`d` and `join`/`leave`) and `StreamOutcome` (run counts) |
-| [`exporters/streaming/engine.py`](../../src/fabulexa_export/exporters/streaming/engine.py) | `iter_stream_events` — the up-front business-rule pass (including the routing rules), per-source fold materialization (per-kind row-state for `state-changes`, per-table membership for `membership-events`, dispatched on `config.content`), sub-type selection, the cross-source k-way merge, `seq` stamping, per-event topic/`route_table` stamping, and Python-side `ts` rendering |
-| [`exporters/streaming/routing.py`](../../src/fabulexa_export/exporters/streaming/routing.py) | `route_attributes` / `resolve_subtype_index` / `membership_route_attributes` (Layer A) and `resolve_topic` / `enumerate_topics` (Layer B) — the two-layer routing surface. Its contract is owned by [`streaming-routing.md`](streaming-routing.md) |
-| [`exporters/streaming/encoding.py`](../../src/fabulexa_export/exporters/streaming/encoding.py) | `encode_pinned` — the single byte-stable JSON encoder shared by every sink (stdout / file / kafka), so a given `(event, fmt, anchor, schema)` yields byte-identical message bodies across all three |
-| [`exporters/streaming/jsonl.py`](../../src/fabulexa_export/exporters/streaming/jsonl.py) | `render_jsonl_object` (the JSONL object shape) and `write_jsonl_stream` (the shared `encode_pinned` + stdout / per-kind-file sinks, with the `paced` per-line-flush mode — see [`streaming-pacing.md`](streaming-pacing.md)) |
-| [`exporters/streaming/debezium.py`](../../src/fabulexa_export/exporters/streaming/debezium.py) | `render_debezium_message` / `build_debezium_value_schema` / `rebased_epoch_ms` (the Debezium value-message shape, the embedded Connect schema, and the epoch-millisecond timestamp) and `write_debezium_stream` (the same shared `encode_pinned` + stdout / per-kind-file sinks, the same `paced` flush mode) |
-| [`exporters/streaming/kafka_sink.py`](../../src/fabulexa_export/exporters/streaming/kafka_sink.py) | `resolve_bootstrap_servers` (CLI → config block → environment bootstrap precedence) and `write_kafka_stream` (the Kafka producer lifecycle — topic pre-creation, per-event produce keyed by `record_id`, flush-before-return); `confluent-kafka` is imported lazily here only |
-| [`exporters/streaming/pacer.py`](../../src/fabulexa_export/exporters/streaming/pacer.py) | `ResolvedClock` / `resolve_clock` / `pace_events` — the realtime-pacing surface the driver composes. Its contract is owned by [`streaming-pacing.md`](streaming-pacing.md) |
-| [`exporters/streaming/driver.py`](../../src/fabulexa_export/exporters/streaming/driver.py) | `stream_export` — events → (pace when realtime) → format → sink for one run, the Debezium config/anchor business rules and the per-topic schema-ambiguity rule, the per-table-identity value-schema build, and the declared-but-empty-topic backfill (empty files + zero counts) |
-| [`derivations/row_state_events.py`](../../src/fabulexa_export/derivations/row_state_events.py), [`derivations/membership_events.py`](../../src/fabulexa_export/derivations/membership_events.py) | The composed event-content folds — their semantics are owned by [`derivations.md`](derivations.md) § The row-state-events derivation and § The membership-events derivation |
-| [`cli.py`](../../src/fabulexa_export/cli.py) | `cmd_stream` — the `fabexport stream` verb, flag-level usage checks (including the `--speed` / `--idle-cap` / `--fast` clock checks and the `--sink stdout\|file\|kafka` / `--out` pairing), clock resolution, the `--bootstrap-servers` flag and `FABEXPORT_KAFKA_BOOTSTRAP` read for the kafka sink, and the `(ReaderError, ExporterError)` funnel |
-| [`anchor.py`](../../src/fabulexa_export/anchor.py) | The `EffectiveAnchor` the engine renders each event's `ts` from — see [`anchor.md`](anchor.md) |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `StreamConfig` (the `content` axis and its content-conditional `kinds` / `memberships` selection lists), `StreamKindSelection` (with `types` sub-type scope), `MembershipSelection` (one membership table's owner kind / property / carried fields), the optional `RoutingConfig` policy, the optional `DebeziumConfig` / `DebeziumSourceIdentity` block, and the optional `KafkaConfig` connection block — the top-level streaming envelope and its parse-time validators |
+| [`config/loader.py`](../../src/fabulexa_forge/config/loader.py) | `load_stream_config` — YAML → validated `StreamConfig`, hard-bound (no mode dispatch) |
+| [`exporters/streaming/types.py`](../../src/fabulexa_forge/exporters/streaming/types.py) | `StreamEvent` (one format-agnostic change event — `op` admits `c`/`u`/`d` and `join`/`leave`) and `StreamOutcome` (run counts) |
+| [`exporters/streaming/engine.py`](../../src/fabulexa_forge/exporters/streaming/engine.py) | `iter_stream_events` — the up-front business-rule pass (including the routing rules), per-source fold materialization (per-kind row-state for `state-changes`, per-table membership for `membership-events`, dispatched on `config.content`), sub-type selection, the cross-source k-way merge, `seq` stamping, per-event topic/`route_table` stamping, and Python-side `ts` rendering |
+| [`exporters/streaming/routing.py`](../../src/fabulexa_forge/exporters/streaming/routing.py) | `route_attributes` / `resolve_subtype_index` / `membership_route_attributes` (Layer A) and `resolve_topic` / `enumerate_topics` (Layer B) — the two-layer routing surface. Its contract is owned by [`streaming-routing.md`](streaming-routing.md) |
+| [`exporters/streaming/encoding.py`](../../src/fabulexa_forge/exporters/streaming/encoding.py) | `encode_pinned` — the single byte-stable JSON encoder shared by every sink (stdout / file / kafka), so a given `(event, fmt, anchor, schema)` yields byte-identical message bodies across all three |
+| [`exporters/streaming/jsonl.py`](../../src/fabulexa_forge/exporters/streaming/jsonl.py) | `render_jsonl_object` (the JSONL object shape) and `write_jsonl_stream` (the shared `encode_pinned` + stdout / per-kind-file sinks, with the `paced` per-line-flush mode — see [`streaming-pacing.md`](streaming-pacing.md)) |
+| [`exporters/streaming/debezium.py`](../../src/fabulexa_forge/exporters/streaming/debezium.py) | `render_debezium_message` / `build_debezium_value_schema` / `rebased_epoch_ms` (the Debezium value-message shape, the embedded Connect schema, and the epoch-millisecond timestamp) and `write_debezium_stream` (the same shared `encode_pinned` + stdout / per-kind-file sinks, the same `paced` flush mode) |
+| [`exporters/streaming/kafka_sink.py`](../../src/fabulexa_forge/exporters/streaming/kafka_sink.py) | `resolve_bootstrap_servers` (CLI → config block → environment bootstrap precedence) and `write_kafka_stream` (the Kafka producer lifecycle — topic pre-creation, per-event produce keyed by `record_id`, flush-before-return); `confluent-kafka` is imported lazily here only |
+| [`exporters/streaming/pacer.py`](../../src/fabulexa_forge/exporters/streaming/pacer.py) | `ResolvedClock` / `resolve_clock` / `pace_events` — the realtime-pacing surface the driver composes. Its contract is owned by [`streaming-pacing.md`](streaming-pacing.md) |
+| [`exporters/streaming/driver.py`](../../src/fabulexa_forge/exporters/streaming/driver.py) | `stream_export` — events → (pace when realtime) → format → sink for one run, the Debezium config/anchor business rules and the per-topic schema-ambiguity rule, the per-table-identity value-schema build, and the declared-but-empty-topic backfill (empty files + zero counts) |
+| [`derivations/row_state_events.py`](../../src/fabulexa_forge/derivations/row_state_events.py), [`derivations/membership_events.py`](../../src/fabulexa_forge/derivations/membership_events.py) | The composed event-content folds — their semantics are owned by [`derivations.md`](derivations.md) § The row-state-events derivation and § The membership-events derivation |
+| [`cli.py`](../../src/fabulexa_forge/cli.py) | `cmd_stream` — the `fabulexa-forge stream` verb, flag-level usage checks (including the `--speed` / `--idle-cap` / `--fast` clock checks and the `--sink stdout\|file\|kafka` / `--out` pairing), clock resolution, the `--bootstrap-servers` flag and `FABEXPORT_KAFKA_BOOTSTRAP` read for the kafka sink, and the `(ReaderError, ExporterError)` funnel |
+| [`anchor.py`](../../src/fabulexa_forge/anchor.py) | The `EffectiveAnchor` the engine renders each event's `ts` from — see [`anchor.md`](anchor.md) |
 
 ## Boundary
 
@@ -306,9 +306,9 @@ new fold, no engine change, no new sink. Each `StreamEvent` becomes the Debezium
 message, the shape a Debezium connector emits off an OLTP database, so an author can feed a
 CDC pipeline or teach against the message envelope. The mapping is a deterministic recoding of the same after-image, so
 the four streaming invariants hold for it. The format is implemented in
-[`debezium.py`](../../src/fabulexa_export/exporters/streaming/debezium.py); the
+[`debezium.py`](../../src/fabulexa_forge/exporters/streaming/debezium.py); the
 config block is `DebeziumConfig` / `DebeziumSourceIdentity` in
-[`config/models.py`](../../src/fabulexa_export/config/models.py).
+[`config/models.py`](../../src/fabulexa_forge/config/models.py).
 
 **Op → before / after (`state-changes`).** The Debezium `op` is the `StreamEvent.op`
 verbatim. The stream is an **upsert log** — insert on `c`, upsert on `u`, keyed by
@@ -459,12 +459,12 @@ The `kafka` sink delivers the merged, `seq`-stamped stream to a Kafka broker, on
 message per event, in place of stdout or a file directory. It consumes the same
 `Iterable[StreamEvent]` the stdout and file sinks consume and renders each event through
 the same format renderer and the shared pinned encoder
-([`encoding.py`](../../src/fabulexa_export/exporters/streaming/encoding.py)), so for a
+([`encoding.py`](../../src/fabulexa_forge/exporters/streaming/encoding.py)), so for a
 given `(event, fmt, anchor, schema)` the message value is **byte-identical to the
 file-sink line minus its trailing newline**. The sink is format-agnostic: the driver
 builds a per-event value-render closure from the selected format — the shared
 `build_kafka_render_value` builder — and `write_kafka_stream`
-([`kafka_sink.py`](../../src/fabulexa_export/exporters/streaming/kafka_sink.py)) holds no
+([`kafka_sink.py`](../../src/fabulexa_forge/exporters/streaming/kafka_sink.py)) holds no
 `jsonl`/`debezium` knowledge. The live mixer
 ([`mixer-control-plane.md`](mixer-control-plane.md)) calls the same builder, so the
 format branch and the Debezium business rules are single-sourced across the stream Kafka
@@ -581,7 +581,7 @@ importable, the run fails with `KafkaClientUnavailable` naming the fix.
 
 **Parse-time** (Pydantic; `StreamConfig`, `StreamKindSelection`, `MembershipSelection`,
 `DebeziumConfig`, `DebeziumSourceIdentity` in
-[`config/models.py`](../../src/fabulexa_export/config/models.py)): `extra='forbid'`;
+[`config/models.py`](../../src/fabulexa_forge/config/models.py)): `extra='forbid'`;
 `content` is the `state-changes` / `membership-events` literal. The `kinds` and
 `memberships` selection lists are **content-conditional**: `selection_matches_content`
 requires exactly the selected content's list populated and the other empty — non-empty
@@ -797,7 +797,7 @@ What the streaming exporter deliberately does not own:
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` resolution surface — origin/zone precedence, `rebase` + CLI flags; the absolute instant `ts` renders from |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — the records spine, current values, and `history_tracked` flag |
 | [`config-docstrings.md`](config-docstrings.md) | The three-channel docstring convention the `StreamConfig` models follow |
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | The `StreamConfig` grammar these semantics bind |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The `StreamConfig` grammar these semantics bind |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles, the isolation boundary, vocabulary |

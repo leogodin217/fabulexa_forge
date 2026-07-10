@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from fabulexa_export.exporters.streaming.encoding import encode_pinned
-from fabulexa_export.exporters.streaming.jsonl import (
+from fabulexa_forge.exporters.streaming.encoding import encode_pinned
+from fabulexa_forge.exporters.streaming.jsonl import (
     _serialize_object,
     render_jsonl_object,
 )
@@ -102,7 +102,7 @@ def test_encode_pinned_matches_jsonl_render_pipeline() -> None:
 
 def test_encode_pinned_plus_newline_equals_debezium_serialize_message() -> None:
     """encode_pinned(msg) + '\\n' is byte-identical to debezium _serialize_message(msg)."""
-    from fabulexa_export.exporters.streaming.debezium import _serialize_message
+    from fabulexa_forge.exporters.streaming.debezium import _serialize_message
 
     msg: dict[str, object] = {
         "schema": None,
@@ -113,7 +113,7 @@ def test_encode_pinned_plus_newline_equals_debezium_serialize_message() -> None:
 
 def test_encode_pinned_debezium_non_ascii_survives() -> None:
     """Non-ASCII in a debezium payload survives unescaped through encode_pinned."""
-    from fabulexa_export.exporters.streaming.debezium import _serialize_message
+    from fabulexa_forge.exporters.streaming.debezium import _serialize_message
 
     msg: dict[str, object] = {"payload": {"name": "Ünïcödé"}}
     pinned_line = encode_pinned(msg) + "\n"
@@ -132,7 +132,7 @@ def test_encode_pinned_debezium_render_message_byte_identity(
     value_schema: dict[str, object] | None,
 ) -> None:
     """encode_pinned(render_debezium_message(...)) + '\\n' equals _serialize_message."""
-    from fabulexa_export.exporters.streaming.debezium import (
+    from fabulexa_forge.exporters.streaming.debezium import (
         _serialize_message,
         render_debezium_message,
     )
@@ -147,7 +147,7 @@ def test_encode_pinned_debezium_render_message_byte_identity(
         topic = "patient"
         route_table = "patient"
 
-    from fabulexa_export.config.models import DebeziumSourceIdentity
+    from fabulexa_forge.config.models import DebeziumSourceIdentity
 
     source_identity = DebeziumSourceIdentity.model_validate(
         {

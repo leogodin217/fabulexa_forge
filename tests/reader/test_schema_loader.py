@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from fabulexa_export.reader import _schema
+from fabulexa_forge.reader import _schema
 
 # ---------------------------------------------------------------------------
 # Fakes

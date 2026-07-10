@@ -1,6 +1,6 @@
 # Development Process
 
-How we architect, develop, and document Fabulexa Composite Export.
+How we architect, develop, and document Fabulexa Forge.
 
 ---
 

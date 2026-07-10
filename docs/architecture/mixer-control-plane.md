@@ -9,29 +9,29 @@ the streaming engine and the mixer scheduler ([`streaming-mixer.md`](streaming-m
 the scheduler owns the pure per-tick release semantics; this plane owns the run
 lifecycle, the HTTP control surface, the async Kafka sink, and the meters derivation. It
 is the deliberately non-deterministic, wall-clock- and operator-driven counterpart to
-`fabexport stream` — a separate `fabexport mixer` verb, never a flag on `stream`.
+`fabulexa-forge stream` — a separate `fabulexa-forge mixer` verb, never a flag on `stream`.
 
 **Source:**
-[`exporters/streaming/mixer/`](../../src/fabulexa_export/exporters/streaming/mixer/) —
-[`run_state.py`](../../src/fabulexa_export/exporters/streaming/mixer/run_state.py)
+[`exporters/streaming/mixer/`](../../src/fabulexa_forge/exporters/streaming/mixer/) —
+[`run_state.py`](../../src/fabulexa_forge/exporters/streaming/mixer/run_state.py)
 (`MixerRunState`),
-[`wire.py`](../../src/fabulexa_export/exporters/streaming/mixer/wire.py) (the request /
-response models), [`sink.py`](../../src/fabulexa_export/exporters/streaming/mixer/sink.py)
-(`KafkaSink`), [`app.py`](../../src/fabulexa_export/exporters/streaming/mixer/app.py)
+[`wire.py`](../../src/fabulexa_forge/exporters/streaming/mixer/wire.py) (the request /
+response models), [`sink.py`](../../src/fabulexa_forge/exporters/streaming/mixer/sink.py)
+(`KafkaSink`), [`app.py`](../../src/fabulexa_forge/exporters/streaming/mixer/app.py)
 (`derive_meters`, `build_app`),
-[`serve.py`](../../src/fabulexa_export/exporters/streaming/mixer/serve.py)
+[`serve.py`](../../src/fabulexa_forge/exporters/streaming/mixer/serve.py)
 (`serve_mixer`); the shared render-closure builder `build_kafka_render_value`
-([`driver.py`](../../src/fabulexa_export/exporters/streaming/driver.py)); the
+([`driver.py`](../../src/fabulexa_forge/exporters/streaming/driver.py)); the
 `MixerExtraUnavailable` error
-([`errors.py`](../../src/fabulexa_export/errors.py)); the `mixer` verb (`cmd_mixer`,
-[`cli.py`](../../src/fabulexa_export/cli.py)). Tests:
+([`errors.py`](../../src/fabulexa_forge/errors.py)); the `mixer` verb (`cmd_mixer`,
+[`cli.py`](../../src/fabulexa_forge/cli.py)). Tests:
 [`tests/exporters/streaming/mixer/`](../../tests/exporters/streaming/mixer/),
 [`tests/test_cli_mixer.py`](../../tests/test_cli_mixer.py).
 
 ## Boundary
 
 - **Input.** An emit directory, an existing `StreamConfig` (the same file
-  `fabexport stream` reads), and operator HTTP requests. There is no mixer config
+  `fabulexa-forge stream` reads), and operator HTTP requests. There is no mixer config
   envelope and no educator-facing YAML: a mixer run layers *runtime* state over the
   `StreamConfig`, and `StreamConfig.clock` is ignored (the transport replaces the
   pacer). Run-specific knobs — launch transport (`--speed` / `--play` / `--paused`),
@@ -51,7 +51,7 @@ response models), [`sink.py`](../../src/fabulexa_export/exporters/streaming/mixe
   producer, so the serving phase holds no DuckDB connection.
 - **Optional extras, lazily imported.** The `[mixer]` extra (FastAPI + an ASGI server)
   composes the `[kafka]` extra (`confluent-kafka`); both are imported lazily, so
-  importing `fabulexa_export` or running any other verb requires neither. A missing
+  importing `fabulexa_forge` or running any other verb requires neither. A missing
   `[mixer]` extra is `MixerExtraUnavailable`; a missing client is
   `KafkaClientUnavailable`.
 - **The HTTP surface mirrors a shared wire contract.** The endpoints, request /
@@ -187,7 +187,7 @@ frontier by the lag) while an un-lagged topic stays near zero.
 
 ## Validation Rules
 
-**Parse-time (the request models, [`wire.py`](../../src/fabulexa_export/exporters/streaming/mixer/wire.py)).**
+**Parse-time (the request models, [`wire.py`](../../src/fabulexa_forge/exporters/streaming/mixer/wire.py)).**
 `TransportUpdate.speed ∈ [0.1, 1000]`; `TopicDialsUpdate.rate ∈ [0.0, 4.0]`,
 `lag_ms ∈ [0, 300000]`. An out-of-bounds body is `422` with no mutation. The wire bounds
 live **only** here — the scheduler assumes them and `advance` neither re-validates nor
@@ -256,7 +256,7 @@ meters; it deliberately does not own:
   dials and reads derived state.
 - **Determinism.** The plane makes no determinism guarantee — it is wall-clock- and
   operator-driven by construction, which is its declared purpose and the reason it is a
-  separate verb from the byte-identical `fabexport stream` and `pace_events`.
+  separate verb from the byte-identical `fabulexa-forge stream` and `pace_events`.
 - **Non-Kafka sinks.** The verb is Kafka-only; the `sink` injection seam keeps other
   sinks reachable, but none other is wired.
 - **A consumer / broker watermark.** The control-plane meters are producer-side tier-1

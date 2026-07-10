@@ -16,21 +16,21 @@ from pathlib import Path
 import duckdb
 import pytest
 
-from fabulexa_export.anchor import resolve_effective_anchor
-from fabulexa_export.config.models import ExportConfig, SourceConfig
-from fabulexa_export.derivations.guard import require_single_branch
-from fabulexa_export.errors import SourceAnchorRequired, SourceSnapshotRequiresWindows
-from fabulexa_export.exporters.query_spec import QuerySpec
-from fabulexa_export.exporters.source.engine import (
+from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.config.models import ExportConfig, SourceConfig
+from fabulexa_forge.derivations.guard import require_single_branch
+from fabulexa_forge.errors import SourceAnchorRequired, SourceSnapshotRequiresWindows
+from fabulexa_forge.exporters.query_spec import QuerySpec
+from fabulexa_forge.exporters.source.engine import (
     build_source_query_specs,
     export_source,
 )
-from fabulexa_export.exporters.source.plan import build_source_plan
-from fabulexa_export.exporters.source.renders import (
+from fabulexa_forge.exporters.source.plan import build_source_plan
+from fabulexa_forge.exporters.source.renders import (
     build_records_render_sql,
     build_snapshot_render_sql,
 )
-from fabulexa_export.reader.emit import open_emit
+from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
     build_empty_source_emit,

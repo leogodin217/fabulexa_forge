@@ -11,14 +11,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from fabulexa_export.reader import (
+from fabulexa_forge.reader import (
     UnsupportedBaseFormatVersionError,
     conformance,
     open_emit,
 )
 
 if TYPE_CHECKING:
-    from fabulexa_export.reader import Emit
+    from fabulexa_forge.reader import Emit
 
 
 def _records_table(emit: "Emit"):

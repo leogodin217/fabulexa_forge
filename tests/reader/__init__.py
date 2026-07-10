@@ -1,1 +1,1 @@
-# tests/reader — test package for fabulexa_export.reader
+# tests/reader — test package for fabulexa_forge.reader

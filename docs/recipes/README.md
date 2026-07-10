@@ -6,24 +6,24 @@ one shows exactly which YAML knobs produce which output shape, with a hand-trace
 row/event count and specific assertions to prove it.
 
 There are four recipe families. Dimensional and source share one config envelope
-(`ExportConfig`, run through `fabexport export`) but not one assertion path — source
+(`ExportConfig`, run through `fabulexa-forge export`) but not one assertion path — source
 needs its own harness because its output tables are sidecar-classification-driven
 rather than author-declared, so it gets its own gate file and its own examples
 sub-directory rather than living flat alongside the dimensional recipes:
 
 - **Dimensional recipes** — a `mode: dimensional` `ExportConfig`, run through
-  `fabexport export`, asserted against the DuckDB output. They live flat under
+  `fabulexa-forge export`, asserted against the DuckDB output. They live flat under
   `examples/recipes/<name>/`.
 - **Source recipes** — a `mode: source` `ExportConfig` (the *same* envelope
-  dimensional uses, just the other `mode` arm), run through `fabexport export`,
+  dimensional uses, just the other `mode` arm), run through `fabulexa-forge export`,
   asserted against the DuckDB output with the same expectation schema dimensional
   uses. They live one level deeper under `examples/recipes/source/<name>/`, gated by
   their own harness (`tests/recipes/test_source_recipes.py`) because `export_source`
   is a different engine entry point than `export_dimensional`.
-- **Streaming recipes** — a `StreamConfig`, run through `fabexport stream`, asserted
+- **Streaming recipes** — a `StreamConfig`, run through `fabulexa-forge stream`, asserted
   against the per-kind JSONL output. They live one level deeper under
   `examples/recipes/streaming/<name>/`.
-- **Corrupter recipes** — a `CorruptConfig`, run through `fabexport corrupt`, asserted
+- **Corrupter recipes** — a `CorruptConfig`, run through `fabulexa-forge corrupt`, asserted
   against the emitted `defects.json` manifest. They live one level deeper under
   `examples/recipes/corrupt/<name>/`. Unlike the other three families, a corrupter
   recipe declares the *defects* it must produce, not an output shape — see
@@ -97,10 +97,10 @@ build_recipe_emit(Path("/tmp/recipe-emit"))
 EOF
 ```
 
-**Dimensional** — `fabexport export <emit_dir> <config_path> <out> --fmt <csv|duckdb>`:
+**Dimensional** — `fabulexa-forge export <emit_dir> <config_path> <out> --fmt <csv|duckdb>`:
 
 ```bash
-fabexport export \
+fabulexa-forge export \
   /tmp/recipe-emit \
   examples/recipes/dim-scd2-from-records/config.yaml \
   /tmp/dim_scd2.duckdb \
@@ -109,13 +109,13 @@ fabexport export \
 duckdb /tmp/dim_scd2.duckdb -c "SELECT * FROM dim_patient ORDER BY patient_id, valid_from;"
 ```
 
-**Source** — same verb as dimensional (`fabexport export <emit_dir> <config_path> <out>
+**Source** — same verb as dimensional (`fabulexa-forge export <emit_dir> <config_path> <out>
 --fmt <csv|duckdb>`); only `config.yaml`'s `mode: source` selects the other engine
 (`export_source` instead of `export_dimensional`), gated by
 `tests/recipes/test_source_recipes.py`:
 
 ```bash
-fabexport export \
+fabulexa-forge export \
   /tmp/recipe-emit \
   examples/recipes/source/source-changelog-from-history/config.yaml \
   /tmp/source_dump.duckdb \
@@ -124,11 +124,11 @@ fabexport export \
 duckdb /tmp/source_dump.duckdb -c "SELECT * FROM patient ORDER BY changed_at, id;"
 ```
 
-**Streaming** — `fabexport stream <emit_dir> <config_path> --fmt jsonl --sink <stdout|file>`:
+**Streaming** — `fabulexa-forge stream <emit_dir> <config_path> --fmt jsonl --sink <stdout|file>`:
 
 ```bash
 mkdir -p /tmp/stream-out
-fabexport stream \
+fabulexa-forge stream \
   /tmp/recipe-emit \
   examples/recipes/streaming/state-changes/config.yaml \
   --fmt jsonl --sink file --out /tmp/stream-out
@@ -139,7 +139,7 @@ cat /tmp/stream-out/patient.jsonl
 Exit 0 means the config loaded and the reshape ran clean — the same gate the tests use.
 The `--base-date` / `--timezone` rebase overrides are accepted by both verbs.
 
-**Corrupters** — `fabexport corrupt <emit_dir> --config <config_path> --out <out_dir>`.
+**Corrupters** — `fabulexa-forge corrupt <emit_dir> --config <config_path> --out <out_dir>`.
 The corrupter recipes run against a *different* fixture emit (`build_history_series`,
 not `build_recipe_emit` — see § The recipe world), because family C's operations need
 a `history` table with real multi-event series to select over:
@@ -151,7 +151,7 @@ from reader._fixtures_build import build_history_series
 build_history_series(Path("/tmp/corrupt-recipe-emit"))
 EOF
 
-fabexport corrupt \
+fabulexa-forge corrupt \
   /tmp/corrupt-recipe-emit \
   examples/recipes/corrupt/null-and-dangle/config.yaml \
   --out /tmp/corrupt-out
@@ -164,7 +164,7 @@ or a `slice_at` boundary an operation's row never crosses, can load and run clea
 declaring zero (or fewer) defects than intended. Check `defects.json`'s
 `counts.by_class` and each defect's `impact` against what you meant to break — the
 same check `expect.yaml`'s `defect_counts` / `impact_union` encode (§ The expect.yaml
-schema). `fabexport validate /tmp/corrupt-out` cross-checks independently: its failing
+schema). `fabulexa-forge validate /tmp/corrupt-out` cross-checks independently: its failing
 checks should union to the same impact codes the manifest declares (minus the
 `beyond-c1-c12` sentinel).
 

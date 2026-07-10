@@ -23,7 +23,7 @@
 services:
   kafka:
     image: apache/kafka:3.9.0
-    container_name: fabexport-kafka
+    container_name: fabulexa-forge-kafka
     ports:
       - "9092:9092"
     environment:
@@ -52,12 +52,12 @@ services:
   # the host-facing localhost:9092 the integration rig uses.
   kafka-ui:
     image: kafbat/kafka-ui:latest
-    container_name: fabexport-kafka-ui
+    container_name: fabulexa-forge-kafka-ui
     profiles: ["ui"]
     ports:
       - "8080:8080"
     environment:
-      KAFKA_CLUSTERS_0_NAME: fabexport
+      KAFKA_CLUSTERS_0_NAME: fabulexa-forge
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
     depends_on:
       kafka:

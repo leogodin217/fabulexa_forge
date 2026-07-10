@@ -7,8 +7,8 @@ import textwrap
 
 import yaml
 
-from fabulexa_export.config.models import CorruptConfig
-from fabulexa_export.corrupters.fingerprint import fingerprint_config
+from fabulexa_forge.config.models import CorruptConfig
+from fabulexa_forge.corrupters.fingerprint import fingerprint_config
 
 _HEX64_RE = re.compile(r"^[0-9a-f]{64}$")
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from fabulexa_export.exporters.streaming.mixer.wire import (
+from fabulexa_forge.exporters.streaming.mixer.wire import (
     TopicDialsUpdate,
     TransportUpdate,
 )

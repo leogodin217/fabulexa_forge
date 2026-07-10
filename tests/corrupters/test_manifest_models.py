@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from fabulexa_export.corrupters.manifest import (
+from fabulexa_forge.corrupters.manifest import (
     DefectCounts,
     DefectManifest,
     DefectRecord,
@@ -21,7 +21,7 @@ from fabulexa_export.corrupters.manifest import (
 _SCHEMA_PATH = (
     Path(__file__).resolve().parents[2]
     / "src"
-    / "fabulexa_export"
+    / "fabulexa_forge"
     / "corrupters"
     / "defect_manifest.schema.json"
 )
@@ -287,9 +287,9 @@ def test_schema_drift_guard() -> None:
 
         uv run python -c "
         import json
-        from fabulexa_export.corrupters.manifest import DefectManifest
+        from fabulexa_forge.corrupters.manifest import DefectManifest
         schema = DefectManifest.model_json_schema(by_alias=True)
-        open('src/fabulexa_export/corrupters/defect_manifest.schema.json', 'w').write(
+        open('src/fabulexa_forge/corrupters/defect_manifest.schema.json', 'w').write(
             json.dumps(schema, indent=2, sort_keys=True) + chr(10)
         )
         "

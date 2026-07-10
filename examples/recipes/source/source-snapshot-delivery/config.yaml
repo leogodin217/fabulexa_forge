@@ -8,7 +8,7 @@
 # is carried as created_at / active / deactivated_at instead, and each
 # tracked property holds its value AT THE HORIZON, not its change log.
 #
-# Snapshot delivery REQUIRES A WINDOWED INVOCATION (`fabexport export`
+# Snapshot delivery REQUIRES A WINDOWED INVOCATION (`fabulexa-forge export`
 # with `--next` or `--from/--to`): a full export under `snapshot` raises
 # SourceSnapshotRequiresWindows rather than silently degrading to
 # current-state-at-slice-end. Each window REPLACES the table (write_mode

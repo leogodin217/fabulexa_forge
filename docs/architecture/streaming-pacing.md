@@ -12,17 +12,17 @@ mirroring CLI overrides. The streaming exporter itself is documented in
 [`streaming.md`](streaming.md); this doc owns the pacing contract it composes.
 
 **Source:**
-[`exporters/streaming/pacer.py`](../../src/fabulexa_export/exporters/streaming/pacer.py)
+[`exporters/streaming/pacer.py`](../../src/fabulexa_forge/exporters/streaming/pacer.py)
 (`ResolvedClock`, `resolve_clock`, `pace_events`),
-[`config/models.py`](../../src/fabulexa_export/config/models.py) (`ClockConfig`, the
+[`config/models.py`](../../src/fabulexa_forge/config/models.py) (`ClockConfig`, the
 optional `StreamConfig.clock` block), the clock wiring in
-[`driver.py`](../../src/fabulexa_export/exporters/streaming/driver.py) (`stream_export`),
+[`driver.py`](../../src/fabulexa_forge/exporters/streaming/driver.py) (`stream_export`),
 the per-line-flush paths in
-[`jsonl.py`](../../src/fabulexa_export/exporters/streaming/jsonl.py) /
-[`debezium.py`](../../src/fabulexa_export/exporters/streaming/debezium.py)
+[`jsonl.py`](../../src/fabulexa_forge/exporters/streaming/jsonl.py) /
+[`debezium.py`](../../src/fabulexa_forge/exporters/streaming/debezium.py)
 (`write_jsonl_stream` / `write_debezium_stream`, the `paced` parameter), and the clock
 flags + flag-level usage checks in
-[`cli.py`](../../src/fabulexa_export/cli.py) (`cmd_stream`).
+[`cli.py`](../../src/fabulexa_forge/cli.py) (`cmd_stream`).
 Tests:
 [`tests/exporters/streaming/test_pacer.py`](../../tests/exporters/streaming/test_pacer.py),
 [`tests/config/test_clock_config.py`](../../tests/config/test_clock_config.py).
@@ -141,7 +141,7 @@ carried on every event independent of whether an anchor resolved.
 ## Validation Rules
 
 **Parse-time** (Pydantic, on `ClockConfig` in
-[`config/models.py`](../../src/fabulexa_export/config/models.py)): `speed` and
+[`config/models.py`](../../src/fabulexa_forge/config/models.py)): `speed` and
 `idle_cap_seconds` carry `Field(gt=0)`, so any non-positive value is rejected at parse
 time. The `mode_fields_consistent` after-validator enforces per-mode field presence:
 `realtime` requires `speed` and allows an optional `idle_cap_seconds` (absent =
@@ -215,7 +215,7 @@ What pacing deliberately does not own:
 | [`anchor.md`](anchor.md) | The effective-anchor resolution surface whose CLI-wins-per-knob precedence clock resolution mirrors, and whose `None`-for-absent shape `ResolvedClock` follows |
 | [`streaming-routing.md`](streaming-routing.md) | The routing surface that stamps the `topic` each paced `<topic>.jsonl` is flushed to, and the declared-but-empty-topic guarantee paced delivery preserves |
 | [`config-docstrings.md`](config-docstrings.md) | The three-channel docstring convention `ClockConfig` follows |
-| [`config/models.py`](../../src/fabulexa_export/config/models.py) | The `ClockConfig` grammar these semantics bind |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The `ClockConfig` grammar these semantics bind |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles, the isolation boundary, vocabulary |

@@ -6,8 +6,8 @@ argument-hint: [what the export should produce]
 
 # Export-Config Authoring
 
-Produce or edit an export config YAML that loads and runs clean — `fabexport export`
-or `fabexport stream` exits 0 against an emit.
+Produce or edit an export config YAML that loads and runs clean — `fabulexa-forge export`
+or `fabulexa-forge stream` exits 0 against an emit.
 
 ## Source of truth (never hand-author field shapes)
 
@@ -19,9 +19,9 @@ copying a recipe and, when you change a type, reading that model class via cclsp
 | Material | What it gives you | How to read it |
 |---|---|---|
 | `docs/recipes/README.md` | **Capability index — the primary copy-adapt source.** One narrow recipe per capability (SCD-2 dim, fact from history/membership, FK via reference/membership, `lookup`, the four derived columns, `exclude`, `rebase`, table/column rename; streaming: state-changes CDC, identity tombstone, multi-kind global `seq`, stream `rebase`). | `tools/mdnav` the index, pick the recipe whose capability matches, copy its `config.yaml`. |
-| `src/fabulexa_export/config/models.py` | **Every config type: its fields, types, required/optional, and the cross-field rules.** The authoritative field shapes (Code Is Truth). | cclsp ONLY — `find_definition` / `get_hover` on the type name (`FkClause`, `SourceDecl`, `StreamKindSelection`, `RoutingConfig`…). The class docstring + attribute docstrings + `@model_validator` docstrings carry the field meaning and the rules. **Never read the whole 661-line file to find one field.** |
-| `fabexport init <emit_dir> [<out>]` | A commented **candidate `mode: dimensional` config** inferred from the sidecar (roles, SCD, sub-type splits, FK candidates). A starting point to edit, not a finished config. | Use when authoring a dimensional config from scratch against a real emit. Classification stays author-authoritative — edit the candidate. |
-| `fabexport export` / `fabexport stream` | The authoritative gate (Pydantic load + the full reshape against an emit). | Run until exit 0. This repo has **no config-only `validate` verb**; running against an emit is the gate. |
+| `src/fabulexa_forge/config/models.py` | **Every config type: its fields, types, required/optional, and the cross-field rules.** The authoritative field shapes (Code Is Truth). | cclsp ONLY — `find_definition` / `get_hover` on the type name (`FkClause`, `SourceDecl`, `StreamKindSelection`, `RoutingConfig`…). The class docstring + attribute docstrings + `@model_validator` docstrings carry the field meaning and the rules. **Never read the whole 661-line file to find one field.** |
+| `fabulexa-forge init <emit_dir> [<out>]` | A commented **candidate `mode: dimensional` config** inferred from the sidecar (roles, SCD, sub-type splits, FK candidates). A starting point to edit, not a finished config. | Use when authoring a dimensional config from scratch against a real emit. Classification stays author-authoritative — edit the candidate. |
+| `fabulexa-forge export` / `fabulexa-forge stream` | The authoritative gate (Pydantic load + the full reshape against an emit). | Run until exit 0. This repo has **no config-only `validate` verb**; running against an emit is the gate. |
 
 Pick the smallest starting point that already does what you need, by capability not by
 size: SCD-2 dimension → `dim-scd2-from-records`; FK through a membership edge →
@@ -35,9 +35,9 @@ top-level key tells you which:
 
 | Shape | Envelope | Distinguishing key | Section / lists | Run with |
 |---|---|---|---|---|
-| Dimensional reshape | **`ExportConfig`** | `mode: dimensional` | a `dimensional:` section (`tables`, optional `exclude`); optional `rebase`, `incremental` | `fabexport export <emit> <config> <out> --fmt <csv\|duckdb>` |
-| Source reshape (operational dump) | **`ExportConfig`** | `mode: source` | an optional `source:` section (`change_delivery`, `exclude`, `rename`); optional `rebase`, `incremental` | `fabexport export <emit> <config> <out> --fmt <csv\|duckdb>` |
-| CDC delivery | **`StreamConfig`** | `content: state-changes` | a `kinds:` list; optional `routing`, `rebase`, `debezium` | `fabexport stream <emit> <config> --fmt <jsonl\|debezium> --sink <stdout\|file> [--out <dir>]` |
+| Dimensional reshape | **`ExportConfig`** | `mode: dimensional` | a `dimensional:` section (`tables`, optional `exclude`); optional `rebase`, `incremental` | `fabulexa-forge export <emit> <config> <out> --fmt <csv\|duckdb>` |
+| Source reshape (operational dump) | **`ExportConfig`** | `mode: source` | an optional `source:` section (`change_delivery`, `exclude`, `rename`); optional `rebase`, `incremental` | `fabulexa-forge export <emit> <config> <out> --fmt <csv\|duckdb>` |
+| CDC delivery | **`StreamConfig`** | `content: state-changes` | a `kinds:` list; optional `routing`, `rebase`, `debezium` | `fabulexa-forge stream <emit> <config> --fmt <jsonl\|debezium> --sink <stdout\|file> [--out <dir>]` |
 
 Dimensional and source are two `mode`s of the *same* envelope (a discriminated
 union — `mode_section_matches` enforces the named mode's section is present and the
@@ -61,7 +61,7 @@ Operational presentation defaults before assuming a name.
 
 1. **Pick the shape and the nearest recipe.**
    - Decide dimensional vs source vs streaming (table above). For a from-scratch
-     dimensional config against a real emit, `fabexport init <emit_dir>` gives a
+     dimensional config against a real emit, `fabulexa-forge init <emit_dir>` gives a
      candidate to edit (source and streaming have no `init` candidate — author from a
      recipe).
    - `tools/mdnav docs/recipes/README.md`, pick the recipe matching your capability,
@@ -94,9 +94,9 @@ Operational presentation defaults before assuming a name.
    ```
    Then run your config against it (or against the author's own emit):
    ```bash
-   fabexport export /tmp/recipe-emit my-config.yaml /tmp/out.duckdb --fmt duckdb
+   fabulexa-forge export /tmp/recipe-emit my-config.yaml /tmp/out.duckdb --fmt duckdb
    # or
-   fabexport stream /tmp/recipe-emit my-stream.yaml --fmt jsonl --sink file --out /tmp/out
+   fabulexa-forge stream /tmp/recipe-emit my-stream.yaml --fmt jsonl --sink file --out /tmp/out
    ```
    Exit 0 → the config loaded and the reshape ran. A non-zero exit names what failed
    (a `ConfigError` for a bad/unknown/missing field or a violated validator; an

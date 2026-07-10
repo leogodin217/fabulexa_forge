@@ -11,7 +11,7 @@ from typing import Any
 
 import pytest
 
-from fabulexa_export.derivations.row_state_events import (
+from fabulexa_forge.derivations.row_state_events import (
     EVENT_CLASS_CREATE,
     EVENT_CLASS_DELETE,
     EVENT_CLASS_UPDATE,
@@ -19,9 +19,9 @@ from fabulexa_export.derivations.row_state_events import (
     build_row_state_events_sql,
     resolve_stream_columns,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.reader.errors import TableNotFoundError
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.errors import TableNotFoundError
 
 from ._fixtures import (
     _RECORD_COLS_INTERLEAVED,

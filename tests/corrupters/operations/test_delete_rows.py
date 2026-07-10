@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import random
 
-from fabulexa_export.config.models import Amount, DeleteRows, EntityScoped, Target
-from fabulexa_export.corrupters.operations.delete_rows import DeleteRowsCorrupter
-from fabulexa_export.corrupters.state import CorruptState
-from fabulexa_export.reader.sidecar import BranchEntry, Sidecar
+from fabulexa_forge.config.models import Amount, DeleteRows, EntityScoped, Target
+from fabulexa_forge.corrupters.operations.delete_rows import DeleteRowsCorrupter
+from fabulexa_forge.corrupters.state import CorruptState
+from fabulexa_forge.reader.sidecar import BranchEntry, Sidecar
 
 from .._helpers import (
     CallOrderRandom,

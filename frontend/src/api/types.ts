@@ -61,7 +61,7 @@ export interface Meters {
 // derives watermarks, tumbling-window firings, and enrichment-join null health.
 // Present only when the backend ran with --consumer (gate on Capabilities first;
 // the consumer routes 404 otherwise). Contract:
-// src/fabulexa_export/exporters/streaming/mixer/wire.py.
+// src/fabulexa_forge/exporters/streaming/mixer/wire.py.
 
 /** Backend feature gate (GET /capabilities). */
 export interface Capabilities {

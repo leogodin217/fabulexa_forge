@@ -17,9 +17,9 @@ import duckdb
 import pytest
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_export import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_export.anchor import EffectiveAnchor
-from fabulexa_export.config.models import (
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
     DimensionalConfig,
@@ -27,15 +27,15 @@ from fabulexa_export.config.models import (
     SourceDecl,
     TableDecl,
 )
-from fabulexa_export.errors import ExportError
-from fabulexa_export.exporters.dimensional.engine import build_query_specs
-from fabulexa_export.exporters.dimensional.scd import (
+from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.dimensional.scd import (
     build_scd2_column_expr_flag,
     build_scd2_sql,
 )
-from fabulexa_export.exporters.dimensional.validation import check_scd2_needs_history
-from fabulexa_export.reader.emit import open_emit
-from fabulexa_export.reader.sidecar import Sidecar
+from fabulexa_forge.exporters.dimensional.validation import check_scd2_needs_history
+from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
 # Column definitions for SCD-2 test emits
