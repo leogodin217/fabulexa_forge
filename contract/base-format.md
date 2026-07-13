@@ -4,7 +4,7 @@ The on-disk shape of one **base-layer emit** — a standalone, self-describing d
 
 **Purpose.** Define the contract precisely enough that any producer or consumer — in any language, in any repo — can implement this format without depending on any package other than DuckDB itself.
 
-**Status.** Reference producer is the Fabulexa base writer. The conformance procedure (C1–C12) is verified by the producer's own conformance suite and by the standalone `tools/check_base_conformance.py`.
+**Status.** Reference producer is the Fabulexa publishing step. The conformance procedure (C1–C13) is verified by the producer's own conformance suite and by the standalone `tools/check_published_conformance.py`.
 
 **Audience.** Producers (today: the Fabulexa base writer; tomorrow: any base-layer producer, in any repo or language), consumers (future exporters, corrupters, analyst tooling, third-party tools).
 
@@ -25,7 +25,7 @@ The contract is **two artifacts per emit**, not a Python package:
 | `run.duckdb` | DuckDB's own format | DuckDB (any version supporting the schema written) |
 | `base.json` | `base-format.schema.json` (sibling of this doc) | Any reader of any kind |
 
-**`BASE_FORMAT_VERSION = 4`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
+**`BASE_FORMAT_VERSION = 5`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
 
 ---
 
@@ -64,9 +64,18 @@ Six required columns, in this order:
 
 `history.value` is always VARCHAR. Consumers cast on read. See *Recommended type mapping* for codec rules.
 
-**Long-form SCD-2.** `history` is the *long-form* rendering of SCD-2 property history: one row per change event, ordered by `sim_time` within each `(fork_path, kind, record_id, property)` series. The validity interval is **implicit** — a row's value holds over `[sim_time, next row's sim_time)` for the same series, and the final row of a series holds from its `sim_time` through the slice boundary. There are deliberately **no `valid_from` / `valid_to` columns**: a consumer that wants explicit intervals derives `valid_to` with a window function (`LEAD(sim_time) OVER (PARTITION BY fork_path, kind, record_id, property ORDER BY sim_time)`). `sim_time` is strictly increasing within a series, so the derivation is well-formed.
+**Long-form SCD-2.** `history` is the *long-form* rendering of SCD-2 property history: one row per change event, ordered by `sim_time` within each `(fork_path, kind, record_id, property)` series. The validity interval is **implicit** — a row's value holds over `[sim_time, next row's sim_time)` for the same series, and the final row of a series holds from its `sim_time` through the slice boundary. There are deliberately **no `valid_from` / `valid_to` columns**: a consumer asking what a value was at time T never needs to materialize an interval — see § Consumer derivations → *Point-in-time value reconstruction* (one record) and → *Bulk as-of join* (set-valued). `sim_time` is strictly increasing within a series, so the implicit interval is well-formed. Consecutive rows in a series always differ in `value`: the producer treats a value-unchanged write as a no-op, so rows are change events, never write echoes.
 
-**Creation-seed guarantee.** Every type-2 (`history_tracked: true`) property is seeded with a `history` row at `created_sim_time` carrying its creation value. Creation is the genesis change event (undefined → initial value), so the *one row per change event* model covers it with no exception. A type-2 property has zero `history` rows **iff** its creation value was NULL and it never changed post-creation; otherwise its first `history` row sits at `created_sim_time`. Consequently a record's creation after-image (t0) is recoverable from `records__<kind>` and `history` alone.
+**Creation-seed guarantee (unconditional).** Every type-2 (`history_tracked: true`) property of every record is seeded with a `history` row at the record's `created_sim_time` carrying its creation value — **including properties absent at creation, which seed with a NULL `value`**. Creation is the genesis change event (undefined → initial value), so the *one row per change event* model covers it with no exception.
+
+The seed is unconditional: there is no carve-out. A type-2 property with **zero** `history` rows for a record that exists is a **contract violation** (flag-without-rows is forbidden), not a signal that the creation value was NULL. Consequently:
+
+- A record's creation after-image (t0) is recoverable from `history` alone — no `records__<kind>` join and no zero-rows inference.
+- "State at T" for any type-2 column is a single ordered lookup over `history` (§ Consumer derivations → Point-in-time value reconstruction), or an as-of join for the set-valued form.
+
+NULL is layer-scoped: it is a legal **history-entry** value (a never-supplied tracked property reads NULL in its genesis row *and* in its `records__` cell, so the cross-table round-trip C6 compares NULL to NULL), but it remains an illegal **property** value — producers reject NULL creation fills and NULL writes.
+
+Collection-struct (set-valued) properties are the one exception to the whole scheme: they emit no `history` rows at all — the `membership__<K>__<p>` table is their sole representation — so they stay outside the input sets of C6, C11, and C13.
 
 **Row order.** Ordered by `sim_time` within each `(fork_path, kind, record_id, property)` series, bounded by `sim_time <= slice_at`. No producer-local sort.
 
@@ -97,7 +106,7 @@ Where P is the count of *scalar* declared properties for kind *K* — a collecti
 
 **`created_sim_time` is the record's immutable creation time.** Position 3 carries the `sim_time` at which the record was created and is set exactly once. It is unaffected by every later content event — a property write and a deactivation both leave it unchanged — and is non-NULL on every row, including write-once fact records (`history_tracked: false`). Consumers MAY use it to bound a record's lifetime from below.
 
-**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 4` with no version bump — an existing guarantee promoted to contract, not a new field or column.
+**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 5` — an existing guarantee promoted to contract, not a new field or column.
 
 **Row order.** Creation order within kind, lexicographic on kind across kinds — the order in which the producer created each record, preserved by insertion-order iteration. A kind whose records are created through more than one id-minting path (e.g. sequential integer-string ids and hex-digest ids on the same kind) yields rows interleaved by creation time, **not** sorted by `record_id` value. Consumers MUST NOT rely on any sort derived from `record_id` — ids minted by different paths are structurally disjoint, and lexicographic order over the mixed set carries no semantic meaning.
 
@@ -158,6 +167,61 @@ LIMIT 1
 
 **Result NULL:** If no row satisfies the containment predicate, no owner held the member at time T — the result is `NULL`. This is correct; do not substitute a default.
 
+### Point-in-time value reconstruction
+
+To recover a column's value as of simulation time T, **dispatch on the column's `temporal_class`** (§ Column temporal semantics). Reading the class first is what makes the answer trustworthy — the three classes have three different correct answers, and one of them is "refuse".
+
+| `temporal_class` | How to answer "value at T" |
+|---|---|
+| `constant` | Read `records__<kind>.prop__<name>` directly. The current value is valid at every T ≥ `created_sim_time`. No history query. |
+| `tracked` | Ordered lookup over `history` (below), or an as-of join in bulk. Exact for any T. |
+| `slice_only` | **Refuse.** The value at T is unknowable; only the value as of this emit's `slice_at` is known. Do not substitute the slice value for an as-of-T value. |
+
+For a `tracked` column — the last recorded value at or before T:
+
+```sql
+-- Value of <kind>.<property> for <record_id> at time T, on one branch
+SELECT h."value"
+FROM "history" h
+WHERE h."fork_path" = '<fork_path>'
+  AND h."kind"      = '<kind>'
+  AND h."record_id" = '<record_id>'
+  AND h."property"  = '<property>'
+  AND h."sim_time" <= <T>
+ORDER BY h."sim_time" DESC
+LIMIT 1
+```
+
+**No `records__` join, no zero-rows special case.** The unconditional creation seed (§ `history`) guarantees a genesis row at `created_sim_time`, so for any T ≥ `created_sim_time` this query always returns a row. A NULL `value` in the result means the property was genuinely NULL at T — not "no data".
+
+**Result empty** iff T < `created_sim_time` — the record did not exist yet. That is a correct answer; do not substitute a default.
+
+`history.value` is VARCHAR; cast on read per § Recommended type mapping.
+
+### Bulk as-of join
+
+The recipe above answers *one record at one T*. The common question is set-valued — the value of a property for **every** probe row, each at its **own** T (e.g. the status of each patient at the instant each of its decisions fired). The same `temporal_class` dispatch governs: a `constant` column is an ordinary equi-join to `records__<kind>`, a `slice_only` column is refused, and a `tracked` column uses an as-of join:
+
+```sql
+-- Value of <kind>.<property> for every probe row, as of that row's own T
+SELECT e."record_id", h."value"
+FROM <probe_table> e
+ASOF LEFT JOIN (
+  SELECT "record_id", "sim_time", "value" FROM "history"
+  WHERE "fork_path" = '<fork_path>'
+    AND "kind"      = '<kind>'
+    AND "property"  = '<property>'
+) h
+  ON h."record_id" = e."<ref_column>"
+ AND e."<T_column>" >= h."sim_time"
+```
+
+`ASOF` resolves each probe row against the last `history` row at or before that row's own T. It is the set-valued form of the `ORDER BY sim_time DESC LIMIT 1` above, and exact for the same reason: the unconditional creation seed guarantees a genesis row at `created_sim_time`.
+
+**Inner vs `LEFT`.** `ASOF LEFT JOIN` keeps probe rows that have no `history` row at or before T (T < `created_sim_time`; `value` is NULL). A plain `ASOF JOIN` drops them. The two differ exactly on the *record did not exist yet* case — choose deliberately, and do not substitute a default for either.
+
+**Do not materialize intervals to do this.** Deriving explicit `[valid_from, valid_to)` intervals with a window function and range-joining them yields the same answer at strictly higher cost, and the resulting range join is a planner hazard: on older DuckDB versions it can degrade catastrophically (observed: an unbounded stall on DuckDB 1.1.3 over a join the as-of form completes in under 0.1s). The as-of join needs no interval columns — which is why the format stores none (§ `history`).
+
 ### Firing-time recovery for write-once records
 
 For record kinds whose rows are written exactly once (e.g. `tick_decision`), `last_mutation_sim_time` equals the firing time. Use it as the T argument in the point-in-time lookup above. This recovers the owner that was holding the member at the exact moment the decision fired — for example, the consultant a patient was assigned to when a clinical decision event occurred.
@@ -176,7 +240,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 ```json
 {
-  "base_format_version": 4,
+  "base_format_version": 5,
   "branches": [
     {"fork_path": "trunk", "parent": null, "slice_at": 1728000000000000}
   ],
@@ -206,7 +270,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `base_format_version` | integer | yes | Format version. Current value: `4`. |
+| `base_format_version` | integer | yes | Format version. Current value: `5`. |
 | `branches` | array | yes | Exactly one entry — a sanitised emit covers a single branch. See § Branch enumeration and runtime anchor. |
 | `branches[].fork_path` | string | yes | Canonical `@`-joined fork path of the single branch. |
 | `branches[].parent` | string \| null | yes | Parent fork path (the `@`-joined prefix), or `null` for a root branch; the named parent need not be present in the emit. |
@@ -227,10 +291,11 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `tables[].columns[].type` | string | yes | DuckDB type literal (e.g. `"BIGINT"`, `"VARCHAR"`). |
 | `tables[].columns[].nullable` | boolean | optional, default `true` | DuckDB column nullability. Omittable when consistent with the spec's nullability rules. |
 | `tables[].columns[].references` | string | optional | Record kind this column points at, when the source schema declared a record-to-record reference. Present iff the column is a foreign-key column (one `VARCHAR` carrying the id portion of a record id); equality-joinable against `records__<references>.record_id`. Omitted for all other columns. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
-| `tables[].columns[].history_tracked` | boolean | optional | SCD class of a value-carrying column: `true` = type-2 (priors recoverable from the `history` table), `false` = type-1 (current value only). Present on records-category `prop__<name>` columns and presentation columns; omitted on structural, fixed-table, and membership columns. See § Column SCD class. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
+| `tables[].columns[].history_tracked` | boolean | optional | SCD class of a value-carrying column: `true` = type-2 (priors recoverable from the `history` table), `false` = type-1 (current value only). Present on records-category `prop__<name>` columns and presentation-property columns; omitted on structural, fixed-table, membership, and `presentation_id` columns. See § Column temporal semantics. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
+| `tables[].columns[].temporal_class` | enum | optional | Point-in-time semantics of a value-carrying column: `"constant"`, `"tracked"`, or `"slice_only"`. Answers *"can I ask what this column's value was at time T?"*. Carried on **exactly** the columns that carry `history_tracked` — a column carries one iff it carries the other. See § Column temporal semantics. |
 | `tables[].rows` | integer | yes | Row count of the table. |
 
-The fields above are the *required* shape at `base_format_version: 4`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 4` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
+The fields above are the *required* shape at `base_format_version: 5`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 5` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
 
 ### Branch enumeration and runtime anchor
 
@@ -296,7 +361,7 @@ The block is a nested object `{<kind>: {<property>: [<option>, ...]}}`:
 Closed domains are fixed at run initialization and persisted with the run, so
 every emit derived from the same persisted run carries the
 same registry across `slice_at` choices. Adding
-`enum_domains` is a version-compatible extension at `base_format_version: 4`:
+`enum_domains` is a version-compatible extension at `base_format_version: 5`:
 a reader that does not recognize the key ignores it (unknown top-level fields
 MAY warn but MUST NOT fail). Downstream tools that route per-sub-type read
 `enum_domains[<kind>][<kind>_type]` as the authoritative declared key set.
@@ -351,63 +416,89 @@ actor sub-types, never narrowed to those surviving a slice — this is what keep
 the block slice-stable.
 
 Adding `record_roles` is a version-compatible extension at
-`base_format_version: 4`: it is an optional top-level field a reader that does
+`base_format_version: 5`: it is an optional top-level field a reader that does
 not recognize it ignores (unknown top-level fields MAY warn but MUST NOT fail).
 A generic exporter branches on `record_roles` with no hard-coded kind→role map.
 
-### Column SCD class (`history_tracked`)
+### Column temporal semantics (`history_tracked`, `temporal_class`)
 
-`history_tracked` is the per-column SCD class — a peer of `references` on a
-sidecar column object. It tells a downstream tool, per data column, whether the
-column is **type-2** (a slowly-changing dimension whose prior values are
-recoverable from the `history` table) or **type-1** (current value only). That
-distinction drives whether a column becomes a time series or a static attribute
-when building a dimensional warehouse, a feature store, or a streaming source.
+Two paired per-column attributes, peers of `references` on a sidecar column
+object. They answer different questions, and a consumer usually wants the second:
 
-The SCD class is a property of the schema, fixed at schema assembly. A consumer
-reads `history_tracked` rather than reconstructing it by scanning `history`:
-inference from history-table contents has a false-negative tail — a type-2
-property with no recorded post-creation change contributes no history rows, yet
-is still type-2.
-
-**Which columns carry the field.** `history_tracked` is present only on
-*value-carrying* columns — those that render a record property's value or a
-presentation value. It is omitted on every other column, where SCD class has no
-meaning.
-
-| Column class | `history_tracked` |
+| Attribute | Question it answers |
 |---|---|
-| Record `prop__<name>` column | the property's declared SCD class |
-| Presentation column (`presentation_id`, presentation property incl. each sub-pick `prop__<name>_<key>`) | `false` |
-| Structural column (`record_id`, `fork_path`, `active`, lifecycle timestamps) | omitted |
-| Fixed-table column (`history`) | omitted |
-| Membership-table column | omitted |
+| `history_tracked` | *Is this column type-2 (priors in `history`) or type-1 (current value only)?* — the SCD class, drives time-series vs. static-attribute modelling. |
+| `temporal_class` | *Can I ask what this column's value was at time T — and will the answer be true?* — the point-in-time contract. |
 
-**Coverage.** A `base_format_version: 4` emit carries `history_tracked` on every
-records-category `prop__<name>` column; presentation columns carry `false`.
+`history_tracked` alone is **not** sufficient to answer the second question, which
+is why `temporal_class` exists. A type-1 column may be one that never changes (its
+current value is valid at every T) or one that changes without a recorded trail
+(its past is unknowable). Those are opposite point-in-time contracts and
+`history_tracked: false` conflates them. `temporal_class` splits them:
+
+| Value | Meaning | Point-in-time answer for T ≥ `created_sim_time` |
+|---|---|---|
+| `constant` | Value never changes after creation. | The current value. Valid at every T. |
+| `tracked` | Value may change; **every** change is captured in `history`. | An ordered lookup over `history`, or an as-of join in bulk. Exact. |
+| `slice_only` | Value may change; changes are **not** captured. | **Unknowable.** Only the value as of the emit's `slice_at` is known. A consumer MUST NOT present a `slice_only` column as an as-of-T value. |
+
+`slice_only` is the honest admission the format previously could not make: it
+marks columns whose history is genuinely lost, so a downstream tool refuses the
+query instead of silently answering with the slice value.
+
+**Derivation is the producer's, never the author's.** `temporal_class` is derived
+from the property's declared schema — whether the property can be modified after
+creation at all, and whether it is history-tracked. It is not author-declarable,
+so a scenario cannot lie into the sidecar. The derivation is conservative in the
+honest direction: it may under-claim `constant`, never over-claim it.
+
+**Pairing (structural).** A column carries `history_tracked` **iff** it carries
+`temporal_class`. The two attributes have exactly the same column population, and
+they constrain each other: `tracked` ⇒ `history_tracked: true`; `slice_only` ⇒
+`history_tracked: false`. (`constant` admits either — a constant column that is
+also history-tracked holds exactly its genesis row.) C13 checks this.
+
+**Which columns carry the pair.** Only *value-carrying* columns — those rendering
+a record property's value or a presentation value:
+
+| Column class | `history_tracked` | `temporal_class` |
+|---|---|---|
+| Record `prop__<name>` column | the property's declared SCD class | derived (see above) |
+| Presentation-property column (incl. each sub-pick `prop__<name>_<key>`) | `true` | `tracked` if the property's bound source column — directly, or transitively through an earlier sibling it reads — is `tracked`; otherwise `constant`. Never `slice_only`. |
+| `presentation_id` | omitted | omitted |
+| Structural column (`record_id`, `fork_path`, `active`, lifecycle timestamps) | omitted | omitted |
+| Fixed-table column (`history`) | omitted | omitted |
+| Membership-table column | omitted | omitted |
+
+`presentation_id` is an identity mint, minted once per record and never
+re-minted; it carries neither attribute (an identity column has no temporal
+semantics). A presentation property bound to a `tracked` source is itself
+`tracked` — it is re-minted at each change instant of its source, and those mints
+are appended to the `history` table.
+
+**Coverage.** A `base_format_version: 5` emit carries both attributes on every
+records-category `prop__<name>` column, and on every presentation-property column.
 
 **All-or-none across an emit's `prop__` columns.** A producer that emits column
-SCD information emits it on *every* `prop__<name>` column of *every*
-records-category table, never on some and not others. This makes "field absent"
-a per-emit signal — the producer predates the attribute — rather than a
-per-column ambiguity.
+temporal information emits it on *every* `prop__<name>` column of *every*
+records-category table, never on some and not others. This makes "attributes
+absent" a per-emit signal — the producer predates them — rather than a per-column
+ambiguity. C11 and C13 both key their skip guard on it.
 
-**Run-level stability.** A property's SCD class is fixed at schema assembly, so
-every emit derived from the same persisted run carries the same `history_tracked`
-for a given column across `slice_at` choices — matching how `enum_domains` and
-`pinned_ids` are run-level.
+**Run-level stability.** Both attributes are fixed at schema assembly, so every
+emit derived from the same persisted run carries the same pair for a given column
+across `slice_at` choices — matching how `enum_domains` and `pinned_ids` are
+run-level.
 
-**Reader contract.** `history_tracked` is additive within
-`base_format_version: 4`. A reader that does not recognize it ignores it (unknown
-fields MAY warn but MUST NOT fail). A reader that wants SCD class treats
-**absence** as "unknown" and falls back to the `history`-table inference: a
-`(kind, property)` present in `history` is type-2. A reader of an emit produced
-with the attribute reads the SCD class directly.
+**Reader contract.** A reader gating on `base_format_version: 5` reads
+`temporal_class` directly. On a v4 emit the attribute is **absent and the class is
+unknown**; the reader falls back to `history_tracked` inference and inherits its
+false-negative tail — and cannot distinguish `constant` from `slice_only` at all,
+which is precisely the ambiguity the bump resolves.
 
-The SCD class is fixed at schema assembly and is not re-derived elsewhere. Read
-it from the sidecar: it is not recoverable from raw scenario YAML, because the
-bit is partly synthesized at schema assembly and recovering it would require
-re-running that assembly.
+Read both from the sidecar: neither is recoverable from raw scenario YAML,
+because the bits are partly synthesized at schema assembly and recovering them
+would require re-running that assembly.
 
 ### What the sidecar does *not* carry
 
@@ -578,11 +669,16 @@ if no records-category prop__ column in the sidecar carries history_tracked:
 for each distinct (kind, property) in history (columns 2, 4):
     let col = the prop__<property> column on records__<kind>
     require: col is present in the sidecar with history_tracked == true
+for each records__<kind> with >= 1 row:
+    for each prop__<property> column flagged history_tracked == true:
+        require: history has >= 1 row for (kind, property)
 ```
 
-A property appears in `history` only if it is type-2, so every `(kind, property)` observed in the history table maps to a `prop__<property>` column the sidecar flags `history_tracked: true`. C11 is **one-directional**: the converse does not hold — a type-2 property contributes no history rows **only when** its creation value was NULL and it never changed post-creation (per the creation-seed guarantee, § `history`); a non-NULL creation value yields a seed row at `created_sim_time` even with no later change. Either way the property is still flagged `true`. Collection-struct properties emit membership tables, not history rows, and are absent from C11's input set (mirroring C6).
+A property appears in `history` only if it is type-2, so every `(kind, property)` observed in the history table maps to a `prop__<property>` column the sidecar flags `history_tracked: true`.
 
-The skip guard keys on the all-or-none invariant (§ Column SCD class): a `base_format_version: 4` producer that emits column SCD information emits it on *every* `prop__<name>` column, so "no `prop__` column carries `history_tracked`" is exactly the signal that the emit predates the attribute. C11 is classed with the semantic checks (C6, C7, C10).
+C11 is **bidirectional at v5**. The converse clause is new: because the creation seed is unconditional (§ `history` → Creation-seed guarantee), a flagged column on a kind with at least one record MUST have history rows. Zero rows is a violation, not a "created NULL, never changed" inference — that carve-out is gone. Collection-struct properties emit membership tables, not history rows, and stay outside C11's input set (mirroring C6).
+
+The skip guard keys on the all-or-none invariant (§ Column temporal semantics): a producer that emits column SCD information emits it on *every* `prop__<name>` column, so "no `prop__` column carries `history_tracked`" is exactly the signal that the emit predates the attribute. C11 is classed with the semantic checks (C6, C7, C10).
 
 ### C12. Record-role registry consistency
 
@@ -603,7 +699,28 @@ for each kind K, value V in record_roles:
 
 `emitted_kinds` ranges over `category == "records"` tables only; `membership` tables are reached via `category`, not `record_roles`, and need no separate clause — every membership kind also has a records table, so its role coverage is transitive through the records loop. Every emitted kind is covered by `record_roles`: a sanitised emit carries no machinery kinds, so each records table has a business role. The `actor` object MAY list more sub-types than appear in `records__actor.prop__actor_type` (it lists every declared sub-type); C12 requires coverage, not exactness. C12 is classed with the semantic checks (C6, C7, C9, C10, C11) and is skipped only when `record_roles` is absent — the additive-field guard, mirroring C11's skip.
 
-A reference Python conformance check ships in `tools/check_base_conformance.py` implementing C1–C12 against any `(emit_dir,)` argument. Implementations in other languages that pass C1–C12 are equally conformant.
+### C13. Temporal-class consistency
+
+```
+if no records-category prop__ column carries history_tracked:
+    skip                      # producer predates the attribute pair (additive)
+for each records-category prop__<name> column:
+    require: (history_tracked present) == (temporal_class present)
+    if present:
+        require: temporal_class in {"constant", "tracked", "slice_only"}
+        require: temporal_class == "tracked"     implies history_tracked == true
+        require: temporal_class == "slice_only"  implies history_tracked == false
+for each prop__<property> column with history_tracked == true (any class):
+    for a sample of up to 10 records of that kind:
+        require: history has a row for (kind, property) at the record's
+                 own created_sim_time            # the genesis row
+```
+
+The structural clauses enforce the attribute pairing (§ Column temporal semantics). The semantic clause enforces the unconditional creation seed (§ `history`): a `history_tracked: true` column MUST have a genesis row at each record's `created_sim_time`, whatever its class — a `constant`-class tracked column holds exactly that one row. Sampling mirrors C6's regime.
+
+C13 reads only `records__<kind>`, `history`, and the sidecar, so it applies **in full to a sanitised emit** — nothing in it is narrowed for this subset. Collection-struct properties emit membership tables rather than history rows and stay outside C13's input set (mirroring C6 and C11).
+
+A reference Python conformance check ships in `tools/check_published_conformance.py` implementing C1–C13 against any `(emit_dir,)` argument. It checks the sanitised subset described by this document — the clauses here, not the wider set a mechanism-carrying emit answers to. Implementations in other languages that pass C1–C13 are equally conformant.
 
 ---
 
@@ -613,7 +730,7 @@ A reference Python conformance check ships in `tools/check_base_conformance.py` 
 |---|---|---|
 | `base_format_version` | `base.json` | Required tables change, fixed-table column lists change, sidecar schema changes |
 
-**Current version = 4.** This document defines v4. A version bump implies one of:
+**Current version = 5.** This document defines v5. A version bump implies one of:
 - The required-tables set changed (added/removed/renamed tables)
 - A fixed-table required-column list changed
 - The sidecar schema gained a new *required* top-level field
@@ -630,7 +747,16 @@ Adding a *new optional* column group is **not** a version bump as long as prior-
 
 The same rule applies to **new optional top-level sidecar fields** (the `record_roles` registry, a pin-identity surface, a future cross-emit linkage block). Their presence is self-describing — a reader gating on `base_format_version` ignores unknown top-level fields per § Field semantics ("MAY warn but MUST NOT fail"). Adding such a field is a version-compatible extension, not a bump. A bump is required only when a prior-version reader could mis-interpret the sidecar.
 
-It applies equally to a **new optional attribute on a column object** (`references`, `history_tracked`): presence is self-describing, the column object's `required` set (`["name", "type"]`) is unaffected, and a prior-version reader ignores the attribute. Adding one is a version-compatible extension at `base_format_version: 4`, not a bump.
+It applies equally to a **new optional attribute on a column object** (`references`, `history_tracked`): presence is self-describing, the column object's `required` set (`["name", "type"]`) is unaffected, and a prior-version reader ignores the attribute. Adding one is a version-compatible extension, not a bump.
+
+The `4 → 5` bump is therefore **not** forced by the `temporal_class` column attribute — under the rule above that attribute alone would have been version-compatible. It is forced by the **strengthened normative guarantee** that ships with it: the creation seed became unconditional, so a consumer must be able to distinguish
+
+- **v4** — zero `history` rows on a type-2 column *may* mean "created NULL, never changed" (the old carve-out), from
+- **v5** — zero `history` rows on a type-2 column of an extant record is a **violation** (C11's new converse clause).
+
+A v4 reader applying v4's inference to a v5 emit is not wrong-but-safe; a v5 reader applying v5's guarantee to a v4 emit will report false violations. The two readings are incompatible, which is what a bump is for.
+
+**Absent-field semantics for v4 emits:** temporal class is *unknown*. A reader falls back to `history_tracked` inference and inherits its documented false-negative tail.
 
 A reader MUST gate on `base_format_version` and refuse to interpret an unknown version. No auto-upgrade.
 

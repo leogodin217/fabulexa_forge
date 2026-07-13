@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fabulexa.example/schemas/base-format-v4.schema.json",
+  "$id": "https://fabulexa.example/schemas/base-format-v5.schema.json",
   "title": "Base Format Sidecar (base.json)",
   "description": "Sidecar manifest enumerating the branches and tables present in a base-layer emit's run.duckdb. Defined by base-format.md, beside this schema.",
   "type": "object",
@@ -9,8 +9,8 @@
   "properties": {
     "base_format_version": {
       "type": "integer",
-      "description": "Format version. v4 = 4. Reader gates on this; unknown versions must be rejected.",
-      "const": 4
+      "description": "Format version. v5 = 5. Reader gates on this; unknown versions must be rejected.",
+      "const": 5
     },
     "branches": {
       "type": "array",
@@ -233,7 +233,12 @@
         },
         "history_tracked": {
           "type": "boolean",
-          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present only on records-category prop__<name> columns emitted by a base_format_version: 4 producer that supports this attribute. Omitted on structural, provenance, fixed-table, and membership columns."
+          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 5 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
+        },
+        "temporal_class": {
+          "type": "string",
+          "enum": ["constant", "tracked", "slice_only"],
+          "description": "Point-in-time semantics for records-category prop__<name> columns, derived by the producer from the property's declared schema (never author-declared). 'constant' = value never changes after creation; 'tracked' = value may change and every change is captured in the history table; 'slice_only' = value may change but changes are not captured in history (only the value as of the export slice is knowable). Present on exactly the same columns as history_tracked ('tracked' implies history_tracked: true, 'slice_only' implies history_tracked: false); a column carries history_tracked iff it carries temporal_class. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
         }
       }
     }
