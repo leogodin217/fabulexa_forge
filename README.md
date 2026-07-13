@@ -1,18 +1,65 @@
 # fabulexa-forge
 
-Downstream **exporter** + **corrupter** for Fabulexa composite base-layer emits.
+Multi-mode, multi-format exporter for Fabulexa simulated bundles. Do you need data 
+for teaching, learning or practicing data skills? Fabulexa forge provides the interface
+to give you the data how you need it. It is in active development, so expect more
+to come. 
+
+Core Features
+* Four pre-simulated datasets that model a real world with causality. (Black friday produces
+more orders, a flu outbreak creates resource contention on hospital beds, etc.)
+* Three export modes: streaming CDC (through Kafka), source (looks like OLTP), dimensional (An entire
+data warehouse)
+* Time rebasing that resets date ranges
+* incremental exports with time windows 
+* Corruption that introduces common data-quality patterns
+* Streaming demo with a mixer board and custom consumer. (Proof of concept of mixing streams with sliders
+for rates and contention) 
+
+**Note**: This repo was carved out of a larger repo, hence the short git history. 
+
+## Concepts
+
+Fabulexa: A synthetic data generator that simulates interconnected business processes. 
+Referential and temporal ingegrity is baked in, as is direct cause and effect modelling. 
+Provenance, forking with paired counterfactuals are implemented in the engine but the datasets
+in this repo do not use those features. 
+
+Fabulexa Forge: While Fabulexa produces dataset bundles in a standard format, Forge shapes them into
+more user-friendly formats. 
+
+corrupter: Fabulexa makes several guarantees about dataset bundles. The corrupter breaks them. If you want
+to learn/teach SQL, dbt, etc. it is useful to have bad data. corrupter breaks the data contracts before 
+you export. 
+
+Bundle: Fabulexa-produced dataset with descriptive docs: .json with the schema, .md with a description. This
+is the input to Fabulexa Forge.
+
+Contract: ./contract/ Provides a JSON schema and instructions on using a bundle. Useful for development and
+creating your own bundles.  
+
+## Getting Started
+
+Start in docs/examples. You'll see four datasets minus the actual data. The data is in DuckDB and attached
+as artifacts. Copy the duckdb into the same directory as the example configs. /examples shows various recipes
+for configuration. CLI download for datasets is coming in the future.  
+
+### Streaming Demo
+
+make kafka-up 
+make mixer-demo EXAMPLE=ride-sharing  
+make board  
+Open http://localhost:5173
+
+**Now onto the LLM-generated stuff**
 
 Reads a base-layer emit (`run.duckdb` + `base.json`, `base_format_version 4`) and
 writes differently-shaped datasets (exporters) or realistically-broken base layers
 (corrupters). A downstream consumer of Fabulexa composite base-layer emits — the
 vendored bundle contract is its only coupling.
 
-> **Status: standalone, trunk-only.** Its own repo; the vendored `contract/` is the
-> only coupling. The reader + C1–C12 conformance, the dimensional / source / streaming
-> exporters, the corrupter family, and a live streaming **mixer** have shipped;
-> multi-branch / fork-aware export is deliberately deferred. See
-> [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) for the feature inventory and
-> [`docs/architecture/README.md`](docs/architecture/README.md) for the staged roadmap.
+* [`docs/CAPABILITIES.md`](docs/CAPABILITIES.md) for the feature inventory and
+* [`docs/architecture/README.md`](docs/architecture/README.md) for the staged roadmap.
 
 One name throughout: the distribution and the CLI are both `fabulexa-forge`; the
 import package is `fabulexa_forge` — the standard hyphen↔underscore mapping, so
@@ -75,7 +122,7 @@ make check         # lint + typecheck + tests
 .
 ├── CLAUDE.md                 # principles, boundary, vocabulary
 ├── contract/                 # VENDORED base-layer contract (the only coupling)
-├── src/fabulexa_forge/      # package source — the fabulexa-forge CLI + library
+├── src/fabulexa_forge/       # package source — the fabulexa-forge CLI + library
 ├── tests/
 ├── examples/recipes/         # minimal, test-guarded author recipes (one per feature)
 ├── docs/                     # architecture index, capabilities, recipes, roadmap
@@ -84,3 +131,9 @@ make check         # lint + typecheck + tests
 ├── tools/                    # repo tooling (mdnav, hooks)
 └── .claude/                  # AI-agent skills/config — tracked as a workflow showcase
 ```
+
+## Use of LLMs
+
+This project is obviously LLM generated. .claude is committed and tracked. For this project, 
+I act as a product manager and Claude the architect and engineer. The process works really
+well for stuff like this that is basically glorified scripts in a CLI.
