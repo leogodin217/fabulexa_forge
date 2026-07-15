@@ -571,6 +571,97 @@ def build_day_scale_source_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
+_VENUE_TRACKED_COLUMNS: list[dict[str, object]] = [
+    {"name": "fork_path", "type": "VARCHAR"},
+    {"name": "record_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+_VENUE_CONSTANT_COLUMNS: list[dict[str, object]] = [
+    {"name": "fork_path", "type": "VARCHAR"},
+    {"name": "record_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="constant"
+    ),
+]
+
+
+def _build_venue_emit(tmp_path: Path, columns: list[dict[str, object]]) -> Path:
+    """Shared body for the venue reclassification fixtures: one dimension-role
+    kind, `venue`, whose sole prop__ column is `columns`' single presentation
+    value, differing only in its declared temporal_class.
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__venue", columns))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__venue" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "ven001", 10 * _MS, True, 10 * _MS, "Main Hall"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "venue", "ven001", "name", 10 * _MS, "Main Hall"],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec("records__venue", "records", columns, 1, record_kind="venue"),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 20 * _MS}],
+        extra={
+            "record_roles": {"venue": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
+def build_presentation_reclassified_source_emit(tmp_path: Path) -> Path:
+    """A dimension-role kind whose sole prop__ column is a `tracked`-class
+    presentation value: the genre trichotomy reclassifies it from reference to
+    change-log genre even though `record_roles` still declares 'dimension' — a
+    name that genuinely changes over time *is* a change log.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    return _build_venue_emit(tmp_path, _VENUE_TRACKED_COLUMNS)
+
+
+def build_presentation_constant_source_emit(tmp_path: Path) -> Path:
+    """The same kind shape as `build_presentation_reclassified_source_emit`,
+    presentation column class `constant`: no reclassification — genre stays
+    'reference' by role, since the class (not the history_tracked bit) decides.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    return _build_venue_emit(tmp_path, _VENUE_CONSTANT_COLUMNS)
+
+
 def build_empty_source_emit(tmp_path: Path) -> Path:
     """Build a minimal single-table emit whose sole kind materializes zero rows.
 

@@ -103,20 +103,45 @@ class _Unit:
 
 
 def _is_kind_tracked(sidecar: "Sidecar", source_table: str) -> bool:
-    """Whether a kind is history-tracked: any prop__ column has history_tracked=True.
+    """Whether any property of `source_table`'s kind genuinely changes over time.
+
+    A kind is tracked iff one of its prop__ columns is temporal_class 'tracked'.
+    Keyed on the class, not on history_tracked: at v5 every presentation column is
+    history_tracked, but one bound to an immutable source is class 'constant' and
+    holds exactly its genesis row — a kind carrying only such a column does not
+    change, and rendering it as a change log would render a change log with no
+    changes.
+
+    Only a history_tracked column can be class 'tracked' (the contract constrains
+    it), so the class is consulted only for the columns carrying the bit — resolved
+    through the sidecar's temporal_class accessor, the single narrowing point. A
+    kind carrying no history_tracked prop__ column is untracked without consulting
+    any class — the same defensive skip signal C11 and C13 key on, unreachable past
+    the version gate against a producer-written v5 emit (coverage is total) and
+    retained so the predicate is correct standalone.
 
     Args:
         sidecar: The open emit's sidecar.
         source_table: The kind's records__<kind> table name.
 
     Returns:
-        True iff any prop__ column of the kind carries history_tracked is True
-        (the `is True` convention — False/None are untracked).
+        True iff some prop__ column of the kind is temporal_class 'tracked'.
+
+    Raises:
+        TableNotFoundError: `source_table` is not in the sidecar.
+        TemporalClassUnavailableError: A prop__ column declares history_tracked but
+            no temporal_class, or declares a class outside the enum. The emit is
+            non-conformant (C13); no class is inferred.
     """
-    return any(
-        col.history_tracked is True
+    flagged = [
+        col
         for col in sidecar.columns(source_table)
-        if col.name.startswith(_PROP_PREFIX)
+        if col.name.startswith(_PROP_PREFIX) and col.history_tracked is True
+    ]
+    if not flagged:
+        return False
+    return any(
+        sidecar.temporal_class(source_table, col.name) == "tracked" for col in flagged
     )
 
 

@@ -22,6 +22,7 @@ from fabulexa_forge.errors import (
     SourceSubtypesUndeclared,
 )
 from fabulexa_forge.exporters.source.plan import build_source_plan
+from fabulexa_forge.reader.errors import TemporalClassUnavailableError
 from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
@@ -33,11 +34,19 @@ def _col(
     name: str,
     type_: str = "VARCHAR",
     history_tracked: bool | None = None,
+    temporal_class: str | None = None,
 ) -> dict[str, object]:
-    """Build a raw sidecar column entry."""
+    """Build a raw sidecar column entry.
+
+    Unlike `_support.sidecar_builder.prop_column`, this builder does not validate
+    the (history_tracked, temporal_class) pairing — test_plan.py's negative
+    fixtures deliberately construct the broken pairings C13 exists to catch.
+    """
     col: dict[str, object] = {"name": name, "type": type_}
     if history_tracked is not None:
         col["history_tracked"] = history_tracked
+    if temporal_class is not None:
+        col["temporal_class"] = temporal_class
     return col
 
 
@@ -138,7 +147,7 @@ def _spanning_sidecar() -> Sidecar:
     visit_table = _records_table(
         "visit",
         [
-            _col("prop__status", history_tracked=True),
+            _col("prop__status", history_tracked=True, temporal_class="tracked"),
             _col("prop__notes", history_tracked=False),
         ],
     )
@@ -194,7 +203,7 @@ def _tracked_sidecar(presentation_id: bool = False) -> Sidecar:
     widget_table = _records_table(
         "widget",
         [
-            _col("prop__status", history_tracked=True),
+            _col("prop__status", history_tracked=True, temporal_class="tracked"),
             _col("prop__notes", history_tracked=False),
         ],
         presentation_id=presentation_id,
@@ -247,7 +256,10 @@ def test_history_tracked_none_treated_as_untracked() -> None:
     }
     sidecar = _sidecar(
         tables=[
-            _records_table("visit", [_col("prop__status", history_tracked=True)]),
+            _records_table(
+                "visit",
+                [_col("prop__status", history_tracked=True, temporal_class="tracked")],
+            ),
             location_no_flag,
         ],
         record_roles={"location": "dimension"},
@@ -268,6 +280,108 @@ def test_history_table_never_a_plan_entry() -> None:
     """The fixed-category history table never yields a plan entry."""
     plan = build_source_plan(_spanning_sidecar(), None)
     assert all(s.source_table != "history" for s in plan)
+
+
+# ---------------------------------------------------------------------------
+# The genre trichotomy keys on the class
+# ---------------------------------------------------------------------------
+
+
+def test_tracked_presentation_column_reclassifies_to_changelog() -> None:
+    """A kind whose only history_tracked column is a class 'tracked' presentation
+    value reclassifies from its role's genre to change-log genre — a name that
+    genuinely changes over time *is* a change log."""
+    sidecar = _sidecar(
+        tables=[
+            _records_table(
+                "venue",
+                [_col("prop__name", history_tracked=True, temporal_class="tracked")],
+            )
+        ],
+        record_roles={"venue": "dimension"},
+    )
+    plan = build_source_plan(sidecar, None)
+    spec = next(s for s in plan if s.source_table == "records__venue")
+    assert spec.genre == "changelog"
+
+
+def test_constant_presentation_column_does_not_reclassify() -> None:
+    """The same kind shape, presentation column class 'constant': no
+    reclassification — genre stays reference/transaction by role. The class,
+    not the history_tracked bit, decides."""
+    sidecar = _sidecar(
+        tables=[
+            _records_table(
+                "venue",
+                [_col("prop__name", history_tracked=True, temporal_class="constant")],
+            )
+        ],
+        record_roles={"venue": "dimension"},
+    )
+    plan = build_source_plan(sidecar, None)
+    spec = next(s for s in plan if s.source_table == "records__venue")
+    assert spec.genre == "reference"
+
+
+def test_no_flagged_column_skips_class_consultation_entirely() -> None:
+    """A kind with no history_tracked prop__ column is untracked without
+    consulting any class at all — the standalone skip guard, exercised here
+    with a column that carries neither temporal attribute. A sibling column
+    carries history_tracked so the sidecar-wide availability flag is present."""
+    sidecar = _sidecar(
+        tables=[
+            _records_table(
+                "venue",
+                [
+                    _col("prop__name"),
+                    _col(
+                        "prop__region", history_tracked=False, temporal_class="constant"
+                    ),
+                ],
+            )
+        ],
+        record_roles={"venue": "dimension"},
+    )
+    plan = build_source_plan(sidecar, None)
+    spec = next(s for s in plan if s.source_table == "records__venue")
+    assert spec.genre == "reference"
+
+
+def test_flagged_column_with_no_class_raises_temporal_class_unavailable() -> None:
+    """A prop__ column declaring history_tracked with no paired temporal_class
+    raises TemporalClassUnavailableError at plan time, directing to
+    `fabulexa-forge validate` (the emit is non-conformant — C13)."""
+    sidecar = _sidecar(
+        tables=[_records_table("venue", [_col("prop__name", history_tracked=True)])],
+        record_roles={"venue": "dimension"},
+    )
+    with pytest.raises(TemporalClassUnavailableError, match="fabulexa-forge validate"):
+        build_source_plan(sidecar, None)
+
+
+def test_class_with_no_history_tracked_is_never_consulted() -> None:
+    """A column declaring a temporal_class with no history_tracked is never
+    consulted by the predicate — the refusal is one-directional; a broken
+    pairing like this is C13's to report, not the genre trichotomy's. A
+    sibling column carries history_tracked so the sidecar-wide availability
+    flag is present."""
+    sidecar = _sidecar(
+        tables=[
+            _records_table(
+                "venue",
+                [
+                    _col("prop__name", temporal_class="tracked"),
+                    _col(
+                        "prop__region", history_tracked=False, temporal_class="constant"
+                    ),
+                ],
+            )
+        ],
+        record_roles={"venue": "dimension"},
+    )
+    plan = build_source_plan(sidecar, None)
+    spec = next(s for s in plan if s.source_table == "records__venue")
+    assert spec.genre == "reference"
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +417,7 @@ def test_tracked_subtyped_kind_single_changelog_with_discriminator_retained() ->
         "shift",
         [
             _col("prop__shift_type", history_tracked=False),
-            _col("prop__status", history_tracked=True),
+            _col("prop__status", history_tracked=True, temporal_class="tracked"),
         ],
     )
     sidecar = _sidecar(
@@ -831,7 +945,9 @@ def test_snapshot_collision_check_runs_over_snapshot_columns() -> None:
             _records_table(
                 "widget",
                 [
-                    _col("prop__status", history_tracked=True),
+                    _col(
+                        "prop__status", history_tracked=True, temporal_class="tracked"
+                    ),
                     _col("prop__id", history_tracked=False),
                 ],
             )

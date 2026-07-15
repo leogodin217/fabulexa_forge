@@ -34,6 +34,8 @@ from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
     build_empty_source_emit,
+    build_presentation_constant_source_emit,
+    build_presentation_reclassified_source_emit,
     build_source_test_emit,
     build_windowed_source_test_emit,
     windowed_test_windows,
@@ -245,3 +247,45 @@ def test_build_source_query_specs_windowed_snapshot_write_mode_and_render(
 
     assert by_table["visit"].sql == expected_visit_sql
     assert by_table["order"].sql == expected_order_sql
+
+
+# ---------------------------------------------------------------------------
+# The genre trichotomy keys on the class
+# ---------------------------------------------------------------------------
+
+
+def test_tracked_presentation_column_exports_as_changelog(tmp_path: Path) -> None:
+    """A dimension-role kind whose sole prop__ column is class 'tracked'
+    reclassifies to change-log genre end-to-end: the export produces a `venue`
+    change-log table (an 'op' column, a 'c' row), not a reference snapshot."""
+    emit_dir = build_presentation_reclassified_source_emit(tmp_path)
+    config = ExportConfig(mode="source")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        row_counts = export_source(emit, config, out_dir, "csv", anchor)
+
+    assert row_counts == {"venue": 1}
+    with (out_dir / "venue.csv").open(encoding="utf-8") as f:
+        header = next(csv.reader(f))
+    assert "op" in header
+    assert "created_at" not in header
+
+
+def test_constant_presentation_column_exports_as_reference(tmp_path: Path) -> None:
+    """The same kind shape, presentation column class 'constant': the export
+    produces a reference snapshot (no 'op' column) — no reclassification."""
+    emit_dir = build_presentation_constant_source_emit(tmp_path)
+    config = ExportConfig(mode="source")
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        row_counts = export_source(emit, config, out_dir, "csv", anchor)
+
+    assert row_counts == {"venue": 1}
+    with (out_dir / "venue.csv").open(encoding="utf-8") as f:
+        header = next(csv.reader(f))
+    assert "op" not in header
+    assert "created_at" in header
