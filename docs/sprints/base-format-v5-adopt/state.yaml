@@ -1,7 +1,7 @@
 sprint: base-format-v5-adopt
 parent_branch: revender_for_point_in_time
 started: 2026-07-15
-current_phase: 2
+current_phase: 3
 capabilities:
   - reader: [temporal_class model + accessor, version gate 5]
   - conformance: [C11 converse, C13, registry C1-C13]
@@ -17,7 +17,7 @@ phases:
     name: "One version authority; gate -> 5"
     demo: "docs/sprints/base-format-v5-adopt/demos/phase_1_version_gate.py"
   2:
-    status: pending
+    status: complete
     name: "The reader models the class"
     demo: "docs/sprints/base-format-v5-adopt/demos/phase_2_temporal_class.py"
   3:
