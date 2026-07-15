@@ -17,8 +17,8 @@ from unittest.mock import patch
 
 import duckdb
 import pytest
+from _support.sidecar_builder import prop_column, write_emit
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     DebeziumConfig,
@@ -53,7 +53,9 @@ _RECORD_COLS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 _HISTORY_COLS: list[dict[str, object]] = [
@@ -90,7 +92,7 @@ def _build_emit(
     record_rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal v4 emit with one kind."""
+    """Build a minimal v5 emit with one kind."""
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     conn.execute(_ddl(f"records__{kind}", _RECORD_COLS))
@@ -103,10 +105,9 @@ def _build_emit(
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 f"records__{kind}",
                 "records",
@@ -116,8 +117,8 @@ def _build_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -942,7 +943,7 @@ def _build_membership_emit(
     waiters_rows: list[tuple[Any, ...]],
     members_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal v4 emit with two membership tables.
+    """Build a minimal v5 emit with two membership tables.
 
     Table membership__queue__waiters has elem__priority; membership__team__members
     has no element fields. waiters_rows is (fork_path, record_id, joined_sim_time,
@@ -969,10 +970,9 @@ def _build_membership_emit(
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _membership_table_spec(
                 "membership__queue__waiters",
                 _MEMBERSHIP_WAITERS_COLS,
@@ -988,8 +988,8 @@ def _build_membership_emit(
                 "members",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 

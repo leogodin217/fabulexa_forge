@@ -30,9 +30,21 @@ def _patient_spec() -> "object":
             column_spec("record_id", "VARCHAR"),
             column_spec("active", "BOOLEAN"),
             column_spec("deactivated_at", "BIGINT"),
-            column_spec("prop__name", "VARCHAR", history_tracked=True),
-            column_spec("prop__nickname", "VARCHAR", history_tracked=True),
-            column_spec("prop__birthdate", "DATE", history_tracked=True),
+            column_spec(
+                "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+            ),
+            column_spec(
+                "prop__nickname",
+                "VARCHAR",
+                history_tracked=True,
+                temporal_class="tracked",
+            ),
+            column_spec(
+                "prop__birthdate",
+                "DATE",
+                history_tracked=True,
+                temporal_class="tracked",
+            ),
             column_spec("prop__notes", "VARCHAR"),
         ),
         record_kind="patient",
@@ -175,7 +187,12 @@ def test_tracked_type_with_incidental_whitespace_still_declares_c6() -> None:
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
-            column_spec("prop__name", "VARCHAR ", history_tracked=True),
+            column_spec(
+                "prop__name",
+                "VARCHAR ",
+                history_tracked=True,
+                temporal_class="tracked",
+            ),
         ),
         record_kind="patient",
     )

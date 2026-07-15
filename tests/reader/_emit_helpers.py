@@ -7,12 +7,14 @@ for the common minimal-emit case.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+
+_SIDECAR_TOP_LEVEL_KEYS = frozenset({"base_format_version", "branches", "tables"})
 
 
 def _minimal_sidecar(
@@ -61,6 +63,10 @@ def write_emit(
 ) -> Path:
     """Write a base.json + run.duckdb pair into tmp_path and return tmp_path.
 
+    Routes the base.json write through `_support.sidecar_builder.write_emit`
+    (the one sidecar authority): the incoming `sidecar` dict is decomposed into
+    its tables/branches/base_format_version/extra-blocks components.
+
     Args:
         tmp_path: Directory to write the emit artifacts into.
         sidecar: The base.json content as a dict; uses a minimal valid sidecar
@@ -75,7 +81,18 @@ def write_emit(
     if sidecar is None:
         sidecar = _minimal_sidecar()
 
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    extra = {
+        key: value
+        for key, value in sidecar.items()
+        if key not in _SIDECAR_TOP_LEVEL_KEYS
+    }
+    _write_sidecar(
+        tmp_path,
+        tables=sidecar["tables"],  # type: ignore[arg-type]
+        branches=sidecar.get("branches"),  # type: ignore[arg-type]
+        extra=extra or None,
+        base_format_version=sidecar.get("base_format_version"),  # type: ignore[arg-type]
+    )
 
     db_path = tmp_path / "run.duckdb"
     if garbage_db:

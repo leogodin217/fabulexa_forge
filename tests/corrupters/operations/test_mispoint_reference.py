@@ -56,12 +56,15 @@ def _patient_spec() -> object:
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
             column_spec("last_mutation_sim_time", "BIGINT"),
-            column_spec("prop__name", "VARCHAR", history_tracked=True),
+            column_spec(
+                "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+            ),
             column_spec(
                 "prop__doctor_id",
                 "VARCHAR",
                 references="doctor",
                 history_tracked=True,
+                temporal_class="tracked",
             ),
             column_spec("prop__untracked_doctor_id", "VARCHAR", references="doctor"),
         ),

@@ -24,12 +24,11 @@ Scenario:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
+from _support.sidecar_builder import prop_column, write_emit
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.incremental.windows import Window
 
 _MS = 1_000_000  # one "tick" — 1 millisecond in sim-time nanoseconds.
@@ -42,8 +41,12 @@ _VISIT_COLUMNS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     {"name": "presentation_id", "type": "BIGINT"},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
-    {"name": "prop__priority", "type": "BIGINT", "history_tracked": True},
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__priority", "BIGINT", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 _SHIFT_COLUMNS: list[dict[str, object]] = [
@@ -53,8 +56,12 @@ _SHIFT_COLUMNS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__shift_type", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    prop_column(
+        "prop__shift_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 _LOCATION_COLUMNS: list[dict[str, object]] = [
@@ -64,8 +71,12 @@ _LOCATION_COLUMNS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__region", "type": "VARCHAR", "history_tracked": False},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__region", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _ORDER_COLUMNS: list[dict[str, object]] = [
@@ -75,13 +86,16 @@ _ORDER_COLUMNS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {
-        "name": "prop__location_id",
-        "type": "VARCHAR",
-        "history_tracked": False,
-        "references": "location",
-    },
-    {"name": "prop__amount", "type": "DOUBLE", "history_tracked": False},
+    prop_column(
+        "prop__location_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="location",
+    ),
+    prop_column(
+        "prop__amount", "DOUBLE", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _ACTOR_COLUMNS: list[dict[str, object]] = [
@@ -91,8 +105,12 @@ _ACTOR_COLUMNS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__actor_type", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
+    prop_column(
+        "prop__actor_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _HISTORY_COLUMNS: list[dict[str, object]] = [
@@ -257,10 +275,26 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
-        "tables": [
+    extra: dict[str, object] = {
+        "record_roles": {
+            "location": "dimension",
+            "order": "fact",
+            "actor": {"consultant": "dimension", "nurse": "fact"},
+        },
+        "enum_domains": {
+            "actor": {"actor_type": ["consultant", "nurse"]},
+            "shift": {"shift_type": ["day", "night"]},
+        },
+    }
+    if with_runtime:
+        extra["runtime"] = {
+            "timezone": "UTC",
+            "start_datetime": "2024-01-01T00:00:00+00:00",
+        }
+
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__visit", "records", _VISIT_COLUMNS, 3, record_kind="visit"
             ),
@@ -290,23 +324,9 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
                 property_name="team",
             ),
         ],
-        "record_roles": {
-            "location": "dimension",
-            "order": "fact",
-            "actor": {"consultant": "dimension", "nurse": "fact"},
-        },
-        "enum_domains": {
-            "actor": {"actor_type": ["consultant", "nurse"]},
-            "shift": {"shift_type": ["day", "night"]},
-        },
-    }
-    if with_runtime:
-        sidecar["runtime"] = {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
-        }
-
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra=extra,
+    )
     return tmp_path
 
 
@@ -429,10 +449,9 @@ def build_windowed_source_test_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__visit", "records", _VISIT_COLUMNS, 3, record_kind="visit"
             ),
@@ -456,13 +475,15 @@ def build_windowed_source_test_emit(tmp_path: Path) -> Path:
                 property_name="team",
             ),
         ],
-        "record_roles": {"location": "dimension", "order": "fact"},
-        "runtime": {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra={
+            "record_roles": {"location": "dimension", "order": "fact"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path
 
 
@@ -475,7 +496,9 @@ _WIDGET_COLUMNS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": True},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 
@@ -524,10 +547,9 @@ def build_day_scale_source_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 3 * _DAY_NS}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__widget",
                 "records",
@@ -537,10 +559,15 @@ def build_day_scale_source_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 3),
         ],
-        "record_roles": {},
-        "runtime": {"timezone": "UTC", "start_datetime": "2024-01-01T00:00:00+00:00"},
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 3 * _DAY_NS}],
+        extra={
+            "record_roles": {"widget": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
     return tmp_path
 
 
@@ -559,10 +586,9 @@ def build_empty_source_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100 * _MS}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__location",
                 "records",
@@ -572,11 +598,13 @@ def build_empty_source_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
         ],
-        "record_roles": {"location": "dimension"},
-        "runtime": {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100 * _MS}],
+        extra={
+            "record_roles": {"location": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path

@@ -1,7 +1,9 @@
 """Fixture builder for base-reader conformance tests.
 
-Synthesizes a spanning-positive v4 emit and several deliberately-broken variants
-into a caller-supplied directory. Zero third-party imports — DuckDB + stdlib only.
+Synthesizes a spanning-positive v5 emit and several deliberately-broken variants
+into a caller-supplied directory. Every base.json write routes through
+`_support.sidecar_builder.write_emit`; every value-carrying `prop__` column is
+built through `prop_column`.
 
 All builder functions are module-level so they can be tested independently.
 """
@@ -9,13 +11,15 @@ All builder functions are module-level so they can be tested independently.
 from __future__ import annotations
 
 import copy
-import json
 from collections.abc import Callable
 from pathlib import Path
 
 import duckdb
-
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from _support.sidecar_builder import (
+    UNSUPPORTED_VERSION_SENTINEL,
+    prop_column,
+    write_emit,
+)
 
 # ---------------------------------------------------------------------------
 # Column lists — match base-format.md exactly (sanitised: no firings, no provenance)
@@ -39,13 +43,30 @@ _RECORDS_ACTOR_COLUMNS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": True},
-    # closed-domain status property (in enum_domains)
-    {"name": "prop__status", "type": "VARCHAR"},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    # closed-domain status property (in enum_domains); mutable but not
+    # history-tracked in this fixture's spanning shape (build_history_series
+    # flips it to tracked) -- the fixture's sole slice_only column
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=False, temporal_class="slice_only"
+    ),
     # references-annotated FK to doctor kind
-    {"name": "prop__doctor_id", "type": "VARCHAR", "references": "doctor"},
-    # sub-type discriminator
-    {"name": "prop__actor_type", "type": "VARCHAR"},
+    prop_column(
+        "prop__doctor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="doctor",
+    ),
+    # sub-type discriminator -- fixed at creation, never changes
+    prop_column(
+        "prop__actor_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
 ]
 
 # records__doctor columns: fixed prefix + prop__ block (no provenance)
@@ -56,7 +77,9 @@ _RECORDS_DOCTOR_COLUMNS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR"},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 # membership__actor__appointments columns
@@ -138,24 +161,21 @@ def _table_spec(
     return spec
 
 
-def _base_sidecar(
-    tables: list[dict[str, object]],
-    *,
-    include_record_roles: bool = True,
-) -> dict[str, object]:
-    """Build a minimal valid sidecar with the given tables.
+_SPANNING_BRANCHES: list[dict[str, object]] = [
+    {"fork_path": "trunk", "parent": None, "slice_at": 100}
+]
+
+
+def _base_extra(*, include_record_roles: bool = True) -> dict[str, object]:
+    """Build the extra top-level sidecar blocks shared by spanning-shaped fixtures.
 
     Args:
-        tables: Sidecar table spec list.
-        include_record_roles: When True, include record_roles in the sidecar.
+        include_record_roles: When True, include record_roles in the result.
 
     Returns:
-        A sidecar dict.
+        A dict suitable for write_emit's `extra` argument.
     """
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": tables,
+    extra: dict[str, object] = {
         "runtime": {
             "timezone": "UTC",
             "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -168,8 +188,8 @@ def _base_sidecar(
         },
     }
     if include_record_roles:
-        sidecar["record_roles"] = _RECORD_ROLES
-    return sidecar
+        extra["record_roles"] = _RECORD_ROLES
+    return extra
 
 
 def _spanning_tables(
@@ -239,7 +259,8 @@ def _history_series_actor_columns() -> list[dict[str, object]]:
     """records__actor columns for build_history_series.
 
     A deep copy of `_RECORDS_ACTOR_COLUMNS` with `prop__status` additionally
-    marked `history_tracked`, plus two appended numeric tracked columns:
+    marked `history_tracked` + `temporal_class="tracked"` (its spanning-shape
+    class is `slice_only`), plus two appended numeric tracked columns:
     `prop__wait_minutes` (BIGINT) and `prop__temperature_c` (DOUBLE). a001
     carries four tracked series (name, status, wait_minutes,
     temperature_c) — `wait_minutes` gives corrupt-recipe scenarios
@@ -256,37 +277,67 @@ def _history_series_actor_columns() -> list[dict[str, object]]:
     for col in columns:
         if col["name"] == "prop__status":
             col["history_tracked"] = True
+            col["temporal_class"] = "tracked"
     columns.append(
-        {"name": "prop__wait_minutes", "type": "BIGINT", "history_tracked": True}
+        prop_column(
+            "prop__wait_minutes",
+            "BIGINT",
+            history_tracked=True,
+            temporal_class="tracked",
+        )
     )
     columns.append(
-        {"name": "prop__temperature_c", "type": "DOUBLE", "history_tracked": True}
+        prop_column(
+            "prop__temperature_c",
+            "DOUBLE",
+            history_tracked=True,
+            temporal_class="tracked",
+        )
     )
     return columns
 
 
 def _history_series_doctor_columns() -> list[dict[str, object]]:
-    """records__doctor columns for build_history_series.
+    """records__doctor columns for build_history_series and
+    build_membership_intervals.
 
-    A deep copy of `_RECORDS_DOCTOR_COLUMNS` with two appended untracked
-    VARCHAR columns: `prop__license_number` ("48213", an optional-minus
-    all-digit string of >= 4 digits — the only fixture value shaped to
-    actually change under `mutate_cells @ format_dirt`; every other VARCHAR
-    value in the fixture is short or non-numeric and would hit that
-    mutation's no-mutation rule) and `prop__notes` ("café", the only
-    fixture value carrying a non-ASCII byte, so it is the only target
-    `mutate_cells @ mojibake` can actually mutate — every other VARCHAR
-    value is pure ASCII and mojibake's no-mutation rule is identity on
-    ASCII). Both are untracked, so a mutation there lands the pure
-    `beyond-c1-c12` sentinel — consistent with the shipped stance that
-    mojibake/format_dirt (like truncate) inject values whose teaching
-    payoff surfaces on downstream export, not in the base layer. Appending
-    rather than editing `_RECORDS_DOCTOR_COLUMNS` keeps `build_spanning`'s
-    seven-column shape untouched.
+    A deep copy of `_RECORDS_DOCTOR_COLUMNS` with three appended columns:
+    `prop__license_number` ("48213", an optional-minus all-digit string of
+    >= 4 digits — the only fixture value shaped to actually change under
+    `mutate_cells @ format_dirt`; every other VARCHAR value in the fixture is
+    short or non-numeric and would hit that mutation's no-mutation rule),
+    `prop__notes` ("café", the only fixture value carrying a non-ASCII byte,
+    so it is the only target `mutate_cells @ mojibake` can actually mutate —
+    every other VARCHAR value is pure ASCII and mojibake's no-mutation rule
+    is identity on ASCII), and `prop__specialty` (history-tracked — doctor's
+    only tracked series, backed by a genesis-only, non-NULL history row per
+    doctor in `_populate_history_series`; gives `hard-deleted-parents`'
+    `hard_delete_referenced_doctor` a tracked series to orphan, so that
+    defect's `impact` carries C6 alongside C10). `license_number` is a
+    once-granted identifier (class `constant`); `notes` is an editable
+    free-text field (class `slice_only`); neither is history_tracked.
+    Appending rather than editing `_RECORDS_DOCTOR_COLUMNS` keeps
+    `build_spanning`'s seven-column shape untouched.
     """
     columns = copy.deepcopy(_RECORDS_DOCTOR_COLUMNS)
-    columns.append({"name": "prop__license_number", "type": "VARCHAR"})
-    columns.append({"name": "prop__notes", "type": "VARCHAR"})
+    columns.append(
+        prop_column(
+            "prop__license_number",
+            "VARCHAR",
+            history_tracked=False,
+            temporal_class="constant",
+        )
+    )
+    columns.append(
+        prop_column(
+            "prop__notes", "VARCHAR", history_tracked=False, temporal_class="slice_only"
+        )
+    )
+    columns.append(
+        prop_column(
+            "prop__specialty", "VARCHAR", history_tracked=True, temporal_class="tracked"
+        )
+    )
     return columns
 
 
@@ -326,15 +377,28 @@ def _populate_history_series(conn: duckdb.DuckDBPyConnection) -> int:
 
     Four series on a001: `name` (5 events — 4 pre-slice ticks plus one
     post-slice tick past slice_at=100, exercising the C6 pre-slice gate),
-    `status` (2 events, both pre-slice), `wait_minutes` (2 events, both
-    pre-slice — a numeric series backing `prop__wait_minutes`, the
-    jitter-eligible column), and `temperature_c` (2 events, both pre-slice
-    — a numeric series backing `prop__temperature_c`, the
-    precision_drop-eligible DOUBLE column). Every series' latest pre-slice
-    value equals its records__actor prop__ cell, so the emit round-trips
-    (C6-conformant).
+    `status` (2 events, both pre-slice, the first coincident with
+    created_sim_time=10 -- its own genesis row), `wait_minutes` (3 events,
+    all pre-slice: an unconditional NULL-valued genesis row at
+    created_sim_time=10 -- `prop__wait_minutes` has no value until its
+    first post-creation tick -- plus the same two ticks as before), and
+    `temperature_c` (3 events, all pre-slice: a NULL-valued genesis row at
+    created_sim_time=10 plus the same two ticks as before) — the two
+    numeric series backing `prop__wait_minutes` / `prop__temperature_c`,
+    the jitter-eligible and precision_drop-eligible columns respectively.
+    Every series' latest pre-slice value equals its records__actor prop__
+    cell, so the emit round-trips (C6-conformant); the added genesis rows
+    are earlier than every existing tick and never become the latest
+    pre-slice value.
+
+    Also one genesis-only `specialty` series per doctor (d001/d002/d003),
+    each a single non-NULL row at its own created_sim_time equal to that
+    doctor's records__doctor `prop__specialty` cell -- a specialty is fixed
+    at creation, so the genesis row is the whole series (C6-conformant, no
+    later tick needed). d001's is the series `hard-deleted-parents`'
+    `hard_delete_referenced_doctor` orphans.
     """
-    rows: list[tuple[str, str, str, str, int, str]] = [
+    rows: list[tuple[str, str, str, str, int, str | None]] = [
         ("trunk", "actor", "a001", "name", 10, "Alice-v0"),
         ("trunk", "actor", "a001", "name", 30, "Alice-v1"),
         ("trunk", "actor", "a001", "name", 60, "Alice-v2"),
@@ -342,10 +406,15 @@ def _populate_history_series(conn: duckdb.DuckDBPyConnection) -> int:
         ("trunk", "actor", "a001", "name", 150, "Alice-future"),
         ("trunk", "actor", "a001", "status", 10, "pending"),
         ("trunk", "actor", "a001", "status", 40, "active"),
+        ("trunk", "actor", "a001", "wait_minutes", 10, None),  # genesis, no value yet
         ("trunk", "actor", "a001", "wait_minutes", 20, "5"),
         ("trunk", "actor", "a001", "wait_minutes", 50, "12"),
+        ("trunk", "actor", "a001", "temperature_c", 10, None),  # genesis, no value yet
         ("trunk", "actor", "a001", "temperature_c", 25, "36.5"),
         ("trunk", "actor", "a001", "temperature_c", 55, "37.256"),
+        ("trunk", "doctor", "d001", "specialty", 5, "cardiology"),  # genesis
+        ("trunk", "doctor", "d002", "specialty", 6, "radiology"),  # genesis
+        ("trunk", "doctor", "d003", "specialty", 50, "surgery"),  # genesis
     ]
     for row in rows:
         conn.execute("INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)", list(row))
@@ -399,9 +468,12 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
     """Insert records__doctor's rows for build_history_series; return row count.
 
     The same d001 row `_populate_records_doctor` writes, plus
-    `prop__license_number = "48213"` and `prop__notes = "café"` — both
-    untracked, so no history series backs them (see
-    `_history_series_doctor_columns`) — plus two donor rows
+    `prop__license_number = "48213"`, `prop__notes = "café"` (both untracked,
+    so no history series backs them — see `_history_series_doctor_columns`),
+    and `prop__specialty` — history-tracked, backed by a genesis-only,
+    non-NULL history row per doctor in `_populate_history_series` (each
+    doctor's specialty is fixed at creation, so its single tracked event IS
+    its genesis row; the emit stays C6-conformant) — plus two donor rows
     `mispoint_reference` needs a non-empty donor pool for every fixture
     reference cell (`membership__actor__appointments.member__doctor__id`,
     `records__actor.prop__doctor_id`, both currently d001):
@@ -413,12 +485,11 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
       <= slice_at=100 (created_sim_time=50) — so Phase 2's
       `created_after_reference`-constrained donor pool is non-empty too.
 
-    Both donor rows are untracked like d001, so the emit stays C1-C12
-    conformant (no series backs prop__license_number/prop__notes for any
-    doctor row).
+    license_number/notes are untracked like before -- no series backs them
+    for any doctor row.
     """
     conn.execute(
-        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
         [
             "trunk",  # fork_path
             "d001",  # record_id
@@ -429,10 +500,11 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
             "Dr. Smith",  # prop__name
             "48213",  # prop__license_number
             "café",  # prop__notes
+            "cardiology",  # prop__specialty
         ],
     )
     conn.execute(
-        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
         [
             "trunk",  # fork_path
             "d002",  # record_id -- ordinary donor
@@ -443,10 +515,11 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
             "Dr. Jones",  # prop__name
             "77104",  # prop__license_number
             "clinic",  # prop__notes
+            "radiology",  # prop__specialty
         ],
     )
     conn.execute(
-        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)",
+        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
         [
             "trunk",  # fork_path
             "d003",  # record_id -- late-created donor
@@ -457,6 +530,7 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
             "Dr. Patel",  # prop__name
             "90210",  # prop__license_number
             "annex",  # prop__notes
+            "surgery",  # prop__specialty
         ],
     )
     return 3
@@ -535,10 +609,10 @@ def _build_spanning_db(conn: duckdb.DuckDBPyConnection) -> tuple[int, int, int, 
 def build_spanning(dest: Path) -> None:
     """Build the spanning fixture into dest.
 
-    A single-branch (trunk-only) sanitised v4 emit with no firings table and
+    A single-branch (trunk-only) sanitised v5 emit with no firings table and
     no provenance columns. Exercises: history (6 base cols), records__actor with
-    a references-annotated column, a closed-domain prop__status, a sub-type
-    discriminator prop__actor_type, records__doctor, and
+    a references-annotated column, a closed-domain, slice_only prop__status, a
+    constant-class sub-type discriminator prop__actor_type, records__doctor, and
     membership__actor__appointments with elem__* and member__*__kind/id columns,
     plus pinned_ids, runtime, enum_domains, and record_roles.
     """
@@ -549,12 +623,16 @@ def build_spanning(dest: Path) -> None:
     conn.close()
 
     tables = _spanning_tables(history_rows, actor_rows, doctor_rows, membership_rows)
-    sidecar = _base_sidecar(tables, include_record_roles=True)
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    write_emit(
+        dest,
+        tables=tables,
+        branches=_SPANNING_BRANCHES,
+        extra=_base_extra(include_record_roles=True),
+    )
 
 
 def build_history_series(dest: Path) -> None:
-    """Build a spanning-shaped v4 emit whose history carries multi-event series.
+    """Build a spanning-shaped v5 emit whose history carries multi-event series.
 
     Identical table set, membership rows, branches (slice_at=100), pins,
     enum_domains, and record_roles to build_spanning, with richer records
@@ -567,14 +645,17 @@ def build_history_series(dest: Path) -> None:
     - records__doctor gains two appended untracked VARCHAR columns,
       `prop__license_number` (an all-digit string shaped for `mutate_cells
       @ format_dirt`) and `prop__notes` (a non-ASCII string shaped for
-      `mutate_cells @ mojibake`) — see `_history_series_doctor_columns` for
-      why every other fixture VARCHAR value is the wrong shape for either.
+      `mutate_cells @ mojibake`), plus one appended tracked VARCHAR column,
+      `prop__specialty` (doctor's sole tracked, genesis-only series) — see
+      `_history_series_doctor_columns` for why every other fixture VARCHAR
+      value is the wrong shape for either untracked mutation.
     - history carries: at least two distinct series with >= 2 events each,
       one series with >= 4 events (so a random freeze cut has a real
       range), distinct sim_time ticks within each series, at least one
       event with sim_time > slice_at (exercising the C6 pre-slice gate),
       two numeric tracked series (`wait_minutes`, `temperature_c`) backing
-      the two numeric prop__ columns above, and every records prop__ cell
+      the two numeric prop__ columns above, one genesis-only series per
+      doctor backing `prop__specialty`, and every records prop__ cell
       equal to its series' latest pre-slice value (the emit is C1-C12
       conformant — the corrupter's source precondition).
 
@@ -615,17 +696,17 @@ def build_history_series(dest: Path) -> None:
         actor_columns=actor_columns,
         doctor_columns=doctor_columns,
     )
-    sidecar = _base_sidecar(tables, include_record_roles=True)
-    enum_domains = sidecar["enum_domains"]
+    extra = _base_extra(include_record_roles=True)
+    enum_domains = extra["enum_domains"]
     assert isinstance(enum_domains, dict)
     actor_domains = enum_domains["actor"]
     assert isinstance(actor_domains, dict)
     actor_domains["actor_type"] = ["nurse", "patient"]
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    write_emit(dest, tables=tables, branches=_SPANNING_BRANCHES, extra=extra)
 
 
 def build_membership_intervals(dest: Path) -> None:
-    """Build a spanning-shaped v4 emit whose membership carries
+    """Build a spanning-shaped v5 emit whose membership carries
     interval-rich member timelines.
 
     Identical history, records__actor, records__doctor,
@@ -694,13 +775,13 @@ def build_membership_intervals(dest: Path) -> None:
             property_name="oncall",
         )
     )
-    sidecar = _base_sidecar(tables, include_record_roles=True)
-    enum_domains = sidecar["enum_domains"]
+    extra = _base_extra(include_record_roles=True)
+    enum_domains = extra["enum_domains"]
     assert isinstance(enum_domains, dict)
     actor_domains = enum_domains["actor"]
     assert isinstance(actor_domains, dict)
     actor_domains["actor_type"] = ["nurse", "patient"]
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    write_emit(dest, tables=tables, branches=_SPANNING_BRANCHES, extra=extra)
 
 
 def build_wrong_version(dest: Path) -> None:
@@ -715,14 +796,13 @@ def build_wrong_version(dest: Path) -> None:
     conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": 99,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
-        "tables": [
-            _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
-        ],
-    }
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    write_emit(
+        dest,
+        tables=[_table_spec("history", "fixed", _HISTORY_COLUMNS, 0)],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+        base_format_version=UNSUPPORTED_VERSION_SENTINEL,
+        schema_valid=False,
+    )
 
 
 def build_c4_wrong_history_type(dest: Path) -> None:
@@ -741,14 +821,11 @@ def build_c4_wrong_history_type(dest: Path) -> None:
     conn.execute(_create_table_ddl("history", broken_columns))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
-        "tables": [
-            _table_spec("history", "fixed", broken_columns, 0),
-        ],
-    }
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    write_emit(
+        dest,
+        tables=[_table_spec("history", "fixed", broken_columns, 0)],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+    )
 
 
 def build_c5_prop_missing(dest: Path) -> None:
@@ -766,10 +843,9 @@ def build_c5_prop_missing(dest: Path) -> None:
     conn.execute(_create_table_ddl("records__actor", db_columns))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
-        "tables": [
+    write_emit(
+        dest,
+        tables=[
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
             _table_spec(
                 "records__actor",
@@ -779,8 +855,8 @@ def build_c5_prop_missing(dest: Path) -> None:
                 record_kind="actor",
             ),
         ],
-    }
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+    )
 
 
 def build_c7_half_null_member(dest: Path) -> None:
@@ -811,10 +887,9 @@ def build_c7_half_null_member(dest: Path) -> None:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        dest,
+        tables=[
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
             _table_spec(
                 "membership__actor__appointments",
@@ -825,8 +900,8 @@ def build_c7_half_null_member(dest: Path) -> None:
                 property_name="appointments",
             ),
         ],
-    }
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
 
 
 def build_schema_mismatch(dest: Path) -> None:
@@ -843,11 +918,17 @@ def build_schema_mismatch(dest: Path) -> None:
     conn.close()
 
     phantom_columns = copy.deepcopy(_RECORDS_ACTOR_COLUMNS)
-    phantom_columns.append({"name": "prop__phantom_column", "type": "VARCHAR"})
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
-        "tables": [
+    phantom_columns.append(
+        prop_column(
+            "prop__phantom_column",
+            "VARCHAR",
+            history_tracked=False,
+            temporal_class="constant",
+        )
+    )
+    write_emit(
+        dest,
+        tables=[
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
             _table_spec(
                 "records__actor",
@@ -857,8 +938,8 @@ def build_schema_mismatch(dest: Path) -> None:
                 record_kind="actor",
             ),
         ],
-    }
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+    )
 
 
 def build_history_duplicate_tick(dest: Path) -> None:
@@ -879,14 +960,11 @@ def build_history_duplicate_tick(dest: Path) -> None:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
-            _table_spec("history", "fixed", _HISTORY_COLUMNS, 2),
-        ],
-    }
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    write_emit(
+        dest,
+        tables=[_table_spec("history", "fixed", _HISTORY_COLUMNS, 2)],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
 
 
 def build_refs_dangling(dest: Path) -> None:
@@ -895,13 +973,18 @@ def build_refs_dangling(dest: Path) -> None:
     A records__actor row has a prop__doctor_id that does not exist in any
     records__doctor table. This is a dangling records-prop reference, which is
     outside C1–C12 (C10 resolves only membership references; C11 checks the
-    history_tracked flag, not prop reference integrity). validate passes.
+    history_tracked flag, not prop reference integrity). validate passes. The
+    tracked prop__name column carries its own unconditional genesis row at
+    a001's created_sim_time=10 -- required so this fixture fails nothing but
+    the dangling-reference boundary it exists to exercise.
     """
     dest.mkdir(parents=True, exist_ok=True)
     db_path = dest / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
     conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
+
+    history_rows = _populate_history(conn)  # a001's prop__name genesis row
 
     conn.execute(
         "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
@@ -919,11 +1002,10 @@ def build_refs_dangling(dest: Path) -> None:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
-            _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
+    write_emit(
+        dest,
+        tables=[
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, history_rows),
             _table_spec(
                 "records__actor",
                 "records",
@@ -932,8 +1014,8 @@ def build_refs_dangling(dest: Path) -> None:
                 record_kind="actor",
             ),
         ],
-    }
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
 
 
 def build_c12_missing_kind(dest: Path) -> None:
@@ -949,12 +1031,12 @@ def build_c12_missing_kind(dest: Path) -> None:
     conn.close()
 
     tables = _spanning_tables(history_rows, actor_rows, doctor_rows, membership_rows)
-    sidecar = _base_sidecar(tables, include_record_roles=True)
+    extra = _base_extra(include_record_roles=True)
     # Remove 'doctor' from record_roles so C12 fails
     record_roles = copy.deepcopy(_RECORD_ROLES)
     del record_roles["doctor"]
-    sidecar["record_roles"] = record_roles
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    extra["record_roles"] = record_roles
+    write_emit(dest, tables=tables, branches=_SPANNING_BRANCHES, extra=extra)
 
 
 def build_c12_missing_subtype(dest: Path) -> None:
@@ -971,14 +1053,14 @@ def build_c12_missing_subtype(dest: Path) -> None:
     conn.close()
 
     tables = _spanning_tables(history_rows, actor_rows, doctor_rows, membership_rows)
-    sidecar = _base_sidecar(tables, include_record_roles=True)
+    extra = _base_extra(include_record_roles=True)
     # Remove 'patient' sub-type from actor so C12 fails
     record_roles: dict[str, object] = {
         "actor": {"nurse": "fact"},  # 'patient' omitted — data has 'patient'
         "doctor": "dimension",
     }
-    sidecar["record_roles"] = record_roles
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    extra["record_roles"] = record_roles
+    write_emit(dest, tables=tables, branches=_SPANNING_BRANCHES, extra=extra)
 
 
 # ---------------------------------------------------------------------------

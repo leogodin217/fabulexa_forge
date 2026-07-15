@@ -30,10 +30,24 @@ def _patient_spec() -> object:
             column_spec("record_id", "VARCHAR"),
             column_spec("active", "BOOLEAN"),
             column_spec("deactivated_at", "BIGINT"),
-            column_spec("prop__name", "VARCHAR", history_tracked=True),
-            column_spec("prop__age", "BIGINT", history_tracked=True),
-            column_spec("prop__visits", "BIGINT", history_tracked=False),
-            column_spec("prop__notes", "VARCHAR", history_tracked=False),
+            column_spec(
+                "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+            ),
+            column_spec(
+                "prop__age", "BIGINT", history_tracked=True, temporal_class="tracked"
+            ),
+            column_spec(
+                "prop__visits",
+                "BIGINT",
+                history_tracked=False,
+                temporal_class="slice_only",
+            ),
+            column_spec(
+                "prop__notes",
+                "VARCHAR",
+                history_tracked=False,
+                temporal_class="slice_only",
+            ),
         ),
         record_kind="patient",
     )

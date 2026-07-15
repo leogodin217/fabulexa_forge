@@ -1,7 +1,7 @@
 sprint: base-format-v5-adopt
 parent_branch: revender_for_point_in_time
 started: 2026-07-15
-current_phase: 3
+current_phase: 4
 capabilities:
   - reader: [temporal_class model + accessor, version gate 5]
   - conformance: [C11 converse, C13, registry C1-C13]
@@ -21,7 +21,7 @@ phases:
     name: "The reader models the class"
     demo: "docs/sprints/base-format-v5-adopt/demos/phase_2_temporal_class.py"
   3:
-    status: pending
+    status: complete
     name: "One sidecar authority; fixtures become v5 emits"
     demo: "docs/sprints/base-format-v5-adopt/demos/phase_3_v5_fixtures.py"
     steps:
@@ -39,6 +39,17 @@ phases:
           - "tests/recipes/_recipe_fixture.py"
           - "tests/corrupters/_helpers.py"
           - "tests/corrupters/test_base_writer.py"
+      - kind: migrate
+        tactic: fan-out
+        summary: "Scope expansion (found mid-phase): _helpers.py's column_spec now requires history_tracked+temporal_class paired; these 6 corrupters/operations callers weren't in the original file list and broke"
+        change: "Add the missing temporal_class to every column_spec(..., history_tracked=...) call site in this file, per the column's fixture-author intent (tracked for a history-backed series, constant for a fixed-at-creation value, slice_only for mutable-untracked)"
+        files:
+          - "tests/corrupters/operations/test_dangle_reference.py"
+          - "tests/corrupters/operations/test_delete_rows.py"
+          - "tests/corrupters/operations/test_duplicate_rows.py"
+          - "tests/corrupters/operations/test_mispoint_reference.py"
+          - "tests/corrupters/operations/test_null_cells.py"
+          - "tests/corrupters/operations/test_schema_drift.py"
   4:
     status: pending
     name: "The corrupter writer round-trips the class"

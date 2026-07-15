@@ -50,8 +50,15 @@ def _patient_spec() -> "object":
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
-            column_spec("prop__age", "BIGINT", history_tracked=True),
-            column_spec("prop__score", "DOUBLE", history_tracked=True),
+            column_spec(
+                "prop__age", "BIGINT", history_tracked=True, temporal_class="tracked"
+            ),
+            column_spec(
+                "prop__score",
+                "DOUBLE",
+                history_tracked=True,
+                temporal_class="tracked",
+            ),
         ),
         record_kind="patient",
     )
@@ -491,9 +498,18 @@ def _conflict_patient_spec() -> "object":
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
-            column_spec("prop__name", "VARCHAR", history_tracked=True),
-            column_spec("prop__age", "BIGINT", history_tracked=True),
-            column_spec("prop__dob", "DATE", history_tracked=True),
+            column_spec(
+                "prop__name",
+                "VARCHAR",
+                history_tracked=True,
+                temporal_class="tracked",
+            ),
+            column_spec(
+                "prop__age", "BIGINT", history_tracked=True, temporal_class="tracked"
+            ),
+            column_spec(
+                "prop__dob", "DATE", history_tracked=True, temporal_class="tracked"
+            ),
             column_spec("prop__code", "VARCHAR"),
         ),
         record_kind="patient",
@@ -507,7 +523,12 @@ def _conflict_actor_spec() -> "object":
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
-            column_spec("prop__actor_type", "VARCHAR", history_tracked=True),
+            column_spec(
+                "prop__actor_type",
+                "VARCHAR",
+                history_tracked=True,
+                temporal_class="tracked",
+            ),
         ),
         record_kind="actor",
     )
