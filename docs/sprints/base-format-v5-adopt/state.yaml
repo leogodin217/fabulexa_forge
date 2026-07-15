@@ -1,0 +1,68 @@
+sprint: base-format-v5-adopt
+parent_branch: revender_for_point_in_time
+started: 2026-07-15
+current_phase: 1
+capabilities:
+  - reader: [temporal_class model + accessor, version gate 5]
+  - conformance: [C11 converse, C13, registry C1-C13]
+  - source-exporter: [genre predicate keyed on temporal_class]
+  - corrupters: [column-attribute round-trip, drop_events emptied-series C11]
+  - fixtures: [single version authority, prop_column + write_emit, v5-shaped fixtures]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "One version authority; gate -> 5"
+    demo: "docs/sprints/base-format-v5-adopt/demos/phase_1_version_gate.py"
+  2:
+    status: pending
+    name: "The reader models the class"
+    demo: "docs/sprints/base-format-v5-adopt/demos/phase_2_temporal_class.py"
+  3:
+    status: pending
+    name: "One sidecar authority; fixtures become v5 emits"
+    demo: "docs/sprints/base-format-v5-adopt/demos/phase_3_v5_fixtures.py"
+    steps:
+      - kind: source
+        summary: "Create tests/_support/sidecar_builder.py (prop_column, write_emit, UNSUPPORTED_VERSION_SENTINEL); rewire tests/reader/_emit_helpers.py base.json through it; write the demo"
+      - kind: migrate
+        tactic: fan-out
+        change: "Route every sidecar write through write_emit and every value-carrying column through prop_column; add the attribute pair (class per fixture intent) and the unconditional genesis rows (NULL-valued where absent at creation); update the same directory's dependent test expectations that legitimately churn"
+        files:
+          - "tests/reader/_fixtures_build.py"
+          - "tests/exporters/_emit_fixtures.py"
+          - "tests/exporters/source/_source_fixtures.py"
+          - "tests/exporters/streaming/test_driver.py"
+          - "tests/derivations/_fixtures.py"
+          - "tests/recipes/_recipe_fixture.py"
+          - "tests/corrupters/_helpers.py"
+          - "tests/corrupters/test_base_writer.py"
+  4:
+    status: pending
+    name: "The corrupter writer round-trips the class"
+    demo: "docs/sprints/base-format-v5-adopt/demos/phase_4_writer_roundtrip.py"
+  5:
+    status: pending
+    name: "Conformance judges v5 - C11 converse, C13, emptied-series impact"
+    demo: "docs/sprints/base-format-v5-adopt/demos/phase_5_conformance.py"
+    steps:
+      - kind: source
+        summary: "C11 converse clause + _check_c13 + registry C1-C13 in conformance.py; drop_events emptied-series -> [C11] impact clause; write the demo"
+      - kind: author
+        summary: "Four negative fixture builders (per spec Phase 5); C11/C13 conformance tests; registry-order test -> C13; recipes harness failing-check comparison scoped to C1-C12; drop_events emptied-series tests; expect.yaml churn where a seeded draw empties a series"
+        files:
+          - "tests/reader/_fixtures_build.py"
+          - "tests/reader/test_conformance_structural.py"
+          - "tests/reader/test_conformance_data.py"
+          - "tests/reader/test_fixtures.py"
+          - "tests/recipes/_harness.py"
+          - "tests/recipes/test_corrupt_recipes.py"
+          - "tests/recipes/test_recipe_conformance.py"
+          - "tests/corrupters/operations/test_drop_events.py"
+          - "tests/test_cli.py"
+  6:
+    status: pending
+    name: "The genre trichotomy keys on the class"
+    demo: "docs/sprints/base-format-v5-adopt/demos/phase_6_genre.py"
