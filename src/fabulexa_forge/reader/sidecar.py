@@ -7,14 +7,25 @@ mapping. Pure Python — no files, no DuckDB.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Mapping
+from typing import Literal, Mapping, cast
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.errors import (
+    ColumnNotFoundError,
     SidecarStructureError,
     TableNotFoundError,
+    TemporalClassUnavailableError,
     UnsupportedBaseFormatVersionError,
 )
+
+TemporalClass = Literal["constant", "tracked", "slice_only"]
+"""The point-in-time contract for one value-carrying column, read from the sidecar.
+
+Never inferred: a column that declares no class has no class, and a surface that
+needs one refuses rather than deriving it from history_tracked.
+"""
+
+_TEMPORAL_CLASSES: frozenset[str] = frozenset({"constant", "tracked", "slice_only"})
 
 
 @dataclass(frozen=True)
@@ -27,6 +38,10 @@ class ColumnSpec:
     # C11 flag: True/False when carried; None when the emit predates it
     # (all-or-none per emit)
     history_tracked: bool | None
+    # Declared verbatim, never validated/coerced at parse (C13's enum clause needs to
+    # see an out-of-enum value); absent -> None. Narrows to TemporalClass only through
+    # Sidecar.temporal_class.
+    temporal_class: str | None
 
 
 @dataclass(frozen=True)
@@ -94,11 +109,16 @@ def _parse_column(raw_col: object, table_name: str, col_idx: int) -> ColumnSpec:
     history_tracked: bool | None = (
         history_tracked_raw if isinstance(history_tracked_raw, bool) else None
     )
+    temporal_class_raw = raw_col.get("temporal_class")
+    temporal_class: str | None = (
+        temporal_class_raw if isinstance(temporal_class_raw, str) else None
+    )
     return ColumnSpec(
         name=col_name,
         type=col_type,
         references=references,
         history_tracked=history_tracked,
+        temporal_class=temporal_class,
     )
 
 
@@ -561,6 +581,74 @@ class Sidecar:
             TableNotFoundError: No table named `table_name` is declared.
         """
         return self.table(table_name).columns
+
+    def _column(self, table_name: str, column_name: str) -> ColumnSpec:
+        """The ColumnSpec named `column_name` on `table_name`.
+
+        Args:
+            table_name: DuckDB table name.
+            column_name: Column name, including its prop__ prefix.
+
+        Returns:
+            The matching ColumnSpec.
+
+        Raises:
+            TableNotFoundError: No table named `table_name` is declared.
+            ColumnNotFoundError: The table declares no column named `column_name`.
+        """
+        for col in self.columns(table_name):
+            if col.name == column_name:
+                return col
+        raise ColumnNotFoundError(
+            f"no column named '{column_name}' on table '{table_name}'"
+        )
+
+    def temporal_class(self, table_name: str, column_name: str) -> TemporalClass:
+        """The declared point-in-time class of one value-carrying column.
+
+        The single point where the sidecar's verbatim declared value narrows to a
+        TemporalClass; every surface that needs a class (the genre predicate) resolves
+        through it.
+
+        Args:
+            table_name: DuckDB table name.
+            column_name: Column name, including its prop__ prefix.
+
+        Returns:
+            The column's declared TemporalClass.
+
+        Raises:
+            TableNotFoundError: No table named `table_name` is declared.
+            ColumnNotFoundError: The table declares no column named `column_name`.
+            TemporalClassUnavailableError: The column has no usable class. Three cases,
+                distinguished in the message: the column carries neither temporal
+                attribute (a structural, identity, or membership column — conformant;
+                it has no temporal semantics to ask about); it declares
+                history_tracked but no temporal_class (non-conformant, C13); or it
+                declares a value outside the three-class enum (non-conformant — C13's
+                enum clause, and C1, since the vendored schema enum-constrains the
+                value). The non-conformant messages direct the caller to
+                `fabulexa-forge validate`. No class is ever inferred.
+        """
+        col = self._column(table_name, column_name)
+        qualified = f"{table_name}.{column_name}"
+        if col.history_tracked is None and col.temporal_class is None:
+            raise TemporalClassUnavailableError(
+                f"{qualified} carries no temporal attributes; it has no "
+                "point-in-time class to ask about"
+            )
+        if col.temporal_class is None:
+            raise TemporalClassUnavailableError(
+                f"{qualified} declares history_tracked but no temporal_class; "
+                "the emit is non-conformant (C13). Run `fabulexa-forge validate`."
+            )
+        if col.temporal_class not in _TEMPORAL_CLASSES:
+            raise TemporalClassUnavailableError(
+                f"{qualified} declares temporal_class {col.temporal_class!r}, "
+                "outside the constant/tracked/slice_only enum; the emit is "
+                "non-conformant (C13). Run `fabulexa-forge validate`."
+            )
+        return cast(TemporalClass, col.temporal_class)
 
     def history_tracked_available(self) -> bool:
         """Whether this emit carries the per-column history_tracked flag.

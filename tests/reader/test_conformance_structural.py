@@ -518,7 +518,13 @@ class TestC5:
 
 
 def _col(name: str, type_: str = "VARCHAR") -> ColumnSpec:
-    return ColumnSpec(name=name, type=type_, references=None, history_tracked=None)
+    return ColumnSpec(
+        name=name,
+        type=type_,
+        references=None,
+        history_tracked=None,
+        temporal_class=None,
+    )
 
 
 # fork_path, record_id

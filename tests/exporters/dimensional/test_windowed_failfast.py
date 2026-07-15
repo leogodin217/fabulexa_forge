@@ -63,9 +63,14 @@ def _col_spec(
     name: str,
     *,
     history_tracked: bool | None = None,
+    temporal_class: str | None = None,
 ) -> ColumnSpec:
     return ColumnSpec(
-        name=name, type="VARCHAR", references=None, history_tracked=history_tracked
+        name=name,
+        type="VARCHAR",
+        references=None,
+        history_tracked=history_tracked,
+        temporal_class=temporal_class,
     )
 
 

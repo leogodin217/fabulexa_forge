@@ -523,7 +523,13 @@ def _check_c5(emit: "Emit") -> CheckResult:
         if tname in catalog_table_set:
             cat_cols_raw = _catalog_columns(emit, tname)
             cat_col_specs = [
-                ColumnSpec(name=n, type=t, references=None, history_tracked=None)
+                ColumnSpec(
+                    name=n,
+                    type=t,
+                    references=None,
+                    history_tracked=None,
+                    temporal_class=None,
+                )
                 for n, t in cat_cols_raw
             ]
             sc_props = _extract_prop_block(list(table_spec.columns))

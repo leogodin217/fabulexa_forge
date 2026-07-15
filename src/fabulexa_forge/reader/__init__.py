@@ -10,12 +10,14 @@ from fabulexa_forge.reader.conformance import (
 )
 from fabulexa_forge.reader.emit import Emit, open_emit
 from fabulexa_forge.reader.errors import (
+    ColumnNotFoundError,
     EmitNotFoundError,
     ReaderError,
     RunDatabaseError,
     SidecarParseError,
     SidecarStructureError,
     TableNotFoundError,
+    TemporalClassUnavailableError,
     UnsupportedBaseFormatVersionError,
 )
 from fabulexa_forge.reader.relations import (
@@ -31,11 +33,13 @@ from fabulexa_forge.reader.sidecar import (
     RuntimeAnchor,
     Sidecar,
     TableSpec,
+    TemporalClass,
 )
 
 __all__ = [
     "BranchEntry",
     "CheckResult",
+    "ColumnNotFoundError",
     "ColumnSpec",
     "ConformanceReport",
     "Emit",
@@ -49,6 +53,8 @@ __all__ = [
     "SidecarStructureError",
     "TableNotFoundError",
     "TableSpec",
+    "TemporalClass",
+    "TemporalClassUnavailableError",
     "UnsupportedBaseFormatVersionError",
     "build_history_relation_sql",
     "build_membership_relation_sql",

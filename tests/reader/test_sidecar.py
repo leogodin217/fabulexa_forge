@@ -147,7 +147,11 @@ def test_from_raw_fully_populated_tables() -> None:
     assert history.rows == 42
     assert len(history.columns) == 2
     assert history.columns[0] == ColumnSpec(
-        name="fork_path", type="VARCHAR", references=None, history_tracked=None
+        name="fork_path",
+        type="VARCHAR",
+        references=None,
+        history_tracked=None,
+        temporal_class=None,
     )
 
     records_table = tables[1]

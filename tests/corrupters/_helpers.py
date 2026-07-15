@@ -31,6 +31,7 @@ def column_spec(
     *,
     references: str | None = None,
     history_tracked: bool | None = None,
+    temporal_class: str | None = None,
 ) -> ColumnSpec:
     """Build one ColumnSpec."""
     return ColumnSpec(
@@ -38,6 +39,7 @@ def column_spec(
         type=duckdb_type,
         references=references,
         history_tracked=history_tracked,
+        temporal_class=temporal_class,
     )
 
 
