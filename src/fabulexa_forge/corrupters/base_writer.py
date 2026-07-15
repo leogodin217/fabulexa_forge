@@ -161,12 +161,15 @@ def _build_table_entry(
     """Rebuild one table's `base.json` `tables[]` entry.
 
     `{name, type}` per column, and `rows`, come from `written` (the catalog
-    and row count just written); `references` / `history_tracked` come from
-    the matching `WorkingTable.spec` `ColumnSpec`, joined by post-drift name
-    -- so a renamed column carries them on its relabeled spec, and a dropped
-    column drops them (it is simply absent from `written.columns`).
-    Table-level `category` / `record_kind` / `property` come from
-    `working_table.spec` (C1/C3 require them).
+    and row count just written); `references` / `history_tracked` /
+    `temporal_class` come from the matching `WorkingTable.spec` `ColumnSpec`,
+    joined by post-drift name -- so a renamed column carries them on its
+    relabeled spec, and a dropped column drops them (it is simply absent
+    from `written.columns`). Each attribute is declared verbatim when the
+    spec carries it and left absent otherwise -- never emitted as `null`,
+    never invented for a column that carries neither. Table-level `category`
+    / `record_kind` / `property` come from `working_table.spec` (C1/C3
+    require them).
 
     Args:
         table_name: The table's (unchanged) name.
@@ -187,6 +190,8 @@ def _build_table_entry(
             column_entry["references"] = col_spec.references
         if col_spec.history_tracked is not None:
             column_entry["history_tracked"] = col_spec.history_tracked
+        if col_spec.temporal_class is not None:
+            column_entry["temporal_class"] = col_spec.temporal_class
         columns.append(column_entry)
 
     entry: dict[str, object] = {
@@ -215,9 +220,10 @@ def write_base_emit(
     written catalog -- per-table `rows` and per-column `{name, type}` read back from
     what was just written; the table-level `category` / `record_kind` / `property`
     carried from each `WorkingTable.spec` (C1/C3 require them); per-column `references`
-    / `history_tracked` read from each column's `WorkingTable.spec` `ColumnSpec`
-    (joined to the written catalog by post-drift name, so they follow a rename and drop
-    with a drop) -- never re-looked-up from the source sidecar by name. Every other
+    / `history_tracked` / `temporal_class` read from each column's `WorkingTable.spec`
+    `ColumnSpec` (joined to the written catalog by post-drift name, so they follow a
+    rename and drop with a drop) -- never re-looked-up from the source sidecar by name.
+    Every other
     top-level sidecar field -- including `enum_domains` and `record_roles` -- is copied
     verbatim from `source_sidecar_raw`. Regenerating the sidecar from the written
     catalog makes C2 hold by construction; untouched structural columns make C3/C4/C5

@@ -103,9 +103,11 @@ def test_writes_run_duckdb_and_base_json(tmp_path: Path) -> None:
     columns_by_name = {c["name"]: c for c in table["columns"]}
     assert columns_by_name["prop__name"]["type"] == "VARCHAR"
     assert columns_by_name["prop__name"]["history_tracked"] is True
+    assert columns_by_name["prop__name"]["temporal_class"] == "tracked"
     assert columns_by_name["prop__doctor_id"]["references"] == "doctor"
     assert "references" not in columns_by_name["record_id"]
     assert "history_tracked" not in columns_by_name["record_id"]
+    assert "temporal_class" not in columns_by_name["record_id"]
 
 
 def test_verbatim_top_level_fields(tmp_path: Path) -> None:
@@ -238,6 +240,56 @@ def test_renamed_column_carries_history_tracked_dropped_column_absent(
     columns_by_name = {c["name"]: c for c in sidecar["tables"][0]["columns"]}
     assert "prop__name" not in columns_by_name  # dropped/renamed-away, absent
     assert columns_by_name["prop__full_name"]["history_tracked"] is True
+    assert columns_by_name["prop__full_name"]["temporal_class"] == "tracked"
+
+
+def test_all_temporal_class_values_round_trip(tmp_path: Path) -> None:
+    """Each of the three declared temporal_class values -- 'constant',
+    'tracked', 'slice_only' -- survives the write verbatim on its own
+    column."""
+    spec = table_spec(
+        "records__actor",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec(
+                "prop__ssn", "VARCHAR", history_tracked=True, temporal_class="constant"
+            ),
+            column_spec(
+                "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+            ),
+            column_spec(
+                "prop__status",
+                "VARCHAR",
+                history_tracked=False,
+                temporal_class="slice_only",
+            ),
+        ),
+        record_kind="actor",
+    )
+    wt = working_table(
+        spec,
+        [
+            {
+                "fork_path": "trunk",
+                "record_id": "a001",
+                "prop__ssn": "111-22-3333",
+                "prop__name": "Alice",
+                "prop__status": "active",
+            }
+        ],
+    )
+    state = CorruptState(tables={"records__actor": wt})
+    source_sidecar = _source_sidecar(tmp_path)
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    columns_by_name = {c["name"]: c for c in sidecar["tables"][0]["columns"]}
+    assert columns_by_name["prop__ssn"]["temporal_class"] == "constant"
+    assert columns_by_name["prop__name"]["temporal_class"] == "tracked"
+    assert columns_by_name["prop__status"]["temporal_class"] == "slice_only"
 
 
 def test_fixed_category_table_entry_omits_record_kind_and_property(
