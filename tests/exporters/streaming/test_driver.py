@@ -18,6 +18,7 @@ from unittest.mock import patch
 import duckdb
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     DebeziumConfig,
@@ -103,7 +104,7 @@ def _build_emit(
     conn.close()
 
     sidecar: dict[str, object] = {
-        "base_format_version": 4,
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
         "tables": [
             _table_spec(
@@ -969,7 +970,7 @@ def _build_membership_emit(
     conn.close()
 
     sidecar: dict[str, object] = {
-        "base_format_version": 4,
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
         "tables": [
             _membership_table_spec(

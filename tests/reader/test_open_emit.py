@@ -9,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader import (
     Emit,
     EmitNotFoundError,
@@ -76,10 +77,10 @@ def test_invalid_json_raises_parse_error(tmp_path: Path) -> None:
 
 
 def test_unsupported_version_raises_before_db_open(tmp_path: Path) -> None:
-    """A base_format_version: 5 emit raises UnsupportedBaseFormatVersionError
+    """A base_format_version: 99 emit raises UnsupportedBaseFormatVersionError
     before any DuckDB open (version gate precedes structure and DB open).
     """
-    sidecar = _minimal_sidecar(base_format_version=5)
+    sidecar = _minimal_sidecar(base_format_version=99)
     (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
     # Write garbage bytes for run.duckdb — if the DB were opened first, this would
     # produce RunDatabaseError. Getting UnsupportedBaseFormatVersionError confirms
@@ -87,7 +88,7 @@ def test_unsupported_version_raises_before_db_open(tmp_path: Path) -> None:
     (tmp_path / "run.duckdb").write_bytes(b"not a db")
     with pytest.raises(UnsupportedBaseFormatVersionError) as exc_info:
         open_emit(tmp_path)
-    assert exc_info.value.found_version == 5
+    assert exc_info.value.found_version == 99
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +104,7 @@ def test_below_floor_sidecar_raises_structure_error(tmp_path: Path) -> None:
 
     # A table missing required 'columns' field
     sidecar: dict[str, object] = {
-        "base_format_version": 4,
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
         "tables": [{"name": "firings", "category": "fixed", "rows": 0}],
     }
@@ -139,7 +140,7 @@ def test_well_formed_emit_opens(tmp_path: Path) -> None:
     try:
         assert emit.emit_dir == tmp_path
         assert emit.sidecar is not None
-        assert emit.sidecar.base_format_version == 4
+        assert emit.sidecar.base_format_version == SUPPORTED_BASE_FORMAT_VERSION
     finally:
         emit.close()
 

@@ -13,6 +13,7 @@ from typing import Any
 import duckdb
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.config.models import RoutingConfig
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.streaming.routing import (
@@ -25,8 +26,6 @@ from fabulexa_forge.exporters.streaming.routing import (
 from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import _ddl
-
-SUPPORTED_VERSION = 4
 
 # ---------------------------------------------------------------------------
 # Emit builder for resolve_subtype_index tests

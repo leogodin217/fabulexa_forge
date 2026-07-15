@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.corrupters.manifest import (
     DefectManifest,
     DefectRecord,
@@ -20,7 +21,9 @@ from fabulexa_forge.corrupters.manifest_build import (
 )
 from fabulexa_forge.errors import CorruptError
 
-_SOURCE = DefectSource(sidecar_sha256="a" * 64, base_format_version=4)
+_SOURCE = DefectSource(
+    sidecar_sha256="a" * 64, base_format_version=SUPPORTED_BASE_FORMAT_VERSION
+)
 _CONFIG_FINGERPRINT = "b" * 64
 _CODE_VERSION = "0.0.1"
 

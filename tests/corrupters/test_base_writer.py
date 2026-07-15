@@ -8,6 +8,7 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.corrupters.base_writer import write_base_emit
 from fabulexa_forge.corrupters.state import CorruptState, WorkingTable
 from fabulexa_forge.errors import ExportRuntimeError
@@ -15,7 +16,7 @@ from fabulexa_forge.errors import ExportRuntimeError
 from ._helpers import column_spec, table_spec, working_table
 
 _SOURCE_SIDECAR: dict[str, object] = {
-    "base_format_version": 4,
+    "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
     "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
     "tables": [{"name": "placeholder", "category": "fixed", "columns": [], "rows": 0}],
     "runtime": {"timezone": "UTC", "start_datetime": "2024-01-01T00:00:00+00:00"},

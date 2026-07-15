@@ -13,6 +13,7 @@ from typing import Mapping, Sequence
 
 import pyarrow as pa
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.corrupters.state import WorkingTable
 from fabulexa_forge.reader.sidecar import BranchEntry, ColumnSpec, Sidecar, TableSpec
 
@@ -115,7 +116,7 @@ def sidecar(
     """
     return Sidecar(
         raw={},
-        base_format_version=4,
+        base_format_version=SUPPORTED_BASE_FORMAT_VERSION,
         branches=branches,
         tables=tables,
         runtime=None,

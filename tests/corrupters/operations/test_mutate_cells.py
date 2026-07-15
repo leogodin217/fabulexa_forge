@@ -7,6 +7,7 @@ from collections.abc import Mapping, Sequence
 
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     Amount,
     Correlated,
@@ -185,7 +186,7 @@ def _sidecar(
 ) -> Sidecar:
     return Sidecar(
         raw={},
-        base_format_version=4,
+        base_format_version=SUPPORTED_BASE_FORMAT_VERSION,
         branches=(BranchEntry(fork_path=_FORK_PATH, parent=None, slice_at=_SLICE_AT),),
         tables=(_patient_spec(), _actor_spec(), _membership_spec(), _history_spec()),
         runtime=None,

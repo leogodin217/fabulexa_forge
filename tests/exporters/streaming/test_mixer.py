@@ -11,6 +11,7 @@ from typing import Any
 import duckdb
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.config.models import (
     MembershipSelection,
     StreamConfig,
@@ -714,8 +715,6 @@ def test_advance_delivery_edges_updated_on_release() -> None:
 # ---------------------------------------------------------------------------
 # seed_mixer_run helpers
 # ---------------------------------------------------------------------------
-
-SUPPORTED_VERSION = 4
 
 _RECORD_COLS: list[dict[str, object]] = [
     {"name": "fork_path", "type": "VARCHAR"},

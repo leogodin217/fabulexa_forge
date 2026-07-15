@@ -706,7 +706,7 @@ def build_membership_intervals(dest: Path) -> None:
 def build_wrong_version(dest: Path) -> None:
     """Build the wrong_version fixture into dest.
 
-    An otherwise-valid emit whose base_format_version is not 4.
+    An otherwise-valid emit whose base_format_version is not 5.
     open_emit raises UnsupportedBaseFormatVersionError on this fixture.
     """
     dest.mkdir(parents=True, exist_ok=True)

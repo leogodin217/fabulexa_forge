@@ -18,6 +18,7 @@ from typing import Any
 import duckdb
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.derivations.reference_resolution import (
     REFERENCE_RESOLUTION_COLUMNS,
     _collect_reference_columns,
@@ -29,9 +30,6 @@ from fabulexa_forge.derivations.reference_resolution import (
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.reader.emit import open_emit
-
-SUPPORTED_VERSION = 4
-
 
 # ---------------------------------------------------------------------------
 # Emit / sidecar builders

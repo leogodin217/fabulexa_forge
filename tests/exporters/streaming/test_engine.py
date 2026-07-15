@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import duckdb
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     MembershipSelection,
@@ -32,8 +33,6 @@ from fabulexa_forge.exporters.streaming.engine import (
 from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import _ddl
-
-SUPPORTED_VERSION = 4
 
 # ---------------------------------------------------------------------------
 # Column definitions

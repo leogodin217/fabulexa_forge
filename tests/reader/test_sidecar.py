@@ -405,24 +405,24 @@ def test_branches_order_preserved() -> None:
 
 
 def test_unsupported_version_raises_with_found_version() -> None:
-    """from_raw raises UnsupportedBaseFormatVersionError(found_version=5) for version 5."""
-    raw = _minimal_raw(base_format_version=5)
+    """from_raw raises UnsupportedBaseFormatVersionError(found_version=99) for version 99."""
+    raw = _minimal_raw(base_format_version=99)
     with pytest.raises(UnsupportedBaseFormatVersionError) as exc_info:
         Sidecar.from_raw(raw)
-    assert exc_info.value.found_version == 5
+    assert exc_info.value.found_version == 99
 
 
 def test_unsupported_version_found_version_is_int() -> None:
-    """The carried found_version is the int 5."""
-    raw = _minimal_raw(base_format_version=5)
+    """The carried found_version is the int 99."""
+    raw = _minimal_raw(base_format_version=99)
     with pytest.raises(UnsupportedBaseFormatVersionError) as exc_info:
         Sidecar.from_raw(raw)
     assert isinstance(exc_info.value.found_version, int)
-    assert exc_info.value.found_version == 5
+    assert exc_info.value.found_version == 99
 
 
 # ---------------------------------------------------------------------------
-# SidecarStructureError: non-version-4 values of base_format_version
+# SidecarStructureError: non-version-5 values of base_format_version
 # ---------------------------------------------------------------------------
 
 

@@ -7,6 +7,7 @@ import random
 import pyarrow as pa
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     Amount,
     Distribution,
@@ -580,7 +581,7 @@ def _conflict_sidecar(
 ) -> Sidecar:
     return Sidecar(
         raw={},
-        base_format_version=4,
+        base_format_version=SUPPORTED_BASE_FORMAT_VERSION,
         branches=(BranchEntry(fork_path=_FORK_PATH, parent=None, slice_at=_SLICE_AT),),
         tables=tables,
         runtime=None,

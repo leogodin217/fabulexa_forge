@@ -13,6 +13,7 @@ from typing import Any
 import duckdb
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.derivations.membership_events import (
     EVENT_CLASS_JOIN,
     EVENT_CLASS_LEAVE,
@@ -24,7 +25,6 @@ from fabulexa_forge.errors import ExportError
 from fabulexa_forge.reader.emit import open_emit
 from fabulexa_forge.reader.errors import TableNotFoundError
 
-SUPPORTED_VERSION = 4
 FORK_PATH = "trunk"
 
 

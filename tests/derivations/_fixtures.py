@@ -14,7 +14,7 @@ from typing import Any
 
 import duckdb
 
-SUPPORTED_VERSION = 4
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 
 # ---------------------------------------------------------------------------
 # Column definitions

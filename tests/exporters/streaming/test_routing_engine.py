@@ -17,6 +17,7 @@ from typing import TYPE_CHECKING, Any
 import duckdb
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.config.models import (
     DebeziumConfig,
     DebeziumSourceIdentity,
@@ -38,7 +39,6 @@ from ._helpers import _ddl, make_anchor
 if TYPE_CHECKING:
     pass
 
-SUPPORTED_VERSION = 4
 _DAY = 86_400_000_000_000  # 1 day in nanoseconds
 
 # ---------------------------------------------------------------------------

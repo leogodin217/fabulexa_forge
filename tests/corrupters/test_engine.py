@@ -13,7 +13,7 @@ from reader._fixtures_build import (
     build_spanning,
 )
 
-from fabulexa_forge import __version__
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION, __version__
 from fabulexa_forge.config.models import (
     Amount,
     ClusteredTemporal,
@@ -153,7 +153,7 @@ def test_manifest_provenance(tmp_path: Path) -> None:
 
     manifest = json.loads((out_dir / "defects.json").read_text(encoding="utf-8"))
     assert manifest["source"]["sidecar_sha256"] == expected_sha256
-    assert manifest["source"]["base_format_version"] == 4
+    assert manifest["source"]["base_format_version"] == SUPPORTED_BASE_FORMAT_VERSION
     assert manifest["config_fingerprint"] == fingerprint_config(config)
     assert manifest["code_version"] == __version__
 
