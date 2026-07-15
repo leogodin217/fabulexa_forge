@@ -1018,6 +1018,182 @@ def build_refs_dangling(dest: Path) -> None:
     )
 
 
+def _c13_records_actor_columns(prop_col: dict[str, object]) -> list[dict[str, object]]:
+    """Build a minimal records__actor column list carrying exactly one prop__ column.
+
+    Shared by the C11/C13 negative fixtures below, which each isolate their
+    defect to a single flagged prop__ column rather than the spanning
+    fixture's four.
+    """
+    return [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        prop_col,
+    ]
+
+
+def _c13_populate_records_actor(conn: duckdb.DuckDBPyConnection, value: str) -> int:
+    """Insert one records__actor row (a001, created_sim_time=10); return row count."""
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?)",
+        ["trunk", "a001", 10, True, 10, value],
+    )
+    return 1
+
+
+def _c13_populate_history_name_series(
+    conn: duckdb.DuckDBPyConnection, rows: list[tuple[int, str | None]]
+) -> int:
+    """Insert (sim_time, value) rows for the (actor, a001, name) series."""
+    for sim_time, value in rows:
+        conn.execute(
+            "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+            ["trunk", "actor", "a001", "name", sim_time, value],
+        )
+    return len(rows)
+
+
+def build_c13_broken_pairing(dest: Path) -> None:
+    """Build the c13_broken_pairing fixture into dest.
+
+    prop__name declares history_tracked=True with no paired temporal_class --
+    built via prop_column, then mutated (the constructor cannot express the
+    defect: it requires both attributes together). A genesis history row keeps
+    C11's converse and C13's semantic clause satisfied, so this fails C13's
+    structural clause alone -- the vendored schema does not enforce the pairing
+    (C1 passes).
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    prop_col = prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    )
+    del prop_col["temporal_class"]
+    columns = _c13_records_actor_columns(prop_col)
+
+    db_path = dest / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", columns))
+    history_rows = _c13_populate_history_name_series(conn, [(10, "Alice")])
+    _c13_populate_records_actor(conn, "Alice")
+    conn.close()
+
+    write_emit(
+        dest,
+        tables=[
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, history_rows),
+            _table_spec("records__actor", "records", columns, 1, record_kind="actor"),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
+
+
+def build_c13_out_of_enum_class(dest: Path) -> None:
+    """Build the c13_out_of_enum_class fixture into dest.
+
+    prop__name declares a temporal_class outside the three-value enum -- built
+    via prop_column, then mutated. Fails C13's enum clause and necessarily C1
+    (the vendored schema enum-constrains the value); written with
+    schema_valid=False since the defect is schema-level. A genesis history row
+    keeps C11's converse and C13's semantic clause satisfied, so the
+    expectation names exactly C1 and C13.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    prop_col = prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    )
+    prop_col["temporal_class"] = "bogus"
+    columns = _c13_records_actor_columns(prop_col)
+
+    db_path = dest / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", columns))
+    history_rows = _c13_populate_history_name_series(conn, [(10, "Alice")])
+    _c13_populate_records_actor(conn, "Alice")
+    conn.close()
+
+    write_emit(
+        dest,
+        tables=[
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, history_rows),
+            _table_spec("records__actor", "records", columns, 1, record_kind="actor"),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        schema_valid=False,
+    )
+
+
+def build_c13_missing_genesis(dest: Path) -> None:
+    """Build the c13_missing_genesis fixture into dest.
+
+    prop__name is properly paired and tracked; history carries two later rows
+    for (actor, name) but none at a001's own created_sim_time=10. C11's
+    converse still sees rows for the pair (passes); C13's semantic clause
+    fails alone -- no row matches the genesis (kind, record_id, property,
+    created_sim_time) key.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    prop_col = prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    )
+    columns = _c13_records_actor_columns(prop_col)
+
+    db_path = dest / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", columns))
+    history_rows = _c13_populate_history_name_series(
+        conn, [(20, "Alice-v1"), (30, "Alice")]
+    )
+    _c13_populate_records_actor(conn, "Alice")
+    conn.close()
+
+    write_emit(
+        dest,
+        tables=[
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, history_rows),
+            _table_spec("records__actor", "records", columns, 1, record_kind="actor"),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
+
+
+def build_c11_emptied_series(dest: Path) -> None:
+    """Build the c11_emptied_series fixture into dest.
+
+    prop__name is properly paired and tracked; records__actor has a row but
+    history carries zero rows for (actor, name). C11's converse fails (zero
+    rows on a kind with records rows); C13's genesis clause fails too -- zero
+    rows implies no genesis row.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    prop_col = prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    )
+    columns = _c13_records_actor_columns(prop_col)
+
+    db_path = dest / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", columns))
+    _c13_populate_records_actor(conn, "Alice")
+    conn.close()
+
+    write_emit(
+        dest,
+        tables=[
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
+            _table_spec("records__actor", "records", columns, 1, record_kind="actor"),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
+
+
 def build_c12_missing_kind(dest: Path) -> None:
     """Build the c12_missing_kind fixture into dest.
 
@@ -1080,6 +1256,10 @@ _BUILDERS: dict[str, Callable[[Path], None]] = {
     "refs_dangling": build_refs_dangling,
     "c12_missing_kind": build_c12_missing_kind,
     "c12_missing_subtype": build_c12_missing_subtype,
+    "c13_broken_pairing": build_c13_broken_pairing,
+    "c13_out_of_enum_class": build_c13_out_of_enum_class,
+    "c13_missing_genesis": build_c13_missing_genesis,
+    "c11_emptied_series": build_c11_emptied_series,
 }
 
 

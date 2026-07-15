@@ -1192,6 +1192,163 @@ def test_c10_skips_kind_column_without_matching_id_column(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# C11: column SCD class consistency (converse clause)
+# ---------------------------------------------------------------------------
+
+
+def test_c11_converse_fails_on_zero_history_rows(tmp_path: Path) -> None:
+    """C11's converse: prop__name is flagged history_tracked True and
+    records__actor has a row, but history carries zero rows for (actor, name)."""
+    dest = tmp_path / "c11_converse_zero_rows"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
+    _populate_records_actor(conn)
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 0,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": list(_RECORDS_ACTOR_COLUMNS),
+                "rows": 1,
+            },
+        ]
+    )
+    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C11")
+
+    assert not result.passed
+    assert any("converse" in m for m in result.messages)
+
+
+def test_c11_converse_gate_excludes_non_round_trippable_column(
+    tmp_path: Path,
+) -> None:
+    """C11's converse gate: a flagged BLOB column with zero history rows does
+    not fail C11 -- collection-struct properties never appear in history."""
+    blob_col: dict[str, object] = {
+        "name": "prop__data",
+        "type": "BLOB",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    }
+    rec_cols = list(_RECORDS_ACTOR_COLUMNS) + [blob_col]
+
+    dest = tmp_path / "c11_converse_blob_gate"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", rec_cols))
+    # prop__name's own genesis row -- keeps that column conformant so only the
+    # BLOB gate is under test.
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+        ["trunk", "actor", "a001", "name", 10, "Alice"],
+    )
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
+        [
+            "trunk",
+            "a001",
+            10,
+            True,
+            10,
+            "Alice",
+            "active",
+            "d001",
+            "patient",
+            b"\x00\x01",
+        ],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 1,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": rec_cols,
+                "rows": 1,
+            },
+        ]
+    )
+    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C11")
+
+    assert result.passed, f"C11 should pass (BLOB gated out): {result.messages}"
+
+
+def test_c11_skips_when_no_flagged_column(tmp_path: Path) -> None:
+    """C11 skips entirely when no records-category prop__ column carries
+    history_tracked anywhere in the sidecar (existing behavior retained)."""
+    bare_cols: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        {"name": "prop__name", "type": "VARCHAR"},
+    ]
+    dest = tmp_path / "c11_no_flagged_column"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", bare_cols))
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?)",
+        ["trunk", "a001", 10, True, 10, "Alice"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 0,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": bare_cols,
+                "rows": 1,
+            },
+        ]
+    )
+    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C11")
+
+    assert result.passed
+    assert any("predates" in s or "skipped" in s for s in result.skips)
+
+
+# ---------------------------------------------------------------------------
 # Boundary fixtures: history_duplicate_tick and refs_dangling
 # ---------------------------------------------------------------------------
 
@@ -1396,6 +1553,195 @@ def test_c12_passes_when_actor_is_bare_string_kind(tmp_path: Path) -> None:
     assert not any("actor" in s and "sub-type" in s for s in result.skips), (
         f"Expected no actor sub-type skip for bare-string kind, got skips={result.skips}"
     )
+
+
+# ---------------------------------------------------------------------------
+# C13: temporal-class consistency (semantic / genesis clause)
+# ---------------------------------------------------------------------------
+
+
+def test_c13_semantic_record_id_matters_not_vicarious(tmp_path: Path) -> None:
+    """C13's genesis clause matches on record_id: a rowless record does not pass
+    because a sibling of the same kind shares its created_sim_time."""
+    dest = tmp_path / "c13_record_id_matters"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
+    # Only a001 gets its genesis row; a002 shares created_sim_time=10 but has none.
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+        ["trunk", "actor", "a001", "name", 10, "Alice"],
+    )
+    conn.executemany(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+        [
+            ["trunk", "a001", 10, True, 10, "Alice", "active", "d001", "patient"],
+            ["trunk", "a002", 10, True, 10, "Bob", "active", "d001", "patient"],
+        ],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 1,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": list(_RECORDS_ACTOR_COLUMNS),
+                "rows": 2,
+            },
+        ]
+    )
+    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C13")
+
+    assert not result.passed
+    assert any("a002" in m for m in result.messages)
+    assert not any("a001" in m for m in result.messages)
+
+
+def test_c13_semantic_null_valued_genesis_row_passes(tmp_path: Path) -> None:
+    """A NULL-valued genesis row satisfies C13's semantic clause -- the clause
+    only requires the row to exist, not that its value be non-NULL."""
+    dest = tmp_path / "c13_null_genesis"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, NULL)",
+        ["trunk", "actor", "a001", "name", 10],
+    )
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, NULL, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, "active", "d001", "patient"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 1,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": list(_RECORDS_ACTOR_COLUMNS),
+                "rows": 1,
+            },
+        ]
+    )
+    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C13")
+
+    assert result.passed, (
+        f"C13 should pass on a NULL-valued genesis row: {result.messages}"
+    )
+
+
+def test_c13_skips_when_no_flagged_column(tmp_path: Path) -> None:
+    """C13 skips entirely when no records-category prop__ column carries
+    history_tracked anywhere in the sidecar."""
+    bare_cols: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        {"name": "prop__name", "type": "VARCHAR"},
+    ]
+    dest = tmp_path / "c13_no_flagged_column"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", bare_cols))
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?)",
+        ["trunk", "a001", 10, True, 10, "Alice"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 0,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": bare_cols,
+                "rows": 1,
+            },
+        ]
+    )
+    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C13")
+
+    assert result.passed
+    assert any("predates" in s or "skipped" in s for s in result.skips)
+
+
+# ---------------------------------------------------------------------------
+# C11/C13 negative fixtures: each fails exactly its named check(s)
+# ---------------------------------------------------------------------------
+
+
+def test_c13_broken_pairing_fails_c13_alone(base_fixtures: dict[str, Path]) -> None:
+    """c13_broken_pairing fails C13's structural clause alone."""
+    with open_emit(base_fixtures["c13_broken_pairing"]) as emit:
+        report = validate(emit)
+    failing = {r.check for r in report.results if not r.passed}
+    assert failing == {"C13"}
+
+
+def test_c13_out_of_enum_class_fails_c1_and_c13(
+    base_fixtures: dict[str, Path],
+) -> None:
+    """c13_out_of_enum_class fails C13's enum clause and necessarily C1."""
+    with open_emit(base_fixtures["c13_out_of_enum_class"]) as emit:
+        report = validate(emit)
+    failing = {r.check for r in report.results if not r.passed}
+    assert failing == {"C1", "C13"}
+
+
+def test_c13_missing_genesis_fails_c13_alone(base_fixtures: dict[str, Path]) -> None:
+    """c13_missing_genesis fails C13's semantic clause alone -- C11's converse
+    still sees rows for the pair."""
+    with open_emit(base_fixtures["c13_missing_genesis"]) as emit:
+        report = validate(emit)
+    failing = {r.check for r in report.results if not r.passed}
+    assert failing == {"C13"}
+
+
+def test_c11_emptied_series_fails_c11_and_c13(base_fixtures: dict[str, Path]) -> None:
+    """c11_emptied_series fails C11's converse and C13's genesis clause together --
+    zero rows implies no genesis row."""
+    with open_emit(base_fixtures["c11_emptied_series"]) as emit:
+        report = validate(emit)
+    failing = {r.check for r in report.results if not r.passed}
+    assert failing == {"C11", "C13"}
 
 
 # ---------------------------------------------------------------------------

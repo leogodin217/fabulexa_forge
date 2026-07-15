@@ -227,14 +227,25 @@ def test_drop_anchor_codec_equal_exposed_value_declares_beyond_c1_c12() -> None:
     assert defect.impact == ("beyond-c1-c12",)
 
 
-def test_drop_entire_c6_view_declares_all_beyond_c1_c12() -> None:
-    """Dropping every pre-slice row of a series empties its C6 view: the
-    series leaves C6's iteration entirely (orphaned snapshot, subconformant),
-    never a C6 declaration."""
+def test_drop_entire_series_with_records_row_declares_c11() -> None:
+    """Dropping every history row of a (kind, property) series while
+    records__actor still has a row triggers the emptied-series clause: every
+    removed row of that series declares impact ("C11",) alone -- ahead of the
+    anchor-participant rule, which never fires here."""
     state = _state(
         [_row(10, "v1"), _row(40, "v2")],
         records_rows=[_records_row("v2")],
     )
+    outcome = _apply(state, rate=1.0)
+    assert outcome.units_affected == 2
+    assert {d.impact for d in outcome.defects} == {("C11",)}
+
+
+def test_drop_entire_c6_view_without_records_rows_declares_beyond_c1_c12() -> None:
+    """The emptied-series clause requires records__<kind> to have at least one
+    row (C11's converse only applies then): with no records rows at all,
+    emptying the series still leaves every removed row beyond-c1-c12."""
+    state = _state([_row(10, "v1"), _row(40, "v2")])
     outcome = _apply(state, rate=1.0)
     assert outcome.units_affected == 2
     assert {d.impact for d in outcome.defects} == {("beyond-c1-c12",)}

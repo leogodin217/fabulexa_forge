@@ -1,7 +1,7 @@
-"""Conformance checks C1–C12 for base-layer emits.
+"""Conformance checks C1–C13 for base-layer emits.
 
 Independent reimplementation of the base-format conformance procedure.
-Zero imports outside the vendored contract. Reads the vendored v4 JSON Schema and DuckDB
+Zero imports outside the vendored contract. Reads the vendored v5 JSON Schema and DuckDB
 catalog/data via Emit.query; never raises on a conformance failure.
 """
 
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, get_args
 
 import jsonschema
 
@@ -18,8 +18,9 @@ from fabulexa_forge.reader._schema import _load_vendored_schema
 
 if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
+    from fabulexa_forge.reader.sidecar import Sidecar, TableSpec
 
-from fabulexa_forge.reader.sidecar import ColumnSpec, RecordRoles
+from fabulexa_forge.reader.sidecar import ColumnSpec, RecordRoles, TemporalClass
 
 # ---------------------------------------------------------------------------
 # Public types
@@ -28,13 +29,13 @@ from fabulexa_forge.reader.sidecar import ColumnSpec, RecordRoles
 
 @dataclass(frozen=True)
 class CheckResult:
-    """Outcome of one conformance check (C1–C12).
+    """Outcome of one conformance check (C1–C13).
 
     `passed` is the authoritative verdict; `messages` and `skips` are diagnostics
     and never decide pass/fail.
     """
 
-    check: str  # "C1" .. "C12"
+    check: str  # "C1" .. "C13"
     passed: bool
     messages: tuple[str, ...]  # failure detail; empty when passed
     skips: tuple[str, ...]  # parts deliberately not examined. Informational.
@@ -42,9 +43,9 @@ class CheckResult:
 
 @dataclass(frozen=True)
 class ConformanceReport:
-    """Aggregate outcome of running C1–C12 over one emit."""
+    """Aggregate outcome of running C1–C13 over one emit."""
 
-    results: tuple[CheckResult, ...]  # one per check, in C1..C12 order
+    results: tuple[CheckResult, ...]  # one per check, in C1..C13 order
 
     @property
     def ok(self) -> bool:
@@ -79,6 +80,10 @@ _PS_RECORDS_PREFIX_COLUMNS: tuple[tuple[str, str], ...] = (
 
 # Valid warehouse roles for C12
 _VALID_ROLES: frozenset[str] = frozenset({"dimension", "fact"})
+
+# The three declared temporal_class values for C13's enum clause — sourced from
+# the sidecar's own TemporalClass alias so the enum is stated once.
+_TEMPORAL_CLASS_VALUES: frozenset[str] = frozenset(get_args(TemporalClass))
 
 # ---------------------------------------------------------------------------
 # Catalog-probe helpers
@@ -1239,17 +1244,49 @@ def _check_c10(emit: "Emit") -> CheckResult:
     )
 
 
+def _any_records_prop_history_tracked(sidecar: "Sidecar") -> bool:
+    """Whether any records-category prop__ column carries history_tracked.
+
+    The published additive-field skip guard C11 and C13 share verbatim: "no
+    records-category prop__ column carries history_tracked". Computed INLINE over
+    records-category prop__ columns only — never Sidecar.history_tracked_available(),
+    which returns True if ANY column anywhere carries the flag (too broad; diverges
+    on malformed emits).
+
+    Args:
+        sidecar: The emit's sidecar.
+
+    Returns:
+        True iff at least one records-category prop__ column declares
+        history_tracked (True or False; not None).
+    """
+    for table_spec in sidecar.tables():
+        if table_spec.category != "records":
+            continue
+        for col in table_spec.columns:
+            if col.name.startswith("prop__") and col.history_tracked is not None:
+                return True
+    return False
+
+
 def _check_c11(emit: "Emit") -> CheckResult:
-    """C11: Column SCD class consistency.
+    """C11: Column SCD class consistency, bidirectional at v5.
 
-    Verbatim rule (contract base-format.md §C11):
-    - If no records-category prop__ column in the sidecar carries history_tracked,
-      skip (producer predates the attribute).
-    - For each distinct (kind, property) in history (columns 2, 4):
-      let col = the prop__<property> column on records__<kind>
-      require: col is present in the sidecar with history_tracked == true.
+    Skips when no records-category prop__ column carries history_tracked (the
+    published additive-field guard).
 
-    C11 is one-directional: a type-2 property with no history rows is not checked.
+    Forward clause (verbatim rule, contract base-format.md §C11): for each distinct
+    (kind, property) in history (columns 2, 4), the prop__<property> column on
+    records__<kind> is present in the sidecar and flagged history_tracked true.
+
+    Converse clause (v5): for each records__<kind> with at least one row, each
+    prop__<property> column flagged history_tracked true has at least one history
+    row for (kind, property). Zero rows is a violation — the unconditional creation
+    seed removed the "created NULL, never changed" carve-out that made it legal at
+    v4. Gated by the same round-trippable-type set C6 uses (BIGINT, DOUBLE, BOOLEAN,
+    VARCHAR): a collection-struct property emits membership tables, never history
+    rows, and stays outside this clause's input set.
+
     C11 skips when the history table is absent from the catalog.
 
     Args:
@@ -1262,22 +1299,7 @@ def _check_c11(emit: "Emit") -> CheckResult:
     skips: list[str] = []
     sidecar = emit.sidecar
 
-    # --- Skip guard: computed INLINE over records-category prop__ columns only ---
-    # "no records-category prop__ column carries history_tracked" → skip.
-    # Do NOT use Sidecar.history_tracked_available() — it returns True if ANY column
-    # anywhere carries the flag (too broad; diverges on malformed emits).
-    any_records_prop_tracked = False
-    for table_spec in sidecar.tables():
-        if table_spec.category != "records":
-            continue
-        for col in table_spec.columns:
-            if col.name.startswith("prop__") and col.history_tracked is not None:
-                any_records_prop_tracked = True
-                break
-        if any_records_prop_tracked:
-            break
-
-    if not any_records_prop_tracked:
+    if not _any_records_prop_history_tracked(sidecar):
         skips.append(
             "no records-category prop__ column carries history_tracked — "
             "producer predates the attribute; C11 skipped"
@@ -1354,12 +1376,74 @@ def _check_c11(emit: "Emit") -> CheckResult:
                 f"requires history_tracked == true"
             )
 
+    # --- Converse clause: a flagged column + records rows requires >=1 history row ---
+    for table_spec in sidecar.tables():
+        if table_spec.category != "records":
+            continue
+        _check_c11_converse(
+            emit, table_spec, seen_pairs, catalog_tables, messages, skips
+        )
+
     return CheckResult(
         check="C11",
         passed=len(messages) == 0,
         messages=tuple(messages),
         skips=tuple(skips),
     )
+
+
+def _check_c11_converse(
+    emit: "Emit",
+    table_spec: "TableSpec",
+    seen_pairs: set[tuple[str, str]],
+    catalog_tables: set[str],
+    messages: list[str],
+    skips: list[str],
+) -> None:
+    """Check C11's converse clause for one records-category table.
+
+    A records__<kind> with at least one row requires every prop__<property> column
+    flagged history_tracked true (and round-trippable-typed) to have at least one
+    history row for (kind, property); zero is a violation.
+
+    Args:
+        emit: An open emit.
+        table_spec: A records-category TableSpec.
+        seen_pairs: The distinct (kind, property) pairs history carries at least
+            one row for.
+        catalog_tables: Pre-fetched set of table names in the catalog.
+        messages: Accumulator for failure messages.
+        skips: Accumulator for skip messages.
+    """
+    kind = table_spec.record_kind
+    if kind is None:
+        return  # C3 owns this; avoid double-reporting
+
+    table_name = table_spec.name
+    if table_name not in catalog_tables:
+        skips.append(
+            f"C11: table {table_name!r} absent from catalog — "
+            f"converse clause for kind={kind!r} skipped"
+        )
+        return
+
+    if _catalog_row_count(emit, table_name) == 0:
+        return  # converse clause only applies when records__<kind> has rows
+
+    for col in table_spec.columns:
+        if not col.name.startswith("prop__"):
+            continue
+        if col.history_tracked is not True:
+            continue
+        if col.type.upper().strip() not in _ROUND_TRIPPABLE_TYPES:
+            continue
+        prop = col.name[len("prop__") :]
+        if (kind, prop) not in seen_pairs:
+            messages.append(
+                f"C11: prop__{prop} on records__{kind} is flagged history_tracked "
+                f"true and records__{kind} has rows, but history has no row for "
+                f"(kind={kind!r}, property={prop!r}) — converse violated"
+            )
 
 
 def _check_c12_actor_subtypes(
@@ -1493,6 +1577,219 @@ def _check_c12(emit: "Emit") -> CheckResult:
     )
 
 
+def _check_c13_structural(
+    table_name: str, col: ColumnSpec, messages: list[str]
+) -> None:
+    """Check C13's structural clauses for one records-category prop__ column.
+
+    Verbatim rule (contract base-format.md §C13): (history_tracked present) ==
+    (temporal_class present); when present, temporal_class is one of the three
+    declared values; temporal_class == "tracked" implies history_tracked == true;
+    temporal_class == "slice_only" implies history_tracked == false. The three
+    requires are independent — none is conditioned on another passing.
+
+    Args:
+        table_name: The owning records table, for error messages.
+        col: The prop__ column under test.
+        messages: Accumulator; failures are appended here.
+    """
+    history_tracked_present = col.history_tracked is not None
+    temporal_class_present = col.temporal_class is not None
+    if history_tracked_present != temporal_class_present:
+        messages.append(
+            f"C13: {table_name}.{col.name}: history_tracked present "
+            f"({history_tracked_present}) != temporal_class present "
+            f"({temporal_class_present})"
+        )
+
+    if not temporal_class_present:
+        return
+
+    if col.temporal_class not in _TEMPORAL_CLASS_VALUES:
+        messages.append(
+            f"C13: {table_name}.{col.name}: temporal_class {col.temporal_class!r} "
+            f"is outside {sorted(_TEMPORAL_CLASS_VALUES)!r}"
+        )
+
+    if col.temporal_class == "tracked" and col.history_tracked is not True:
+        messages.append(
+            f"C13: {table_name}.{col.name}: temporal_class='tracked' requires "
+            f"history_tracked=True, got {col.history_tracked!r}"
+        )
+
+    if col.temporal_class == "slice_only" and col.history_tracked is not False:
+        messages.append(
+            f"C13: {table_name}.{col.name}: temporal_class='slice_only' requires "
+            f"history_tracked=False, got {col.history_tracked!r}"
+        )
+
+
+def _c13_history_ready(
+    emit: "Emit", catalog_tables: set[str], skips: list[str]
+) -> bool:
+    """Whether the history catalog carries every column C13's genesis clause needs.
+
+    Args:
+        emit: An open emit.
+        catalog_tables: Pre-fetched set of table names in the catalog.
+        skips: Accumulator; a skip note is appended when the clause cannot run.
+
+    Returns:
+        True iff the semantic clause can safely query history.
+    """
+    if "history" not in catalog_tables:
+        skips.append("history table absent from catalog — C13 semantic clause skipped")
+        return False
+
+    history_cat_cols = {name for name, _ in _catalog_columns(emit, "history")}
+    missing = [
+        c
+        for c in ("kind", "property", "record_id", "sim_time")
+        if c not in history_cat_cols
+    ]
+    if missing:
+        skips.append(
+            f"history table missing columns {missing!r} (C4 failure) — "
+            f"C13 semantic clause skipped"
+        )
+        return False
+    return True
+
+
+def _check_c13_genesis(
+    emit: "Emit",
+    table_name: str,
+    kind: str,
+    prop: str,
+    catalog_tables: set[str],
+    messages: list[str],
+    skips: list[str],
+) -> None:
+    """Check C13's genesis-row semantic clause for one flagged prop__ column.
+
+    Every record in records__<kind> must have a history row for (kind, property,
+    record_id) at its own created_sim_time. record_id is part of the match: a
+    rowless record does not pass vicariously because a sibling of the same kind
+    shares its created_sim_time.
+
+    Args:
+        emit: An open emit.
+        table_name: The owning records__<kind> table name.
+        kind: The record kind.
+        prop: The property name, without its prop__ prefix.
+        catalog_tables: Pre-fetched set of table names in the catalog.
+        messages: Accumulator for failure messages.
+        skips: Accumulator for skip messages.
+    """
+    if table_name not in catalog_tables:
+        skips.append(
+            f"C13: table {table_name!r} absent from catalog — genesis check for "
+            f"(kind={kind!r}, property={prop!r}) skipped"
+        )
+        return
+
+    cat_col_names = {name for name, _ in _catalog_columns(emit, table_name)}
+    if "record_id" not in cat_col_names or "created_sim_time" not in cat_col_names:
+        skips.append(
+            f"C13: table {table_name!r} missing record_id/created_sim_time — "
+            f"genesis check for (kind={kind!r}, property={prop!r}) skipped"
+        )
+        return
+
+    tq = _quote_identifier(table_name)
+    rows = emit.query(
+        f'SELECT r."record_id" FROM {tq} r '
+        f"LEFT JOIN history h ON h.kind = ? AND h.property = ? "
+        f'  AND h.record_id = r."record_id" AND h.sim_time = r."created_sim_time" '
+        f"WHERE h.record_id IS NULL "
+        f'ORDER BY r."record_id"',
+        (kind, prop),
+    )
+    for row in rows:
+        record_id = str(row[0])
+        messages.append(
+            f"C13: records__{kind}.record_id={record_id!r} has no genesis history "
+            f"row for (kind={kind!r}, property={prop!r}) at its own created_sim_time"
+        )
+
+
+def _check_c13(emit: "Emit") -> CheckResult:
+    """C13: Temporal-class consistency.
+
+    Skips when no records-category prop__ column carries history_tracked (the
+    published additive-field guard; unreachable against a producer-written v5
+    emit, retained so the checker is a correct standalone implementation of the
+    procedure).
+
+    Structural clauses, over every records-category prop__ column: history_tracked
+    is present iff temporal_class is present; a present temporal_class is one of
+    the three declared values; 'tracked' implies history_tracked true; 'slice_only'
+    implies history_tracked false.
+
+    Semantic clause, over every prop__ column flagged history_tracked true (any
+    class), for every record of that kind: history carries a row for (kind,
+    record_id, property) at that record's own created_sim_time — the genesis row.
+    Runs exhaustively (every record), the same strictness choice C6 makes, rather
+    than the published procedure's sample of up to ten records.
+
+    Collection-struct properties stay outside the semantic clause's input set —
+    excluded by the same round-trippable-type gate shipped C6 uses (BIGINT,
+    DOUBLE, BOOLEAN, VARCHAR); their changes emit membership tables, not history
+    rows. The structural clauses have no history side and run ungated, over every
+    records-category prop__ column.
+
+    Args:
+        emit: An open emit.
+
+    Returns:
+        A CheckResult for check id "C13".
+    """
+    messages: list[str] = []
+    skips: list[str] = []
+    sidecar = emit.sidecar
+
+    if not _any_records_prop_history_tracked(sidecar):
+        skips.append(
+            "no records-category prop__ column carries history_tracked — "
+            "producer predates the attribute; C13 skipped"
+        )
+        return CheckResult(check="C13", passed=True, messages=(), skips=tuple(skips))
+
+    for table_spec in sidecar.tables():
+        if table_spec.category != "records":
+            continue
+        for col in table_spec.columns:
+            if col.name.startswith("prop__"):
+                _check_c13_structural(table_spec.name, col, messages)
+
+    catalog_tables = _catalog_tables(emit)
+    if _c13_history_ready(emit, catalog_tables, skips):
+        for table_spec in sidecar.tables():
+            if table_spec.category != "records":
+                continue
+            kind = table_spec.record_kind
+            if kind is None:
+                continue  # C3 owns this; avoid double-reporting
+            for col in table_spec.columns:
+                if not col.name.startswith("prop__"):
+                    continue
+                if col.history_tracked is not True:
+                    continue
+                if col.type.upper().strip() not in _ROUND_TRIPPABLE_TYPES:
+                    continue
+                prop = col.name[len("prop__") :]
+                _check_c13_genesis(
+                    emit, table_spec.name, kind, prop, catalog_tables, messages, skips
+                )
+
+    return CheckResult(
+        check="C13",
+        passed=len(messages) == 0,
+        messages=tuple(messages),
+        skips=tuple(skips),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Check registry
 # ---------------------------------------------------------------------------
@@ -1510,6 +1807,7 @@ _CHECKS: dict[str, Callable[["Emit"], CheckResult]] = {
     "C10": _check_c10,
     "C11": _check_c11,
     "C12": _check_c12,
+    "C13": _check_c13,
 }
 
 _RECOGNIZED_IDS: tuple[str, ...] = (
@@ -1525,6 +1823,7 @@ _RECOGNIZED_IDS: tuple[str, ...] = (
     "C10",
     "C11",
     "C12",
+    "C13",
 )
 
 
@@ -1534,12 +1833,12 @@ _RECOGNIZED_IDS: tuple[str, ...] = (
 
 
 def validate(emit: "Emit") -> ConformanceReport:
-    """Run conformance checks C1–C12 against an opened emit.
+    """Run conformance checks C1–C13 against an opened emit.
 
     Reimplements the base-format conformance procedure independently of the
     producer's emitters.conformance. C1 validates base.json against the vendored
-    v4 JSON Schema; C2–C5 check catalog/sidecar agreement, required tables,
-    and column shapes; C6–C12 check data-level integrity.
+    v5 JSON Schema; C2–C5 check catalog/sidecar agreement, required tables,
+    and column shapes; C6–C13 check data-level integrity.
 
     A conformance failure is reported as a failing CheckResult, never raised:
     callers inspect the report and choose an exit code. Operational failures
@@ -1549,7 +1848,7 @@ def validate(emit: "Emit") -> ConformanceReport:
         emit: An emit already opened — and therefore version-gated — by open_emit.
 
     Returns:
-        A ConformanceReport with one CheckResult per check, in C1..C12 order.
+        A ConformanceReport with one CheckResult per check, in C1..C13 order.
 
     Raises:
         RunDatabaseError: An operational failure reading run.duckdb mid-check.
@@ -1568,7 +1867,7 @@ def run_check(emit: "Emit", check_id: str) -> CheckResult:
 
     Args:
         emit: An opened emit.
-        check_id: One of "C1" .. "C12".
+        check_id: One of "C1" .. "C13".
 
     Returns:
         The CheckResult for that check.

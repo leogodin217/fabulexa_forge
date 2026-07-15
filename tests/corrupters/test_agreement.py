@@ -21,6 +21,7 @@ from reader._fixtures_build import (
     build_membership_intervals,
     build_spanning,
 )
+from recipes._harness import failing_checks_in_manifest_vocabulary
 
 from fabulexa_forge.config.models import (
     Amount,
@@ -327,8 +328,10 @@ def _run_and_agreement_sets(
             operations require multi-event history series).
 
     Returns:
-        A tuple of (validate's failing-check set on the corrupted emit, the
-        manifest's non-sentinel impact-code union).
+        A tuple of (validate's failing-check set on the corrupted emit, scoped to
+        the manifest's C1-C12 impact vocabulary, and the manifest's non-sentinel
+        impact-code union). C13 is excluded from the failing set: no corrupter
+        operation can declare it (see `failing_checks_in_manifest_vocabulary`).
     """
     emit_dir = tmp_path / "source"
     build_fixture(emit_dir)
@@ -339,7 +342,7 @@ def _run_and_agreement_sets(
 
     with open_emit(out_dir) as corrupted:
         report = conformance.validate(corrupted)
-    failing = {r.check for r in report.results if not r.passed}
+    failing = failing_checks_in_manifest_vocabulary(report)
 
     manifest = json.loads((out_dir / "defects.json").read_text(encoding="utf-8"))
     impact_union = {

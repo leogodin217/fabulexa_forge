@@ -12,10 +12,14 @@ Four gates:
                     spot-checked defects).
 3. corpus guard   : corpus is non-empty; every folder contains exactly the two
                     expected files.
-4. set equality   : validate's failing-check set == manifest impact union minus
+4. set equality   : validate's failing-check set, scoped to the manifest's C1-C12
+                    impact vocabulary, == manifest impact union minus
                     'beyond-c1-c12' -- the recipes are curated so every declared
                     code fires (no heals, no skip-guard cases). Containment alone
                     is asserted more broadly in tests/corrupters/test_agreement.py.
+                    The C1-C12 scoping keeps a sentinel-labeled C13 break accurate,
+                    not false: C13 is outside the manifest's ImpactCode vocabulary
+                    entirely, so no corrupter can declare it.
 """
 
 from __future__ import annotations
@@ -35,6 +39,7 @@ from ._harness import (
     RecipeFolder,
     assert_corrupt_output,
     discover_recipes,
+    failing_checks_in_manifest_vocabulary,
     load_corrupt_expectation,
 )
 
@@ -137,7 +142,8 @@ def test_corrupt_recipe_folder_well_formed(recipe: RecipeFolder) -> None:
 def test_corrupt_recipe_agreement_set_equality(
     recipe: RecipeFolder, corrupt_recipe_emit_dir: Path, tmp_path: Path
 ) -> None:
-    """validate's failing-check set == manifest impact union minus 'beyond-c1-c12'.
+    """validate's C1-C12-scoped failing-check set == manifest impact union minus
+    'beyond-c1-c12'.
 
     Curated recipes avoid heals and skip-guard cases, so containment tightens to
     strict set equality here.
@@ -149,7 +155,7 @@ def test_corrupt_recipe_agreement_set_equality(
 
     with open_emit(out_dir) as corrupted:
         report = conformance.validate(corrupted)
-    failing = {r.check for r in report.results if not r.passed}
+    failing = failing_checks_in_manifest_vocabulary(report)
 
     manifest = json.loads((out_dir / "defects.json").read_text(encoding="utf-8"))
     impact_union = {

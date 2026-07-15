@@ -1,7 +1,7 @@
 sprint: base-format-v5-adopt
 parent_branch: revender_for_point_in_time
 started: 2026-07-15
-current_phase: 5
+current_phase: 6
 capabilities:
   - reader: [temporal_class model + accessor, version gate 5]
   - conformance: [C11 converse, C13, registry C1-C13]
@@ -55,7 +55,7 @@ phases:
     name: "The corrupter writer round-trips the class"
     demo: "docs/sprints/base-format-v5-adopt/demos/phase_4_writer_roundtrip.py"
   5:
-    status: pending
+    status: complete
     name: "Conformance judges v5 - C11 converse, C13, emptied-series impact"
     demo: "docs/sprints/base-format-v5-adopt/demos/phase_5_conformance.py"
     steps:

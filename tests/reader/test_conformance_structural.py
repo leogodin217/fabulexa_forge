@@ -23,6 +23,7 @@ from fabulexa_forge.reader import (
 from fabulexa_forge.reader._schema import _load_vendored_schema
 from fabulexa_forge.reader.conformance import (
     _check_c5_table,
+    _check_c13_structural,
 )
 from fabulexa_forge.reader.sidecar import ColumnSpec
 
@@ -604,6 +605,119 @@ class TestC5PresentationId:
 
 
 # ---------------------------------------------------------------------------
+# C13 structural clauses (direct, via _check_c13_structural)
+# ---------------------------------------------------------------------------
+
+
+def _c13_messages(col: ColumnSpec) -> list[str]:
+    """Run _check_c13_structural for one column; return its failure messages."""
+    messages: list[str] = []
+    _check_c13_structural("records__actor", col, messages)
+    return messages
+
+
+class TestC13Structural:
+    """_check_c13_structural's four clauses, exercised directly per the design
+    doc: (history_tracked present) == (temporal_class present); a present
+    temporal_class is one of the three declared values; 'tracked' implies
+    history_tracked True; 'slice_only' implies history_tracked False."""
+
+    def test_conformant_tracked_column_passes(self) -> None:
+        """A properly paired 'tracked' column passes all four clauses."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=True,
+            temporal_class="tracked",
+        )
+        assert _c13_messages(col) == []
+
+    def test_conformant_constant_column_passes(self) -> None:
+        """A properly paired 'constant' column passes (no implication applies)."""
+        col = ColumnSpec(
+            name="prop__doctor_id",
+            type="VARCHAR",
+            references=None,
+            history_tracked=False,
+            temporal_class="constant",
+        )
+        assert _c13_messages(col) == []
+
+    def test_conformant_slice_only_column_passes(self) -> None:
+        """A properly paired 'slice_only' column passes all four clauses."""
+        col = ColumnSpec(
+            name="prop__status",
+            type="VARCHAR",
+            references=None,
+            history_tracked=False,
+            temporal_class="slice_only",
+        )
+        assert _c13_messages(col) == []
+
+    def test_history_tracked_present_temporal_class_absent_fails(self) -> None:
+        """Clause 1 (pairing): history_tracked present with no temporal_class fails."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=True,
+            temporal_class=None,
+        )
+        messages = _c13_messages(col)
+        assert any("history_tracked present" in m for m in messages)
+
+    def test_temporal_class_present_history_tracked_absent_fails(self) -> None:
+        """Clause 1 (pairing), other direction: temporal_class with no
+        history_tracked fails."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=None,
+            temporal_class="tracked",
+        )
+        messages = _c13_messages(col)
+        assert any("history_tracked present" in m for m in messages)
+
+    def test_out_of_enum_temporal_class_fails(self) -> None:
+        """Clause 2 (enum): a declared value outside the three-value enum fails."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=True,
+            temporal_class="bogus",
+        )
+        messages = _c13_messages(col)
+        assert any("outside" in m for m in messages)
+
+    def test_tracked_requires_history_tracked_true(self) -> None:
+        """Clause 3: temporal_class='tracked' requires history_tracked=True."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=False,
+            temporal_class="tracked",
+        )
+        messages = _c13_messages(col)
+        assert any("'tracked' requires" in m for m in messages)
+
+    def test_slice_only_requires_history_tracked_false(self) -> None:
+        """Clause 4: temporal_class='slice_only' requires history_tracked=False."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=True,
+            temporal_class="slice_only",
+        )
+        messages = _c13_messages(col)
+        assert any("'slice_only' requires" in m for m in messages)
+
+
+# ---------------------------------------------------------------------------
 # C8 tests
 # ---------------------------------------------------------------------------
 
@@ -677,8 +791,8 @@ class TestValidate:
             report = validate(emit)
         assert isinstance(report, ConformanceReport)
 
-    def test_results_in_c1_to_c12_order(self, base_fixtures: dict[str, Path]) -> None:
-        """validate returns results in C1..C12 order."""
+    def test_results_in_c1_to_c13_order(self, base_fixtures: dict[str, Path]) -> None:
+        """validate returns results in C1..C13 order."""
         with open_emit(base_fixtures["spanning"]) as emit:
             report = validate(emit)
         check_ids = [r.check for r in report.results]
@@ -695,6 +809,7 @@ class TestValidate:
             "C10",
             "C11",
             "C12",
+            "C13",
         ]
 
     def test_c4_wrong_history_type_fails_c4_not_c2(

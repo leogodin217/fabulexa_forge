@@ -73,6 +73,10 @@ SeriesKey = tuple[str, str, str]
 order `resolve_c6_anchor` / `series_round_trip_fails` take, so a key unpacks
 directly into either call. Shared by `drop_events` and `shift_sim_time`."""
 
+PairKey = tuple[str, str]
+"""A `(kind, property)` pair identity -- C11's converse grain, coarser than
+`SeriesKey` (no `record_id`). Shared by `drop_events`' emptied-series clause."""
+
 
 def is_round_trippable_type(type_string: str) -> bool:
     """Whether `type_string` names a C6 round-trippable column type.
@@ -828,6 +832,57 @@ def anchor_participant_impact(
     if is_anchor_participant and round_trip_fails:
         return ("C6",)
     return ("beyond-c1-c12",)
+
+
+def history_pair_row_count(
+    history_data: pa.Table, kind: str, property_name: str
+) -> int:
+    """The number of `history` rows for a `(kind, property)` pair.
+
+    Args:
+        history_data: A working `history` table's current Arrow.
+        kind: The pair's record kind.
+        property_name: The pair's property.
+
+    Returns:
+        The count of rows matching (kind, property), across every record_id and
+        fork_path -- C11's converse grain (no series/fork narrowing).
+    """
+    kinds = history_data.column("kind")
+    properties = history_data.column("property")
+    return sum(
+        1
+        for i in range(history_data.num_rows)
+        if kinds[i].as_py() == kind and properties[i].as_py() == property_name
+    )
+
+
+def c11_converse_broken(
+    state: "CorruptState", history_data: pa.Table, kind: str, property_name: str
+) -> bool:
+    """Whether removing rows emptied a `(kind, property)` pair's C11 converse.
+
+    True iff `history_data` (the post-removal working `history` Arrow) carries
+    zero rows for `(kind, property)` while `records__<kind>` still has at least
+    one row -- the emptied-series clause's grain (§ Corrupters — behavioral
+    contracts, `drop_events` emptied-series clause). C11's converse is scoped to
+    the whole `(kind, property)` pair, coarser than `SeriesKey`: emptying one
+    record's series while a sibling keeps rows is not this clause.
+
+    Args:
+        state: The engine's current working set (records tables untouched by
+            `drop_events`, so their row counts are pre- and post-removal alike).
+        history_data: The post-removal working `history` Arrow.
+        kind: The pair's record kind.
+        property_name: The pair's property.
+
+    Returns:
+        True iff the emptied-series clause applies to this pair.
+    """
+    records_working = state.tables.get(f"records__{kind}")
+    if records_working is None or records_working.data.num_rows == 0:
+        return False
+    return history_pair_row_count(history_data, kind, property_name) == 0
 
 
 def enumerate_series_units(
