@@ -1,9 +1,9 @@
 # fabulexa-forge
 
-Multi-mode, multi-format exporter for Fabulexa simulated bundles. Do you need data 
+Multi-mode, multi-format exporter for Fabulexa simulated bundles. Do you need data
 for teaching, learning or practicing data skills? Fabulexa forge provides the interface
 to give you the data how you need it. It is in active development, so expect more
-to come. 
+to come.
 
 Core Features
 * Four pre-simulated datasets that model a real world with causality. (Black friday produces
@@ -11,44 +11,44 @@ more orders, a flu outbreak creates resource contention on hospital beds, etc.)
 * Three export modes: streaming CDC (through Kafka), source (looks like OLTP), dimensional (An entire
 data warehouse)
 * Time rebasing that resets date ranges
-* incremental exports with time windows 
+* incremental exports with time windows
 * Corruption that introduces common data-quality patterns
 * Streaming demo with a mixer board and custom consumer. (Proof of concept of mixing streams with sliders
-for rates and contention) 
+for rates and contention)
 
-**Note**: This repo was carved out of a larger repo, hence the short git history. 
+**Note**: This repo was carved out of a larger repo, hence the short git history.
 
 ## Concepts
 
-Fabulexa: A synthetic data generator that simulates interconnected business processes. 
-Referential and temporal ingegrity is baked in, as is direct cause and effect modelling. 
+Fabulexa: A synthetic data generator that simulates interconnected business processes.
+Referential and temporal ingegrity is baked in, as is direct cause and effect modelling.
 Provenance, forking with paired counterfactuals are implemented in the engine but the datasets
-in this repo do not use those features. 
+in this repo do not use those features.
 
 Fabulexa Forge: While Fabulexa produces dataset bundles in a standard format, Forge shapes them into
-more user-friendly formats. 
+more user-friendly formats.
 
 corrupter: Fabulexa makes several guarantees about dataset bundles. The corrupter breaks them. If you want
-to learn/teach SQL, dbt, etc. it is useful to have bad data. corrupter breaks the data contracts before 
-you export. 
+to learn/teach SQL, dbt, etc. it is useful to have bad data. corrupter breaks the data contracts before
+you export.
 
 Bundle: Fabulexa-produced dataset with descriptive docs: .json with the schema, .md with a description. This
 is the input to Fabulexa Forge.
 
 Contract: ./contract/ Provides a JSON schema and instructions on using a bundle. Useful for development and
-creating your own bundles.  
+creating your own bundles.
 
 ## Getting Started
 
 Start in docs/examples. You'll see four datasets minus the actual data. The data is in DuckDB and attached
 as artifacts. Copy the duckdb into the same directory as the example configs. /examples shows various recipes
-for configuration. CLI download for datasets is coming in the future.  
+for configuration. CLI download for datasets is coming in the future.
 
 ### Streaming Demo
 
-make kafka-up 
-make mixer-demo EXAMPLE=ride-sharing  
-make board  
+make kafka-up
+make mixer-demo EXAMPLE=ride-sharing
+make board
 Open http://localhost:5173
 
 **Now onto the LLM-generated stuff**
@@ -134,6 +134,6 @@ make check         # lint + typecheck + tests
 
 ## Use of LLMs
 
-This project is obviously LLM generated. .claude is committed and tracked. For this project, 
+This project is obviously LLM generated. .claude is committed and tracked. For this project,
 I act as a product manager and Claude the architect and engineer. The process works really
 well for stuff like this that is basically glorified scripts in a CLI.
