@@ -4,7 +4,7 @@ The on-disk shape of one **base-layer emit** — a standalone, self-describing d
 
 **Purpose.** Define the contract precisely enough that any producer or consumer — in any language, in any repo — can implement this format without depending on any package other than DuckDB itself.
 
-**Status.** Reference producer is the Fabulexa publishing step. The conformance procedure (C1–C13) is verified by the producer's own conformance suite and by the standalone `tools/check_published_conformance.py`.
+**Status.** Reference producer is the Fabulexa publishing step. The conformance procedure (C1–C13) is verified by the producer's own conformance suite and by a standalone reference checker, `check_published_conformance.py`, shipped in the producer's repository (not alongside this document).
 
 **Audience.** Producers (today: the Fabulexa base writer; tomorrow: any base-layer producer, in any repo or language), consumers (future exporters, corrupters, analyst tooling, third-party tools).
 
@@ -25,7 +25,7 @@ The contract is **two artifacts per emit**, not a Python package:
 | `run.duckdb` | DuckDB's own format | DuckDB (any version supporting the schema written) |
 | `base.json` | `base-format.schema.json` (sibling of this doc) | Any reader of any kind |
 
-**`BASE_FORMAT_VERSION = 5`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
+**`BASE_FORMAT_VERSION = 6`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
 
 ---
 
@@ -94,19 +94,30 @@ For each kind *K* with at least one record at the emit's slice, one table named 
 | 4 | `active` | BOOLEAN | whether the record is active at the slice boundary |
 | 5 | `deactivated_at` | BIGINT (nullable) | `sim_time` the record was deactivated; NULL iff `active` |
 | 6 | `last_mutation_sim_time` | BIGINT | `sim_time` of the record's most recent content change — any property write or deactivation |
-| 7 .. 6+P | `prop__<name>` | per-property type (see below) | current value of property `<name>` at the slice; NULL iff the property is absent on this record |
+| 7 | `record_index` | BIGINT NOT NULL | 0-based `(fork_path, kind)` creation-order index — see § Dense record index |
+| 8 .. 7+P+R | `prop__<name>` (+ `ref_index__<name>` immediately following each reference-typed property) | per-property type (see below) / BIGINT nullable | current value of property `<name>` at the slice; NULL iff the property is absent on this record. A reference-typed property's `ref_index__<name>` carries the target record's `record_index`; NULL iff the reference is NULL. |
 
-Where P is the count of *scalar* declared properties for kind *K* — a collection-struct property (one with an element schema) contributes no `prop__` column; it is materialized as a membership table instead (§ Membership-category tables). `prop__<name>` columns appear in the kind's schema declaration order.
+Where P is the count of *scalar* declared properties for kind *K* and R is the count of those that are reference-typed (`R <= P`) — a collection-struct property (one with an element schema) contributes no `prop__` column; it is materialized as a membership table instead (§ Membership-category tables). `prop__<name>` columns appear in the kind's schema declaration order; each reference-typed property's `ref_index__<name>` column immediately follows its own `prop__<name>` column in that same sequence.
 
-**Optional `presentation_id` column.** When a non-`inherit` `presentation_id` strategy minted a surrogate for the kind, `presentation_id` occupies the slot immediately after `record_id`; the lifecycle columns (positions 3–6) and the `prop__` block then shift down by one position. It is the only structural column whose presence is optional and whose type is producer-determined: the sidecar is authoritative for its (scalar) type, and C2's sidecar↔catalog cross-check guarantees agreement, so the spec pins its name and position but not its type. It is permitted in this slot and **nowhere else** — a `presentation_id` at any other position fails C5 (it displaces a pinned lifecycle column, or lands in the `prop__` block as a non-`prop__` column), so widening this one slot does not weaken the positional check. An `inherit`-strategy kind mirrors `record_id` and adds no column.
+**Optional `presentation_id` column.** When a non-`inherit` `presentation_id` strategy minted a surrogate for the kind, `presentation_id` occupies the slot immediately after `record_id`; the lifecycle columns (positions 3–6), `record_index`, and the `prop__`/`ref_index__` block then shift down by one position. It is the only structural column whose presence is optional and whose type is producer-determined: the sidecar is authoritative for its (scalar) type, and C2's sidecar↔catalog cross-check guarantees agreement, so the spec pins its name and position but not its type. It is permitted in this slot and **nowhere else** — a `presentation_id` at any other position fails C5 (it displaces a pinned lifecycle column, or lands in the `prop__` block as a non-`prop__` column), so widening this one slot does not weaken the positional check. An `inherit`-strategy kind mirrors `record_id` and adds no column.
 
 **Per-property column type.** Determined by the property's declared Python type per the *Recommended type mapping* table below. Producers MAY use a different mapping if they adhere to the round-trip rules in *Conformance*; the sidecar always reflects the actual type written.
 
-**References-annotated properties.** When a property declares a record-to-record `references` annotation, the renderer emits `prop__<name>` as a single `VARCHAR` column carrying the id portion of the referenced record id (the id only, not the kind). The kind component is redundant with the schema annotation and is exposed via the sidecar's `references` field on the column entry. Producers MUST use this id-only form so downstream tools can equality-join against `records__<references>.record_id` without parsing tuple reprs.
+**References-annotated properties.** When a property declares a record-to-record `references` annotation, the renderer emits `prop__<name>` as a single `VARCHAR` column carrying the id portion of the referenced record id (the id only, not the kind). The kind component is redundant with the schema annotation and is exposed via the sidecar's `references` field on the column entry. Producers MUST use this id-only form so downstream tools can equality-join against `records__<references>.record_id` without parsing tuple reprs. The property additionally carries a `ref_index__<name>` `BIGINT` column resolving the same target through `record_index` rather than `record_id` — see § Dense record index.
+
+### Dense record index
+
+`record_index` exists because `record_id` is opaque — creation order cannot be recovered by comparing or sorting id strings (§ Row order) — and a time-sliced emit would otherwise leave that order unrecoverable. `record_index` materializes creation order as a stable, dense integer that survives slicing, so a consumer gets direct positional access to creation order without re-deriving it.
+
+`record_index` and `ref_index__<name>` are **identity columns**, like `record_id` and `fork_path`: they carry no `temporal_class` and no `history_tracked` attribute in the sidecar. `record_index` is the 0-based ordinal of a record in creation order within its `(fork_path, kind)` — equivalently, the position of its `record_id` in the records table's guaranteed row order (§ Row order), so a consumer can verify it directly. A record keeps the same `record_index` in every emit of its branch: an emit sliced at an earlier `sim_time` drops a creation-order suffix, leaving the remaining indices a dense prefix of the same enumeration, and deactivation never renumbers. `ref_index__<name>` renders the referenced record's `record_index` at the emitted slice.
+
+**`record_index` is dense: no gaps.** For a given `(fork_path, kind)`, `record_index` values exactly cover `0 .. tables[].rows - 1` for that kind's `records__<kind>` table — every integer in range is assigned to exactly one row, none skipped, none repeated. A consumer MAY allocate an array of length `rows` and index it directly by `record_index`.
+
+**`ref_index__<name>` carries no `references` annotation of its own** — the sibling `prop__<name>` column's sidecar `references` field is authoritative for the target kind. A consumer resolves the join as `ref_index__<name>` = `records__<references>.record_index`, where `<references>` is read off that sibling `prop__<name>` column's entry — exactly as `prop__<name>` itself joins against `records__<references>.record_id`. Pair agreement (`ref_index__<name>` and its sibling `prop__<name>` are NULL together and resolve to the same target row) and resolution of `ref_index__<name>` values against `records__<references>.record_index` are producer-guaranteed by construction and not verified by C1–C13 — the same trust class as `prop__<name>` referential integrity against `records__<references>.record_id`.
 
 **`created_sim_time` is the record's immutable creation time.** Position 3 carries the `sim_time` at which the record was created and is set exactly once. It is unaffected by every later content event — a property write and a deactivation both leave it unchanged — and is non-NULL on every row, including write-once fact records (`history_tracked: false`). Consumers MAY use it to bound a record's lifetime from below.
 
-**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 5` — an existing guarantee promoted to contract, not a new field or column.
+**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 6`.
 
 **Row order.** Creation order within kind, lexicographic on kind across kinds — the order in which the producer created each record, preserved by insertion-order iteration. A kind whose records are created through more than one id-minting path (e.g. sequential integer-string ids and hex-digest ids on the same kind) yields rows interleaved by creation time, **not** sorted by `record_id` value. Consumers MUST NOT rely on any sort derived from `record_id` — ids minted by different paths are structurally disjoint, and lexicographic order over the mixed set carries no semantic meaning.
 
@@ -240,7 +251,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 ```json
 {
-  "base_format_version": 5,
+  "base_format_version": 6,
   "branches": [
     {"fork_path": "trunk", "parent": null, "slice_at": 1728000000000000}
   ],
@@ -270,8 +281,8 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `base_format_version` | integer | yes | Format version. Current value: `5`. |
-| `branches` | array | yes | Exactly one entry — a sanitised emit covers a single branch. See § Branch enumeration and runtime anchor. |
+| `base_format_version` | integer | yes | Format version. Current value: `6`. |
+| `branches` | array | yes | Exactly one entry — an emit covers a single branch. See § Branch enumeration and runtime anchor. |
 | `branches[].fork_path` | string | yes | Canonical `@`-joined fork path of the single branch. |
 | `branches[].parent` | string \| null | yes | Parent fork path (the `@`-joined prefix), or `null` for a root branch; the named parent need not be present in the emit. |
 | `branches[].slice_at` | integer | yes | The `sim_time` this branch was sliced at in this emit. |
@@ -295,13 +306,13 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `tables[].columns[].temporal_class` | enum | optional | Point-in-time semantics of a value-carrying column: `"constant"`, `"tracked"`, or `"slice_only"`. Answers *"can I ask what this column's value was at time T?"*. Carried on **exactly** the columns that carry `history_tracked` — a column carries one iff it carries the other. See § Column temporal semantics. |
 | `tables[].rows` | integer | yes | Row count of the table. |
 
-The fields above are the *required* shape at `base_format_version: 5`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 5` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
+The fields above are the *required* shape at `base_format_version: 6`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 6` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
 
 ### Branch enumeration and runtime anchor
 
 `branches` and `runtime` make a known emit interpretable from `base.json` + `run.duckdb` alone — no package import and no companion file.
 
-**`branches`** has exactly one entry — a sanitised emit covers a single branch. `fork_path` is that branch's canonical `@`-joined path; `parent` is the `@`-joined prefix (the path with its last `@`-segment removed) or `null` for a root branch, and the named parent need not be present in the emit (a descendant branch selected at export names a parent that was not carried); `slice_at` is the `sim_time` the branch was sliced at. Every table's `fork_path` equals this branch's `fork_path`.
+**`branches`** has exactly one entry — an emit covers a single branch. `fork_path` is that branch's canonical `@`-joined path; `parent` is the `@`-joined prefix (the path with its last `@`-segment removed) or `null` for a root branch, and the named parent need not be present in the emit (a descendant branch selected at export names a parent that was not carried); `slice_at` is the `sim_time` the branch was sliced at. Every table's `fork_path` equals this branch's `fork_path`.
 
 **`runtime`** is the run's wallclock anchor. `sim_time` is an integer nanosecond offset; converting it to a real datetime requires the run's `timezone` and `start_datetime`:
 
@@ -361,7 +372,7 @@ The block is a nested object `{<kind>: {<property>: [<option>, ...]}}`:
 Closed domains are fixed at run initialization and persisted with the run, so
 every emit derived from the same persisted run carries the
 same registry across `slice_at` choices. Adding
-`enum_domains` is a version-compatible extension at `base_format_version: 5`:
+`enum_domains` is a version-compatible extension at `base_format_version: 6`:
 a reader that does not recognize the key ignores it (unknown top-level fields
 MAY warn but MUST NOT fail). Downstream tools that route per-sub-type read
 `enum_domains[<kind>][<kind>_type]` as the authoritative declared key set.
@@ -416,7 +427,7 @@ actor sub-types, never narrowed to those surviving a slice — this is what keep
 the block slice-stable.
 
 Adding `record_roles` is a version-compatible extension at
-`base_format_version: 5`: it is an optional top-level field a reader that does
+`base_format_version: 6`: it is an optional top-level field a reader that does
 not recognize it ignores (unknown top-level fields MAY warn but MUST NOT fail).
 A generic exporter branches on `record_roles` with no hard-coded kind→role map.
 
@@ -476,7 +487,7 @@ semantics). A presentation property bound to a `tracked` source is itself
 `tracked` — it is re-minted at each change instant of its source, and those mints
 are appended to the `history` table.
 
-**Coverage.** A `base_format_version: 5` emit carries both attributes on every
+**Coverage.** A `base_format_version: 6` emit carries both attributes on every
 records-category `prop__<name>` column, and on every presentation-property column.
 
 **All-or-none across an emit's `prop__` columns.** A producer that emits column
@@ -490,7 +501,7 @@ emit derived from the same persisted run carries the same pair for a given colum
 across `slice_at` choices — matching how `enum_domains` and `pinned_ids` are
 run-level.
 
-**Reader contract.** A reader gating on `base_format_version: 5` reads
+**Reader contract.** A reader gating on `base_format_version: 6` reads
 `temporal_class` directly. On a v4 emit the attribute is **absent and the class is
 unknown**; the reader falls back to `history_tracked` inference and inherits its
 false-negative tail — and cannot distinguish `constant` from `slice_only` at all,
@@ -587,9 +598,12 @@ for each records__K:
     the lifecycle prefix matches
         (created_sim_time, active, deactivated_at, last_mutation_sim_time)
         per the spec, at its (possibly shifted) positions
-    the next P columns are prop__<name> for the P scalar (non-collection-struct)
-        schema-declared properties of K, in declaration order; a collection-struct
-        property is skipped — it has no prop__ column
+    the next column is record_index (BIGINT NOT NULL)
+    the remaining columns are, per the P scalar (non-collection-struct)
+        schema-declared properties of K in declaration order: one prop__<name>
+        column, immediately followed by one ref_index__<name> BIGINT column
+        iff that property is reference-typed; a collection-struct property
+        is skipped — it has no prop__ column
 ```
 
 `presentation_id` is permitted only at column 3 (immediately after `record_id`).
@@ -628,7 +642,7 @@ let sidecar_paths = { branches[*].fork_path }
 require: table_paths == sidecar_paths
 ```
 
-A sanitised emit carries exactly one branch: `branches` has one entry and every row in every table carries that one `fork_path`. The check reduces to: the sole `fork_path` value present in the data equals the sole `branches[].fork_path`. A branch's `parent` field may name a fork path not present in the emit; C8 constrains `fork_path` values only, not `parent` values.
+An emit carries exactly one branch: `branches` has one entry and every row in every table carries that one `fork_path`. The check reduces to: the sole `fork_path` value present in the data equals the sole `branches[].fork_path`. A branch's `parent` field may name a fork path not present in the emit; C8 constrains `fork_path` values only, not `parent` values.
 
 ### C9. Pin surface consistency
 
@@ -697,7 +711,7 @@ for each kind K, value V in record_roles:
         require: V in {"dimension","fact"}
 ```
 
-`emitted_kinds` ranges over `category == "records"` tables only; `membership` tables are reached via `category`, not `record_roles`, and need no separate clause — every membership kind also has a records table, so its role coverage is transitive through the records loop. Every emitted kind is covered by `record_roles`: a sanitised emit carries no machinery kinds, so each records table has a business role. The `actor` object MAY list more sub-types than appear in `records__actor.prop__actor_type` (it lists every declared sub-type); C12 requires coverage, not exactness. C12 is classed with the semantic checks (C6, C7, C9, C10, C11) and is skipped only when `record_roles` is absent — the additive-field guard, mirroring C11's skip.
+`emitted_kinds` ranges over `category == "records"` tables only; `membership` tables are reached via `category`, not `record_roles`, and need no separate clause — every membership kind also has a records table, so its role coverage is transitive through the records loop. Every emitted kind is covered by `record_roles`: each records table's kind carries a business role. The `actor` object MAY list more sub-types than appear in `records__actor.prop__actor_type` (it lists every declared sub-type); C12 requires coverage, not exactness. C12 is classed with the semantic checks (C6, C7, C9, C10, C11) and is skipped only when `record_roles` is absent — the additive-field guard, mirroring C11's skip.
 
 ### C13. Temporal-class consistency
 
@@ -718,9 +732,9 @@ for each prop__<property> column with history_tracked == true (any class):
 
 The structural clauses enforce the attribute pairing (§ Column temporal semantics). The semantic clause enforces the unconditional creation seed (§ `history`): a `history_tracked: true` column MUST have a genesis row at each record's `created_sim_time`, whatever its class — a `constant`-class tracked column holds exactly that one row. Sampling mirrors C6's regime.
 
-C13 reads only `records__<kind>`, `history`, and the sidecar, so it applies **in full to a sanitised emit** — nothing in it is narrowed for this subset. Collection-struct properties emit membership tables rather than history rows and stay outside C13's input set (mirroring C6 and C11).
+C13 reads only `records__<kind>`, `history`, and the sidecar, so it applies **in full to every emit** — nothing in it is narrowed. Collection-struct properties emit membership tables rather than history rows and stay outside C13's input set (mirroring C6 and C11).
 
-A reference Python conformance check ships in `tools/check_published_conformance.py` implementing C1–C13 against any `(emit_dir,)` argument. It checks the sanitised subset described by this document — the clauses here, not the wider set a mechanism-carrying emit answers to. Implementations in other languages that pass C1–C13 are equally conformant.
+A reference Python conformance check, `check_published_conformance.py`, ships in the producer's repository and implements C1–C13 against any `(emit_dir,)` argument. It checks exactly the format described by this document. Implementations in other languages that pass C1–C13 are equally conformant.
 
 ---
 
@@ -730,7 +744,7 @@ A reference Python conformance check ships in `tools/check_published_conformance
 |---|---|---|
 | `base_format_version` | `base.json` | Required tables change, fixed-table column lists change, sidecar schema changes |
 
-**Current version = 5.** This document defines v5. A version bump implies one of:
+**Current version = 6.** This document defines v6. A version bump implies one of:
 - The required-tables set changed (added/removed/renamed tables)
 - A fixed-table required-column list changed
 - The sidecar schema gained a new *required* top-level field
@@ -757,6 +771,8 @@ The `4 → 5` bump is therefore **not** forced by the `temporal_class` column at
 A v4 reader applying v4's inference to a v5 emit is not wrong-but-safe; a v5 reader applying v5's guarantee to a v4 emit will report false violations. The two readings are incompatible, which is what a bump is for.
 
 **Absent-field semantics for v4 emits:** temporal class is *unknown*. A reader falls back to `history_tracked` inference and inherits its documented false-negative tail.
+
+The `5 → 6` bump is forced by two new required columns on every `records__<kind>` table: `record_index` (position 7, every kind) and `ref_index__<name>` (immediately following each reference-typed property's `prop__<name>` column) — a fixed records-prefix and interleaved-block shape a v5 reader keying on the prior positions cannot interpret correctly, and C5's amended positional check. Both are identity columns (§ Dense record index): neither carries `temporal_class` nor `history_tracked`.
 
 A reader MUST gate on `base_format_version` and refuse to interpret an unknown version. No auto-upgrade.
 
