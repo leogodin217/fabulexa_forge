@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fabulexa.example/schemas/base-format-v5.schema.json",
+  "$id": "https://fabulexa.example/schemas/base-format-v6.schema.json",
   "title": "Base Format Sidecar (base.json)",
   "description": "Sidecar manifest enumerating the branches and tables present in a base-layer emit's run.duckdb. Defined by base-format.md, beside this schema.",
   "type": "object",
@@ -9,8 +9,8 @@
   "properties": {
     "base_format_version": {
       "type": "integer",
-      "description": "Format version. v5 = 5. Reader gates on this; unknown versions must be rejected.",
-      "const": 5
+      "description": "Format version. v6 = 6. Reader gates on this; unknown versions must be rejected.",
+      "const": 6
     },
     "branches": {
       "type": "array",
