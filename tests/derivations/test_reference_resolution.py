@@ -11,14 +11,13 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.derivations.reference_resolution import (
     REFERENCE_RESOLUTION_COLUMNS,
     _collect_reference_columns,
@@ -67,6 +66,7 @@ def _build_emit(
     tables: list[dict[str, object]],
     table_rows: dict[str, list[tuple[Any, ...]]],
     col_specs: dict[str, list[dict[str, object]]],
+    schema_valid: bool = True,
 ) -> Path:
     """Build a minimal emit with the given tables, rows, and sidecar."""
     db_path = tmp_path / "run.duckdb"
@@ -80,12 +80,12 @@ def _build_emit(
             conn.execute(f'INSERT INTO "{tname}" VALUES ({placeholders})', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": tables,
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_sidecar(
+        tmp_path,
+        tables=tables,
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        schema_valid=schema_valid,
+    )
     return tmp_path
 
 
@@ -538,6 +538,10 @@ def _build_membership_emit(
             "membership__team__members": _MEM_COLS,
             "records__team": owner_cols,
         },
+        # The membership table spec omits record_kind (fixture content, unchanged
+        # by migration); the vendored schema requires it, so this fixture is
+        # schema-invalid by construction.
+        schema_valid=False,
     )
 
 
@@ -623,6 +627,10 @@ def test_build_membership_edge_sql_bigint_where_predicate_cast(tmp_path: Path) -
             "membership__team__members": mem_cols,
             "records__team": owner_cols,
         },
+        # The membership table spec omits record_kind (fixture content, unchanged
+        # by migration); the vendored schema requires it, so this fixture is
+        # schema-invalid by construction.
+        schema_valid=False,
     )
     with open_emit(emit_dir) as emit:
         sql = build_membership_edge_sql(

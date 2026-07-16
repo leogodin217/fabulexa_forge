@@ -15,7 +15,6 @@ Covers:
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -24,8 +23,8 @@ from unittest.mock import AsyncMock
 import duckdb
 import pytest
 import yaml
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.cli import _parse_join_flag, cmd_mixer, main
 from fabulexa_forge.errors import KafkaConsumeError, KafkaDeliveryError
 
@@ -82,14 +81,9 @@ def _build_minimal_emit(tmp_path: Path) -> Path:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "runtime": {
-            "start_datetime": "2026-01-01T00:00:00+00:00",
-            "timezone": "UTC",
-        },
-        "tables": [
+    _write_sidecar(
+        emit_dir,
+        tables=[
             {
                 "name": "records__actor",
                 "category": "records",
@@ -104,8 +98,14 @@ def _build_minimal_emit(tmp_path: Path) -> Path:
                 "rows": 1,
             },
         ],
-    }
-    (emit_dir / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra={
+            "runtime": {
+                "start_datetime": "2026-01-01T00:00:00+00:00",
+                "timezone": "UTC",
+            },
+        },
+    )
     return emit_dir
 
 
@@ -418,10 +418,9 @@ def test_no_resolvable_anchor_exits_1(
     conn.execute(_ddl("history", _HISTORY_COLS))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        emit_dir,
+        tables=[
             {
                 "name": "records__actor",
                 "category": "records",
@@ -436,8 +435,8 @@ def test_no_resolvable_anchor_exits_1(
                 "rows": 0,
             },
         ],
-    }
-    (emit_dir / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
 
     config_path = tmp_path / "config.yaml"
     _write_stream_config(config_path)

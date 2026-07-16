@@ -11,14 +11,13 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
+from _support.sidecar_builder import write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
@@ -115,16 +114,15 @@ def _build_records_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity", "records", entity_cols, 3, record_kind="entity"
             )
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -160,17 +158,16 @@ def _build_history_point_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__journey", "records", entity_cols, 1, record_kind="journey"
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 3),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -204,10 +201,9 @@ def _build_scd2_with_valid_to_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -217,8 +213,8 @@ def _build_scd2_with_valid_to_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 3),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -248,10 +244,9 @@ def _build_scd2_no_valid_to_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -261,8 +256,8 @@ def _build_scd2_no_valid_to_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 2),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -299,16 +294,15 @@ def _build_ordinal_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity", "records", entity_cols, 3, record_kind="entity"
             )
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 

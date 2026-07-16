@@ -6,10 +6,10 @@ and virtual column behavior (lead_sim_time).
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
+from _support.sidecar_builder import write_emit
 
 from exporters._emit_fixtures import (
     _create_ddl,
@@ -17,7 +17,6 @@ from exporters._emit_fixtures import (
     build_no_runtime_emit,
     build_test_emit,
 )
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
@@ -116,10 +115,9 @@ def _build_history_interval_emit(
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__journey_instance",
                 "records",
@@ -129,12 +127,14 @@ def _build_history_interval_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, len(history_rows)),
         ],
-        "runtime": {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            }
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path
 
 
@@ -844,10 +844,9 @@ def _build_typed_predicate_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity",
                 "records",
@@ -864,8 +863,8 @@ def _build_typed_predicate_emit(tmp_path: Path) -> Path:
                 property_name="roles",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 

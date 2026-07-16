@@ -23,7 +23,7 @@ drained detection, labels, and staging apply identically to either mode. Streami
 wire into the same driver when they land.
 
 ```
-emit (run.duckdb + base.json @ v4)
+emit (run.duckdb + base.json @ v5)
    │  (reader: Emit + Sidecar; trunk-only — sole branch)
    │  anchor: the one EffectiveAnchor cmd_export resolves (see anchor.md)
    ▼

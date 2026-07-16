@@ -7,10 +7,10 @@ NULL rows, ambiguous). Also verifies FkTargetIsDim and history-grain FK NULL.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
+from _support.sidecar_builder import write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.config.models import (
@@ -118,8 +118,6 @@ def build_reference_chain_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -195,10 +193,9 @@ def build_reference_chain_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec("records__actor", "records", _ACTOR_COLUMNS, 2, "actor"),
             _table_spec(
                 "records__journey_instance",
@@ -220,8 +217,8 @@ def build_reference_chain_emit(tmp_path: Path) -> Path:
                 "bindings",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -233,8 +230,6 @@ def build_ambiguous_emit(tmp_path: Path) -> Path:
     This creates two paths from decision to actor, making the FK ambiguous.
     """
     import duckdb
-
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -256,10 +251,9 @@ def build_ambiguous_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec("records__actor", "records", _ACTOR_COLUMNS, 1, "actor"),
             _table_spec(
                 "records__journey_instance",
@@ -276,8 +270,8 @@ def build_ambiguous_emit(tmp_path: Path) -> Path:
                 "decision",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -760,8 +754,6 @@ def build_typed_membership_emit(tmp_path: Path) -> Path:
     """Emit with actor + membership that has a BIGINT elem__ column."""
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -797,10 +789,9 @@ def build_typed_membership_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec("records__actor", "records", _ACTOR_COLUMNS, 2, "actor"),
             _table_spec(
                 "records__decision", "records", _DECISION_COLUMNS, 2, "decision"
@@ -814,8 +805,8 @@ def build_typed_membership_emit(tmp_path: Path) -> Path:
                 "bindings",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -912,8 +903,6 @@ def build_surrogate_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -968,10 +957,9 @@ def build_surrogate_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _ACTOR_SURROGATE_COLUMNS, 2, "actor"
             ),
@@ -994,8 +982,8 @@ def build_surrogate_emit(tmp_path: Path) -> Path:
                 "bindings",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -1255,8 +1243,6 @@ def build_pit_membership_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -1332,10 +1318,9 @@ def build_pit_membership_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__owner", "records", _OWNER_SURROGATE_COLUMNS, 2, "owner"
             ),
@@ -1359,8 +1344,8 @@ def build_pit_membership_emit(tmp_path: Path) -> Path:
                 "holders",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -1754,8 +1739,6 @@ def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -1790,10 +1773,9 @@ def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _ACTOR_SURROGATE_COLUMNS, 2, "actor"
             ),
@@ -1809,8 +1791,8 @@ def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
                 "bindings",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 

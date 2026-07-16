@@ -8,13 +8,13 @@ flag-absent emits refused, and total ORDER BY.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
@@ -123,10 +123,9 @@ def _build_scd2_emit(
 
     conn.close()
 
-    sidecar: dict = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -136,8 +135,8 @@ def _build_scd2_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 

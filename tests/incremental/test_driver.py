@@ -5,12 +5,12 @@ Uses tmp_path for all IO. Builds minimal emits inline.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Literal
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit
 
 from exporters.source._source_fixtures import (
     build_day_scale_source_emit,
@@ -18,7 +18,6 @@ from exporters.source._source_fixtures import (
     build_windowed_source_test_emit,
     windowed_test_windows,
 )
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import ExportConfig
 from fabulexa_forge.errors import (
@@ -103,10 +102,9 @@ def _build_emit(tmp_path: Path, slice_at: int = 300) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": slice_at}],
-        "tables": [
+    write_emit(
+        emit_dir,
+        tables=[
             {
                 "name": "records__entity",
                 "category": "records",
@@ -121,8 +119,8 @@ def _build_emit(tmp_path: Path, slice_at: int = 300) -> Path:
                 "rows": 3,
             },
         ],
-    }
-    (emit_dir / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": slice_at}],
+    )
     return emit_dir
 
 
@@ -531,10 +529,9 @@ def test_duckdb_empty_window_is_emitted(tmp_path: Path) -> None:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 300}],
-        "tables": [
+    write_emit(
+        emit_dir,
+        tables=[
             {
                 "name": "records__entity",
                 "category": "records",
@@ -543,8 +540,8 @@ def test_duckdb_empty_window_is_emitted(tmp_path: Path) -> None:
                 "record_kind": "entity",
             }
         ],
-    }
-    (emit_dir / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300}],
+    )
 
     config = _simple_config()
     out = tmp_path / "wh.duckdb"

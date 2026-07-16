@@ -138,17 +138,75 @@ semantic ones deliberately. This is the list of what "them" means:
 | Row-level determinism | Same (`master_seed` + scenario + `code_versions`) → identical rows in identical order. Binary bytes of `run.duckdb` are *not* stable — compare rows, never files. |
 | Monotonic time | `sim_time` never decreases along the change log's total order. |
 | Referential integrity | Reference columns resolve within the emit's scope; the producer guards scope closure at emit time. |
+| Unconditional creation seed | Every `history_tracked: true` property of every record carries a `history` row at that record's `created_sim_time` (NULL-valued when the property was absent at creation) — see § Column temporal classes below. |
+| History↔records property naming | Every `history` row's `property` names a `prop__<property>` column on `records__<kind>`, presentation sub-picks included; `history` introduces no property without a corresponding records column. |
 | Actor identity across forks | The same `(kind, record_id)` in two branches is the same logical individual — identical intrinsic properties (arrival, demographics, identity draws); only consequences downstream of the divergent config differ. |
 | Trunk row-identity | Rows recorded before a fork point are identical across sibling branches. |
 | Complete history | Every state row is reachable from simulated events in `history`; nothing was fabricated mid-process. |
 
-**Conformance is narrower than the guarantee set.** C1–C12 verifies structure
+**Conformance is narrower than the guarantee set.** C1–C13 verifies structure
 and a semantic subset; a defect such as a dangling records-property reference
-passes C1–C12 by design (see
+passes C1–C13 by design (see
 [`conformance.md`](conformance.md) § Boundaries). The guarantees above hold by
 construction in the emit, not because `fabulexa-forge validate` proves them. Design consequence: an exporter may *lean on* these properties
 (e.g. skip dangling-reference handling) but must not claim to have *verified*
 them.
+
+---
+
+## Column temporal classes and the genesis guarantee
+
+Every value-carrying `prop__<name>` column on a records-category table declares a
+pair of temporal attributes in the sidecar — `history_tracked` (the SCD-class flag)
+and `temporal_class` (the point-in-time contract). The pairing is structural: a
+column carries one iff it carries the other, and `presentation_id` carries neither.
+C13 judges the pairing and the classes' implications; the reader carries the
+declared values verbatim and narrows them in one accessor
+([`reader.md`](reader.md) § Per-column temporal semantics).
+
+| `temporal_class` | Value at horizon T (T ≥ `created_sim_time`) | Modelled as |
+|---|---|---|
+| `constant` | the current value — exact at every T | read `records__<kind>.prop__<name>` |
+| `tracked` | exact | an ordered lookup over `history` |
+| `slice_only` | **unknowable** | nothing in the emit can answer it |
+
+`tracked` implies `history_tracked: true`; `slice_only` implies
+`history_tracked: false`; `constant` admits either — a constant column that is also
+history-tracked holds exactly its genesis row. The class is never derived from the
+bit: a `history_tracked: false` column may be genuinely constant *or* mutable with
+an untracked past, and only the declared class separates a value that is exact at
+every horizon from one whose past is unknowable.
+
+**The genesis guarantee (the unconditional creation seed).** Every
+`history_tracked: true` property of every record carries a `history` row at that
+record's `created_sim_time` — NULL-valued when the property was absent at creation.
+Consequences:
+
+- An empty as-of lookup over `history` for a flagged property means exactly
+  `T < created_sim_time` — never "created NULL, never changed", never "the value
+  lives only in `records__`".
+- A NULL-valued `history` row means the value was genuinely NULL at that time (NULL
+  is a legal history-entry value — `contract/base-format.md` § `history`); it
+  round-trips through C6 as NULL-against-NULL.
+- Zero `history` rows for a flagged column of a kind with extant records is a
+  conformance violation (C11's converse clause — see
+  [`conformance.md`](conformance.md)).
+
+**Presentation columns are history-tracked.** Every presentation column carries
+`history_tracked: true` — class `tracked` when its bound source is tracked,
+otherwise `constant`; a presentation column is never `slice_only`
+(`contract/base-format.md` § Column temporal semantics → *Which columns carry the
+pair*). Together with the unconditional seed, `history` carries a genesis row for
+every flagged property of every record, presentation sub-picks included — so a
+change-log genre, an SCD-2 dimension, and a CDC stream all see presentation values
+version like any other tracked value, and a kind whose only genuinely-changing
+column is a presentation value renders as a change log
+([`source.md`](source.md) § Classification).
+
+**What the emit does not say.** A genesis row's value may be an intrinsic birth
+value or a truncated as-of initial condition whose real history predates the run.
+The contract carries no marker distinguishing them, and this package stays silent
+on the distinction rather than guessing.
 
 ---
 
@@ -201,9 +259,12 @@ separate emit:
 - An optional `presentation_id` surrogate occupies the slot right after
   `record_id` (only when a non-`inherit` `presentation_id` strategy minted one; its
   scalar type is producer-determined, the sidecar authoritative). It is a valid FK
-  `target_key` for a dimension.
-- Presentation properties (and each sub-pick `prop__<name>_<key>`) are type-1
-  (`history_tracked: false`).
+  `target_key` for a dimension. It carries neither temporal attribute.
+- Presentation properties (and each sub-pick `prop__<name>_<key>`) are
+  `history_tracked: true` — class `tracked` when bound to a tracked source,
+  otherwise `constant`, never `slice_only` (§ Column temporal classes above). Each
+  carries at least its genesis `history` row; a `tracked` one versions like any
+  other tracked value.
 
 There is no separate "projected emit", no sidecar `projection` block, and no
 emit-level projection flag: presentation, when present, is just more
@@ -219,6 +280,6 @@ column into an output.
 |---|---|
 | [`../../contract/base-format.md`](../../contract/base-format.md) + `.schema.json` | The normative emit shape this doc deliberately does not restate |
 | [`reader.md`](reader.md) | The one read path; typed sidecar accessors incl. `record_roles` |
-| [`conformance.md`](conformance.md) | C1–C12 and its boundaries (what validate does *not* prove) |
+| [`conformance.md`](conformance.md) | C1–C13 and its boundaries (what validate does *not* prove) |
 | [`anchor.md`](anchor.md) | Effective-anchor resolution; time rebasing |
 | [`../CLAUDE.md`](../CLAUDE.md) | Boundary, principles, vocabulary |

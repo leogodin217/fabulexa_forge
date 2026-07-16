@@ -31,10 +31,10 @@ from pathlib import Path
 import duckdb
 import pytest
 import yaml
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from exporters.source._source_fixtures import build_day_scale_source_emit
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.cli import cmd_export, main
 from fabulexa_forge.config.models import (
     ColumnDecl,
@@ -70,16 +70,15 @@ def build_single_branch_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 200}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _ACTOR_COLUMNS, 1, record_kind="actor"
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 200}],
+    )
     return tmp_path
 
 
@@ -91,19 +90,18 @@ def build_two_branch_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__actor", _ACTOR_COLUMNS))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [
-            {"fork_path": "trunk", "parent": None, "slice_at": 0},
-            {"fork_path": "trunk@branch_a", "parent": "trunk", "slice_at": 50},
-        ],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _ACTOR_COLUMNS, 0, record_kind="actor"
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[
+            {"fork_path": "trunk", "parent": None, "slice_at": 0},
+            {"fork_path": "trunk@branch_a", "parent": "trunk", "slice_at": 50},
+        ],
+    )
     return tmp_path
 
 
@@ -293,22 +291,21 @@ def build_runtime_emit(tmp_path: Path, start_datetime: str, timezone_str: str) -
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [
-            {"fork_path": "trunk", "parent": None, "slice_at": 200_000_000_000}
-        ],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _ACTOR_COLUMNS, 1, record_kind="actor"
             ),
         ],
-        "runtime": {
-            "timezone": timezone_str,
-            "start_datetime": start_datetime,
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 200_000_000_000}],
+        extra={
+            "runtime": {
+                "timezone": timezone_str,
+                "start_datetime": start_datetime,
+            },
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path
 
 
@@ -615,10 +612,9 @@ def build_incremental_emit(tmp_path: Path, slice_at: int = 250) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": slice_at}],
-        "tables": [
+    _write_sidecar(
+        emit_dir,
+        tables=[
             {
                 "name": "records__entity",
                 "category": "records",
@@ -627,8 +623,8 @@ def build_incremental_emit(tmp_path: Path, slice_at: int = 250) -> Path:
                 "record_kind": "entity",
             }
         ],
-    }
-    (emit_dir / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": slice_at}],
+    )
     return emit_dir
 
 
@@ -1151,10 +1147,15 @@ def build_source_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 200}],
-        "tables": [
+    extra: dict[str, object] = {"record_roles": {"location": "dimension"}}
+    if with_runtime:
+        extra["runtime"] = {
+            "timezone": "UTC",
+            "start_datetime": "2024-01-01T00:00:00+00:00",
+        }
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__location",
                 "records",
@@ -1163,14 +1164,9 @@ def build_source_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
                 record_kind="location",
             ),
         ],
-        "record_roles": {"location": "dimension"},
-    }
-    if with_runtime:
-        sidecar["runtime"] = {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
-        }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 200}],
+        extra=extra,
+    )
     return tmp_path
 
 

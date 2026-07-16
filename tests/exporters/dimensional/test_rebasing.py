@@ -14,12 +14,12 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
+from _support.sidecar_builder import write_emit
 
 from exporters._emit_fixtures import (
     _create_ddl,
@@ -27,7 +27,6 @@ from exporters._emit_fixtures import (
     build_no_runtime_emit,
     build_test_emit,
 )
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
@@ -108,23 +107,24 @@ def build_scd2_emit(tmp_path: Path, runtime_block: dict[str, str] | None) -> Pat
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [
-            {"fork_path": "trunk", "parent": None, "slice_at": 100_000_000_000}
-        ],
-        "tables": [
+    extra: dict[str, object] = {"enum_domains": {"actor": {}}}
+    if runtime_block is not None:
+        extra["runtime"] = runtime_block
+
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _ACTOR_SCD2_COLUMNS, 1, record_kind="actor"
             ),
             _table_spec("history", "fixed", _SCD2_HISTORY_COLUMNS, 2),
         ],
-        "enum_domains": {"actor": {}},
-    }
-    if runtime_block is not None:
-        sidecar["runtime"] = runtime_block
-
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100_000_000_000}],
+        extra=extra,
+        # enum_domains.actor is deliberately {} (no domain values declared for
+        # this fixture) — the vendored schema requires a non-empty object here.
+        schema_valid=False,
+    )
     return tmp_path
 
 

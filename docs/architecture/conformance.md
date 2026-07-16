@@ -1,4 +1,4 @@
-# Conformance (C1–C12)
+# Conformance (C1–C13)
 
 **Status:** Implemented. Code is the contract — see
 [`conformance.py`](../../src/fabulexa_forge/reader/conformance.py),
@@ -9,9 +9,9 @@
 `validate`, `run_check`, `CheckResult`, `ConformanceReport`.
 
 `validate(emit)` assesses whether a base-layer emit conforms to the base-format
-contract, running the twelve checks C1–C12 against an opened [`Emit`](reader.md). It
+contract, running the thirteen checks C1–C13 against an opened [`Emit`](reader.md). It
 reimplements the conformance procedure independently of the producer's
-reference conformance checker — reading the **vendored** v4 JSON Schema and querying the
+reference conformance checker — reading the **vendored** v5 JSON Schema and querying the
 already-open DuckDB connection — so that passing the producer's reference checker and
 passing this one are independent facts that must agree. `validate` is the one place
 in the export package that *distrusts* the emit. The CLI verb
@@ -19,10 +19,10 @@ in the export package that *distrusts* the emit. The CLI verb
 depends on nothing outside the vendored `contract/`.
 
 ```
-open_emit(emit_dir) ─► Emit ─► validate(emit) ─► ConformanceReport (C1..C12)
+open_emit(emit_dir) ─► Emit ─► validate(emit) ─► ConformanceReport (C1..C13)
                                                        │
    contract/base-format.schema.json (vendored, C1) ───┤
-   run.duckdb catalog + data (Emit.query, C2–C12) ────┘
+   run.duckdb catalog + data (Emit.query, C2–C13) ────┘
 ```
 
 ---
@@ -31,17 +31,17 @@ open_emit(emit_dir) ─► Emit ─► validate(emit) ─► ConformanceReport (
 
 | Module | Owns |
 |---|---|
-| [`conformance.py`](../../src/fabulexa_forge/reader/conformance.py) | `validate`, `run_check`, `CheckResult`, `ConformanceReport`, the twelve checks, the pinned spec (PS) column lists, the `to_csv_text` codec, identifier quoting |
-| [`_schema.py`](../../src/fabulexa_forge/reader/_schema.py) | Loads the vendored v4 JSON Schema from package data (the C1 input); reads only the vendored `contract/`, no other tree |
+| [`conformance.py`](../../src/fabulexa_forge/reader/conformance.py) | `validate`, `run_check`, `CheckResult`, `ConformanceReport`, the thirteen checks, the pinned spec (PS) column lists, the `to_csv_text` codec, identifier quoting |
+| [`_schema.py`](../../src/fabulexa_forge/reader/_schema.py) | Loads the vendored v5 JSON Schema from package data (the C1 input); reads only the vendored `contract/`, no other tree |
 | [`cli.py`](../../src/fabulexa_forge/cli.py) | `fabulexa-forge validate` — the thin verb over `open_emit` → `validate` → report → exit code |
 
 ## Boundary
 
 - **Input.** An `Emit` already opened — and therefore version-gated — by `open_emit`.
-- **Output.** A `ConformanceReport`: exactly twelve `CheckResult`s in C1..C12 order.
+- **Output.** A `ConformanceReport`: exactly thirteen `CheckResult`s in C1..C13 order.
 - **Reads.** The vendored `contract/base-format.schema.json` (package data) for C1;
   the DuckDB catalog (`information_schema`) and row data through `Emit.query` for
-  C2–C12.
+  C2–C13.
 - **Forbidden imports.** The producer's reference conformance checker and codec are
   references read at design time, never dependencies. Matching the producer's checker and codec
   is a conformance requirement, not a code dependency.
@@ -52,7 +52,7 @@ open_emit(emit_dir) ─► Emit ─► validate(emit) ─► ConformanceReport (
 
 Diagnosing a non-conformant emit is `validate`'s whole job, so a conformance failure
 is always a failing `CheckResult` in the report, never a raised error. `validate`
-returns exactly twelve `CheckResult`s in C1..C12 order and never raises a
+returns exactly thirteen `CheckResult`s in C1..C13 order and never raises a
 conformance-attributable error; `run_check` obeys the same rule for the single check
 it runs. `RunDatabaseError` is reserved for a `run.duckdb` that cannot be read at all
 (which `open_emit` already surfaces) and never arises from sidecar↔catalog
@@ -60,7 +60,7 @@ disagreement on an already-open connection.
 
 **C2 owns catalog↔sidecar agreement.** Any sidecar-declared table *or column* absent
 from `run.duckdb` — or any catalog object the sidecar omits — is a C2 failure. Every
-*other* data-reading check (C6, C7, C8, C9, C10, C11, C12) first confirms via the
+*other* data-reading check (C6, C7, C8, C9, C10, C11, C12, C13) first confirms via the
 DuckDB catalog that each table **and column** it will read is present; an object a check reads
 *opportunistically* but finds absent is excluded from that check's comparison,
 recorded in its `skips`, and never queried. The one exception is an object a check
@@ -114,18 +114,18 @@ decode direction is documented as the reader's contract — see [`reader.md`](re
 
 ### C1 and the unknown-top-level carve-out
 
-C1 validates `Sidecar.raw` against the vendored v4 JSON Schema. The vendored contract
+C1 validates `Sidecar.raw` against the vendored v5 JSON Schema. The vendored contract
 contradicts itself here: the schema sets top-level `additionalProperties: false`,
 while the prose (§ Format versioning) says an unknown optional top-level field "MAY
 warn but MUST NOT fail". C1 resolves the contradiction in favor of the prose and the
 version gate — an *unknown top-level* field is recorded in C1's `skips` (a warning),
 not a C1 failure; an unknown key *nested* inside a known object (branch, table,
 column, runtime — all `additionalProperties: false`) still fails C1. The carve-out is
-narrow because the gate already accepts only `base_format_version == 4` and the prose
-declares a new optional top-level field a version-compatible extension, so a v4.x
-producer that adds one is not rejected by a v4 reader.
+narrow because the gate already accepts only `base_format_version == 5` and the prose
+declares a new optional top-level field a version-compatible extension, so a producer
+that adds one within the version is not rejected by this reader.
 
-`record_roles` is a *known* top-level property of the vendored v4 schema, so C1
+`record_roles` is a *known* top-level property of the vendored v5 schema, so C1
 validates it directly and it never reaches the carve-out. The carve-out governs only
 genuinely unknown future top-level fields.
 
@@ -149,11 +149,11 @@ direct validation of the unmodified schema and drops step 1.
 
 ### The checks
 
-`validate` runs twelve checks. Their assertions and independent-implementation notes:
+`validate` runs thirteen checks. Their assertions and independent-implementation notes:
 
 | Check | What it asserts | Implementation notes |
 |---|---|---|
-| C1 | `base.json` validates against the v4 JSON Schema | `jsonschema.validate` of `Sidecar.raw` against the **vendored** schema; unknown *top-level* field → warning in `skips`, not a failure (above) |
+| C1 | `base.json` validates against the v5 JSON Schema | `jsonschema.validate` of `Sidecar.raw` against the **vendored** schema; unknown *top-level* field → warning in `skips`, not a failure (above) |
 | C2 | DuckDB catalog (table set, column order+types, row counts) matches the sidecar | `information_schema` introspection; compare to `TableSpec`/`ColumnSpec` **by ordinal position** (name + normalized-literal type — uppercase then collapse internal whitespace; DuckDB type synonyms are **not** reconciled and nullability is **not** compared, both per the contract) and `count(*)` vs `TableSpec.rows`. Existence is checked before count, so a phantom table/column is a C2 failure, not a raised error. Column comparison is cardinality-strict — unequal length names the surplus/missing column, never zip-truncates |
 | C3 | Required tables present; table names well-formed per category | `history` is the only required fixed-category table; `records__<kind>` and `membership__<kind>__<property>` name composition matches `record_kind`/`property`. A required-but-`None` `record_kind`/`property` is a name-composition mismatch → C3 fails |
 | C4 | `history` cols 1–6 match the spec exactly (names + types + order) | vs the pinned spec (PS) — the single place spec column lists are restated, solely to check |
@@ -163,8 +163,9 @@ direct validation of the unmodified schema and drops step 1.
 | C8 | Exactly one branch, and the single distinct `fork_path` across all tables equals that branch's | `branches` has exactly one entry; the union of distinct `fork_path` per table equals the single sidecar `fork_path`; `parent` is **not** constrained |
 | C9 | If `pinned_ids` present: each `(kind,label,id)` resolves to exactly one row per `(id × fork_path present in that table)` | exhaustive over `pinned_ids`; per-branch quantifier. An absent `records__<kind>` for a pinned kind is a C9 *failure* — a pin must resolve |
 | C10 | Membership integrity | `left_sim_time IS NULL OR left_sim_time >= joined_sim_time`; each non-NULL member reference resolves to **some** row in `records__<member_kind>` on the same `fork_path`, by identity (regardless of `active`) |
-| C11 | `history_tracked` validity (semantic check, classed with C6/C7/C10) | For each distinct `(kind, property)` pair in `history`, the `prop__<property>` column on `records__<kind>` must carry `history_tracked == true` in the sidecar. Skips when no records-category `prop__` column carries `history_tracked` (flag predates C11 or emit produced before the flag was introduced); iterates pairs in sorted order for deterministic messages. |
+| C11 | `history_tracked` validity, **bidirectional** (semantic check, classed with C6/C7/C10) | Forward clause: for each distinct `(kind, property)` pair in `history`, the `prop__<property>` column on `records__<kind>` must carry `history_tracked == true` in the sidecar. Converse clause: for each `records__<kind>` with at least one row, each `prop__` column flagged `history_tracked: true` has at least one `history` row for `(kind, property)` — zero rows violates the unconditional creation seed (see [`bundle.md`](bundle.md) § Column temporal classes). The converse consults only flagged columns whose declared type is round-trippable (`{BIGINT, DOUBLE, BOOLEAN, VARCHAR}`, the same gate C6 uses — collection-struct properties emit membership tables, not `history` rows); the forward clause needs no gate. Skips when no records-category `prop__` column carries `history_tracked`; iterates in sorted order for deterministic messages |
 | C12 | Record-role registry consistency (semantic check, classed with C6/C7/C9/C10/C11) | every emitted records-category kind appears in `record_roles`; every role value is in `{"dimension","fact"}`; every distinct `prop__actor_type` in `records__actor` data is declared in `record_roles["actor"]`. Coverage, not exactness — the `actor` object MAY declare unused sub-types. Skips when `record_roles` is absent (below) |
+| C13 | Temporal-class consistency: the attribute pairing, the enum, the implications, and the genesis row (below) | Structural clauses over every records-category `prop__` column: `history_tracked` present **iff** `temporal_class` present; a present class is one of the three declared values; `tracked` implies flag `true`; `slice_only` implies flag `false`. Semantic clause: every flagged property of every record has its genesis `history` row at that record's own `created_sim_time` — **exhaustive** where the published procedure samples up to ten records. Skips on the same guard as C11 |
 
 The full algorithms are the check functions in
 [`conformance.py`](../../src/fabulexa_forge/reader/conformance.py); the negative- and
@@ -200,6 +201,39 @@ sub-type clause records a skip (C2 owns the catalog↔sidecar disagreement) whil
 kind-coverage still runs from the sidecar; if `records__actor` is present but holds
 zero rows the sub-type clause passes by vacuity — a pass, not a skip.
 
+### C13 — temporal-class consistency
+
+C13 skips — recording the skip and passing by vacuity — when no records-category
+`prop__` column carries `history_tracked`, the same published additive-field guard
+C11 uses. Past the version gate the guard is unreachable against a producer-written
+v5 emit (v5 puts the attribute pair on every value-carrying column), and it is
+retained so the checker is a correct standalone implementation of the published
+procedure, guard included.
+
+The **structural clauses** run over every records-category `prop__` column:
+`history_tracked` is present **iff** `temporal_class` is present; a present class is
+one of the three declared values; `tracked` implies `history_tracked: true`;
+`slice_only` implies `history_tracked: false`. The vendored schema enum-constrains a
+*present* class value — an out-of-enum declaration therefore fails C1 as well — but
+does not enforce the pairing; the pairing clauses are C13's alone.
+
+The **semantic clause** asserts the genesis row: for every `prop__` column flagged
+`history_tracked: true` (any class) and every record of that kind, `history` carries
+a row for `(kind, record_id, property)` at that record's own `created_sim_time`.
+`record_id` is part of the match — a rowless record does not pass because a sibling
+of the same kind shares its `created_sim_time` (the published pseudocode's
+`(kind, property)` shorthand is scoped inside its per-record loop; the full key is
+what is matched). Collection-struct properties stay outside the semantic clause's
+input set, excluded by the same round-trippable-type gate C6 and C11's converse use
+(`{BIGINT, DOUBLE, BOOLEAN, VARCHAR}`); their changes emit membership tables, not
+`history` rows. The structural clauses have no `history` side and run ungated.
+
+**Exhaustive where the procedure samples.** The published procedure requires a
+sample of up to ten records; C13's genesis clause checks every record — the same
+strictness choice C6 makes (the contract permits it: "exhaustive checking is the
+consumer's choice"), and an exhaustive pass needs no sample-selection rule, keeping
+`validate` deterministic.
+
 ### Comparison sources
 
 Every check compares a fixed pair of artifacts; naming both sides removes the
@@ -225,8 +259,9 @@ ambiguity of "matches the spec". The five sources:
 | C8 | DB-data distinct `fork_path` + SC `branches` cardinality | SC `branches[].fork_path` | exactly one branch; `parent` not constrained |
 | C9 | SC `pinned_ids` | DB-data records rows | one row per `(id × branch)`; absent table for a pinned kind → fail |
 | C10 | DB-data membership | DB-data records existence | reference resolution by identity |
-| C11 | SC `ColumnSpec.history_tracked` | DB-data `history` `(kind, property)` pairs | for each pair in `history`, sidecar must flag `prop__<property>` on `records__<kind>` as `history_tracked == true`; skip when no records `prop__` column carries the flag |
+| C11 | SC `ColumnSpec.history_tracked` | DB-data `history` `(kind, property)` pairs | forward: each pair in `history` is sidecar-flagged; converse: each flagged round-trippable column of a non-empty kind has ≥ 1 `history` row; skip when no records `prop__` column carries the flag |
 | C12 | SC `record_roles` + SC `category == "records"` kinds | DB-data distinct `records__actor.prop__actor_type` | kind coverage; role values in `{"dimension","fact"}`; actor sub-type coverage; skip when `record_roles` absent |
+| C13 | SC `ColumnSpec.{history_tracked, temporal_class}` | the contract's pairing/enum/implication clauses; DB-data `history` genesis rows vs `records__<kind>.created_sim_time` | pairing iff; enum; implications; a genesis row per `(kind, record_id, property)`, exhaustive over records; skip on C11's guard |
 
 **C4/C5 read the sidecar, not the catalog.** They check that `base.json`'s declared
 fixed/records columns match the contract (PS); C2 separately checks that the live
@@ -250,7 +285,7 @@ report → exit code.
 
 | Condition | Result |
 |---|---|
-| All of C1–C12 pass | print per-check PASS summary (with any skips noted); exit 0 |
+| All of C1–C13 pass | print per-check PASS summary (with any skips noted); exit 0 |
 | Any check fails | print the failing checks + messages (and any skips); exit non-zero |
 | `open_emit` raises (missing files, bad JSON, unsupported version, bad structure, unreadable DB) | print the reader error; exit non-zero |
 
@@ -259,20 +294,21 @@ a scenario. `fabulexa-forge validate` is its only user surface.
 
 ## Invariants
 
-1. **Conformance independence.** `validate` reproduces C1–C12 (and the `to_csv_text`
+1. **Conformance independence.** `validate` reproduces C1–C13 (and the `to_csv_text`
    codec for C6) from the vendored spec alone. Passing the producer's reference checker
    and passing this one are independent facts that must agree.
 2. **Single coupling.** No dependency on the bundle's producer; the vendored
    `contract/` is the only coupling. The producer's reference conformance checker and
    codec are references read at design time, never imported.
-3. **Total and never-raising.** `validate` returns exactly twelve `CheckResult`s in
-   C1..C12 order. A conformance failure is a failing `CheckResult`, never an
+3. **Total and never-raising.** `validate` returns exactly thirteen `CheckResult`s in
+   C1..C13 order. A conformance failure is a failing `CheckResult`, never an
    exception; only an operational failure (an unreadable `run.duckdb`) raises
    `RunDatabaseError`. Data-reading checks probe the catalog before querying, so a
    sidecar↔catalog disagreement is a C2 failure plus skips, never a raised error.
-4. **Exhaustive and deterministic.** C6 checks every `history` series rather than a
-   sample, so the reader's determinism invariant holds without inventing a sample
-   size.
+4. **Exhaustive and deterministic.** C6 checks every `history` series and C13's
+   genesis clause checks every record rather than a sample, so the reader's
+   determinism invariant holds without inventing a sample size or a
+   sample-selection rule.
 
 ## Rationale
 
@@ -294,20 +330,21 @@ a scenario. `fabulexa-forge validate` is its only user surface.
 
 ## Boundaries
 
-- **C1–C12 is the entire base-format conformance contract — and it is narrower than
+- **C1–C13 is the entire base-format conformance contract — and it is narrower than
   the producer's full QA suite.** It does not assert duplicate-tick suppression or
-  records-prop reference integrity; C1–C12 resolves references only for *membership*
-  tables (C10), not records props. A defect outside C1–C12 — a duplicate
+  records-prop reference integrity; C1–C13 resolves references only for *membership*
+  tables (C10), not records props. A defect outside C1–C13 — a duplicate
   `(…, sim_time)` history row, a dangling `records__*.prop__*` reference — *passes*
   `validate` by design. Those deeper guarantees belong to the producer's separate QA
   tooling, not the bundle conformance contract; a checker for them would be a separate
   checker, not an extension of `validate`.
-- **C11 (`history_tracked` validity) IS reimplemented** (semantic check, classed with
-  C6/C7/C10). It skips when no records-category `prop__` column carries
-  `history_tracked` — emits that predate the flag pass automatically. Consumers (the
-  dimensional exporter) *read* `history_tracked` through the reader on an emit they
-  trust to be conformant (as they trust C1–C12), and C11 is the check that warrants
-  that trust. The producer's deeper QA guarantees remain out of scope.
+- **C11 and C13 (the temporal-attribute checks) ARE reimplemented** (semantic checks,
+  classed with C6/C7/C10). Both skip when no records-category `prop__` column carries
+  `history_tracked` — the published additive-field guard. Consumers (the dimensional
+  exporter's tracked-vs-static split, the source exporter's genre predicate) *read*
+  the temporal pair through the reader on an emit they trust to be conformant (as
+  they trust C1–C13), and C11/C13 are the checks that warrant that trust. The
+  producer's deeper QA guarantees remain out of scope.
 - **Decode direction of the codec.** Conformance needs the *encode* direction only;
   the per-type decode contract is the reader's — see [`reader.md`](reader.md).
 
@@ -316,7 +353,8 @@ a scenario. `fabulexa-forge validate` is its only user surface.
 | Document | Why |
 |---|---|
 | [`reader.md`](reader.md) | The `Emit`/`Sidecar` surface every check reads through; the decode-direction codec contract |
-| [`../../contract/base-format.md`](../../contract/base-format.md) § Conformance procedure | The vendored conformance procedure this reimplements (C1–C12), and § Format versioning behind the C1 carve-out |
-| [`../../contract/base-format.schema.json`](../../contract/base-format.schema.json) | The vendored v4 JSON Schema C1 validates against |
+| [`../../contract/base-format.md`](../../contract/base-format.md) § Conformance procedure | The vendored conformance procedure this reimplements (C1–C13), and § Format versioning behind the C1 carve-out |
+| [`../../contract/base-format.schema.json`](../../contract/base-format.schema.json) | The vendored v5 JSON Schema C1 validates against |
+| [`bundle.md`](bundle.md) | Consumer-side orientation — the column temporal classes and the genesis guarantee C11/C13 judge |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles, the isolation boundary, vocabulary |

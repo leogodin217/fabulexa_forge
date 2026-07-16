@@ -8,6 +8,8 @@ import json
 from pathlib import Path
 
 import pytest
+from _support.sidecar_builder import UNSUPPORTED_VERSION_SENTINEL
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader import (
@@ -36,9 +38,7 @@ def test_missing_emit_dir_raises(tmp_path: Path) -> None:
 
 def test_missing_run_duckdb_raises(tmp_path: Path) -> None:
     """An emit_dir with base.json but no run.duckdb raises EmitNotFoundError."""
-    (tmp_path / "base.json").write_text(
-        json.dumps(_minimal_sidecar()), encoding="utf-8"
-    )
+    _write_sidecar(tmp_path, tables=_minimal_sidecar()["tables"])  # type: ignore[arg-type]
     with pytest.raises(EmitNotFoundError):
         open_emit(tmp_path)
 
@@ -80,8 +80,12 @@ def test_unsupported_version_raises_before_db_open(tmp_path: Path) -> None:
     """A base_format_version: 99 emit raises UnsupportedBaseFormatVersionError
     before any DuckDB open (version gate precedes structure and DB open).
     """
-    sidecar = _minimal_sidecar(base_format_version=99)
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_sidecar(
+        tmp_path,
+        tables=_minimal_sidecar()["tables"],  # type: ignore[arg-type]
+        base_format_version=UNSUPPORTED_VERSION_SENTINEL,
+        schema_valid=False,
+    )
     # Write garbage bytes for run.duckdb — if the DB were opened first, this would
     # produce RunDatabaseError. Getting UnsupportedBaseFormatVersionError confirms
     # the gate runs before the DB open.

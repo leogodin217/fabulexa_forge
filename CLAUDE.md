@@ -8,7 +8,7 @@ downstream consumer of Fabulexa composite base-layer emits; its **only** couplin
 the vendored bundle contract in `contract/`.
 
 ```
-base-layer emit (run.duckdb + base.json @ base_format_version 4)
+base-layer emit (run.duckdb + base.json @ base_format_version 5)
         │
         ▼
    base reader  ──▶ exporters  (dimensional / source / streaming / base)
@@ -34,7 +34,7 @@ per-branch slices) is a deliberately deferred later stage. See
 ## The boundary (non-negotiable)
 
 The **only** input is two files per emit — `run.duckdb` + `base.json` — at
-`base_format_version: 4`, defined by `contract/base-format.md` +
+`base_format_version: 5`, defined by `contract/base-format.md` +
 `contract/base-format.schema.json` (vendored copies of the base-format spec).
 
 - **The bundle + `contract/` is the only interface.** This package carries no

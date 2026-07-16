@@ -8,14 +8,13 @@ row counts for every table (including 0-row tables), idempotent re-run
 from __future__ import annotations
 
 import csv
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
@@ -105,10 +104,9 @@ def _build_export_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -125,11 +123,13 @@ def _build_export_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 2),
         ],
-        "enum_domains": {
-            "journey_instance": {"entity_type": ["type_a", "type_b"]},
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+        extra={
+            "enum_domains": {
+                "journey_instance": {"entity_type": ["type_a", "type_b"]},
+            }
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path
 
 

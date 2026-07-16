@@ -6,11 +6,11 @@ In-memory fixtures supplement where the pre-built set lacks a specific variant.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader import (
@@ -37,24 +37,47 @@ from ._fixtures_build import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+_SIDECAR_TOP_LEVEL_KEYS = frozenset({"base_format_version", "branches", "tables"})
+
 
 def _write_emit(
     dest: Path,
     sidecar: dict[str, object],
     db_setup: dict[str, list[dict[str, object]]] | None = None,
+    *,
+    schema_valid: bool = True,
 ) -> Path:
     """Write a minimal emit (base.json + run.duckdb) into dest.
+
+    The base.json write is delegated to `_support.sidecar_builder.write_emit` —
+    the sole sidecar authority; this helper decomposes `sidecar` into that
+    function's tables/branches/extra/base_format_version components and keeps
+    only the run.duckdb construction local.
 
     Args:
         dest: Directory to write into.
         sidecar: The base.json dict.
         db_setup: Mapping of {table_name: columns_list} for tables to create.
+        schema_valid: Forwarded to sidecar_builder.write_emit. False for the
+            deliberately schema-invalid negative fixtures.
 
     Returns:
         dest path.
     """
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    extra = {
+        key: value
+        for key, value in sidecar.items()
+        if key not in _SIDECAR_TOP_LEVEL_KEYS
+    }
+    _write_sidecar(
+        dest,
+        tables=sidecar["tables"],  # type: ignore[arg-type]
+        branches=sidecar.get("branches"),  # type: ignore[arg-type]
+        extra=extra or None,
+        base_format_version=sidecar.get("base_format_version"),  # type: ignore[arg-type]
+        schema_valid=schema_valid,
+    )
     db_path = dest / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     if db_setup:
@@ -77,7 +100,6 @@ def _minimal_sidecar(
         },
     ]
     return {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
         "tables": tables if tables is not None else default_tables,
     }
@@ -172,6 +194,7 @@ class TestC1:
             tmp_path / "c1_unknown_top",
             sidecar,
             {"history": list(_HISTORY_COLUMNS)},
+            schema_valid=False,
         )
         with open_emit(dest) as emit:
             result = run_check(emit, "C1")
@@ -190,6 +213,7 @@ class TestC1:
             tmp_path / "c1_nested_unknown",
             sidecar,
             {"history": list(_HISTORY_COLUMNS)},
+            schema_valid=False,
         )
         with open_emit(dest) as emit:
             result = run_check(emit, "C1")
@@ -419,6 +443,7 @@ class TestC3:
                 "history": list(_HISTORY_COLUMNS),
                 "records__actor": list(_RECORDS_ACTOR_COLUMNS),
             },
+            schema_valid=False,
         )
         with open_emit(dest) as emit:
             result = run_check(emit, "C3")
@@ -460,6 +485,7 @@ class TestC3:
                 "history": list(_HISTORY_COLUMNS),
                 "membership__actor__appointments": membership_cols,
             },
+            schema_valid=False,
         )
         with open_emit(dest) as emit:
             result = run_check(emit, "C3")

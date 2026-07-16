@@ -9,15 +9,15 @@
 
 The foundation every exporter and corrupter reads through. `open_emit(emit_dir)`
 opens a base-layer emit (`run.duckdb` + `base.json`), version-gates it to
-`base_format_version` 4, parses the sidecar into typed handles, and opens the single
+`base_format_version` 5, parses the sidecar into typed handles, and opens the single
 sanctioned read-only query surface over `run.duckdb`. It depends on nothing outside
 the vendored [`contract/`](../../contract/base-format.md) — that is the only
-coupling. Conformance assessment (C1–C12) is a separate surface that reads through
+coupling. Conformance assessment (C1–C13) is a separate surface that reads through
 this one — see [`conformance.md`](conformance.md).
 
 ```
 open_emit(emit_dir)
-   ├─ base.json  ─► JSON parse ─► version gate (== 4) ─► structural floor ─► Sidecar
+   ├─ base.json  ─► JSON parse ─► version gate (== 5) ─► structural floor ─► Sidecar
    └─ run.duckdb ─► read-only DuckDB connection
                                                         └─► Emit (Sidecar + Emit.query)
 ```
@@ -29,14 +29,14 @@ open_emit(emit_dir)
 | Module | Owns |
 |---|---|
 | [`emit.py`](../../src/fabulexa_forge/reader/emit.py) | `open_emit`, the `Emit` handle (`query` row-tuples, `query_arrow` columnar, `close`, context manager), the read-only DuckDB open |
-| [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) | `Sidecar` and its frozen descriptors `ColumnSpec` / `TableSpec` / `BranchEntry` / `RuntimeAnchor`; the typed `RecordRoles` registry view + `Sidecar.record_roles()`; the per-column `history_tracked` flag + `history_tracked_available()`; the version gate + structural floor (`Sidecar.from_raw`) |
+| [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) | `Sidecar` and its frozen descriptors `ColumnSpec` / `TableSpec` / `BranchEntry` / `RuntimeAnchor`; the typed `RecordRoles` registry view + `Sidecar.record_roles()`; the per-column temporal pair — the `history_tracked` flag + `history_tracked_available()`, the `TemporalClass` literal, and the `Sidecar.temporal_class()` accessor (the single narrowing point); the version gate + structural floor (`Sidecar.from_raw`) |
 | [`relations.py`](../../src/fabulexa_forge/reader/relations.py) | The faithful-read SQL builders (`build_records_relation_sql`, `build_history_relation_sql`, `build_membership_relation_sql`) and the faithful introspection helper `distinct_prop_values` — the reader's compose-time surface, the sole faithful namer of base tables |
 | [`errors.py`](../../src/fabulexa_forge/reader/errors.py) | The reader error hierarchy — operational/structural failures only |
 
 ## Boundary
 
 - **Input.** A directory holding `run.duckdb` + `base.json` at `base_format_version`
-  4. Extra entries in the directory are ignored — the gate checks the two required
+  5. Extra entries in the directory are ignored — the gate checks the two required
   artifacts are present, not that they are the directory's only contents (an emit may
   sit inside a bundle alongside sibling files).
 - **Output.** An open `Emit`: a typed `Sidecar` plus a read-only DuckDB connection.
@@ -60,15 +60,16 @@ room the negative fixtures need.
 The open sequence and what each step rejects is the [Validation Rules](#validation-rules)
 table below. Two ordering guarantees are normative:
 
-- **The version gate precedes the structural parse.** A future v5 sidecar may carry
-  new required fields a v4 structural parse would choke on; gating first guarantees
-  the error a human sees is "unsupported version 5", never an opaque structural
-  complaint about a field that only exists in a version the reader does not support.
+- **The version gate precedes the structural parse.** A future-version sidecar may
+  carry new required fields the structural parse would choke on; gating first
+  guarantees the error a human sees is "unsupported version N", never an opaque
+  structural complaint about a field that only exists in a version the reader does
+  not support.
 - **A malformed `base_format_version` is a structure error, not a version error.**
   `UnsupportedBaseFormatVersionError` is reserved for a well-formed integer version
   the reader does not support; an absent or non-integer version is a malformed
   sidecar (`SidecarStructureError`). "Integer" is the strict test
-  `isinstance(v, int) and not isinstance(v, bool)` — a JSON float (`4.0`), a boolean,
+  `isinstance(v, int) and not isinstance(v, bool)` — a JSON float (`5.0`), a boolean,
   a string, or `null` all route to `SidecarStructureError`. `found_version` is
   therefore always a genuine `int`.
 
@@ -103,6 +104,7 @@ learns what exists by reading the `Sidecar`:
 | Author label → minted record id? | `Sidecar.pinned_ids()` (`{kind: {label: id}}`; empty when absent) |
 | Allowed values for a closed-domain property? | `Sidecar.enum_domains()` (`{kind: {prop: (opt,…)}}`; empty when absent) |
 | Is a kind sub-typed, and into which sub-types? | `Sidecar.subtype_values(kind)` (the `<kind>_type` domain in declaration order; `()` when not sub-typed) |
+| What is a column's point-in-time class? | `Sidecar.temporal_class(table, column)` — the single narrowing point; raises rather than infers (§ Per-column temporal semantics) |
 
 Field shapes of the descriptors and accessors are the dataclass and method
 definitions in [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) — that is
@@ -262,19 +264,56 @@ materialization belongs to the dimensional exporter, the first consumer that nee
 `membership__*` rows carry explicit `joined_sim_time` / `left_sim_time`, so no `LEAD`
 is needed there; the reader exposes them as-is.
 
-### Per-column `history_tracked` (SCD class)
+### Per-column temporal semantics: `history_tracked` and `temporal_class`
 
-`ColumnSpec.history_tracked` carries the contract's per-column SCD-class flag (C11):
-`True` for a type-2 column (priors recoverable from `history`), `False` for type-1
-(current value only), and `None` when the emit predates the flag. It is all-or-none per
-emit — present on every records-category `prop__<name>` column or on none — so
-`Sidecar.history_tracked_available()` reports presence by inspecting any column. The
-reader exposes the flag and the accessor; C11 conformance validation — whether the flag
-assignment is consistent with `history` contents — is `validate`'s concern, not the
-reader's. The dimensional exporter reads the flag to split tracked-vs-static columns
-purely from the sidecar; a flag-absent emit is refused at validation rather than
+Every value-carrying records column declares a pair of temporal attributes
+(see [`bundle.md`](bundle.md) § Column temporal classes for what the classes mean):
+
+- `ColumnSpec.history_tracked` — the SCD-class flag (C11): `True` for a type-2
+  column (priors recoverable from `history`), `False` for type-1 (current value
+  only), `None` when the column declares no flag.
+  `Sidecar.history_tracked_available()` reports presence by inspecting any column.
+- `ColumnSpec.temporal_class` — the column's declared point-in-time class. The field
+  is `str | None`, **deliberately not** enum-typed: the sidecar's declared value is
+  carried **verbatim**, neither validated nor coerced at parse. The reader reads,
+  conformance judges — C13's enum clause must be able to *see* an out-of-enum
+  declared value, and `validate` reads through the reader, so a parse-time rejection
+  (or a coerce-to-`None`) would hide the very defect `validate` exists to report.
+
+The narrowing from the verbatim string to the typed `TemporalClass` literal
+(`"constant" | "tracked" | "slice_only"`) happens in exactly one place:
+`Sidecar.temporal_class(table_name, column_name)`. Every surface that needs a class
+(the source exporter's genre predicate — see [`source.md`](source.md)) resolves
+through it, so any holder of a sidecar resolves a class without an open connection.
+The accessor raises `TemporalClassUnavailableError` for a column with no usable
+class — three cases, distinguished in the message: the column carries neither
+temporal attribute (a structural, identity, or membership column — conformant, but
+with no temporal semantics to ask about); it declares `history_tracked` but no
+`temporal_class` (non-conformant, C13); or it declares a value outside the
+three-class enum (non-conformant — C13's enum clause, and C1, since the vendored
+schema enum-constrains the value). The non-conformant messages direct the caller to
+`fabulexa-forge validate`.
+
+**Never inferred.** A column that declares no class has no class. Deriving a class
+from `history_tracked` is precisely the fiction the class attribute exists to
+delete — a `history_tracked: false` column may be genuinely constant *or* mutable
+with an unknowable past, and only the declared class distinguishes them. A surface
+that needs a class refuses rather than guessing.
+
+**No class gate at open.** `open_emit` does not refuse an emit whose `prop__`
+columns carry no `temporal_class`, nor one whose declared class is outside the enum;
+the sidecar model carries the declared value verbatim. Refusing at open would make
+`fabulexa-forge validate` unable to *diagnose* the very emit you would reach for it
+with, since validate reads through the reader. The reader reads, conformance judges
+(C11, C13), and the modes refuse what they cannot answer honestly.
+
+The dimensional exporter reads the flag to split tracked-vs-static columns purely
+from the sidecar; a flag-absent emit is refused at validation rather than
 reconstructed by `history`-table inference (see [`dimensional.md`](dimensional.md)
-§ SCD-2 wide reconstruction).
+§ SCD-2 wide reconstruction). Signatures and the exact error taxonomy are the
+definitions in [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) and
+[`errors.py`](../../src/fabulexa_forge/reader/errors.py)
+(`TemporalClassUnavailableError`, `ColumnNotFoundError`).
 
 ### Determinism and row order
 
@@ -294,9 +333,12 @@ imposes no implicit ordering.
    `ORDER BY`.
 2. **Version-gating.** Any `base_format_version` ≠ `SUPPORTED_BASE_FORMAT_VERSION` is
    refused at `open_emit` with `UnsupportedBaseFormatVersionError`. No auto-upgrade,
-   no best-effort read. The reader imports
+   no best-effort read, no dual-version support. The supported version appears as a
+   literal exactly once —
    [`fabulexa_forge.SUPPORTED_BASE_FORMAT_VERSION`](../../src/fabulexa_forge/__init__.py)
-   as the single source of truth; `4` is never re-declared in the reader.
+   — and every other site, the test tree included, imports it (see
+   [`README.md`](README.md) § Inputs and fixtures for the fixture-side half of this
+   invariant).
 3. **Integrity-preservation.** The reader opens `run.duckdb` read-only and never
    writes `base.json`; it fabricates nothing and surfaces exactly what the sidecar
    and DuckDB contain. It is the faithful foundation on which the exporter "reshape,
@@ -319,7 +361,7 @@ imposes no implicit ordering.
 |---|---|---|
 | 1. Locate | `emit_dir`, `run.duckdb`, or `base.json` missing | `EmitNotFoundError` |
 | 2. JSON parse | `base.json` is not valid JSON | `SidecarParseError` |
-| 3. Version gate | `base_format_version` is a present integer ≠ 4 | `UnsupportedBaseFormatVersionError(found_version=…)` — no auto-upgrade |
+| 3. Version gate | `base_format_version` is a present integer ≠ `SUPPORTED_BASE_FORMAT_VERSION` (5) | `UnsupportedBaseFormatVersionError(found_version=…)` — no auto-upgrade |
 | 4. Structural floor | `base_format_version` absent or non-integer; or a required floor field absent/mis-typed (branches a non-empty list; tables a list; each table has `name`/`category`/`columns`/`rows`; each column object has `name`/`type`; each branch has `fork_path`/`parent`/`slice_at`, `parent` present and `str` or `null`) | `SidecarStructureError` |
 | 5. Open DuckDB | `run.duckdb` present but not a readable DuckDB database | `RunDatabaseError` |
 | else | all of the above pass | an open `Emit` |
@@ -337,10 +379,18 @@ never reader errors — they are failing `CheckResult`s (see
   fail to construct. Splitting them lets the negative fixtures open and be diagnosed,
   and lets a caller open a known-good emit without paying for a full conformance pass
   every time.
-- **Version-gate before structural parse.** A v5 sidecar may add required fields a v4
-  parse rejects. Gating first guarantees the human-facing error is "unsupported
-  version 5", the actionable message, not an opaque structural complaint about a
-  field that exists only in an unsupported version.
+- **Version-gate before structural parse.** A newer-version sidecar may add required
+  fields the current parse rejects. Gating first guarantees the human-facing error is
+  "unsupported version N", the actionable message, not an opaque structural complaint
+  about a field that exists only in an unsupported version.
+- **The class is carried verbatim and narrowed in one place.** Typing
+  `ColumnSpec.temporal_class` to the enum — or rejecting an out-of-enum value at
+  parse — would make a C13-non-conformant emit unreadable, and `validate` reads
+  through the reader. Carrying the declared string verbatim and narrowing it only in
+  `Sidecar.temporal_class()` keeps diagnosis possible while giving every consumer a
+  single typed resolution point with a uniform refusal
+  (`TemporalClassUnavailableError`) instead of scattered `history_tracked`-based
+  guesses.
 - **One query primitive, not a query builder.** The dimensional and source exporters
   need real SQL — `LEAD` window functions for implicit intervals, equality joins on
   references. A constrained builder would be torn down immediately. `Emit.query`
@@ -391,14 +441,21 @@ What the reader deliberately does not own:
 - **Timestamp rebasing.** The reader exposes `RuntimeAnchor`; mapping `sim_time`
   through the anchor to wallclock is a downstream exporter concern.
 - **Conformance assessment.** The reader *opens*; assessing whether an emit conforms
-  (C1–C12) is [`conformance.md`](conformance.md)'s surface, which reads through the
+  (C1–C13) is [`conformance.md`](conformance.md)'s surface, which reads through the
   `Emit` this reader produces.
+- **Class policy.** The reader *resolves* a column's class; what a consumer does with
+  it is that consumer's contract. The genre predicate that consults the class is the
+  source exporter's ([`source.md`](source.md)); a policy that refuses or omits a
+  `slice_only` column from an export, or a point-in-time fold that leans on the
+  genesis guarantee, belongs to the mode or derivation that owns the output shape.
 
 ## Related
 
 | Document | Why |
 |---|---|
-| [`conformance.md`](conformance.md) | The C1–C12 conformance contract that reads through this reader |
+| [`conformance.md`](conformance.md) | The C1–C13 conformance contract that reads through this reader |
+| [`bundle.md`](bundle.md) | Consumer-side orientation to the format — the column temporal classes and the genesis guarantee the temporal accessors surface |
+| [`source.md`](source.md) | The genre predicate — the first consumer of `Sidecar.temporal_class` |
 | [`derivations.md`](derivations.md) | The interpretive layer that composes the faithful-read builders — the home for reads that reconstruct versions or resolve references |
 | [`dimensional.md`](dimensional.md) | The first reshaping consumer — uses `query_arrow`, the `history_tracked` flag, and the faithful-read builders |
 | [`corrupters.md`](corrupters.md) | The base-emit-writing consumer — materializes every table via `query_arrow`, reads column metadata and reference targets from the `Sidecar`, and reuses the single-branch guard |

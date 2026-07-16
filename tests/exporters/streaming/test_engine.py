@@ -6,7 +6,6 @@ cover all conditions from the Phase 3 spec.
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -14,8 +13,8 @@ from zoneinfo import ZoneInfo
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     MembershipSelection,
@@ -128,10 +127,9 @@ def _build_single_kind_emit(
             {"fork_path": "trunk@alt", "parent": "trunk", "slice_at": 100},
         ]
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": branches,
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 f"records__{kind}",
                 "records",
@@ -141,8 +139,8 @@ def _build_single_kind_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=branches,
+    )
     return tmp_path
 
 
@@ -180,10 +178,9 @@ def _build_two_kind_emit(
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 f"records__{kind_a}",
                 "records",
@@ -200,8 +197,8 @@ def _build_two_kind_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -802,16 +799,15 @@ def _build_single_membership_emit(
         conn.execute(f'INSERT INTO "{table_name}" VALUES ({placeholders})', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec_membership(
                 table_name, mem_cols, len(mem_rows), owner_kind, property_name
             )
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -844,10 +840,9 @@ def _build_two_membership_emit(
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec_membership(
                 table_a, cols_a, len(rows_a), owner_kind_a, property_a
             ),
@@ -855,8 +850,8 @@ def _build_two_membership_emit(
                 table_b, cols_b, len(rows_b), owner_kind_b, property_b
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -1426,12 +1421,11 @@ class TestMembershipResolvable:
         # Build emit with NO membership tables
         db_path = tmp_path / "run.duckdb"
         duckdb.connect(str(db_path)).close()
-        sidecar: dict[str, object] = {
-            "base_format_version": SUPPORTED_VERSION,
-            "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-            "tables": [],
-        }
-        (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        _write_sidecar(
+            tmp_path,
+            tables=[],
+            branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        )
 
         config = _make_membership_config([("queue", "waiters", [])])
         with open_emit(tmp_path) as emit:

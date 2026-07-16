@@ -5,14 +5,13 @@ Each condition from the design doc's condition table gets a test.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.derivations.versioned_intervals import (
     VERSIONED_INTERVAL_COLUMNS,
     build_versioned_intervals_sql,
@@ -98,10 +97,9 @@ def _build_emit(
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 f"records__{kind}",
                 "records",
@@ -111,8 +109,8 @@ def _build_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -364,15 +362,14 @@ class TestErrors:
         conn.execute(_ddl("history", _HISTORY_COLS))
         conn.close()
 
-        sidecar: dict[str, object] = {
-            "base_format_version": SUPPORTED_VERSION,
-            "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-            "tables": [
+        _write_sidecar(
+            tmp_path,
+            tables=[
                 _table_spec("history", "fixed", _HISTORY_COLS, 0),
                 # records__item intentionally absent
             ],
-        }
-        (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+            branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        )
 
         with open_emit(tmp_path) as emit:
             with pytest.raises(TableNotFoundError):

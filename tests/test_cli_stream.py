@@ -23,9 +23,9 @@ from unittest.mock import patch
 import duckdb
 import pytest
 import yaml
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from exporters.streaming._helpers import _membership_table_spec
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.cli import cmd_stream, main
 from fabulexa_forge.exporters.streaming.types import StreamOutcome
 
@@ -113,10 +113,9 @@ def _build_spanning_emit(tmp_path: Path) -> Path:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _RECORD_COLS, 2, record_kind="actor"
             ),
@@ -125,8 +124,8 @@ def _build_spanning_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, 4),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -1294,10 +1293,9 @@ def _build_membership_emit(tmp_path: Path) -> Path:
     conn.execute(f'CREATE TABLE "membership__team__members" ({cols_ddl2})')
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        emit_dir,
+        tables=[
             _membership_table_spec(
                 "membership__queue__waiters",
                 _WAITERS_COLS,
@@ -1309,8 +1307,8 @@ def _build_membership_emit(tmp_path: Path) -> Path:
                 "membership__team__members", _MEMBERS_COLS, 0, "team", "members"
             ),
         ],
-    }
-    (emit_dir / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return emit_dir
 
 

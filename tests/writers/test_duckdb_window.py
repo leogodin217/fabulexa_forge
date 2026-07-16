@@ -11,13 +11,12 @@ Verifies:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
@@ -86,10 +85,9 @@ def _build_scd2_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             {
                 "name": "records__actor",
                 "category": "records",
@@ -104,8 +102,8 @@ def _build_scd2_emit(tmp_path: Path) -> Path:
                 "rows": 3,
             },
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -133,10 +131,9 @@ def _build_fact_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             {
                 "name": "records__entity",
                 "category": "records",
@@ -145,8 +142,8 @@ def _build_fact_emit(tmp_path: Path) -> Path:
                 "record_kind": "entity",
             },
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 

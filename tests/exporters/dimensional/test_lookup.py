@@ -11,11 +11,11 @@ SELECT expression projects <alias>."resolved".
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
@@ -611,15 +611,14 @@ def _build_lookup_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec("records__actor", "records", _ACTOR_COLS, 2, "actor"),
             _table_spec("history", "fixed", _HIST_COLS, 4),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -1125,15 +1124,14 @@ def _build_temporal_emit(tmp_path: Path, name_tracked: bool) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec("records__actor", "records", actor_cols, 1, "actor"),
             _table_spec("history", "fixed", hist_cols, 1),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -1259,10 +1257,9 @@ def _build_mixed_fk_lookup_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec("records__actor", "records", actor_cols, 2, "actor"),
             _table_spec(
                 "records__journey_instance",
@@ -1272,8 +1269,8 @@ def _build_mixed_fk_lookup_emit(tmp_path: Path) -> Path:
                 "journey_instance",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 

@@ -16,14 +16,13 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_emit_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.cli import cmd_init, main
 
 # ---------------------------------------------------------------------------
@@ -95,9 +94,22 @@ _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
 # ---------------------------------------------------------------------------
 
 
+_SIDECAR_TOP_LEVEL_KEYS = frozenset({"base_format_version", "branches", "tables"})
+
+
 def _write_sidecar(tmp_path: Path, sidecar: dict[str, object]) -> None:
-    """Write the sidecar JSON file to tmp_path."""
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    """Write the sidecar JSON file to tmp_path via the canonical sidecar writer."""
+    extra = {
+        key: value
+        for key, value in sidecar.items()
+        if key not in _SIDECAR_TOP_LEVEL_KEYS
+    }
+    _write_emit_sidecar(
+        tmp_path,
+        tables=sidecar["tables"],  # type: ignore[arg-type]
+        branches=sidecar.get("branches"),  # type: ignore[arg-type]
+        extra=extra or None,
+    )
 
 
 def _base_sidecar(
@@ -106,7 +118,6 @@ def _base_sidecar(
 ) -> dict[str, object]:
     """Build a minimal sidecar dict with optional record_roles."""
     result: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 200}],
         "tables": tables,
     }

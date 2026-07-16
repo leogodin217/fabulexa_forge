@@ -11,10 +11,10 @@ doc owns the design and build order.
 |---|---|
 | [`bundle.md`](bundle.md) | The input, understood — consumer-side orientation to the bundle: where emit data comes from, table-genre semantics, inherited guarantees, mechanism vs presentation columns, single-branch facts. Informational companion to the vendored contract |
 | [`reader.md`](reader.md) | The base reader — open + version-gate an emit, expose the typed sidecar, the row-tuple + columnar query surfaces, the faithful-read SQL builders (the sole faithful namer of base tables) |
-| [`conformance.md`](conformance.md) | C1–C12 conformance — `validate` / `fabulexa-forge validate`, the independent codec, comparison sources |
+| [`conformance.md`](conformance.md) | C1–C13 conformance — `validate` / `fabulexa-forge validate`, the independent codec, comparison sources |
 | [`derivations.md`](derivations.md) | The derivations layer — interpretive shared folds between the reader and the modes; the versioned-intervals, reference-resolution, row-state-events, membership-events, and state-at residents, the layer contract (purity / anti-weld / traceability / temporal honesty), the single-branch guard |
 | [`dimensional.md`](dimensional.md) | The dimensional exporter — `mode: dimensional` star-schema reshape (config grammar, grains, FK pathfind, `lookup` enrichment, SCD-2, writers, `export` / `init`) |
-| [`source.md`](source.md) | The source exporter — `mode: source` operational-dump reshape: the genre trichotomy classifying every table (change-log / reference / transaction / junction) from `record_roles` × `history_tracked`, the untracked-only sub-type split, operational presentation defaults, the mandatory wallclock anchor, `exclude`/`rename` escape hatches, corrupt→source composition, the cross-mode incremental driver's per-genre window membership, and `change_delivery: snapshot` (periodic full-table snapshots composing the derivations layer's state-at fold) |
+| [`source.md`](source.md) | The source exporter — `mode: source` operational-dump reshape: the genre trichotomy classifying every table (change-log / reference / transaction / junction) from `record_roles` × `temporal_class`, the untracked-only sub-type split, operational presentation defaults, the mandatory wallclock anchor, `exclude`/`rename` escape hatches, corrupt→source composition, the cross-mode incremental driver's per-genre window membership, and `change_delivery: snapshot` (periodic full-table snapshots composing the derivations layer's state-at fold) |
 | [`streaming.md`](streaming.md) | The streaming exporter — the `fabulexa-forge stream` delivery driver: two content axes — `state-changes` (`history` replayed as an ordered `c`/`u`/`d` CDC stream) and `membership-events` (the `membership__<K>__<p>` interval tables unpivoted into an ordered `join`/`leave` stream) — over the content × format × sink model (`StreamConfig`, cross-source merge + global `seq`, Python-side `ts` rendering, `jsonl` + `debezium` formats to stdout, per-topic files, or a Kafka broker — the `kafka` sink with topic pre-creation, `record_id` keying, and CLI/config/env bootstrap resolution). Composes the derivations row-state-events and membership-events folds and the streaming-routing surface |
 | [`streaming-routing.md`](streaming-routing.md) | The streaming routing surface — the two-layer partition of the `seq`-stamped event stream into topics: a per-content Layer A route-attribute derivation (`route_table` from the record spine for `state-changes`, from the `(owner_kind, property)` identity for `membership-events`), the content-agnostic Layer B policy (`RoutingConfig` — `topic_template`, `groups`, `table_identity`), `types` sub-type selection, declared-but-empty topics, the Debezium `table_identity` masquerade, and the routing validation rules |
 | [`streaming-pacing.md`](streaming-pacing.md) | The streaming pacing surface — realtime delivery of the `seq`-stamped event stream so a finished run replays as a live feed: clock resolution (`ClockConfig` × `--speed` / `--idle-cap` / `--fast`, CLI-wins-per-knob), the drift-free release schedule keyed on `event_sim_time`, paced per-line-flush sink delivery, and the timing-only / determinism invariants. A post-merge timing overlay composed by the streaming driver |
@@ -47,10 +47,10 @@ Stage-3 mode (`base`) and later stages are planned.
 
 | Module | Role | Status |
 |---|---|---|
-| `reader/` | The foundation. Open an emit, parse + version-gate `base.json`, expose typed tables/branches/runtime/pins/enum_domains/record_roles, and run conformance C1–C12. The one path every exporter/corrupter reads through. See [`reader.md`](reader.md) + [`conformance.md`](conformance.md). | Implemented (Stage 1) |
+| `reader/` | The foundation. Open an emit, parse + version-gate `base.json`, expose typed tables/branches/runtime/pins/enum_domains/record_roles and the per-column temporal pair (`history_tracked` + the `temporal_class` accessor), and run conformance C1–C13. The one path every exporter/corrupter reads through. See [`reader.md`](reader.md) + [`conformance.md`](conformance.md). | Implemented (Stage 1) |
 | `derivations/` | Interpretive shared folds between the reader and the modes. Pure SQL, anti-weld signatures (sidecar + plain values), one canonical raw relation each. Five residents — `history` → versioned-intervals, reference-resolution (reference-path · membership-edge), `history` → row-state-events (per-record `c`/`u`/`d`), `membership__<K>__<p>` → membership-events (`join`/`leave`), and `history` + `records__<kind>` → state-at (point-in-time row reconstruction); owns the single-branch guard. See [`derivations.md`](derivations.md). | Implemented (Stage 3) — five residents |
 | `exporters/` | Base → different shape. One sub-package per mode, plus two mode-neutral modules (`query_spec.py` — the shared compiled-table shape and full-export write dispatch; `reserved_names.py` — the shared bookkeeping-name check). `dimensional` (Stage 2), `streaming` (Stage 3), and `source` (Stage 3) ship; `base` is planned. The `streaming` mode includes the two-layer routing surface (`streaming/routing.py`). See [`dimensional.md`](dimensional.md), [`source.md`](source.md), [`streaming.md`](streaming.md), [`streaming-routing.md`](streaming-routing.md). | `dimensional`, `streaming` + `source` implemented; `base` planned (Stage 3) |
-| `corrupters/` | Base → broken base. The engine (`corrupt_emit`), the seeded selection surface (five-way table-selector resolution, pattern column matching, uniform + placement-weighted samplers), the `Corrupter` operation registry (`null_cells` / `mutate_cells` / `duplicate_rows` / `delete_rows` / `insert_rows` / `schema_drift` / `dangle_reference` / `mispoint_reference` / `freeze_series` / `drop_events` / `shift_sim_time`), the base-emit writer, and the defect manifest (`build_defect_manifest`, `defects.json`) — breaking C6/C7/C9–C12 while preserving C1–C5/C8 by construction. See [`corrupters.md`](corrupters.md). | Implemented (Stage 4) |
+| `corrupters/` | Base → broken base. The engine (`corrupt_emit`), the seeded selection surface (five-way table-selector resolution, pattern column matching, uniform + placement-weighted samplers), the `Corrupter` operation registry (`null_cells` / `mutate_cells` / `duplicate_rows` / `delete_rows` / `insert_rows` / `schema_drift` / `dangle_reference` / `mispoint_reference` / `freeze_series` / `drop_events` / `shift_sim_time`), the base-emit writer, and the defect manifest (`build_defect_manifest`, `defects.json`) — breaking C6/C7/C9–C12 while preserving C1–C5/C8 and C13's structural clauses by construction. See [`corrupters.md`](corrupters.md). | Implemented (Stage 4) |
 | `config/` | Pydantic config envelopes. `ExportConfig` — the two-tier dimensional grammar plus the cross-mode `rebase` and `incremental` blocks (siblings of `mode`); `mode` is `Literal["dimensional", "source"]`, the discriminator-plus-per-mode-section shape (`mode_section_matches`) validating the named mode's section is present and the other mode's section is absent — additive by construction, so a further shape-mode extends the `Literal` and adds its section. `SourceConfig` (`change_delivery`, `exclude`, `rename`) is `mode: source`'s section — see [`source.md`](source.md). `StreamConfig` — a separate top-level envelope (not a mode), because streaming is a delivery driver, not a shape-mode; it declares `content` × per-kind selection, an optional `RoutingConfig` topic policy (`topic_template` / `groups` / `table_identity`), and reuses `rebase`. `CorruptConfig` — a third top-level envelope, sibling of `ExportConfig` / `StreamConfig`; a master `seed` plus an ordered list of `kind`-discriminated operations sharing one selector (`Target` — five-way table selector, pattern column entries) / distribution (`Amount`, `Distribution`) / placement (`Placement`) grammar. See [`streaming.md`](streaming.md), [`streaming-routing.md`](streaming-routing.md), [`corrupters.md`](corrupters.md). | Implemented (Stage 2 + Stage 3 `StreamConfig` + Stage 4 `CorruptConfig`) |
 | `anchor.py` | The effective-anchor resolver. Combines sidecar `runtime`, `rebase` config, and CLI overrides into one `EffectiveAnchor` (or `None`); the single authority for origin/zone precedence and DST/ambiguity validation. Every wallclock mode renders through it. See [`anchor.md`](anchor.md). | Implemented (Stage 2) |
 | `writers/` | Output adapters. CSV + DuckDB (Stage 2) ship; Parquet is planned. DuckDB has a windowed path (`write_duckdb_window`) for incremental export. See [`writers.md`](writers.md). | CSV + DuckDB implemented |
@@ -65,7 +65,7 @@ its own.
 
 1. **Reader + conformance, trunk-only.** Open an emit, validate `base.json` against the
    vendored schema, version-gate, expose tables/columns/runtime/pins/enum_domains as
-   typed accessors, reimplement C1–C12 independently (the producer's
+   typed accessors, reimplement C1–C13 independently (the producer's
    reference conformance checker is a *reference to read*, never a dependency). The
    sanitised subset mandates exactly one `branches` entry (C8 asserts it).
    `fabulexa-forge validate`.
@@ -80,7 +80,7 @@ its own.
    files, or a Kafka broker, composing the row-state-events derivation (see
    [`streaming.md`](streaming.md)). The source exporter has shipped as `mode: source`
    — every emitted table classified into a change-log, reference, transaction, or
-   junction genre from `record_roles` × `history_tracked`, composing the
+   junction genre from `record_roles` × `temporal_class`, composing the
    row-state-events derivation for its change-log render and a new state-at
    derivation for its `change_delivery: snapshot` periodic-full-table delivery (see
    [`source.md`](source.md)); `base` remains planned. Timestamp rebasing is a
@@ -93,7 +93,8 @@ its own.
    each new mode wires into the same window derivation, cursor, fingerprint, and
    writers.
 4. **Corrupter family.** Reuse the reader; write base-shaped output that breaks
-   C6/C7/C9–C12 while preserving C1–C5/C8 by construction. Shipped as the `fabulexa-forge
+   C6/C7/C9–C12 while preserving C1–C5/C8 and C13's structural clauses by
+   construction. Shipped as the `fabulexa-forge
    corrupt` verb — a `CorruptConfig` envelope over twelve operations (family A's
    `null_cells` and `mutate_cells` — eleven type-preserving wrong-value transforms,
    including the family's first reach into `history.value` and into C12 —
@@ -135,21 +136,35 @@ by [`tests/reader/_fixtures_build.py`](../../tests/reader/_fixtures_build.py) in
 temporary directory and read only through the reader. No emit is committed to the
 repo, and the producer is never invoked.
 
-- A **spanning positive** v4 emit exercises every table category in the sanitised
+- A **spanning positive** emit exercises every table category in the sanitised
   subset — `history`, `records__*`, and `membership__*` — plus `pinned_ids`,
   `runtime`, `enum_domains`, a `references` column, and a `record_roles` registry
   covering every emitted kind (including an `actor` object whose sub-types cover every
-  `records__actor.prop__actor_type` value). It carries no `firings` table, no
-  provenance column group, and exactly one branch, so each C1–C12 check has live
-  input.
+  `records__actor.prop__actor_type` value). Every value-carrying `prop__` column
+  carries the temporal attribute pair, all three classes are represented (a
+  `slice_only` column included), every history-tracked property of every record
+  carries its genesis `history` row (NULL-valued rows included, which round-trip
+  through C6 as NULL-against-NULL), and presentation columns appear in both classes —
+  one bound to a tracked source (class `tracked`, flipping its kind's genre) and one
+  bound to an immutable source (class `constant`, which does not). It carries no
+  `firings` table, no provenance column group, and exactly one branch, so each
+  C1–C13 check has live input.
 - Several **deliberately-broken** variants drive the negative suite — a retyped
   `history` column (C4), a dropped `prop__` column the sidecar still declares
   (C2/C5), a half-NULL membership reference pair (C7), a phantom column (C2/C5), a
   `record_roles` registry that omits an emitted kind or an in-data `actor` sub-type
-  (C12), and a wrong `base_format_version` (the version gate) — plus defects that
-  *pass* C1–C12 by design (duplicate tick, dangling records-prop reference), which
-  exercise the boundary that C1–C12 is narrower than the producer's QA suite (see
-  [`conformance.md`](conformance.md) § Boundaries).
+  (C12), a wrong `base_format_version` (the version gate), a broken temporal
+  attribute pairing (C13's structural clause alone — the vendored schema does not
+  enforce the pairing), an out-of-enum `temporal_class` (C13's enum clause **and**
+  C1, the schema enum-constraining the value; the expectation names both), a missing
+  genesis row with later rows intact (C13's semantic clause alone), and an emptied
+  `(kind, property)` series (C11's converse **and** C13's genesis clause — zero rows
+  implies no genesis row; the expectation names both) — plus defects that
+  *pass* C1–C13 by design (duplicate tick, dangling records-prop reference), which
+  exercise the boundary that C1–C13 is narrower than the producer's QA suite (see
+  [`conformance.md`](conformance.md) § Boundaries). A negative fixture must fail the
+  check it is named for and no other, except a coupling the contract itself forces —
+  which its expectation then names in full.
 
 A later stage that needs multiple branches extends the spanning builder; the
 single-branch fixture is enough through Stage 4.
@@ -160,12 +175,38 @@ correct), and each negative variant is named by the defect it injects. A version
 appears in a name only when version-gating is the assertion under test, and even
 then by intent (`wrong_version`), not by the literal number.
 
+**Fixture invariants** (what keeps the next contract re-vendor cheap — semantic
+churn is the only cost a version bump should surface, never version-integer or
+sidecar-shape churn):
+
+- **The supported version appears as a literal exactly once** —
+  [`SUPPORTED_BASE_FORMAT_VERSION`](../../src/fabulexa_forge/__init__.py); every
+  other site, the test tree included, imports it. A version-gate negative test uses
+  `UNSUPPORTED_VERSION_SENTINEL` — a value the contract has never defined and never
+  will — never a neighbouring real version, so a bump cannot quietly turn an
+  "unsupported version" test into a supported one.
+- **Every well-formed fixture sidecar is written through one function** —
+  [`tests/_support/sidecar_builder.py`](../../tests/_support/sidecar_builder.py)'s
+  `write_emit`, which stamps the supported version by default and schema-validates
+  against the vendored contract before writing, so a fixture that has not learned a
+  new required field fails at construction naming the field, not as an unrelated C1
+  failure at read time. Negative fixtures whose declared defect is schema-level opt
+  out via `schema_valid=False`; deliberately *malformed* specimens exercising the
+  reader's rejection paths (invalid JSON, below-floor structure) are the only
+  literal writes.
+- **Every value-carrying column that declares temporal attributes is constructed
+  through one constructor** — `prop_column`, which requires the pair together and
+  validates the contract's implication clauses, so a defective pairing is never
+  expressible through it (negative variants mutate the returned dict). A new paired
+  attribute at the next bump is one signature change, and the type checker names
+  every call site.
+
 ## Status
 
 | Area | Status |
 |---|---|
 | Project skeleton + standalone-venv boundary | Scaffolded |
-| Vendored contract (`base_format_version 4`) | Vendored — re-synced on version bump (`contract/README.md`) |
+| Vendored contract (`base_format_version 5`) | Vendored — re-synced on version bump (`contract/README.md`) |
 | Reader + conformance | Implemented (Stage 1) — [`reader.md`](reader.md), [`conformance.md`](conformance.md) |
 | `fabulexa-forge validate` CLI verb | Implemented (Stage 1) |
 | Dimensional exporter + config + CSV/DuckDB writers | Implemented (Stage 2) — [`dimensional.md`](dimensional.md) |

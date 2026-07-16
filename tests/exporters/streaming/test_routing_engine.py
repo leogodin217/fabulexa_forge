@@ -16,8 +16,8 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.config.models import (
     DebeziumConfig,
     DebeziumSourceIdentity,
@@ -139,20 +139,9 @@ def _build_actor_emit(
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "record_roles": {
-            "actor": {
-                "customer": "dimension",
-                "vip_customer": "dimension",
-                "staff": "fact",
-            }
-        },
-        "enum_domains": {
-            "actor": {"actor_type": ["customer", "vip_customer", "staff"]}
-        },
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -162,8 +151,20 @@ def _build_actor_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra={
+            "record_roles": {
+                "actor": {
+                    "customer": "dimension",
+                    "vip_customer": "dimension",
+                    "staff": "fact",
+                }
+            },
+            "enum_domains": {
+                "actor": {"actor_type": ["customer", "vip_customer", "staff"]}
+            },
+        },
+    )
     return tmp_path
 
 
@@ -195,20 +196,9 @@ def _build_actor_device_emit(
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "record_roles": {
-            "actor": {
-                "customer": "dimension",
-                "vip_customer": "dimension",
-                "staff": "fact",
-            }
-        },
-        "enum_domains": {
-            "actor": {"actor_type": ["customer", "vip_customer", "staff"]}
-        },
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -225,8 +215,20 @@ def _build_actor_device_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra={
+            "record_roles": {
+                "actor": {
+                    "customer": "dimension",
+                    "vip_customer": "dimension",
+                    "staff": "fact",
+                }
+            },
+            "enum_domains": {
+                "actor": {"actor_type": ["customer", "vip_customer", "staff"]}
+            },
+        },
+    )
     return tmp_path
 
 
@@ -252,10 +254,9 @@ def _build_nonsubtyped_emit(
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 f"records__{kind}",
                 "records",
@@ -265,8 +266,8 @@ def _build_nonsubtyped_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -297,12 +298,9 @@ def _build_entity_emit(
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "record_roles": {"entity": "dimension"},
-        "enum_domains": {"entity": {"entity_type": list(_ENTITY_SUB_TYPES)}},
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity",
                 "records",
@@ -312,8 +310,12 @@ def _build_entity_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra={
+            "record_roles": {"entity": "dimension"},
+            "enum_domains": {"entity": {"entity_type": list(_ENTITY_SUB_TYPES)}},
+        },
+    )
     return tmp_path
 
 
@@ -655,7 +657,12 @@ class TestBusinessRules:
         del raw["record_roles"]
         # Strip enum_domains so actor has empty subtype_values — triggers the real error
         del raw["enum_domains"]
-        sidecar_path.write_text(json.dumps(raw), encoding="utf-8")
+        _write_sidecar(
+            emit_dir,
+            tables=raw["tables"],
+            branches=raw["branches"],
+            base_format_version=raw["base_format_version"],
+        )
 
         config = StreamConfig(
             content="state-changes",
@@ -1019,10 +1026,9 @@ def _build_two_membership_emit(
 
     conn.close()
 
-    sidecar: dict[str, Any] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _membership_table_spec(
                 "membership__queue__waiters",
                 _MEM_QUEUE_WAITERS_COLS,
@@ -1038,8 +1044,8 @@ def _build_two_membership_emit(
                 "members",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -1095,10 +1101,9 @@ def _build_two_same_owner_membership_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, Any] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _membership_table_spec(
                 "membership__queue__waiters",
                 _MEM_QUEUE_WAITERS_COLS,
@@ -1114,8 +1119,8 @@ def _build_two_same_owner_membership_emit(tmp_path: Path) -> Path:
                 "tasks",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 

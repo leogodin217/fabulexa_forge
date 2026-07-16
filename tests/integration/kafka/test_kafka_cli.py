@@ -9,7 +9,6 @@ localhost:9092). Skipped automatically when no broker is reachable.
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -18,9 +17,9 @@ from typing import Any
 import duckdb
 import pytest
 import yaml
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from exporters.streaming._helpers import _ddl
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.cli import cmd_stream
 
 from ._harness import bootstrap_servers, consume, delete_topic, skip_reason
@@ -75,10 +74,9 @@ def _build_emit(tmp_path: Path, kind: str) -> Path:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             {
                 "name": f"records__{kind}",
                 "category": "records",
@@ -93,8 +91,8 @@ def _build_emit(tmp_path: Path, kind: str) -> Path:
                 "rows": len(history_rows),
             },
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 

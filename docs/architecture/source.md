@@ -91,16 +91,52 @@ writers (CSV | DuckDB — both via Emit.query_arrow)
 ### Classification: the genre trichotomy from the sidecar
 
 Every `records__<kind>` table resolves to exactly one genre from two sidecar facts —
-the kind's `history_tracked` column flags and its `record_roles` entry. Tracked-ness
-dominates: a kind with recoverable history exports as its change log, whatever its
-warehouse role, because classifying it as a snapshot would silently drop base-layer
-history rows (a fidelity violation). Role then splits the untracked kinds.
+the kind's per-column `temporal_class` declarations and its `record_roles` entry.
+Tracked-ness dominates: a kind whose values genuinely change over time exports as
+its change log, whatever its warehouse role, because classifying it as a snapshot
+would silently drop base-layer history rows (a fidelity violation). Role then splits
+the untracked kinds.
 
 | Condition (in precedence order) | Genre | One output row = |
 |---|---|---|
-| Any `prop__` column of the kind has `history_tracked: true` | **change-log** | one record state-change event (`c`/`u`/`d`) |
+| Any `prop__` column of the kind is `temporal_class: "tracked"` | **change-log** | one record state-change event (`c`/`u`/`d`) |
 | No tracked column; resolved role `dimension` | **reference** | one record, current state |
 | No tracked column; resolved role `fact` | **transaction** | one record, current state, FK columns prominent |
+
+**Tracked-ness keys on the class, not on the `history_tracked` bit.** Every
+presentation column is `history_tracked: true`, but one bound to an immutable source
+is class `constant` and holds exactly its genesis `history` row
+([`bundle.md`](bundle.md) § Column temporal classes) — a predicate keyed on the bit
+would classify a kind carrying only such a column as change-log genre and render a
+change log with no changes. A kind is tracked **iff** any of its `prop__` columns is
+`temporal_class: "tracked"`: a kind whose only tracked column is a presentation
+value is change-log genre — faithful, since a name that genuinely changes over time
+*is* a change log.
+
+| Kind's `prop__` columns | Tracked? | Genre |
+|---|---|---|
+| No column carries `history_tracked` | no | reference / transaction (by role) |
+| Every history-tracked column is class `constant` | no | reference / transaction (by role) |
+| Any column is class `tracked` | yes | change-log |
+| A history-tracked column declares no class, or one outside the enum | — | `TemporalClassUnavailableError` |
+
+Only a `history_tracked: true` column can be class `tracked` (the contract
+constrains it), so the predicate consults the class — always through the sidecar's
+`temporal_class` accessor, the single narrowing point
+([`reader.md`](reader.md) § Per-column temporal semantics) — only for the columns
+carrying the bit, under the `is True` convention (exactly `True` is flagged). The
+first row mirrors C11's and C13's skip guard rather than any legal v5 shape: v5
+coverage is total, and the version gate refuses an emit predating the attributes
+before the predicate ever runs; the guard is retained so the predicate is a correct
+standalone implementation — a kind with nothing flagged needs no class to be
+classified. The refusal is one-directional, deliberately so: a column declaring a
+`temporal_class` with **no** `history_tracked` is never consulted — the predicate
+classifies the kind from the flagged columns alone, the contract-consistent reading
+(only a flagged column can be `tracked`), not a guess; the broken pairing is C13's
+to report, and `validate` names it. A `slice_only` column is
+`history_tracked: false` and is therefore never consulted here (see Boundaries).
+The predicate is `_is_kind_tracked` in
+[`exporters/source/plan.py`](../../src/fabulexa_forge/exporters/source/plan.py).
 
 Every `membership__<K>__<p>` table resolves to the fourth genre unconditionally:
 
@@ -109,20 +145,19 @@ Every `membership__<K>__<p>` table resolves to the fourth genre unconditionally:
 | `membership__<K>__<p>` | **junction** | one membership interval (owner, member, joined/left) |
 
 `history` is consumed by the change-log render and never passed through. The three
-sidecar table categories are exhaustive at `base_format_version: 4`, so this
+sidecar table categories are exhaustive at `base_format_version: 5`, so this
 classification is total: the whole emit is covered, nothing else exists to classify.
 
-Classification requires the sidecar to carry the `record_roles` registry and
-per-column `history_tracked` flags, and every **untracked** exported kind — and
+Classification requires the sidecar to carry the `record_roles` registry and the
+per-column temporal attributes, and every **untracked** exported kind — and
 every declared sub-type of an untracked object-registry kind — to resolve a role (a
 tracked kind classifies as its change log regardless of role); there are no
-inference fallbacks (§ Validation Rules). The `history_tracked` partition applies
-the `is True` convention: exactly `True` is tracked; `False` is untracked.
+inference fallbacks (§ Validation Rules).
 
 ### The sub-type split
 
-Tracked-ness is resolved first, and it is a **kind-level** fact (the
-`history_tracked` column flags): a tracked kind is a single change-log table
+Tracked-ness is resolved first, and it is a **kind-level** fact (any `prop__`
+column of class `tracked`): a tracked kind is a single change-log table
 whatever its role-registry shape — its units would share one genre, so nothing
 forces a split, and if the kind is sub-typed its `<kind>_type` discriminator is
 **retained** as a column (single-table inheritance). The role registry's asymmetric
@@ -420,7 +455,7 @@ delivery. The `genre` label stays `changelog` — it selects the render — whil
 1. **Classification is total and deterministic.** Every `records__<kind>` and
    `membership__<K>__<p>` table in the sidecar resolves to exactly one genre from
    the trichotomy; the three sidecar table categories are exhaustive at
-   `base_format_version: 4`, so nothing is left unclassified.
+   `base_format_version: 5`, so nothing is left unclassified.
 2. **A tracked kind is never split.** Tracked-ness is a kind-level fact; a
    change-log table is emitted once per kind regardless of role-registry shape,
    retaining its `<kind>_type` discriminator if sub-typed.
@@ -472,6 +507,7 @@ funnel.
 |---|---|---|
 | `SourceRecordRolesRequired` | The sidecar carries a `record_roles` registry | `"source export requires the record_roles registry; this emit predates it"` |
 | `SourceHistoryTrackedRequired` | The sidecar carries `history_tracked` flags | `"source export requires per-column history_tracked flags; this emit predates them"` |
+| `TemporalClassUnavailableError` (reader-owned; see [`reader.md`](reader.md)) | Every `prop__` column the genre predicate inspects (i.e. one flagged `history_tracked`) declares a `temporal_class` within the three-value enum. Resolved at plan time, against the open emit's sidecar, before any data read | `"… declares history_tracked but no temporal_class; the emit is non-conformant (C13). Run \`fabulexa-forge validate\`."` (an out-of-enum declared value raises the same error, its message naming the value) |
 | `SourceRoleUnknown` | Every **untracked** exported kind — and every declared sub-type of an untracked object-registry kind — resolves a role (a tracked kind needs none) | `"kind '{kind}'{sub_type_clause}: no role in record_roles"` |
 | `SourceSubtypesUndeclared` | An **untracked** object-registry kind declares a `<kind>_type` enum domain | `"kind '{kind}': role varies by sub-type but no {kind}_type enum domain declares the sub-types"` |
 | `SourceAnchorRequired` | An `EffectiveAnchor` resolved for the invocation | `"source export renders wallclock timestamps and requires a resolved anchor: the emit declares no runtime block; supply rebase.base_date/timezone or --base-date/--timezone"` |
@@ -484,10 +520,15 @@ funnel.
 
 ## Rationale
 
-- **Tracked-ness dominates classification.** A kind with any history-tracked
+- **Tracked-ness dominates classification.** A kind with any class-`tracked`
   column exports as its change log regardless of role, because classifying it as
   a snapshot would silently drop base-layer history rows — a fidelity violation
   the trichotomy's precedence order exists to prevent.
+- **The predicate keys on the class, not the bit.** `history_tracked: true` does
+  not separate "changes over time" from "constant with a genesis row" — only
+  `temporal_class` does. Keying on the bit would render change logs with no
+  changes for kinds whose only flagged column is a constant presentation value;
+  keying on the class classifies by what genuinely changes.
 - **The sub-type split is untracked-only.** The per-kind change-log fold carries
   no discriminator predicate, and a delete row's after-image discriminator is
   `NULL` — splitting a tracked kind would either misfile deletes or require a
@@ -535,6 +576,12 @@ funnel.
   feature-store rows) will share the state-at derivation this mode introduced
   (see [`derivations.md`](derivations.md) § The state-at derivation) rather than
   reuse source's own plan/render surface.
+- **No `slice_only` policy.** The genre predicate never consults a `slice_only`
+  column (`history_tracked: false`), and the mode exports it like any other
+  column — including into shapes that stamp its slice value at horizons the emit
+  cannot speak to. The class makes that infidelity *visible*; a policy that
+  refuses or omits such a column (per mode, with a notice channel) is a separate
+  contract this mode does not own.
 - **Single-branch, like every mode.** Source uses the derivations layer's
   single-branch guard; branch-aware export is parked pending a contract
   extension (see [`README.md`](README.md) § Staged roadmap).
@@ -545,6 +592,8 @@ funnel.
 
 | Document | Why |
 |---|---|
+| [`reader.md`](reader.md) | The `Sidecar.temporal_class` accessor the genre predicate resolves through |
+| [`bundle.md`](bundle.md) | The column temporal classes and the genesis guarantee behind the trichotomy's tracked-ness predicate |
 | [`derivations.md`](derivations.md) | The row-state-events fold the change-log render composes, and the state-at derivation snapshot delivery composes |
 | [`dimensional.md`](dimensional.md) | The contrasting mode — reconstructed star schema vs. source's raw operational shape; both compile to the mode-neutral `QuerySpec` |
 | [`streaming.md`](streaming.md) | The change-log render's sibling delivery — the same row-state-events fold, replayed as a live event feed instead of landed as a table |

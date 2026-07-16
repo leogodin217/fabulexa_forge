@@ -6,14 +6,13 @@ resolve_subtype_index tests build a minimal in-process emit via duckdb.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.config.models import RoutingConfig
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.streaming.routing import (
@@ -79,10 +78,9 @@ def _build_subtyped_emit(
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             {
                 "name": f"records__{kind}",
                 "category": "records",
@@ -97,8 +95,8 @@ def _build_subtyped_emit(
                 "rows": 0,
             },
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 

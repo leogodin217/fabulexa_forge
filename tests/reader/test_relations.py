@@ -6,11 +6,11 @@ returns values in native-type ORDER BY 1 order.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.emit import open_emit
@@ -76,7 +76,12 @@ def _write_emit(
     db_tables: dict[str, str] | None = None,
 ) -> Path:
     """Write a base.json + run.duckdb pair into tmp_path."""
-    (tmp_path / "base.json").write_text(json.dumps(sidecar_raw), encoding="utf-8")
+    _write_sidecar(
+        tmp_path,
+        tables=sidecar_raw["tables"],  # type: ignore[arg-type]
+        branches=sidecar_raw["branches"],  # type: ignore[arg-type]
+        base_format_version=sidecar_raw["base_format_version"],  # type: ignore[arg-type]
+    )
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     if db_tables:
@@ -465,7 +470,12 @@ def _build_records_emit(
             [fork_p, rec_id, val],
         )
     conn.close()
-    (tmp_path / "base.json").write_text(json.dumps(sidecar_raw), encoding="utf-8")
+    _write_sidecar(
+        tmp_path,
+        tables=sidecar_raw["tables"],  # type: ignore[arg-type]
+        branches=sidecar_raw["branches"],  # type: ignore[arg-type]
+        base_format_version=sidecar_raw["base_format_version"],  # type: ignore[arg-type]
+    )
     return tmp_path
 
 
@@ -528,7 +538,12 @@ def test_distinct_prop_values_missing_table_raises(tmp_path: Path) -> None:
     sidecar_raw = _make_sidecar_raw()
     db_path = tmp_path / "run.duckdb"
     duckdb.connect(str(db_path)).close()
-    (tmp_path / "base.json").write_text(json.dumps(sidecar_raw), encoding="utf-8")
+    _write_sidecar(
+        tmp_path,
+        tables=sidecar_raw["tables"],  # type: ignore[arg-type]
+        branches=sidecar_raw["branches"],  # type: ignore[arg-type]
+        base_format_version=sidecar_raw["base_format_version"],  # type: ignore[arg-type]
+    )
     with open_emit(tmp_path) as emit:
         with pytest.raises(TableNotFoundError, match="records__missing"):
             distinct_prop_values(emit, "missing", "code")

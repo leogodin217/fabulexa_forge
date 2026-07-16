@@ -6,13 +6,12 @@ In-memory fixtures supplement where the pre-built set lacks a specific variant.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader import open_emit, run_check, validate
 from fabulexa_forge.reader.conformance import to_csv_text
 
@@ -29,24 +28,47 @@ from ._fixtures_build import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+_SIDECAR_TOP_LEVEL_KEYS = frozenset({"base_format_version", "branches", "tables"})
+
 
 def _write_emit(
     dest: Path,
     sidecar: dict[str, object],
     db_setup: dict[str, list[dict[str, object]]] | None = None,
+    *,
+    schema_valid: bool = True,
 ) -> Path:
     """Write a minimal emit (base.json + run.duckdb) into dest.
+
+    The base.json write is delegated to `_support.sidecar_builder.write_emit` —
+    the sole sidecar authority; this helper decomposes `sidecar` into that
+    function's tables/branches/extra/base_format_version components and keeps
+    only the run.duckdb construction local.
 
     Args:
         dest: Directory to write into.
         sidecar: The base.json dict.
         db_setup: Mapping of {table_name: columns_list} for tables to create.
+        schema_valid: Forwarded to sidecar_builder.write_emit. False for the
+            deliberately schema-invalid negative fixtures.
 
     Returns:
         dest path.
     """
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    extra = {
+        key: value
+        for key, value in sidecar.items()
+        if key not in _SIDECAR_TOP_LEVEL_KEYS
+    }
+    _write_sidecar(
+        dest,
+        tables=sidecar["tables"],  # type: ignore[arg-type]
+        branches=sidecar.get("branches"),  # type: ignore[arg-type]
+        extra=extra or None,
+        base_format_version=sidecar.get("base_format_version"),  # type: ignore[arg-type]
+        schema_valid=schema_valid,
+    )
     db_path = dest / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     if db_setup:
@@ -74,7 +96,6 @@ def _minimal_sidecar_with_tables(
     if branches is None:
         branches = [{"fork_path": "trunk", "parent": None, "slice_at": 100}]
     sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": branches,
         "tables": tables,
     }
@@ -217,7 +238,7 @@ def test_c6_skips_non_round_trippable_prop(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -265,7 +286,7 @@ def test_c6_fails_on_round_trip_mismatch(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -324,7 +345,7 @@ def test_c6_fails_not_raises_on_null_numeric_tracked_cell(tmp_path: Path) -> Non
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -380,7 +401,7 @@ def test_c6_set_based_isolates_mismatch_across_series(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -436,7 +457,7 @@ def test_c6_latest_pre_slice_tiebreak_is_deterministic(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         first = run_check(emit, "C6")
@@ -473,7 +494,7 @@ def test_c6_skips_when_records_table_absent_from_catalog(tmp_path: Path) -> None
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -546,7 +567,7 @@ def test_c7_deactivated_at_null_iff_active(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C7")
@@ -594,7 +615,7 @@ def test_c7_membership_member_pair(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C7")
@@ -638,7 +659,7 @@ def test_c8_passes_distinct_fork_paths(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C8")
@@ -673,7 +694,7 @@ def test_c8_fails_extra_fork_path_in_data(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C8")
@@ -714,7 +735,7 @@ def test_c9_passes_when_no_pinned_ids(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -742,7 +763,7 @@ def test_c9_fails_absent_records_table(tmp_path: Path) -> None:
         ]
     )
     sidecar["pinned_ids"] = {"actor": {"alice": "a001"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -770,7 +791,7 @@ def test_c9_reflects_self_contained_via_run_check(tmp_path: Path) -> None:
         ]
     )
     sidecar["pinned_ids"] = {"doctor": {"bob": "d001"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -807,7 +828,7 @@ def test_c9_fails_wrong_count(tmp_path: Path) -> None:
         ]
     )
     sidecar["pinned_ids"] = {"actor": {"alice": "a001"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -851,7 +872,7 @@ def test_c9_skips_when_records_table_missing_key_columns(tmp_path: Path) -> None
         ]
     )
     sidecar["pinned_ids"] = {"actor": {"alice": "a001"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -919,7 +940,7 @@ def test_c10_left_sim_time_ge_joined(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -985,7 +1006,7 @@ def test_c10_member_reference_resolves(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -1047,7 +1068,7 @@ def test_c10_fails_unresolved_member_reference(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -1124,7 +1145,7 @@ def test_c10_set_based_isolates_dangling_reference(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -1179,7 +1200,7 @@ def test_c10_skips_kind_column_without_matching_id_column(tmp_path: Path) -> Non
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -1224,7 +1245,7 @@ def test_c11_converse_fails_on_zero_history_rows(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C11")
@@ -1291,7 +1312,7 @@ def test_c11_converse_gate_excludes_non_round_trippable_column(
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C11")
@@ -1339,7 +1360,7 @@ def test_c11_skips_when_no_flagged_column(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C11")
@@ -1445,7 +1466,7 @@ def test_c12_skips_when_record_roles_absent(tmp_path: Path) -> None:
         ]
     )
     # No record_roles key in sidecar
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C12")
@@ -1495,7 +1516,7 @@ def test_c12_skips_actor_subtype_check_when_prop_actor_type_column_absent(
         ]
     )
     sidecar["record_roles"] = {"actor": {"patient": "dimension", "staff": "fact"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C12")
@@ -1543,7 +1564,7 @@ def test_c12_passes_when_actor_is_bare_string_kind(tmp_path: Path) -> None:
         ]
     )
     sidecar["record_roles"] = {"actor": "dimension"}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C12")
@@ -1599,7 +1620,7 @@ def test_c13_semantic_record_id_matters_not_vicarious(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C13")
@@ -1644,7 +1665,7 @@ def test_c13_semantic_null_valued_genesis_row_passes(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C13")
@@ -1694,7 +1715,7 @@ def test_c13_skips_when_no_flagged_column(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C13")

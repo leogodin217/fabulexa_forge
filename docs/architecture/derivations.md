@@ -194,11 +194,16 @@ preceding `c`/`u`. The after-image keys are the fold's output column names verba
 
 **Type-1 vs type-2 by the sidecar.** `properties` is partitioned by each column's
 sidecar `history_tracked` flag under the `is True` convention: exactly `True` is type-2
-(history-tracked, as-of value); `False` — or `None` on a non-conformant-but-`v4` emit —
-is type-1 (current value). The class is never inferred from `history` and has no
-inference fallback; the `version == 4` gate admits the emit but does not re-check C11
-(every `prop__` column carries the flag), so the `None`-as-current-value rule defines
-the otherwise-undefined case rather than failing.
+(history-tracked, as-of value); `False` — or `None` on a non-conformant emit — is
+type-1 (current value). The split is never inferred from `history` and has no
+inference fallback; the version gate admits the emit but does not re-check
+conformance, so the `None`-as-current-value rule defines the otherwise-undefined case
+rather than failing. Every history-tracked property carries a genesis `history` row at
+its record's `created_sim_time` (the unconditional creation seed —
+[`bundle.md`](bundle.md) § Column temporal classes), so the genesis fold at `C`
+(below) is load-bearing for every flagged property, presentation values included: the
+inclusive lookback folds the seed row into the `c` after-image while `t > C` keeps it
+from spawning a spurious `u` at the record's own creation instant.
 
 **The genesis fold at `C`.** The `t > C` condition governs only which distinct history
 `sim_time`s spawn a `u`; it never governs the after-image read, which is the inclusive
@@ -491,6 +496,20 @@ filter on; it raises `ExportError` on zero or more than one branch.
   are invisible to any history-sourced derivation (versioned-intervals, row-state-events).
   The membership-events resident reaches them by reading the `membership__<K>__<p>`
   interval tables directly instead, never `history`.
+- **The folds do not lean on the genesis guarantee.** The unconditional creation seed
+  makes an as-of lookup over `history` complete for a flagged property — an empty
+  result means exactly `T < created_sim_time` — but state-at and row-state-events
+  retain their `records__<kind>` join for type-1 current values and identity, and no
+  fold substitutes a pure-`history` as-of read for it. A fold redesign that exploits
+  the guarantee (dropping the `records__` fallback, an exact variable-horizon form)
+  is a contract change to this layer, designed on its own.
+- **A `slice_only` column has no faithful point-in-time read.** State-at and the
+  row-state-events after-image render a type-1 column's *current* `records__` value
+  at every horizon — the declared temporal-honesty exception. For a `constant` column
+  that value is exact at every T; for a `slice_only` column it is a slice value
+  stamped at horizons the emit cannot speak to. The class makes the difference
+  visible ([`bundle.md`](bundle.md) § Column temporal classes); the folds do not
+  consult it, and a policy that refuses or omits such a column is mode-side.
 
 ## Related
 

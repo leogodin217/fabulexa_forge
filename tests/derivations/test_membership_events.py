@@ -6,14 +6,13 @@ Materialized against minimal in-process emits via the reader.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.derivations.membership_events import (
     EVENT_CLASS_JOIN,
     EVENT_CLASS_LEAVE,
@@ -141,12 +140,11 @@ def _build_emit(
     if extra_tables:
         tables.extend(extra_tables)
 
-    sidecar: dict[str, Any] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": FORK_PATH, "parent": None, "slice_at": 9999}],
-        "tables": tables,
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_sidecar(
+        tmp_path,
+        tables=tables,
+        branches=[{"fork_path": FORK_PATH, "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 

@@ -3,15 +3,14 @@ seed_mixer_run, schedule_releases."""
 
 from __future__ import annotations
 
-import json
 from collections import deque
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION as SUPPORTED_VERSION
 from fabulexa_forge.config.models import (
     MembershipSelection,
     StreamConfig,
@@ -785,10 +784,9 @@ def _build_two_kind_emit(
             {"fork_path": "trunk@alt", "parent": "trunk", "slice_at": 100},
         ]
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": branches,
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 f"records__{kind_a}",
                 "records",
@@ -805,8 +803,8 @@ def _build_two_kind_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, 0),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=branches,
+    )
     return tmp_path
 
 
@@ -1097,10 +1095,9 @@ def _build_single_membership_emit(
         conn.execute(f'INSERT INTO "{table_name}" VALUES ({ph})', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             {
                 "name": table_name,
                 "category": "membership",
@@ -1110,8 +1107,8 @@ def _build_single_membership_emit(
                 "property": property_name,
             }
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
