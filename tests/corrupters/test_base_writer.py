@@ -116,6 +116,31 @@ def test_writes_run_duckdb_and_base_json(tmp_path: Path) -> None:
     assert "temporal_class" not in columns_by_name["record_id"]
 
 
+def test_identity_columns_round_trip_as_bare_name_and_type_entries(
+    tmp_path: Path,
+) -> None:
+    """`record_index` and `ref_index__<name>` are identity columns: the
+    regenerated sidecar carries them as exactly `{"name", "type"}` -- no
+    `references`, `history_tracked`, or `temporal_class` key, even though
+    `ref_index__doctor_id` sits beside a `prop__doctor_id` that does carry
+    `references`."""
+    state = _one_table_state()
+    source_sidecar = _source_sidecar(tmp_path)
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    columns_by_name = {c["name"]: c for c in sidecar["tables"][0]["columns"]}
+    assert columns_by_name["record_index"] == {
+        "name": "record_index",
+        "type": "BIGINT",
+    }
+    assert columns_by_name["ref_index__doctor_id"] == {
+        "name": "ref_index__doctor_id",
+        "type": "BIGINT",
+    }
+
+
 def test_verbatim_top_level_fields(tmp_path: Path) -> None:
     state = _one_table_state()
     source_sidecar = _source_sidecar(tmp_path)

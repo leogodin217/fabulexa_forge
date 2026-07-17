@@ -80,6 +80,6 @@ phases:
     name: "Corrupter pair-scoped reference writes"
     demo: "docs/sprints/base-format-v6/demos/phase_3_pair_writes.py"
   4:
-    status: pending
+    status: complete
     name: "Index minting + stated invariants"
     demo: "docs/sprints/base-format-v6/demos/phase_4_index_minting.py"

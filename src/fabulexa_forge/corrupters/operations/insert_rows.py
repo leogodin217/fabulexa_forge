@@ -201,6 +201,7 @@ class InsertRowsCorrupter:
 
             phantom = dict(donor)
             phantom["record_id"] = phantom_id
+            phantom["record_index"] = state.mint_record_index(population.table_name)
             for column in per_table_columns[table_idx]:
                 seed = rng.random()
                 current = donor[column]

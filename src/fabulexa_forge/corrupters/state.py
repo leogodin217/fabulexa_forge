@@ -12,6 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from fabulexa_forge.errors import CorruptError
+
 if TYPE_CHECKING:
     import pyarrow
 
@@ -30,6 +32,27 @@ class WorkingTable:
     """The table's evolving row content."""
 
 
+def _table_record_index_mark(working_table: "WorkingTable") -> int | None:
+    """The `record_index` high-water mark captured for one records-category
+    working table, at the instant it is captured.
+
+    Args:
+        working_table: One records-category WorkingTable, at capture time.
+
+    Returns:
+        The table's maximum `record_index` value, `-1` when it carries zero
+        rows (the first mint then yields `0`), or `None` when the table
+        carries no `record_index` column at all (a pre-v6 fixture never
+        targeted by `insert_rows`).
+    """
+    if "record_index" not in working_table.data.column_names:
+        return None
+    if working_table.data.num_rows == 0:
+        return -1
+    values: list[int] = working_table.data.column("record_index").to_pylist()
+    return max(values)
+
+
 @dataclass
 class CorruptState:
     """The full working set threaded through the ordered operations."""
@@ -42,6 +65,53 @@ class CorruptState:
     `delete_rows` handler, read only by `insert_rows`' id universe. The
     engine, writer, and manifest builder ignore it -- it never reaches any
     output artifact."""
+    _record_index_marks: dict[str, int] = field(
+        default_factory=dict, init=False, repr=False, compare=False
+    )
+    """Per-`records__<K>` table `record_index` high-water mark, captured at
+    working-set load (`__post_init__`, before any operation can mutate a
+    table) and advanced only forward by `mint_record_index` -- never
+    recomputed from a later (possibly deletion-shrunk) table state, so a
+    tombstoned ordinal (a deleted suffix row's index included) is never
+    reused. Absent for a table carrying no `record_index` column."""
+
+    def __post_init__(self) -> None:
+        for name, working_table in self.tables.items():
+            if working_table.spec.category != "records":
+                continue
+            mark = _table_record_index_mark(working_table)
+            if mark is not None:
+                self._record_index_marks[name] = mark
+
+    def mint_record_index(self, table_name: str) -> int:
+        """Mint the next fresh `record_index` for `table_name`, advancing its
+        working high-water mark past the minted value.
+
+        Design doc § Semantics, `insert_rows` -- the minting rule: per-table
+        ordinal high-water mark `+ 1` per phantom, in assignment order; the
+        mark is never lowered, so a deletion gap (a tombstoned suffix
+        included) is never reused.
+
+        Args:
+            table_name: The records-category table receiving one phantom row.
+
+        Returns:
+            The freshly minted `record_index`.
+
+        Raises:
+            CorruptError: `table_name` carries no captured high-water mark --
+                an engine invariant breach (a records-category `insert_rows`
+                target with no `record_index` column), not a config error.
+        """
+        mark = self._record_index_marks.get(table_name)
+        if mark is None:
+            raise CorruptError(
+                f"mint_record_index: no record_index high-water mark captured"
+                f" for table {table_name!r}"
+            )
+        mark += 1
+        self._record_index_marks[table_name] = mark
+        return mark
 
 
 @dataclass(frozen=True)

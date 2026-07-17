@@ -324,6 +324,65 @@ def test_jitter_c9_recomputed_not_inherited_from_exact() -> None:
     assert outcome.defects[0].impact == ("C9",)
 
 
+def test_jitter_excludes_reference_prop_column_regardless_of_duckdb_type() -> None:
+    """A records reference `prop__` column is jitter-ineligible by declared
+    rule, not by numeric-type coincidence -- deliberately typed BIGINT (never
+    a real contract shape; a real reference `prop__` is VARCHAR) to isolate
+    the exclusion from the type gate. `prop__age` still jitters; the
+    reference pair travels into the near-duplicate untouched."""
+    spec = table_spec(
+        "records__patient",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec(
+                "prop__age", "BIGINT", history_tracked=True, temporal_class="tracked"
+            ),
+            column_spec(
+                "prop__doctor_ref",
+                "BIGINT",
+                references="doctor",
+                history_tracked=False,
+                temporal_class="constant",
+            ),
+        ),
+        record_kind="patient",
+    )
+    history_rows = [_history_row("p1", "age", "30")]
+    state = CorruptState(
+        tables={
+            "history": working_table(_history_spec(), history_rows),
+            "records__patient": working_table(
+                spec,
+                [
+                    {
+                        "fork_path": _FORK_PATH,
+                        "record_id": "p1",
+                        "prop__age": 30,
+                        "prop__doctor_ref": 7,
+                    }
+                ],
+            ),
+        }
+    )
+    sc = sidecar((spec,))
+    jitter = Distribution(shape="uniform", low=1.0, high=1.0)
+    op = _op(
+        "records__patient",
+        Amount(count=1),
+        columns=["prop__*"],
+        jitter=jitter,
+    )
+    outcome = _apply(state, op, sc, seed=3)
+    assert outcome.units_affected == 1
+    rows = state.tables["records__patient"].data.to_pylist()
+    ages = sorted(r["prop__age"] for r in rows)
+    refs = [r["prop__doctor_ref"] for r in rows]
+    assert ages == [30, 31]  # jittered by the deterministic +1.0 delta
+    assert refs == [7, 7]  # the reference pair travels untouched
+
+
 # ---------------------------------------------------------------------------
 # Break locality, determinism, and cross-handler working-state reads
 # ---------------------------------------------------------------------------

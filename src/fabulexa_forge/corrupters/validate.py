@@ -176,9 +176,13 @@ def is_jitter_eligible(col: "ColumnSpec") -> bool:
 
     Returns:
         True iff `col` is a `prop__*` / `elem__*` column, is not a `*_sim_time`
-        lifecycle column, and its DuckDB type is BIGINT or DOUBLE.
+        lifecycle column, is not a records reference `prop__` column (declared
+        ineligible regardless of its DuckDB type -- never a numeric-type
+        coincidence), and its DuckDB type is BIGINT or DOUBLE.
     """
     if col.name.endswith("_sim_time"):
+        return False
+    if col.name.startswith("prop__") and col.references is not None:
         return False
     if not (col.name.startswith("prop__") or col.name.startswith("elem__")):
         return False
