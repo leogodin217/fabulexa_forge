@@ -1,7 +1,7 @@
 sprint: base-format-v6
 parent_branch: revender_for_point_in_time
 started: 2026-07-17
-current_phase: 3
+current_phase: 4
 capabilities:
   - reader: [records-column taxonomy, version gate v6]
   - conformance: [C5 v6 layout, catalog re-check removal]
@@ -76,7 +76,7 @@ phases:
           - "tests/reader/test_fixtures.py"
           - "tests/_support/test_sidecar_builder.py"
   3:
-    status: pending
+    status: complete
     name: "Corrupter pair-scoped reference writes"
     demo: "docs/sprints/base-format-v6/demos/phase_3_pair_writes.py"
   4:
