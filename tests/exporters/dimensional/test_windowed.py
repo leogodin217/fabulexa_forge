@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.config.models import (
@@ -39,21 +39,25 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _ENTITY_COLUMNS_WITH_FLAGS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
 ]
 
 _ENTITY_COLUMNS_NO_FLAGS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR"},
     {"name": "prop__status", "type": "VARCHAR"},
 ]
@@ -92,25 +96,27 @@ def _build_records_emit(tmp_path: Path) -> Path:
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     entity_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-        {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN", "history_tracked": False},
         {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
         {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
     ]
     conn.execute(_create_ddl("records__entity", entity_cols))
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "e001", True, 10, "Alice"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "e001", 0, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "e002", True, 20, "Bob"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "e002", 0, True, 20, 1, "Bob"],
     )
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "e003", True, 30, "Carol"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "e003", 0, True, 30, 2, "Carol"],
     )
     conn.close()
 
@@ -140,15 +146,18 @@ def _build_history_point_emit(tmp_path: Path) -> Path:
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     entity_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
     ]
     conn.execute(_create_ddl("records__journey", entity_cols))
     conn.execute(
-        'INSERT INTO "records__journey" VALUES (?, ?, ?, ?)',
-        ["trunk", "j001", True, 30],
+        'INSERT INTO "records__journey" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "j001", 0, True, 30, 0],
     )
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     for sim_time in [5, 15, 25]:
@@ -186,8 +195,8 @@ def _build_scd2_with_valid_to_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__actor", _ENTITY_COLUMNS_WITH_FLAGS))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a001", True, None, 30, "Alice", "discharged"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a001", 0, True, None, 30, 0, "Alice", "discharged"],
     )
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     for sim_time, state in [
@@ -233,8 +242,8 @@ def _build_scd2_no_valid_to_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__actor", _ENTITY_COLUMNS_WITH_FLAGS))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a001", True, None, 20, "Alice", "treatment"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a001", 0, True, None, 20, 0, "Alice", "treatment"],
     )
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     for sim_time, state in [(10, "admitted"), (20, "treatment")]:
@@ -276,21 +285,26 @@ def _build_ordinal_emit(tmp_path: Path) -> Path:
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     entity_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR"},
     ]
     conn.execute(_create_ddl("records__entity", entity_cols))
-    for rid, sim_t, name in [
-        ("e001", 10, "Alice"),
-        ("e002", 10, "Bob"),
-        ("e003", 20, "Carol"),
-    ]:
+    for idx, (rid, sim_t, name) in enumerate(
+        [
+            ("e001", 10, "Alice"),
+            ("e002", 10, "Bob"),
+            ("e003", 20, "Carol"),
+        ]
+    ):
         conn.execute(
-            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?)',
-            ["trunk", rid, True, sim_t, name],
+            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+            ["trunk", rid, 0, True, sim_t, idx, name],
         )
     conn.close()
 

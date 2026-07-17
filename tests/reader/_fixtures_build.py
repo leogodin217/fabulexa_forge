@@ -1,9 +1,10 @@
 """Fixture builder for base-reader conformance tests.
 
-Synthesizes a spanning-positive v5 emit and several deliberately-broken variants
+Synthesizes a spanning-positive v6 emit and several deliberately-broken variants
 into a caller-supplied directory. Every base.json write routes through
 `_support.sidecar_builder.write_emit`; every value-carrying `prop__` column is
-built through `prop_column`.
+built through `prop_column`; every identity column (`fork_path`, `record_id`,
+`record_index`, `ref_index__<name>`) is built through `identity_column`.
 
 All builder functions are module-level so they can be tested independently.
 """
@@ -17,6 +18,7 @@ from pathlib import Path
 import duckdb
 from _support.sidecar_builder import (
     UNSUPPORTED_VERSION_SENTINEL,
+    identity_column,
     prop_column,
     write_emit,
 )
@@ -35,14 +37,17 @@ _HISTORY_COLUMNS: list[dict[str, object]] = [
     {"name": "value", "type": "VARCHAR"},
 ]
 
-# records__actor columns: fixed prefix + prop__ block (no provenance)
+# records__actor columns: fixed prefix + record_index + prop__/ref_index__ block
+# (no provenance). prop__doctor_id is reference-annotated, so its
+# ref_index__doctor_id sibling immediately follows it (v6 § Dense record index).
 _RECORDS_ACTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
     ),
@@ -52,7 +57,7 @@ _RECORDS_ACTOR_COLUMNS: list[dict[str, object]] = [
     prop_column(
         "prop__status", "VARCHAR", history_tracked=False, temporal_class="slice_only"
     ),
-    # references-annotated FK to doctor kind
+    # references-annotated FK to doctor kind, paired with its ref_index__ sibling
     prop_column(
         "prop__doctor_id",
         "VARCHAR",
@@ -60,6 +65,7 @@ _RECORDS_ACTOR_COLUMNS: list[dict[str, object]] = [
         temporal_class="constant",
         references="doctor",
     ),
+    identity_column("ref_index__doctor_id", "BIGINT"),
     # sub-type discriminator -- fixed at creation, never changes
     prop_column(
         "prop__actor_type",
@@ -69,23 +75,25 @@ _RECORDS_ACTOR_COLUMNS: list[dict[str, object]] = [
     ),
 ]
 
-# records__doctor columns: fixed prefix + prop__ block (no provenance)
+# records__doctor columns: fixed prefix + record_index + prop__ block (no provenance)
 _RECORDS_DOCTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
     ),
 ]
 
-# membership__actor__appointments columns
+# membership__actor__appointments columns (no ref_index analog: membership
+# reference pairs stay member__<name>__kind/member__<name>__id, unchanged by v6)
 _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     # scalar element field
@@ -104,8 +112,8 @@ _RECORD_ROLES: dict[str, object] = {
 # membership__actor__oncall columns -- build_membership_intervals' new,
 # interval-rich membership table (family E's sibling of family C's history)
 _ONCALL_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     # nullable scalar element field
@@ -247,10 +255,28 @@ def _spanning_tables(
 
 
 def _populate_history(conn: duckdb.DuckDBPyConnection) -> int:
-    """Insert rows into history (6 base columns, no provenance); return row count."""
+    """Insert rows into history (6 base columns, no provenance); return row count.
+
+    a001's genesis row for the history-tracked `prop__name` (C13's per-record
+    sample).
+    """
     conn.execute(
         "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
         ["trunk", "actor", "a001", "name", 10, "Alice"],
+    )
+    return 1
+
+
+def _populate_history_a002_genesis(conn: duckdb.DuckDBPyConnection) -> int:
+    """Insert a002's `name` genesis row into history; return row count.
+
+    a002 is the spanning fixture's NULL-doctor-reference row
+    (`_populate_records_actor`) -- C13 samples every records row of a kind
+    carrying a history-tracked column, so it too needs its own genesis row.
+    """
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+        ["trunk", "actor", "a002", "name", 15, "Bob"],
     )
     return 1
 
@@ -353,7 +379,7 @@ def _populate_records_actor_history_series(conn: duckdb.DuckDBPyConnection) -> i
     round-half-to-even ambiguity).
     """
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",  # fork_path
             "a001",  # record_id
@@ -361,9 +387,11 @@ def _populate_records_actor_history_series(conn: duckdb.DuckDBPyConnection) -> i
             True,  # active
             # deactivated_at = NULL
             10,  # last_mutation_sim_time
+            0,  # record_index
             "Alice",  # prop__name
             "active",  # prop__status
             "d001",  # prop__doctor_id
+            0,  # ref_index__doctor_id -- d001's record_index
             "patient",  # prop__actor_type
             12,  # prop__wait_minutes
             37.256,  # prop__temperature_c
@@ -424,13 +452,17 @@ def _populate_history_series(conn: duckdb.DuckDBPyConnection) -> int:
 def _populate_records_actor(conn: duckdb.DuckDBPyConnection) -> int:
     """Insert rows into records__actor; return row count.
 
-    Columns (10 total):
-      fork_path, record_id, created_sim_time, active, deactivated_at(NULL),
-      last_mutation_sim_time,
-      prop__name, prop__status, prop__doctor_id, prop__actor_type
+    Columns (12 total): fork_path, record_id, created_sim_time, active,
+    deactivated_at(NULL), last_mutation_sim_time, record_index, prop__name,
+    prop__status, prop__doctor_id, ref_index__doctor_id, prop__actor_type.
+
+    Two rows: a001 (references d001 -- `ref_index__doctor_id` resolves to
+    d001's record_index) and a002 (a NULL-together pair -- both
+    `prop__doctor_id` and `ref_index__doctor_id` NULL, exercising the pair's
+    NULL-together invariant on a genuinely unreferenced actor).
     """
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",  # fork_path
             "a001",  # record_id
@@ -438,30 +470,61 @@ def _populate_records_actor(conn: duckdb.DuckDBPyConnection) -> int:
             True,  # active
             # deactivated_at = NULL
             10,  # last_mutation_sim_time
+            0,  # record_index
             "Alice",  # prop__name
             "active",  # prop__status
             "d001",  # prop__doctor_id
+            0,  # ref_index__doctor_id -- d001's record_index
             "patient",  # prop__actor_type
         ],
     )
-    return 1
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, ?)",
+        [
+            "trunk",  # fork_path
+            "a002",  # record_id
+            15,  # created_sim_time
+            True,  # active
+            # deactivated_at = NULL
+            15,  # last_mutation_sim_time
+            1,  # record_index
+            "Bob",  # prop__name
+            "active",  # prop__status
+            # prop__doctor_id = NULL, ref_index__doctor_id = NULL (NULL-together)
+            "nurse",  # prop__actor_type
+        ],
+    )
+    return 2
 
 
 def _populate_records_doctor(conn: duckdb.DuckDBPyConnection) -> int:
-    """Insert rows into records__doctor; return row count."""
-    conn.execute(
-        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?)",
-        [
-            "trunk",  # fork_path
-            "d001",  # record_id
-            5,  # created_sim_time
-            True,  # active
-            # deactivated_at = NULL
-            5,  # last_mutation_sim_time
-            "Dr. Smith",  # prop__name
-        ],
-    )
-    return 1
+    """Insert rows into records__doctor; return row count.
+
+    Three doctors mixing record_id shapes -- d001 (a hex-valid alnum id),
+    "1005" (a pure decimal-string id), and "9f2ab1" (a hex-digest id) -- so no
+    id/index-conflating implementation can resolve `ref_index__doctor_id` by
+    coincidentally parsing `record_id` as an integer.
+    """
+    rows = [
+        ("d001", 5, "Dr. Smith"),
+        ("1005", 6, "Dr. Numeric"),
+        ("9f2ab1", 7, "Dr. Hex"),
+    ]
+    for record_index, (record_id, created_sim_time, name) in enumerate(rows):
+        conn.execute(
+            "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+            [
+                "trunk",  # fork_path
+                record_id,  # record_id
+                created_sim_time,  # created_sim_time
+                True,  # active
+                # deactivated_at = NULL
+                created_sim_time,  # last_mutation_sim_time
+                record_index,  # record_index
+                name,  # prop__name
+            ],
+        )
+    return len(rows)
 
 
 def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> int:
@@ -489,7 +552,7 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
     for any doctor row.
     """
     conn.execute(
-        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",  # fork_path
             "d001",  # record_id
@@ -497,6 +560,7 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
             True,  # active
             # deactivated_at = NULL
             5,  # last_mutation_sim_time
+            0,  # record_index
             "Dr. Smith",  # prop__name
             "48213",  # prop__license_number
             "café",  # prop__notes
@@ -504,7 +568,7 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
         ],
     )
     conn.execute(
-        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",  # fork_path
             "d002",  # record_id -- ordinary donor
@@ -512,6 +576,7 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
             True,  # active
             # deactivated_at = NULL
             6,  # last_mutation_sim_time
+            1,  # record_index
             "Dr. Jones",  # prop__name
             "77104",  # prop__license_number
             "clinic",  # prop__notes
@@ -519,7 +584,7 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
         ],
     )
     conn.execute(
-        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",  # fork_path
             "d003",  # record_id -- late-created donor
@@ -527,6 +592,7 @@ def _populate_records_doctor_history_series(conn: duckdb.DuckDBPyConnection) -> 
             True,  # active
             # deactivated_at = NULL
             50,  # last_mutation_sim_time
+            2,  # record_index
             "Dr. Patel",  # prop__name
             "90210",  # prop__license_number
             "annex",  # prop__notes
@@ -594,7 +660,7 @@ def _build_spanning_db(conn: duckdb.DuckDBPyConnection) -> tuple[int, int, int, 
     conn.execute(
         _create_table_ddl("membership__actor__appointments", _MEMBERSHIP_COLUMNS)
     )
-    history_rows = _populate_history(conn)
+    history_rows = _populate_history(conn) + _populate_history_a002_genesis(conn)
     actor_rows = _populate_records_actor(conn)
     doctor_rows = _populate_records_doctor(conn)
     membership_rows = _populate_membership(conn)
@@ -609,12 +675,18 @@ def _build_spanning_db(conn: duckdb.DuckDBPyConnection) -> tuple[int, int, int, 
 def build_spanning(dest: Path) -> None:
     """Build the spanning fixture into dest.
 
-    A single-branch (trunk-only) sanitised v5 emit with no firings table and
-    no provenance columns. Exercises: history (6 base cols), records__actor with
-    a references-annotated column, a closed-domain, slice_only prop__status, a
-    constant-class sub-type discriminator prop__actor_type, records__doctor, and
-    membership__actor__appointments with elem__* and member__*__kind/id columns,
-    plus pinned_ids, runtime, enum_domains, and record_roles.
+    A single-branch (trunk-only) sanitised v6 emit with no firings table and
+    no provenance columns. Exercises: history (6 base cols), records__actor
+    (two rows, record_index 0-1) with a references-annotated prop__doctor_id
+    paired with ref_index__doctor_id (a001 resolves to d001; a002 is a
+    NULL-together pair -- both cells NULL), a closed-domain slice_only
+    prop__status, a constant-class sub-type discriminator prop__actor_type,
+    records__doctor (three rows, record_index 0-2, record_id shapes mixing a
+    hex-valid alnum id (d001), a pure decimal-string id ("1005"), and a
+    hex-digest id ("9f2ab1") -- the adversarial id mix an
+    id/index-conflating implementation cannot pass by coincidence), and
+    membership__actor__appointments with elem__* and member__*__kind/id
+    columns, plus pinned_ids, runtime, enum_domains, and record_roles.
     """
     dest.mkdir(parents=True, exist_ok=True)
     db_path = dest / "run.duckdb"
@@ -632,7 +704,7 @@ def build_spanning(dest: Path) -> None:
 
 
 def build_history_series(dest: Path) -> None:
-    """Build a spanning-shaped v5 emit whose history carries multi-event series.
+    """Build a spanning-shaped v6 emit whose history carries multi-event series.
 
     Identical table set, membership rows, branches (slice_at=100), pins,
     enum_domains, and record_roles to build_spanning, with richer records
@@ -706,7 +778,7 @@ def build_history_series(dest: Path) -> None:
 
 
 def build_membership_intervals(dest: Path) -> None:
-    """Build a spanning-shaped v5 emit whose membership carries
+    """Build a spanning-shaped v6 emit whose membership carries
     interval-rich member timelines.
 
     Identical history, records__actor, records__doctor,
@@ -787,7 +859,8 @@ def build_membership_intervals(dest: Path) -> None:
 def build_wrong_version(dest: Path) -> None:
     """Build the wrong_version fixture into dest.
 
-    An otherwise-valid emit whose base_format_version is not 5.
+    An otherwise-valid emit whose base_format_version is not
+    SUPPORTED_BASE_FORMAT_VERSION (UNSUPPORTED_VERSION_SENTINEL instead).
     open_emit raises UnsupportedBaseFormatVersionError on this fixture.
     """
     dest.mkdir(parents=True, exist_ok=True)
@@ -832,7 +905,9 @@ def build_c5_prop_missing(dest: Path) -> None:
     """Build the c5_prop_missing fixture into dest.
 
     A prop__* column dropped from the records DuckDB table but still declared
-    in the sidecar. C2 + C5 fail.
+    in the sidecar (itself a well-formed v6 shape). C2 fails alone: C5's
+    removed catalog re-check no longer sees the sidecar/catalog mismatch --
+    C2's element-wise catalog<->sidecar agreement is the sole catalog carrier.
     """
     dest.mkdir(parents=True, exist_ok=True)
 
@@ -907,8 +982,10 @@ def build_c7_half_null_member(dest: Path) -> None:
 def build_schema_mismatch(dest: Path) -> None:
     """Build the schema_mismatch fixture into dest.
 
-    A phantom prop__phantom_column is declared in the sidecar but absent in
-    the DuckDB records table. C2 + C5 fail.
+    A phantom prop__phantom_column is declared in the sidecar (itself a
+    well-formed v6 shape -- an unreferenced trailing prop__ column) but
+    absent in the DuckDB records table. C2 fails alone: C5's removed catalog
+    re-check no longer sees the sidecar/catalog mismatch.
     """
     dest.mkdir(parents=True, exist_ok=True)
     db_path = dest / "run.duckdb"
@@ -971,12 +1048,14 @@ def build_refs_dangling(dest: Path) -> None:
     """Build the refs_dangling fixture into dest.
 
     A records__actor row has a prop__doctor_id that does not exist in any
-    records__doctor table. This is a dangling records-prop reference, which is
-    outside C1–C12 (C10 resolves only membership references; C11 checks the
-    history_tracked flag, not prop reference integrity). validate passes. The
-    tracked prop__name column carries its own unconditional genesis row at
-    a001's created_sim_time=10 -- required so this fixture fails nothing but
-    the dangling-reference boundary it exists to exercise.
+    records__doctor table (its ref_index__doctor_id sibling is likewise
+    dangling -- pair resolution is producer-guaranteed, not C1-C13-verified).
+    This is a dangling records-prop reference, which is outside C1–C12 (C10
+    resolves only membership references; C11 checks the history_tracked flag,
+    not prop reference integrity). validate passes. The tracked prop__name
+    column carries its own unconditional genesis row at a001's
+    created_sim_time=10 -- required so this fixture fails nothing but the
+    dangling-reference boundary it exists to exercise.
     """
     dest.mkdir(parents=True, exist_ok=True)
     db_path = dest / "run.duckdb"
@@ -987,16 +1066,18 @@ def build_refs_dangling(dest: Path) -> None:
     history_rows = _populate_history(conn)  # a001's prop__name genesis row
 
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "a001",
             10,
             True,
-            10,
+            10,  # last_mutation_sim_time
+            0,  # record_index
             "Alice",
             "active",
             "nonexistent_doctor_id",  # dangling reference
+            -1,  # ref_index__doctor_id -- likewise dangling, never verified
             "patient",
         ],
     )
@@ -1023,15 +1104,18 @@ def _c13_records_actor_columns(prop_col: dict[str, object]) -> list[dict[str, ob
 
     Shared by the C11/C13 negative fixtures below, which each isolate their
     defect to a single flagged prop__ column rather than the spanning
-    fixture's four.
+    fixture's four. Carries `record_index` (v6-required on every
+    records-category table) so these C11/C13 negatives fail only the check
+    they are named for, never C5.
     """
     return [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
         {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         prop_col,
     ]
 
@@ -1039,8 +1123,8 @@ def _c13_records_actor_columns(prop_col: dict[str, object]) -> list[dict[str, ob
 def _c13_populate_records_actor(conn: duckdb.DuckDBPyConnection, value: str) -> int:
     """Insert one records__actor row (a001, created_sim_time=10); return row count."""
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?)",
-        ["trunk", "a001", 10, True, 10, value],
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, value],
     )
     return 1
 
@@ -1240,6 +1324,106 @@ def build_c12_missing_subtype(dest: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# C5 shape negatives (v6) — each isolates one clause of the amended
+# _check_c5_table positional check to records__actor alone.
+# ---------------------------------------------------------------------------
+
+
+def _write_c5_negative(dest: Path, columns: list[dict[str, object]]) -> None:
+    """Shared harness for the C5 shape negatives below.
+
+    Each negative supplies a deliberately mis-shaped records__actor column
+    list; the DuckDB catalog carries the identical (broken) shape so C2 stays
+    silent and only C5's positional check can fail. Zero rows -- the defect
+    is purely structural, so no row data is needed. write_emit's own v6
+    records-shape assertion is the same net C5 enforces at read time, so it
+    is opted out here via records_shape_valid=False -- the deliberate defect
+    this harness exists to write.
+
+    Args:
+        dest: The emit directory.
+        columns: The (broken) records__actor column list, used for both the
+            DuckDB catalog and the sidecar.
+    """
+    dest.mkdir(parents=True, exist_ok=True)
+    db_path = dest / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", columns))
+    conn.close()
+
+    write_emit(
+        dest,
+        tables=[
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
+            _table_spec("records__actor", "records", columns, 0, record_kind="actor"),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+        records_shape_valid=False,
+    )
+
+
+def build_c5_missing_record_index(dest: Path) -> None:
+    """Build the c5_missing_record_index fixture into dest.
+
+    record_index is dropped entirely from records__actor; the property block
+    starts one slot early. C5 fails alone.
+    """
+    columns = [c for c in _RECORDS_ACTOR_COLUMNS if c["name"] != "record_index"]
+    _write_c5_negative(dest, columns)
+
+
+def build_c5_misplaced_record_index(dest: Path) -> None:
+    """Build the c5_misplaced_record_index fixture into dest.
+
+    record_index is moved to the end of the column list instead of sitting
+    immediately after the lifecycle prefix. C5 fails alone.
+    """
+    columns = [c for c in _RECORDS_ACTOR_COLUMNS if c["name"] != "record_index"]
+    record_index_col = next(
+        c for c in _RECORDS_ACTOR_COLUMNS if c["name"] == "record_index"
+    )
+    columns.append(record_index_col)
+    _write_c5_negative(dest, columns)
+
+
+def build_c5_prop_without_ref_index(dest: Path) -> None:
+    """Build the c5_prop_without_ref_index fixture into dest.
+
+    The reference-annotated prop__doctor_id column's ref_index__doctor_id
+    sibling is dropped; prop__doctor_id's own `references` annotation is
+    unchanged. C5 fails alone.
+    """
+    columns = [c for c in _RECORDS_ACTOR_COLUMNS if c["name"] != "ref_index__doctor_id"]
+    _write_c5_negative(dest, columns)
+
+
+def build_c5_ref_index_without_reference(dest: Path) -> None:
+    """Build the c5_ref_index_without_reference fixture into dest.
+
+    A ref_index__ column is appended after a non-reference-annotated prop__
+    column (prop__actor_type carries no `references`), so it has no
+    reference-annotated predecessor to pair with. C5 fails alone.
+    """
+    columns = copy.deepcopy(_RECORDS_ACTOR_COLUMNS)
+    columns.append(identity_column("ref_index__actor_type", "BIGINT"))
+    _write_c5_negative(dest, columns)
+
+
+def build_c5_ref_index_wrong_type(dest: Path) -> None:
+    """Build the c5_ref_index_wrong_type fixture into dest.
+
+    ref_index__doctor_id is declared VARCHAR instead of the pinned BIGINT.
+    C5 fails alone.
+    """
+    columns = copy.deepcopy(_RECORDS_ACTOR_COLUMNS)
+    for col in columns:
+        if col["name"] == "ref_index__doctor_id":
+            col["type"] = "VARCHAR"
+    _write_c5_negative(dest, columns)
+
+
+# ---------------------------------------------------------------------------
 # Top-level: build all fixtures
 # ---------------------------------------------------------------------------
 
@@ -1260,6 +1444,11 @@ _BUILDERS: dict[str, Callable[[Path], None]] = {
     "c13_out_of_enum_class": build_c13_out_of_enum_class,
     "c13_missing_genesis": build_c13_missing_genesis,
     "c11_emptied_series": build_c11_emptied_series,
+    "c5_missing_record_index": build_c5_missing_record_index,
+    "c5_misplaced_record_index": build_c5_misplaced_record_index,
+    "c5_prop_without_ref_index": build_c5_prop_without_ref_index,
+    "c5_ref_index_without_reference": build_c5_ref_index_without_reference,
+    "c5_ref_index_wrong_type": build_c5_ref_index_wrong_type,
 }
 
 

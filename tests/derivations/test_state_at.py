@@ -58,7 +58,7 @@ class TestMembership:
         """A record created before the horizon is present."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset(), horizon_ns=20)
@@ -69,7 +69,7 @@ class TestMembership:
         """A record created exactly at the horizon is absent (horizon is exclusive)."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 20, True, None, 20, "a", "5")],
+            record_rows=[("trunk", "r1", 20, True, None, 20, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset(), horizon_ns=20)
@@ -79,7 +79,7 @@ class TestMembership:
         """A record created after the horizon is absent."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 30, True, None, 30, "a", "5")],
+            record_rows=[("trunk", "r1", 30, True, None, 30, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset(), horizon_ns=20)
@@ -98,7 +98,7 @@ class TestHorizonExclusivity:
         """A history event at exactly horizon_ns is not reflected in the as-of value."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 5, True, None, 30, "c", "5")],
+            record_rows=[("trunk", "r1", 5, True, None, 30, 0, "c", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 5, "a"),
                 ("trunk", "item", "r1", "status", 30, "b"),
@@ -113,7 +113,7 @@ class TestHorizonExclusivity:
         """State at the end of window k equals the state at horizon = window k's end."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 40, "c", "5")],
+            record_rows=[("trunk", "r1", 0, True, None, 40, 0, "c", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 0, "a"),
                 ("trunk", "item", "r1", "status", 20, "b"),
@@ -142,7 +142,7 @@ class TestPropertyReconstruction:
         """Tracked prop carries the most-recent history value strictly before horizon."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 30, "c", "5")],
+            record_rows=[("trunk", "r1", 0, True, None, 30, 0, "c", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 0, "alpha"),
                 ("trunk", "item", "r1", "status", 10, "beta"),
@@ -158,7 +158,7 @@ class TestPropertyReconstruction:
         """Tracked prop is NULL when the kind has no history at or before the horizon."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 30, "c", "5")],
+            record_rows=[("trunk", "r1", 0, True, None, 30, 0, "c", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "beta"),
             ],
@@ -172,7 +172,7 @@ class TestPropertyReconstruction:
         """Untracked (current-value) prop is the record's current value at every horizon."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 30, "c", "99")],
+            record_rows=[("trunk", "r1", 0, True, None, 30, 0, "c", "99")],
             history_rows=[],
         )
         rows_early = _run(emit_dir, "item", frozenset({"score"}), horizon_ns=5)
@@ -184,7 +184,7 @@ class TestPropertyReconstruction:
         """Empty properties yields identity + lifecycle columns only (no prop__ cols)."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 0, "a", "5")],
+            record_rows=[("trunk", "r1", 0, True, None, 0, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset(), horizon_ns=10)
@@ -203,7 +203,7 @@ class TestLifecycleHorizonRender:
         """A record deactivated after the horizon shows active=true, deactivated_at=NULL."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, False, 50, 50, "a", "5")],
+            record_rows=[("trunk", "r1", 0, False, 50, 50, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset(), horizon_ns=20)
@@ -214,7 +214,7 @@ class TestLifecycleHorizonRender:
         """A record deactivated before the horizon shows active=false, deactivated_at set."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, False, 50, 50, "a", "5")],
+            record_rows=[("trunk", "r1", 0, False, 50, 50, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset(), horizon_ns=100)
@@ -225,7 +225,7 @@ class TestLifecycleHorizonRender:
         """A delete event exactly at the horizon is not reflected (horizon is exclusive)."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, False, 50, 50, "a", "5")],
+            record_rows=[("trunk", "r1", 0, False, 50, 50, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset(), horizon_ns=50)
@@ -238,7 +238,7 @@ class TestLifecycleHorizonRender:
         """A record deactivated between two horizons flips from active to inactive."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, False, 30, 30, "a", "5")],
+            record_rows=[("trunk", "r1", 0, False, 30, 30, 0, "a", "5")],
             history_rows=[],
         )
         rows_early = _run(emit_dir, "item", frozenset(), horizon_ns=10)
@@ -252,7 +252,7 @@ class TestLifecycleHorizonRender:
         """An active record (deactivated_at NULL) is always active."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 0, "a", "5")],
+            record_rows=[("trunk", "r1", 0, True, None, 0, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset(), horizon_ns=1000)
@@ -281,7 +281,7 @@ class TestColumnOrder:
         """presentation_id follows STATE_AT_COLUMNS when the kind carries it."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 99, 0, True, None, 0, "a")],
+            record_rows=[("trunk", "r1", 99, 0, True, None, 0, 0, "a")],
             history_rows=[],
             record_cols=_RECORD_COLS_WITH_PID,
         )
@@ -293,7 +293,7 @@ class TestColumnOrder:
         """No presentation_id column when the kind does not carry a surrogate."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 0, "a", "5")],
+            record_rows=[("trunk", "r1", 0, True, None, 0, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset(), horizon_ns=10)
@@ -303,7 +303,7 @@ class TestColumnOrder:
         """prop__ columns follow sidecar column-declaration order regardless of class."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 0, "a1", "b1", "g1")],
+            record_rows=[("trunk", "r1", 0, True, None, 0, 0, "a1", "b1", "g1")],
             history_rows=[
                 ("trunk", "widget", "r1", "alpha", 0, "a1"),
                 ("trunk", "widget", "r1", "gamma", 0, "g1"),
@@ -335,9 +335,9 @@ class TestOrdering:
         emit_dir = _build_emit(
             tmp_path,
             record_rows=[
-                ("trunk", "r2", 5, True, None, 5, "b", "2"),
-                ("trunk", "r1", 5, True, None, 5, "a", "1"),
-                ("trunk", "r0", 0, True, None, 0, "z", "0"),
+                ("trunk", "r2", 5, True, None, 5, 0, "b", "2"),
+                ("trunk", "r1", 5, True, None, 5, 1, "a", "1"),
+                ("trunk", "r0", 0, True, None, 0, 2, "z", "0"),
             ],
             history_rows=[],
         )
@@ -370,7 +370,7 @@ class TestErrors:
         """A selected property missing from the kind raises ExportError."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 0, "a", "5")],
+            record_rows=[("trunk", "r1", 0, True, None, 0, 0, "a", "5")],
             history_rows=[],
         )
         with open_emit(emit_dir) as emit:
@@ -392,7 +392,7 @@ class TestDeterminism:
         """Two builds with identical arguments produce identical SQL."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 0, True, None, 0, "a", "5")],
+            record_rows=[("trunk", "r1", 0, True, None, 0, 0, "a", "5")],
             history_rows=[],
         )
         with open_emit(emit_dir) as emit:
@@ -409,8 +409,8 @@ class TestDeterminism:
         emit_dir = _build_emit(
             tmp_path,
             record_rows=[
-                ("trunk", "r1", 0, True, None, 0, "a", "5"),
-                ("other/branch", "r2", 0, True, None, 0, "b", "6"),
+                ("trunk", "r1", 0, True, None, 0, 0, "a", "5"),
+                ("other/branch", "r2", 0, True, None, 0, 1, "b", "6"),
             ],
             history_rows=[],
         )

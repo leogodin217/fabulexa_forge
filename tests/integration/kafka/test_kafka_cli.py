@@ -17,6 +17,7 @@ from typing import Any
 import duckdb
 import pytest
 import yaml
+from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from exporters.streaming._helpers import _ddl
@@ -29,12 +30,13 @@ pytestmark = pytest.mark.kafka
 _DAY = 86_400_000_000_000
 
 _RECORD_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
 ]
 
@@ -57,8 +59,8 @@ def _build_emit(tmp_path: Path, kind: str) -> Path:
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     record_rows = [
-        ("trunk", "r001", 1 * _DAY, True, None, 2 * _DAY, "active"),
-        ("trunk", "r002", 2 * _DAY, True, None, 2 * _DAY, "pending"),
+        ("trunk", "r001", 1 * _DAY, True, None, 2 * _DAY, 0, "active"),
+        ("trunk", "r002", 2 * _DAY, True, None, 2 * _DAY, 1, "pending"),
     ]
     history_rows = [
         ("trunk", kind, "r001", "status", 1 * _DAY, "initial"),
@@ -68,7 +70,7 @@ def _build_emit(tmp_path: Path, kind: str) -> Path:
 
     for row in record_rows:
         conn.execute(
-            f'INSERT INTO "records__{kind}" VALUES (?, ?, ?, ?, ?, ?, ?)', list(row)
+            f'INSERT INTO "records__{kind}" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', list(row)
         )
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))

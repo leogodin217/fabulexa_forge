@@ -972,7 +972,9 @@ def test_emptying_one_table_is_a_noop_for_a_later_operation(tmp_path: Path) -> N
         report = corrupt_emit(emit, config, out_dir)
 
     first_outcome, second_outcome = report.outcomes
-    assert first_outcome.units_selected == 1
+    # 3 doctor rows in the spanning fixture (d001, 1005, 9f2ab1) -- rate:1.0
+    # empties the table entirely.
+    assert first_outcome.units_selected == 3
     assert second_outcome.units_selected == 0
     assert second_outcome.units_affected == 0
     assert second_outcome.defects == ()

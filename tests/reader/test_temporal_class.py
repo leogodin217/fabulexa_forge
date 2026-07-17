@@ -4,6 +4,7 @@ verbatim declared value to the TemporalClass enum."""
 from __future__ import annotations
 
 import pytest
+from _support.sidecar_builder import identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.errors import (
@@ -61,7 +62,7 @@ def test_no_temporal_attributes_raises_with_no_temporal_semantics_message() -> N
     """A column carrying neither attribute raises, message names the no-semantics
     case and never mentions C13 (it is a conformant structural column)."""
     sidecar = _sidecar_with_columns(
-        [{"name": "record_id", "type": "VARCHAR"}],
+        [identity_column("record_id", "VARCHAR")],
     )
     with pytest.raises(TemporalClassUnavailableError) as exc_info:
         sidecar.temporal_class("records__patient", "record_id")
@@ -101,14 +102,14 @@ def test_out_of_enum_declared_value_raises_naming_the_value() -> None:
 
 def test_unknown_table_raises_table_not_found() -> None:
     """An unknown table raises TableNotFoundError."""
-    sidecar = _sidecar_with_columns([{"name": "record_id", "type": "VARCHAR"}])
+    sidecar = _sidecar_with_columns([identity_column("record_id", "VARCHAR")])
     with pytest.raises(TableNotFoundError):
         sidecar.temporal_class("records__doctor", "prop__status")
 
 
 def test_unknown_column_raises_column_not_found() -> None:
     """An unknown column raises ColumnNotFoundError."""
-    sidecar = _sidecar_with_columns([{"name": "record_id", "type": "VARCHAR"}])
+    sidecar = _sidecar_with_columns([identity_column("record_id", "VARCHAR")])
     with pytest.raises(ColumnNotFoundError):
         sidecar.temporal_class("records__patient", "prop__missing")
 

@@ -16,6 +16,7 @@ from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.derivations.reference_resolution import (
@@ -59,6 +60,28 @@ def _table_spec(
     if property_name is not None:
         spec["property"] = property_name
     return spec
+
+
+def _records_prefix() -> list[dict[str, object]]:
+    """The fixed 7-column records-table prefix: identity head, lifecycle
+    tail, record_index (v6 records-column taxonomy) -- shared by every
+    records-category table this module builds.
+    """
+    return [
+        _identity_column("fork_path", "VARCHAR"),
+        _identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        _identity_column("record_index", "BIGINT"),
+    ]
+
+
+def _prefix_values(record_id: str, record_index: int) -> tuple[object, ...]:
+    """Row values for `_records_prefix()` (fixed lifecycle constants,
+    fork_path='trunk')."""
+    return ("trunk", record_id, 10, True, None, 10, record_index)
 
 
 def _build_emit(
@@ -201,8 +224,7 @@ def test_reference_resolution_columns_constant() -> None:
 def test_collect_reference_columns_empty(tmp_path: Path) -> None:
     """Returns empty dict when no prop__ columns have references."""
     cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__name", "type": "VARCHAR"},
     ]
     tables = [_table_spec("records__item", "records", cols, 0, "item")]
@@ -215,9 +237,9 @@ def test_collect_reference_columns_empty(tmp_path: Path) -> None:
 def test_collect_reference_columns_finds_ref_col(tmp_path: Path) -> None:
     """Finds prop__ column annotated with references."""
     cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__owner_id", "type": "VARCHAR", "references": "owner"},
+        _identity_column("ref_index__owner_id", "BIGINT"),
     ]
     tables = [_table_spec("records__item", "records", cols, 0, "item")]
     emit_dir = _build_emit(tmp_path, tables, {}, {"records__item": cols})
@@ -248,9 +270,9 @@ def test_find_paths_no_path_returns_empty() -> None:
 def test_find_paths_single_hop(tmp_path: Path) -> None:
     """Single hop from item to owner via prop__owner_id."""
     cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__owner_id", "type": "VARCHAR", "references": "owner"},
+        _identity_column("ref_index__owner_id", "BIGINT"),
     ]
     tables = [_table_spec("records__item", "records", cols, 0, "item")]
     emit_dir = _build_emit(tmp_path, tables, {}, {"records__item": cols})
@@ -265,14 +287,14 @@ def test_find_paths_single_hop(tmp_path: Path) -> None:
 def test_find_paths_multi_hop(tmp_path: Path) -> None:
     """Multi-hop: item → dept → org."""
     item_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__dept_id", "type": "VARCHAR", "references": "dept"},
+        _identity_column("ref_index__dept_id", "BIGINT"),
     ]
     dept_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__org_id", "type": "VARCHAR", "references": "org"},
+        _identity_column("ref_index__org_id", "BIGINT"),
     ]
     tables = [
         _table_spec("records__item", "records", item_cols, 0, "item"),
@@ -295,9 +317,9 @@ def test_find_paths_multi_hop(tmp_path: Path) -> None:
 def test_path_hint_to_cols_valid(tmp_path: Path) -> None:
     """Valid path hint resolves to ordered ColumnSpec list."""
     cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__owner_id", "type": "VARCHAR", "references": "owner"},
+        _identity_column("ref_index__owner_id", "BIGINT"),
     ]
     tables = [_table_spec("records__item", "records", cols, 0, "item")]
     emit_dir = _build_emit(tmp_path, tables, {}, {"records__item": cols})
@@ -313,8 +335,7 @@ def test_path_hint_to_cols_valid(tmp_path: Path) -> None:
 def test_path_hint_to_cols_invalid_col_raises(tmp_path: Path) -> None:
     """Non-references column in hint raises ExportError."""
     cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__name", "type": "VARCHAR"},
     ]
     tables = [_table_spec("records__item", "records", cols, 0, "item")]
@@ -332,12 +353,11 @@ def test_path_hint_to_cols_invalid_col_raises(tmp_path: Path) -> None:
 def test_build_reference_path_sql_zero_hop_record_id(tmp_path: Path) -> None:
     """Zero-hop (empty hops) with terminal_projection='record_id' returns anchor record_ids."""
     cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__name", "type": "VARCHAR"},
     ]
     tables = [_table_spec("records__item", "records", cols, 1, "item")]
-    rows = [("trunk", "i001", "Alpha")]
+    rows = [(*_prefix_values("i001", 0), "Alpha")]
     emit_dir = _build_emit(
         tmp_path, tables, {"records__item": rows}, {"records__item": cols}
     )
@@ -356,12 +376,11 @@ def test_build_reference_path_sql_zero_hop_record_id(tmp_path: Path) -> None:
 def test_build_reference_path_sql_zero_hop_prop(tmp_path: Path) -> None:
     """Zero-hop with terminal_projection='prop__name' returns prop value as resolved."""
     cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__name", "type": "VARCHAR"},
     ]
     tables = [_table_spec("records__item", "records", cols, 1, "item")]
-    rows = [("trunk", "i001", "Alpha")]
+    rows = [(*_prefix_values("i001", 0), "Alpha")]
     emit_dir = _build_emit(
         tmp_path, tables, {"records__item": rows}, {"records__item": cols}
     )
@@ -385,13 +404,12 @@ def test_build_reference_path_sql_zero_hop_prop(tmp_path: Path) -> None:
 def test_build_reference_path_sql_single_hop_fan_out_free(tmp_path: Path) -> None:
     """Single-hop resolves to the target record_id; each anchor has at most one resolved."""
     item_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__owner_id", "type": "VARCHAR", "references": "owner"},
+        _identity_column("ref_index__owner_id", "BIGINT"),
     ]
     owner_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__name", "type": "VARCHAR"},
     ]
     tables = [
@@ -399,11 +417,15 @@ def test_build_reference_path_sql_single_hop_fan_out_free(tmp_path: Path) -> Non
         _table_spec("records__owner", "records", owner_cols, 2, "owner"),
     ]
     item_rows = [
-        ("trunk", "i001", "o001"),
-        ("trunk", "i002", None),  # unresolvable → NULL
+        (
+            *_prefix_values("i001", 0),
+            "o001",
+            0,
+        ),  # ref_index__owner_id = o001's record_index
+        (*_prefix_values("i002", 1), None, None),  # unresolvable → NULL-together
     ]
     owner_rows = [
-        ("trunk", "o001", "Alice"),
+        (*_prefix_values("o001", 0), "Alice"),
     ]
     emit_dir = _build_emit(
         tmp_path,
@@ -435,18 +457,17 @@ def test_build_reference_path_sql_single_hop_fan_out_free(tmp_path: Path) -> Non
 def test_build_reference_path_sql_multi_hop(tmp_path: Path) -> None:
     """Multi-hop chain resolves through intermediate records."""
     item_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__dept_id", "type": "VARCHAR", "references": "dept"},
+        _identity_column("ref_index__dept_id", "BIGINT"),
     ]
     dept_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__org_id", "type": "VARCHAR", "references": "org"},
+        _identity_column("ref_index__org_id", "BIGINT"),
     ]
     org_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        *_records_prefix(),
         {"name": "prop__name", "type": "VARCHAR"},
     ]
     tables = [
@@ -458,9 +479,10 @@ def test_build_reference_path_sql_multi_hop(tmp_path: Path) -> None:
         tmp_path,
         tables,
         {
-            "records__item": [("trunk", "i001", "d001")],
-            "records__dept": [("trunk", "d001", "org001")],
-            "records__org": [("trunk", "org001", "Acme")],
+            # d001's record_index is 0; org001's record_index is 0
+            "records__item": [(*_prefix_values("i001", 0), "d001", 0)],
+            "records__dept": [(*_prefix_values("d001", 0), "org001", 0)],
+            "records__org": [(*_prefix_values("org001", 0), "Acme")],
         },
         {
             "records__item": item_cols,
@@ -500,8 +522,8 @@ def test_build_reference_path_sql_invalid_terminal_raises() -> None:
 # ---------------------------------------------------------------------------
 
 _MEM_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "elem__role", "type": "VARCHAR"},
     {"name": "member__person__id", "type": "VARCHAR"},
     {"name": "member__person__kind", "type": "VARCHAR"},
@@ -513,10 +535,7 @@ def _build_membership_emit(
     mem_rows: list[tuple[Any, ...]],
     owner_rows: list[tuple[Any, ...]],
 ) -> Path:
-    owner_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
-    ]
+    owner_cols: list[dict[str, object]] = _records_prefix()
     tables = [
         _table_spec(
             "membership__team__members",
@@ -551,7 +570,7 @@ def test_build_membership_edge_sql_narrows_by_kind(tmp_path: Path) -> None:
         ("trunk", "team1", "lead", "p001", "person"),
         ("trunk", "team1", "member", "p002", "other_kind"),  # wrong kind
     ]
-    owner_rows: list[tuple[Any, ...]] = [("trunk", "team1")]
+    owner_rows: list[tuple[Any, ...]] = [_prefix_values("team1", 0)]
     emit_dir = _build_membership_emit(tmp_path, mem_rows, owner_rows)
     with open_emit(emit_dir) as emit:
         sql = build_membership_edge_sql(
@@ -574,7 +593,7 @@ def test_build_membership_edge_sql_with_where_predicate(tmp_path: Path) -> None:
         ("trunk", "team1", "lead", "p001", "person"),
         ("trunk", "team1", "member", "p002", "person"),
     ]
-    owner_rows: list[tuple[Any, ...]] = [("trunk", "team1")]
+    owner_rows: list[tuple[Any, ...]] = [_prefix_values("team1", 0)]
     emit_dir = _build_membership_emit(tmp_path, mem_rows, owner_rows)
     with open_emit(emit_dir) as emit:
         sql = build_membership_edge_sql(
@@ -593,16 +612,13 @@ def test_build_membership_edge_sql_with_where_predicate(tmp_path: Path) -> None:
 def test_build_membership_edge_sql_bigint_where_predicate_cast(tmp_path: Path) -> None:
     """A BIGINT elem__ where_predicate value renders as a CAST and filters rows."""
     mem_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        _identity_column("fork_path", "VARCHAR"),
+        _identity_column("record_id", "VARCHAR"),
         {"name": "elem__rank", "type": "BIGINT"},
         {"name": "member__person__id", "type": "VARCHAR"},
         {"name": "member__person__kind", "type": "VARCHAR"},
     ]
-    owner_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
-    ]
+    owner_cols: list[dict[str, object]] = _records_prefix()
     tables = [
         _table_spec(
             "membership__team__members",
@@ -621,7 +637,7 @@ def test_build_membership_edge_sql_bigint_where_predicate_cast(tmp_path: Path) -
                 ("trunk", "team1", 1, "p001", "person"),
                 ("trunk", "team1", 2, "p002", "person"),
             ],
-            "records__team": [("trunk", "team1")],
+            "records__team": [_prefix_values("team1", 0)],
         },
         {
             "membership__team__members": mem_cols,
@@ -653,7 +669,7 @@ def test_build_membership_edge_sql_not_fan_out_free(tmp_path: Path) -> None:
         ("trunk", "team1", "lead", "p001", "person"),
         ("trunk", "team1", "member", "p002", "person"),
     ]
-    owner_rows: list[tuple[Any, ...]] = [("trunk", "team1")]
+    owner_rows: list[tuple[Any, ...]] = [_prefix_values("team1", 0)]
     emit_dir = _build_membership_emit(tmp_path, mem_rows, owner_rows)
     with open_emit(emit_dir) as emit:
         sql = build_membership_edge_sql(
@@ -673,10 +689,7 @@ def test_build_membership_edge_sql_not_fan_out_free(tmp_path: Path) -> None:
 
 def test_build_membership_edge_sql_missing_table(tmp_path: Path) -> None:
     """Missing membership table raises ExportError."""
-    owner_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
-    ]
+    owner_cols: list[dict[str, object]] = _records_prefix()
     tables = [_table_spec("records__team", "records", owner_cols, 0, "team")]
     emit_dir = _build_emit(tmp_path, tables, {}, {"records__team": owner_cols})
     with open_emit(emit_dir) as emit:
@@ -697,7 +710,7 @@ def test_build_membership_edge_sql_bad_member_field(tmp_path: Path) -> None:
     mem_rows: list[tuple[Any, ...]] = [
         ("trunk", "team1", "lead", "p001", "person"),
     ]
-    owner_rows: list[tuple[Any, ...]] = [("trunk", "team1")]
+    owner_rows: list[tuple[Any, ...]] = [_prefix_values("team1", 0)]
     emit_dir = _build_membership_emit(tmp_path, mem_rows, owner_rows)
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="not found"):

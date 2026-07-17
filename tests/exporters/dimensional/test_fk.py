@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.config.models import (
@@ -29,37 +29,45 @@ from fabulexa_forge.reader.emit import open_emit
 # ---------------------------------------------------------------------------
 
 _ACTOR_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR"},
 ]
 
 _JOURNEY_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # references actor
     {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
 _DECISION_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # references journey_instance (for multi-hop: decision→journey_instance→actor)
     {"name": "prop__journey_id", "type": "VARCHAR", "references": "journey_instance"},
+    identity_column("ref_index__journey_id", "BIGINT"),
 ]
 
 _BINDINGS_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role", "type": "VARCHAR"},
@@ -78,25 +86,33 @@ _HISTORY_COLUMNS = [
 
 # Ambiguous: journey_instance has TWO reference columns pointing to actor
 _JOURNEY_AMBIGUOUS_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__primary_actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("ref_index__primary_actor_id", "BIGINT"),
     {"name": "prop__secondary_actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("ref_index__secondary_actor_id", "BIGINT"),
 ]
 
 # Decision with two alternative FK columns (one to journey, one to actor directly)
 _DECISION_AMBIGUOUS_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__journey_id", "type": "VARCHAR", "references": "journey_instance"},
+    identity_column("ref_index__journey_id", "BIGINT"),
     # direct reference to actor as well — creates two paths decision→actor
     {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
 _SUPPORTED_VERSION = "0.1"
@@ -132,38 +148,39 @@ def build_reference_chain_emit(tmp_path: Path) -> Path:
         )
     )
 
-    # actor rows
+    # actor rows: record_index 0, 1
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob"],
-    )
-
-    # journey rows: j001 → a001, j002 → a002
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 10, "a001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j002", True, 20, "a002"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", 20, True, 20, 1, "Bob"],
     )
 
-    # decision rows: d001 → j001 (→ a001), d002 → j002 (→ a002), d003 → no journey (NULL)
+    # journey rows: j001 → a001 (ref_index__actor_id=0), j002 → a002 (ref_index__actor_id=1)
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 10, "j001"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 10, True, 10, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 20, "j002"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j002", 20, True, 20, 1, "a002", 1],
+    )
+
+    # decision rows: d001 → j001 (ref_index__journey_id=0), d002 → j002 (ref_index__journey_id=1),
+    # d003 → no journey (NULL, ref_index__journey_id NULL-together)
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, NULL)',
-        ["trunk", "d003", True, 30],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 20, True, 20, 1, "j002", 1],
+    )
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, NULL)',
+        ["trunk", "d003", 30, True, 30, 2],
     )
 
     # history rows for journey_instance.state (for history-grain FK test)
@@ -238,16 +255,16 @@ def build_ambiguous_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__decision", _DECISION_AMBIGUOUS_COLUMNS))
 
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 5, "a001"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 5, True, 5, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "d001", True, 10, "j001", "a001"],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", 0, "a001", 0],
     )
     conn.close()
 
@@ -739,8 +756,8 @@ def test_history_grain_fk_null_for_unresolvable_rows(tmp_path: Path) -> None:
 
 # Membership columns where elem__priority is BIGINT
 _TYPED_BINDINGS_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role", "type": "VARCHAR"},
@@ -762,20 +779,23 @@ def build_typed_membership_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__decision", _DECISION_COLUMNS))
 
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", 20, True, 20, 1, "Bob"],
+    )
+    # prop__journey_id references journey_instance, which this fixture does not
+    # emit -- a dangling reference, so ref_index__journey_id is the fixture's
+    # dangling sentinel (-1), never verified (see build_refs_dangling precedent).
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", -1],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 10, "j001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 20, "j002"],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 20, True, 20, 1, "j002", -1],
     )
 
     # d001 → a001 (priority=1), d002 → a002 (priority=2)
@@ -881,15 +901,19 @@ def test_membership_fk_where_varchar_elem_stays_quoted(tmp_path: Path) -> None:
 # Surrogate-key (target_key: presentation_id) tests — F8
 # ---------------------------------------------------------------------------
 
-# Actor columns with presentation_id for surrogate tests
+# Actor columns with presentation_id for surrogate tests. presentation_id
+# occupies the slot immediately after record_id (base-format.md § C5), shifting
+# the lifecycle prefix, record_index, and prop__ block down by one position.
 _ACTOR_SURROGATE_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR"},
-    {"name": "presentation_id", "type": "VARCHAR"},
 ]
 
 
@@ -913,36 +937,37 @@ def build_surrogate_emit(tmp_path: Path) -> Path:
 
     # actor rows with presentation_id surrogates
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice", "PAT_001"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", "PAT_001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob", "PAT_002"],
-    )
-
-    # journey rows: j001 → a001, j002 → a002
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 10, "a001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j002", True, 20, "a002"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", "PAT_002", 20, True, 20, 1, "Bob"],
     )
 
-    # decision rows: d001 → j001 (→ a001), d002 → j002 (→ a002), d003 → no journey
+    # journey rows: j001 → a001 (ref_index__actor_id=0), j002 → a002 (ref_index__actor_id=1)
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 10, "j001"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 10, True, 10, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 20, "j002"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j002", 20, True, 20, 1, "a002", 1],
+    )
+
+    # decision rows: d001 → j001 (ref_index__journey_id=0), d002 → j002 (ref_index__journey_id=1),
+    # d003 → no journey (NULL, ref_index__journey_id NULL-together)
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, NULL)',
-        ["trunk", "d003", True, 30],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 20, True, 20, 1, "j002", 1],
+    )
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, NULL)',
+        ["trunk", "d003", 30, True, 30, 2],
     )
 
     # membership: d001 → a001 (consultant), d002 → a002 (nurse)
@@ -1175,17 +1200,19 @@ def test_target_key_presentation_id_missing_column_raises(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 _OWNER_SURROGATE_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "presentation_id", "type": "VARCHAR"},
+    identity_column("record_index", "BIGINT"),
 ]
 
 _HOLDER_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "member__actor__kind", "type": "VARCHAR"},
@@ -1194,29 +1221,37 @@ _HOLDER_COLUMNS = [
 
 # decision columns: references journey_instance + has last_mutation_sim_time
 _PIT_DECISION_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__journey_id", "type": "VARCHAR", "references": "journey_instance"},
+    identity_column("ref_index__journey_id", "BIGINT"),
 ]
 
 _PIT_JOURNEY_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
 _PIT_ACTOR_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
 ]
 
 
@@ -1254,50 +1289,51 @@ def build_pit_membership_emit(tmp_path: Path) -> Path:
 
     # owner rows with presentation_id surrogates
     conn.execute(
-        'INSERT INTO "records__owner" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "o001", True, 100, "OWN_001"],
+        'INSERT INTO "records__owner" VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "o001", "OWN_001", 100, True, 100, 0],
     )
     conn.execute(
-        'INSERT INTO "records__owner" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "o002", True, 100, "OWN_002"],
+        'INSERT INTO "records__owner" VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "o002", "OWN_002", 100, True, 100, 1],
     )
 
     # actor rows
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?)',
-        ["trunk", "a001", True, 100],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "a001", 100, True, 100, 0],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?)',
-        ["trunk", "a002", True, 100],
-    )
-
-    # journey_instance rows: j001 -> a001, j002 -> a002
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 100, "a001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j002", True, 100, "a002"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "a002", 100, True, 100, 1],
     )
 
-    # decision rows (grain)
+    # journey_instance rows: j001 -> a001 (ref_index__actor_id=0), j002 -> a002 (ref_index__actor_id=1)
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 15, "j001"],  # T=15, member=a001
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 100, True, 100, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 35, "j001"],  # T=35, member=a001, no hold
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j002", 100, True, 100, 1, "a002", 1],
+    )
+
+    # decision rows (grain): all reference journey j001 (record_index 0) or j002
+    # (record_index 1) -> ref_index__journey_id follows accordingly.
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 15, True, 15, 0, "j001", 0],  # T=15, member=a001
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d003", True, 60, "j001"],  # T=60, member=a001, open hold
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 35, True, 35, 1, "j001", 0],  # T=35, member=a001, no hold
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d004", True, 20, "j002"],  # T=20, member=a002
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d003", 60, True, 60, 2, "j001", 0],  # T=60, member=a001, open hold
+    )
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d004", 20, True, 20, 3, "j002", 1],  # T=20, member=a002
     )
 
     # membership__owner__holders: owner holds actor members
@@ -1747,20 +1783,23 @@ def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("membership__decision__bindings", _TYPED_BINDINGS_COLUMNS))
 
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice", "PAT_001"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", "PAT_001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob", "PAT_002"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", "PAT_002", 20, True, 20, 1, "Bob"],
+    )
+    # prop__journey_id references journey_instance, which this fixture does not
+    # emit -- a dangling reference, so ref_index__journey_id is the fixture's
+    # dangling sentinel (-1), never verified (see build_refs_dangling precedent).
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", -1],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 10, "j001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 20, "j002"],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 20, True, 20, 1, "j002", -1],
     )
     # d001 → a001 (priority=1), d002 → a002 (priority=2)
     conn.execute(

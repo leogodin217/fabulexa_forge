@@ -9,6 +9,7 @@ from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.config.models import (
@@ -716,20 +717,21 @@ def test_advance_delivery_edges_updated_on_release() -> None:
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
     {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
 ]
 
 _HISTORY_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
     {"name": "kind", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("record_id", "VARCHAR"),
     {"name": "property", "type": "VARCHAR"},
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
@@ -840,7 +842,7 @@ def test_seed_buffer_keys_equal_topic_set(tmp_path: Path) -> None:
     """One FIFO buffer per topic; buffer key set equals build_topic_set exactly."""
     from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
-    rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
+    rows = [("trunk", "r1", 10, True, None, 10, 0, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", rows)
     config = _make_stream_config(["alpha", "beta"])
 
@@ -860,10 +862,10 @@ def test_seed_buffer_keys_equal_topic_set(tmp_path: Path) -> None:
 
 def test_seed_events_partitioned_by_topic(tmp_path: Path) -> None:
     """Every drained event lands in the correct buffer; sum equals total events."""
-    rows_a = [("trunk", "r1", 10, True, None, 10, "a", "x")]
+    rows_a = [("trunk", "r1", 10, True, None, 10, 0, "a", "x")]
     rows_b = [
-        ("trunk", "r2", 20, True, None, 20, "b", "y"),
-        ("trunk", "r3", 30, True, None, 30, "c", "z"),
+        ("trunk", "r2", 20, True, None, 20, 0, "b", "y"),
+        ("trunk", "r3", 30, True, None, 30, 1, "c", "z"),
     ]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows_a, "beta", rows_b)
     config = _make_stream_config(["alpha", "beta"])
@@ -888,9 +890,9 @@ def test_seed_events_partitioned_by_topic(tmp_path: Path) -> None:
 def test_seed_buffer_seq_order(tmp_path: Path) -> None:
     """Each topic's buffer is in seq / event_sim_time order."""
     rows = [
-        ("trunk", "r1", 10, True, None, 10, "a", "x"),
-        ("trunk", "r2", 20, True, None, 20, "b", "y"),
-        ("trunk", "r3", 30, True, None, 30, "c", "z"),
+        ("trunk", "r1", 10, True, None, 10, 0, "a", "x"),
+        ("trunk", "r2", 20, True, None, 20, 1, "b", "y"),
+        ("trunk", "r3", 30, True, None, 30, 2, "c", "z"),
     ]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", [])
     config = _make_stream_config(["alpha", "beta"])
@@ -913,7 +915,7 @@ def test_seed_buffer_seq_order(tmp_path: Path) -> None:
 
 def test_seed_declared_but_empty_topic_present(tmp_path: Path) -> None:
     """Declared-but-empty topic: present as a key with an empty buffer."""
-    rows_a = [("trunk", "r1", 10, True, None, 10, "a", "x")]
+    rows_a = [("trunk", "r1", 10, True, None, 10, 0, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows_a, "beta", [])
     config = _make_stream_config(["alpha", "beta"])
 
@@ -934,7 +936,7 @@ def test_seed_declared_but_empty_topic_present(tmp_path: Path) -> None:
 
 def test_seed_control_transport_preserved(tmp_path: Path) -> None:
     """ControlState.transport is exactly the supplied launch transport."""
-    rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
+    rows = [("trunk", "r1", 10, True, None, 10, 0, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", [])
     config = _make_stream_config(["alpha", "beta"])
     transport = Transport(playing=False, speed=2.5)
@@ -951,7 +953,7 @@ def test_seed_control_topics_one_per_topic_in_order(tmp_path: Path) -> None:
     """ControlState.topics has one entry per topic in build_topic_set order."""
     from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
-    rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
+    rows = [("trunk", "r1", 10, True, None, 10, 0, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", rows)
     config = _make_stream_config(["alpha", "beta"])
 
@@ -971,7 +973,7 @@ def test_seed_control_topics_one_per_topic_in_order(tmp_path: Path) -> None:
 
 def test_seed_topic_dials_neutral(tmp_path: Path) -> None:
     """Every seeded TopicDials is neutral: rate=1.0, lag_ms=0, mute=False."""
-    rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
+    rows = [("trunk", "r1", 10, True, None, 10, 0, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", rows)
     config = _make_stream_config(["alpha", "beta"])
 
@@ -988,7 +990,7 @@ def test_seed_topic_dials_neutral(tmp_path: Path) -> None:
 
 def test_seed_topic_dials_content_stamped(tmp_path: Path) -> None:
     """Every seeded TopicDials has content == config.content."""
-    rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
+    rows = [("trunk", "r1", 10, True, None, 10, 0, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", [])
     config = _make_stream_config(["alpha", "beta"])
 
@@ -1010,7 +1012,7 @@ def test_seed_frontier_state_fresh(tmp_path: Path) -> None:
     """FrontierState: frontier_sim_time is None; edges and delivery_edges all None."""
     from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
-    rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
+    rows = [("trunk", "r1", 10, True, None, 10, 0, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", rows)
     config = _make_stream_config(["alpha", "beta"])
 
@@ -1058,7 +1060,7 @@ def test_seed_zero_event_emit(tmp_path: Path) -> None:
 
 def test_seed_multi_branch_raises_export_error(tmp_path: Path) -> None:
     """Multi-branch emit: seed_mixer_run surfaces ExportError from iter_stream_events."""
-    rows = [("trunk", "r1", 10, True, None, 10, "a", "x")]
+    rows = [("trunk", "r1", 10, True, None, 10, 0, "a", "x")]
     emit_dir = _build_two_kind_emit(tmp_path, "alpha", rows, "beta", rows, n_branches=2)
     config = _make_stream_config(["alpha", "beta"])
 

@@ -20,6 +20,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_emit_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
@@ -30,58 +31,69 @@ from fabulexa_forge.cli import cmd_init, main
 # ---------------------------------------------------------------------------
 
 _LOCATION_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
-    {"name": "active", "type": "BOOLEAN", "history_tracked": False},
-    {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
-    {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
 ]
 
 _SENSOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
-    {"name": "created_sim_time", "type": "BIGINT", "history_tracked": False},
-    {"name": "active", "type": "BOOLEAN", "history_tracked": False},
-    {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
-    {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
 ]
 
 _EVENT_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__location_id", "type": "VARCHAR", "references": "location"},
+    identity_column("ref_index__location_id", "BIGINT"),
 ]
 
 _TRIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__trip_type", "type": "VARCHAR"},
     {"name": "prop__location_id", "type": "VARCHAR", "references": "location"},
+    identity_column("ref_index__location_id", "BIGINT"),
 ]
 
 _ACTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__actor_type", "type": "VARCHAR"},
     {"name": "prop__name", "type": "VARCHAR"},
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
 ]
 
 _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role_name", "type": "VARCHAR"},
@@ -134,8 +146,8 @@ def build_bare_dim_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.close()
     _write_sidecar(
@@ -163,8 +175,8 @@ def build_bare_dim_scd2_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__sensor", _SENSOR_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__sensor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "s1", 0, True, 10, "SensorA", "online"],
+        'INSERT INTO "records__sensor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "s1", 0, True, 10, 0, "SensorA", "online"],
     )
     conn.close()
     _write_sidecar(
@@ -193,12 +205,12 @@ def build_bare_fact_no_discriminator_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(_create_ddl("records__event", _EVENT_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.execute(
-        'INSERT INTO "records__event" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "ev1", True, 10, "loc1"],
+        'INSERT INTO "records__event" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "ev1", 10, True, 10, 0, "loc1", 0],
     )
     conn.close()
     _write_sidecar(
@@ -234,16 +246,16 @@ def build_bare_fact_with_discriminator_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(_create_ddl("records__trip", _TRIP_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.execute(
-        'INSERT INTO "records__trip" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "t1", True, 10, "delivery", "loc1"],
+        'INSERT INTO "records__trip" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "t1", 10, True, 10, 0, "delivery", "loc1", 0],
     )
     conn.execute(
-        'INSERT INTO "records__trip" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "t2", True, 20, "pickup", "loc1"],
+        'INSERT INTO "records__trip" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "t2", 20, True, 20, 1, "pickup", "loc1", 0],
     )
     conn.close()
     _write_sidecar(
@@ -278,8 +290,8 @@ def build_object_valued_actor_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__actor", _ACTOR_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "a1", True, 10, "driver", "Alice", "active"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "a1", 10, True, 10, 0, "driver", "Alice", "active"],
     )
     # "bus" sub-type is declared but has no rows - tests unobserved sub-type stub
     conn.close()
@@ -311,8 +323,8 @@ def build_membership_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(_create_ddl("membership__location__zones", _MEMBERSHIP_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.execute(
         'INSERT INTO "membership__location__zones" VALUES (?, ?, ?, NULL, ?, ?, ?)',
@@ -352,8 +364,8 @@ def build_no_record_roles_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.close()
     _write_sidecar(

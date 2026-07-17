@@ -12,7 +12,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.config.models import (
@@ -34,28 +34,33 @@ from fabulexa_forge.reader.emit import open_emit
 # ---------------------------------------------------------------------------
 
 _ACTOR_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
-    {"name": "active", "type": "BOOLEAN", "history_tracked": False},
-    {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
-    {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
 ]
 
 _JOURNEY_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
 _HISTORY_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
     {"name": "kind", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("record_id", "VARCHAR"),
     {"name": "property", "type": "VARCHAR"},
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
@@ -74,22 +79,23 @@ def _build_export_emit(tmp_path: Path) -> Path:
 
     # Two actors
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a001", True, None, 100, "Alice", "active"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a001", 0, True, None, 100, 0, "Alice", "active"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a002", True, None, 200, "Bob", "active"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a002", 0, True, None, 200, 1, "Bob", "active"],
     )
 
-    # Two journeys referencing actors
+    # Two journeys referencing actors (ref_index__actor_id mirrors the
+    # referenced actor's record_index)
     conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 10, "a001"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 0, True, 10, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j002", True, 20, "a002"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j002", 0, True, 20, 1, "a002", 1],
     )
 
     # History: status changes for a001 at two sim_times

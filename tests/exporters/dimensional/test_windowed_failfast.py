@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
+from _support.sidecar_builder import identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
@@ -87,7 +88,8 @@ def _sidecar_with_tracked(
                 "category": "records",
                 "record_kind": "entity",
                 "columns": [
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
                     {
                         "name": tracked_prop,
                         "type": "VARCHAR",
@@ -209,7 +211,10 @@ def _sidecar_with_extra_table(extra_table: dict[str, object]) -> Sidecar:
                 "name": "records__entity",
                 "category": "records",
                 "record_kind": "entity",
-                "columns": [{"name": "record_id", "type": "VARCHAR"}],
+                "columns": [
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
+                ],
                 "rows": 0,
             },
             extra_table,
@@ -232,7 +237,7 @@ def test_validate_table_forecloses_dim_membership_grain_under_window() -> None:
             "record_kind": "entity",
             "property": "team_members",
             "columns": [
-                {"name": "record_id", "type": "VARCHAR"},
+                identity_column("record_id", "VARCHAR"),
                 {"name": "joined_sim_time", "type": "BIGINT"},
                 {"name": "left_sim_time", "type": "BIGINT"},
                 {"name": "member__entity__kind", "type": "VARCHAR"},
@@ -262,9 +267,9 @@ def test_validate_table_forecloses_dim_history_interval_grain_under_window() -> 
             "name": "history",
             "category": "fixed",
             "columns": [
-                {"name": "fork_path", "type": "VARCHAR"},
+                identity_column("fork_path", "VARCHAR"),
                 {"name": "kind", "type": "VARCHAR"},
-                {"name": "record_id", "type": "VARCHAR"},
+                identity_column("record_id", "VARCHAR"),
                 {"name": "property", "type": "VARCHAR"},
                 {"name": "sim_time", "type": "BIGINT"},
                 {"name": "value", "type": "VARCHAR"},

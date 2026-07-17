@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
-from _support.sidecar_builder import prop_column, write_emit
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 # ---------------------------------------------------------------------------
 # Column definitions
@@ -25,6 +25,7 @@ _RECORD_COLS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
     ),
@@ -41,6 +42,7 @@ _RECORD_COLS_INTERLEAVED: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__alpha", "VARCHAR", history_tracked=True, temporal_class="tracked"
     ),
@@ -61,6 +63,7 @@ _RECORD_COLS_INTERLEAVED_WITH_PID: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__alpha", "VARCHAR", history_tracked=True, temporal_class="tracked"
     ),
@@ -80,6 +83,7 @@ _RECORD_COLS_WITH_PID: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
     ),

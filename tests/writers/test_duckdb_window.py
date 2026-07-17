@@ -15,7 +15,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, write_emit
 
 from fabulexa_forge.config.models import (
     ColumnDecl,
@@ -36,11 +36,13 @@ from fabulexa_forge.writers.duckdb import write_duckdb_window
 # ---------------------------------------------------------------------------
 
 _ENTITY_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT", "history_tracked": False},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
 ]
@@ -68,8 +70,8 @@ def _build_scd2_emit(tmp_path: Path) -> Path:
     col_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _ENTITY_COLUMNS)
     conn.execute(f'CREATE TABLE "records__actor" ({col_ddl})')
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a001", True, None, 30, "Alice", "discharged"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a001", 10, True, None, 30, 0, "Alice", "discharged"],
     )
 
     hist_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _HISTORY_COLUMNS)
@@ -120,14 +122,26 @@ def _build_fact_emit(tmp_path: Path) -> Path:
 
     col_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _ENTITY_COLUMNS)
     conn.execute(f'CREATE TABLE "records__entity" ({col_ddl})')
-    for rec_id, sim_time, name, status in [
-        ("e001", 10, "Alice", "active"),
-        ("e002", 20, "Bob", "active"),
-        ("e003", 30, "Carol", "active"),
-    ]:
+    for record_index, (rec_id, sim_time, name, status) in enumerate(
+        [
+            ("e001", 10, "Alice", "active"),
+            ("e002", 20, "Bob", "active"),
+            ("e003", 30, "Carol", "active"),
+        ]
+    ):
         conn.execute(
-            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?, ?)',
-            ["trunk", rec_id, True, None, sim_time, name, status],
+            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                "trunk",
+                rec_id,
+                sim_time,
+                True,
+                None,
+                sim_time,
+                record_index,
+                name,
+                status,
+            ],
         )
     conn.close()
 

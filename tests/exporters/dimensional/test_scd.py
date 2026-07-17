@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 import duckdb
 import pytest
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
@@ -42,20 +42,31 @@ from fabulexa_forge.reader.sidecar import Sidecar
 # ---------------------------------------------------------------------------
 
 _ACTOR_COLUMNS_WITH_FLAGS = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
-    {"name": "active", "type": "BOOLEAN", "history_tracked": False},
-    {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
-    {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
-    {"name": "prop__admission_count", "type": "BIGINT", "history_tracked": True},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__admission_count",
+        "BIGINT",
+        history_tracked=True,
+        temporal_class="tracked",
+    ),
 ]
 
 _HISTORY_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
     {"name": "kind", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("record_id", "VARCHAR"),
     {"name": "property", "type": "VARCHAR"},
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
@@ -116,7 +127,8 @@ def _build_scd2_emit(
 
     for row in actor_rows:
         conn.execute(
-            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', list(row)
+            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            list(row),
         )
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
@@ -152,7 +164,7 @@ def test_n_versions_from_n_change_points(tmp_path: Path) -> None:
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
         actor_rows=[
-            ("trunk", "a001", True, None, 30, "Alice", "discharged", 3),
+            ("trunk", "a001", 0, True, None, 30, 0, "Alice", "discharged", 3),
         ],
         history_rows=[
             ("trunk", "actor", "a001", "status", 10, "admitted"),
@@ -180,7 +192,7 @@ def test_valid_from_to_windowing(tmp_path: Path) -> None:
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
         actor_rows=[
-            ("trunk", "a001", True, None, 30, "Alice", "discharged", 3),
+            ("trunk", "a001", 0, True, None, 30, 0, "Alice", "discharged", 3),
         ],
         history_rows=[
             ("trunk", "actor", "a001", "status", 10, "admitted"),
@@ -209,7 +221,7 @@ def test_tracked_column_takes_per_version_value(tmp_path: Path) -> None:
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
         actor_rows=[
-            ("trunk", "a001", True, None, 30, "Alice", "discharged", 3),
+            ("trunk", "a001", 0, True, None, 30, 0, "Alice", "discharged", 3),
         ],
         history_rows=[
             ("trunk", "actor", "a001", "status", 10, "admitted"),
@@ -233,7 +245,7 @@ def test_static_column_constant_across_versions(tmp_path: Path) -> None:
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
         actor_rows=[
-            ("trunk", "a001", True, None, 30, "Alice", "discharged", 3),
+            ("trunk", "a001", 0, True, None, 30, 0, "Alice", "discharged", 3),
         ],
         history_rows=[
             ("trunk", "actor", "a001", "status", 10, "admitted"),
@@ -263,7 +275,7 @@ def test_flag_authoritative_tracked_but_unchanged_single_version(
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
         actor_rows=[
-            ("trunk", "a001", True, None, 10, "Alice", "admitted", 1),
+            ("trunk", "a001", 0, True, None, 10, 0, "Alice", "admitted", 1),
         ],
         history_rows=[
             # Only status changes; admission_count never changes
@@ -292,7 +304,7 @@ def test_projection_introduced_column_never_tracked(tmp_path: Path) -> None:
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
         actor_rows=[
-            ("trunk", "a001", True, None, 30, "Alice", "discharged", 3),
+            ("trunk", "a001", 0, True, None, 30, 0, "Alice", "discharged", 3),
         ],
         history_rows=[
             ("trunk", "actor", "a001", "status", 10, "admitted"),
@@ -316,8 +328,8 @@ def test_total_order_by_record_id_valid_from(tmp_path: Path) -> None:
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
         actor_rows=[
-            ("trunk", "a001", True, None, 20, "Alice", "discharged", 2),
-            ("trunk", "a002", True, None, 10, "Bob", "admitted", 1),
+            ("trunk", "a001", 0, True, None, 20, 0, "Alice", "discharged", 2),
+            ("trunk", "a002", 0, True, None, 10, 1, "Bob", "admitted", 1),
         ],
         history_rows=[
             ("trunk", "actor", "a001", "status", 10, "admitted"),
@@ -341,7 +353,7 @@ def test_build_twice_yields_identical_sql(tmp_path: Path) -> None:
     emit_dir = _build_scd2_emit(
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
-        actor_rows=[("trunk", "a001", True, None, 10, "Alice", "admitted", 1)],
+        actor_rows=[("trunk", "a001", 0, True, None, 10, 0, "Alice", "admitted", 1)],
         history_rows=[("trunk", "actor", "a001", "status", 10, "admitted")],
     )
 
@@ -369,8 +381,8 @@ def _make_sidecar_with_flags(kind: str = "actor") -> Sidecar:
                 "category": "records",
                 "record_kind": kind,
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-                    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
                     {
                         "name": "prop__status",
                         "type": "VARCHAR",
@@ -395,8 +407,8 @@ def _make_sidecar_no_flags(kind: str = "actor") -> Sidecar:
                 "category": "records",
                 "record_kind": kind,
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
                     {"name": "prop__status", "type": "VARCHAR"},
                 ],
                 "rows": 0,
@@ -438,8 +450,8 @@ def test_scd2_needs_history_raises_no_tracked_column(tmp_path: Path) -> None:
                 "category": "records",
                 "record_kind": "actor",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-                    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
                     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
                 ],
                 "rows": 0,
@@ -493,8 +505,8 @@ def test_multiple_records_multiple_versions(tmp_path: Path) -> None:
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
         actor_rows=[
-            ("trunk", "a001", True, None, 20, "Alice", "discharged", 2),
-            ("trunk", "a002", True, None, 15, "Bob", "admitted", 1),
+            ("trunk", "a001", 0, True, None, 20, 0, "Alice", "discharged", 2),
+            ("trunk", "a002", 0, True, None, 15, 1, "Bob", "admitted", 1),
         ],
         history_rows=[
             ("trunk", "actor", "a001", "status", 10, "admitted"),
@@ -638,7 +650,7 @@ def test_build_scd2_sql_flag_path_uses_cast_for_bigint(tmp_path: Path) -> None:
     emit_dir = _build_scd2_emit(
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
-        actor_rows=[("trunk", "a001", True, None, 10, "Alice", "admitted", 1)],
+        actor_rows=[("trunk", "a001", 0, True, None, 10, 0, "Alice", "admitted", 1)],
         history_rows=[("trunk", "actor", "a001", "status", 10, "admitted")],
     )
     with open_emit(emit_dir) as emit:
@@ -656,7 +668,7 @@ def test_scd2_bigint_column_execution_succeeds(tmp_path: Path) -> None:
     emit_dir = _build_scd2_emit(
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
-        actor_rows=[("trunk", "a001", True, None, 20, "Alice", "discharged", 3)],
+        actor_rows=[("trunk", "a001", 0, True, None, 20, 0, "Alice", "discharged", 3)],
         history_rows=[
             ("trunk", "actor", "a001", "status", 10, "admitted"),
             ("trunk", "actor", "a001", "status", 20, "discharged"),
@@ -687,8 +699,8 @@ def test_build_scd2_sql_no_tracked_props_yields_empty_filter() -> None:
                 "category": "records",
                 "record_kind": "actor",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-                    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
                     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
                 ],
                 "rows": 0,
@@ -710,7 +722,7 @@ def test_scd2_sql_embeds_versioned_intervals_derivation(tmp_path: Path) -> None:
     emit_dir = _build_scd2_emit(
         tmp_path,
         _ACTOR_COLUMNS_WITH_FLAGS,
-        actor_rows=[("trunk", "a001", True, None, 10, "Alice", "admitted", 1)],
+        actor_rows=[("trunk", "a001", 0, True, None, 10, 0, "Alice", "admitted", 1)],
         history_rows=[("trunk", "actor", "a001", "status", 10, "admitted")],
     )
     with open_emit(emit_dir) as emit:

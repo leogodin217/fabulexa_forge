@@ -23,6 +23,7 @@ from unittest.mock import patch
 import duckdb
 import pytest
 import yaml
+from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from exporters.streaming._helpers import _membership_table_spec
@@ -34,12 +35,13 @@ from fabulexa_forge.exporters.streaming.types import StreamOutcome
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
 ]
 
@@ -87,20 +89,20 @@ def _build_spanning_emit(tmp_path: Path) -> Path:
 
     _DAY = 86_400_000_000_000
     actor_rows = [
-        ("trunk", "a001", 1 * _DAY, True, None, 1 * _DAY, "active"),
-        ("trunk", "a002", 2 * _DAY, False, 5 * _DAY, 5 * _DAY, "inactive"),
+        ("trunk", "a001", 1 * _DAY, True, None, 1 * _DAY, 0, "active"),
+        ("trunk", "a002", 2 * _DAY, False, 5 * _DAY, 5 * _DAY, 1, "inactive"),
     ]
     for row in actor_rows:
         conn.execute(
-            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)', list(row)
+            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', list(row)
         )
 
     task_rows = [
-        ("trunk", "t001", 1 * _DAY, True, None, 1 * _DAY, "open"),
+        ("trunk", "t001", 1 * _DAY, True, None, 1 * _DAY, 0, "open"),
     ]
     for row in task_rows:
         conn.execute(
-            'INSERT INTO "records__task" VALUES (?, ?, ?, ?, ?, ?, ?)', list(row)
+            'INSERT INTO "records__task" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', list(row)
         )
 
     history_rows = [
@@ -1255,16 +1257,16 @@ class TestKafkaSinkEndToEndFake:
 _NS = 1_000_000_000  # one second in nanoseconds
 
 _WAITERS_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
 ]
 
 _MEMBERS_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
 ]

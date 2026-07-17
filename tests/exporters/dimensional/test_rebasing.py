@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from exporters._emit_fixtures import (
     _create_ddl,
@@ -55,12 +55,16 @@ if TYPE_CHECKING:
 _UTC_ORIGIN = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
 _ACTOR_SCD2_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
-    {"name": "active", "type": "BOOLEAN", "history_tracked": False},
-    {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
-    {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 _SCD2_HISTORY_COLUMNS: list[dict[str, object]] = [
@@ -94,8 +98,8 @@ def build_scd2_emit(tmp_path: Path, runtime_block: dict[str, str] | None) -> Pat
     conn.execute(_create_ddl("history", _SCD2_HISTORY_COLUMNS))
 
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 50_000_000_000, "active"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 0, True, 50_000_000_000, 0, "active"],
     )
     conn.execute(
         'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',

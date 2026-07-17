@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _support.sidecar_builder import identity_column, prop_column
 
 from fabulexa_forge.reader import RunDatabaseError, open_emit
 
@@ -20,10 +21,25 @@ def _emit_with_data(tmp_path: Path) -> Path:
                 "category": "records",
                 "record_kind": "patient",
                 "columns": [
-                    {"name": "id", "type": "VARCHAR"},
-                    {"name": "age", "type": "BIGINT"},
-                    {"name": "score", "type": "DOUBLE"},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    {"name": "created_sim_time", "type": "BIGINT"},
                     {"name": "active", "type": "BOOLEAN"},
+                    {"name": "deactivated_at", "type": "BIGINT"},
+                    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+                    identity_column("record_index", "BIGINT"),
+                    prop_column(
+                        "prop__age",
+                        "BIGINT",
+                        history_tracked=False,
+                        temporal_class="constant",
+                    ),
+                    prop_column(
+                        "prop__score",
+                        "DOUBLE",
+                        history_tracked=False,
+                        temporal_class="constant",
+                    ),
                 ],
                 "rows": 2,
             }
@@ -33,7 +49,9 @@ def _emit_with_data(tmp_path: Path) -> Path:
         "firings": ("CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)"),
         "records__patient": (
             "CREATE TABLE records__patient "
-            "(id VARCHAR, age BIGINT, score DOUBLE, active BOOLEAN)"
+            "(fork_path VARCHAR, record_id VARCHAR, created_sim_time BIGINT, "
+            "active BOOLEAN, deactivated_at BIGINT, last_mutation_sim_time BIGINT, "
+            "record_index BIGINT, prop__age BIGINT, prop__score DOUBLE)"
         ),
     }
     write_emit(tmp_path, sidecar=sidecar, db_tables=db_tables)
@@ -43,7 +61,9 @@ def _emit_with_data(tmp_path: Path) -> Path:
 
     conn = duckdb.connect(str(tmp_path / "run.duckdb"))
     conn.execute(
-        "INSERT INTO records__patient VALUES ('p1', 30, 0.75, true), ('p2', 45, 0.5, false)"
+        "INSERT INTO records__patient VALUES "
+        "('trunk', 'p1', 0, true, NULL, 0, 0, 30, 0.75), "
+        "('trunk', 'p2', 0, false, NULL, 0, 1, 45, 0.5)"
     )
     conn.close()
 
@@ -59,7 +79,9 @@ def test_query_returns_rows_as_tuples(tmp_path: Path) -> None:
     """query returns rows as tuples in ORDER BY order."""
     _emit_with_data(tmp_path)
     with open_emit(tmp_path) as emit:
-        rows = emit.query("SELECT id, age FROM records__patient ORDER BY age", ())
+        rows = emit.query(
+            "SELECT record_id, prop__age FROM records__patient ORDER BY prop__age", ()
+        )
     assert rows == [("p1", 30), ("p2", 45)]
 
 
@@ -68,7 +90,9 @@ def test_query_native_types_are_preserved(tmp_path: Path) -> None:
     _emit_with_data(tmp_path)
     with open_emit(tmp_path) as emit:
         rows = emit.query(
-            "SELECT id, age, score, active FROM records__patient ORDER BY id", ()
+            "SELECT record_id, prop__age, prop__score, active "
+            "FROM records__patient ORDER BY record_id",
+            (),
         )
     assert rows[0] == ("p1", 30, 0.75, True)
     assert isinstance(rows[0][0], str)
@@ -86,7 +110,9 @@ def test_query_bound_parameter(tmp_path: Path) -> None:
     """A bound parameter is passed through parameters and not string-interpolated."""
     _emit_with_data(tmp_path)
     with open_emit(tmp_path) as emit:
-        rows = emit.query("SELECT id FROM records__patient WHERE age = ?", (30,))
+        rows = emit.query(
+            "SELECT record_id FROM records__patient WHERE prop__age = ?", (30,)
+        )
     assert rows == [("p1",)]
 
 
@@ -108,7 +134,11 @@ def test_insert_raises_run_database_error(tmp_path: Path) -> None:
     _emit_with_data(tmp_path)
     with open_emit(tmp_path) as emit:
         with pytest.raises(RunDatabaseError):
-            emit.query("INSERT INTO records__patient VALUES ('p3', 50, 0.9, true)", ())
+            emit.query(
+                "INSERT INTO records__patient VALUES "
+                "('trunk', 'p3', 0, true, NULL, 0, 2, 50, 0.9)",
+                (),
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -135,7 +165,7 @@ def test_query_after_close_raises_run_database_error(tmp_path: Path) -> None:
     emit = open_emit(tmp_path)
     emit.close()
     with pytest.raises(RunDatabaseError, match="query failed"):
-        emit.query("SELECT id FROM records__patient", ())
+        emit.query("SELECT record_id FROM records__patient", ())
 
 
 # ---------------------------------------------------------------------------

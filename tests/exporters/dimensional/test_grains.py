@@ -9,7 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import (
     _create_ddl,
@@ -46,11 +46,13 @@ def _from_col(name: str, src: str) -> ColumnDecl:
 # ---------------------------------------------------------------------------
 
 _JOURNEY_INSTANCE_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__state", "type": "VARCHAR"},
 ]
 
@@ -88,14 +90,14 @@ def _build_history_interval_emit(
     conn.execute(_create_ddl("records__journey_instance", _JOURNEY_INSTANCE_COLUMNS))
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
 
-    record_rows = [("trunk", "j001", True, None, 25, "completed")]
+    record_rows = [("trunk", "j001", 5, True, None, 25, 0, "completed")]
     history_rows = [
         ("trunk", "journey_instance", "j001", "state", 5, "waiting"),
         ("trunk", "journey_instance", "j001", "state", 15, "in_progress"),
         ("trunk", "journey_instance", "j001", "state", 25, "completed"),
     ]
     if include_second_record:
-        record_rows.append(("trunk", "j002", True, None, 30, "completed"))
+        record_rows.append(("trunk", "j002", 10, True, None, 30, 1, "completed"))
         history_rows.extend(
             [
                 ("trunk", "journey_instance", "j002", "state", 10, "waiting"),
@@ -105,7 +107,7 @@ def _build_history_interval_emit(
 
     for row in record_rows:
         conn.execute(
-            'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, ?, ?)',
+            'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             list(row),
         )
     for row in history_rows:
@@ -793,17 +795,21 @@ def test_history_interval_multi_interval_order_by_record_id_then_version_start(
 
 # Column definitions for typed-predicate emit
 _TYPED_ENTITY_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__entity_type", "type": "VARCHAR"},
     {"name": "prop__score", "type": "BIGINT"},
     {"name": "prop__active_flag", "type": "BOOLEAN"},
 ]
 
 _TYPED_MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role_name", "type": "VARCHAR"},
@@ -823,13 +829,13 @@ def _build_typed_predicate_emit(tmp_path: Path) -> Path:
 
     # score=100 (BIGINT), active_flag=True (BOOLEAN)
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?)',
-        ["trunk", "e001", True, "consultant", 100, True],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e001", 5, True, 5, 0, "consultant", 100, True],
     )
     # score=200, active_flag=False
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?)',
-        ["trunk", "e002", True, "nurse", 200, False],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e002", 6, True, 6, 1, "nurse", 200, False],
     )
 
     # membership rows: priority=1 for e001 (surgeon), priority=2 for e002 (nurse)

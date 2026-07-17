@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import duckdb
 import pytest
-from _support.sidecar_builder import prop_column, write_emit
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
@@ -47,21 +47,22 @@ from ._helpers import _ddl, _membership_table_spec, make_anchor
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
     ),
 ]
 
 _HISTORY_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
     {"name": "kind", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("record_id", "VARCHAR"),
     {"name": "property", "type": "VARCHAR"},
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
@@ -324,7 +325,7 @@ class TestDebeziumStdoutDelivery:
     ) -> None:
         """fmt='debezium' with stdout sink writes Debezium messages to stdout."""
         record_rows = [
-            ("trunk", "r001", 1 * _DAY, True, None, 1 * _DAY, "active"),
+            ("trunk", "r001", 1 * _DAY, True, None, 1 * _DAY, 0, "active"),
         ]
         history_rows = [
             ("trunk", "item", "r001", "status", 1 * _DAY, "active"),
@@ -351,7 +352,7 @@ class TestDebeziumStdoutDelivery:
     ) -> None:
         """schemas_enable=false produces bare envelope payloads (no schema wrapper)."""
         record_rows = [
-            ("trunk", "r001", 1 * _DAY, True, None, 1 * _DAY, "active"),
+            ("trunk", "r001", 1 * _DAY, True, None, 1 * _DAY, 0, "active"),
         ]
         history_rows = [
             ("trunk", "item", "r001", "status", 1 * _DAY, "active"),
@@ -386,7 +387,7 @@ class TestDebeziumFileDelivery:
     def test_debezium_file_writes_kind_jsonl(self, tmp_path: Path) -> None:
         """fmt='debezium' with file sink writes <kind>.jsonl."""
         record_rows = [
-            ("trunk", "r001", 1 * _DAY, True, None, 1 * _DAY, "active"),
+            ("trunk", "r001", 1 * _DAY, True, None, 1 * _DAY, 0, "active"),
         ]
         history_rows = [
             ("trunk", "item", "r001", "status", 1 * _DAY, "active"),
@@ -447,7 +448,7 @@ def _build_emit_with_events(tmp_path: Path, kind: str) -> Path:
     tmp_path.mkdir(parents=True, exist_ok=True)
     _DAY = 86_400_000_000_000
     record_rows = [
-        ("trunk", "r001", 1 * _DAY, True, None, 2 * _DAY, "active"),
+        ("trunk", "r001", 1 * _DAY, True, None, 2 * _DAY, 0, "active"),
     ]
     history_rows = [
         ("trunk", kind, "r001", "status", 1 * _DAY, "initial"),
@@ -923,16 +924,16 @@ class TestKafkaPacedDelivery:
 # ---------------------------------------------------------------------------
 
 _MEMBERSHIP_WAITERS_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
 ]
 
 _MEMBERSHIP_MEMBERS_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
 ]

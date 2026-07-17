@@ -11,6 +11,7 @@ from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.derivations.membership_events import (
@@ -32,8 +33,8 @@ FORK_PATH = "trunk"
 # ---------------------------------------------------------------------------
 
 _MEM_COLS_SCALAR: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
@@ -41,8 +42,8 @@ _MEM_COLS_SCALAR: list[dict[str, Any]] = [
 ]
 
 _MEM_COLS_REFERENCE: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "member__ref__kind", "type": "VARCHAR"},
@@ -51,8 +52,8 @@ _MEM_COLS_REFERENCE: list[dict[str, Any]] = [
 
 # Table with both scalar and reference fields in mixed declaration order
 _MEM_COLS_MIXED: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "member__ref__kind", "type": "VARCHAR"},
@@ -61,8 +62,8 @@ _MEM_COLS_MIXED: list[dict[str, Any]] = [
 ]
 
 _MEM_COLS_EMPTY: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
 ]

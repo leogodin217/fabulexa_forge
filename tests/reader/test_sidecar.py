@@ -4,6 +4,7 @@ and RecordRoles accessor."""
 from __future__ import annotations
 
 import pytest
+from _support.sidecar_builder import identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.errors import (
@@ -71,12 +72,14 @@ def _full_raw() -> dict[str, object]:
                 "category": "records",
                 "record_kind": "patient",
                 "columns": [
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
                     {
                         "name": "prop__doctor",
                         "type": "VARCHAR",
                         "references": "doctor",
                     },
+                    identity_column("ref_index__doctor", "BIGINT"),
                 ],
                 "rows": 10,
             },
@@ -85,7 +88,7 @@ def _full_raw() -> dict[str, object]:
                 "category": "membership",
                 "record_kind": "patient",
                 "property": "tags",
-                "columns": [{"name": "record_id", "type": "VARCHAR"}],
+                "columns": [identity_column("record_id", "VARCHAR")],
                 "rows": 5,
             },
         ],
@@ -159,7 +162,7 @@ def test_from_raw_fully_populated_tables() -> None:
     assert records_table.category == "records"
     assert records_table.record_kind == "patient"
     assert records_table.property is None
-    ref_col = records_table.columns[1]
+    ref_col = records_table.columns[2]
     assert ref_col.references == "doctor"
 
     membership_table = tables[2]

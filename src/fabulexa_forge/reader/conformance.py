@@ -15,6 +15,7 @@ import jsonschema
 
 from fabulexa_forge._sql import quote_identifier as _quote_identifier
 from fabulexa_forge.reader._schema import _load_vendored_schema
+from fabulexa_forge.reader.records_columns import records_column_role, ref_index_sibling
 
 if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
@@ -77,6 +78,14 @@ _PS_RECORDS_PREFIX_COLUMNS: tuple[tuple[str, str], ...] = (
     ("deactivated_at", "BIGINT"),
     ("last_mutation_sim_time", "BIGINT"),
 )
+
+# records__K: the dense-index column immediately following the (possibly
+# shifted) lifecycle prefix (v6; § Dense record index). Nullability is not
+# compared (existing C2/C5 stance).
+_PS_RECORD_INDEX_COLUMN: tuple[str, str] = ("record_index", "BIGINT")
+
+# records__K: the type pinned for every ref_index__<name> sibling column.
+_PS_REF_INDEX_TYPE: str = "BIGINT"
 
 # Valid warehouse roles for C12
 _VALID_ROLES: frozenset[str] = frozenset({"dimension", "fact"})
@@ -405,26 +414,94 @@ def _check_c4(emit: "Emit") -> CheckResult:
     )
 
 
+def _check_c5_property_block(
+    tname: str,
+    block: list[ColumnSpec],
+    block_offset: int,
+    messages: list[str],
+) -> None:
+    """Check the v6 property block: prop__<name>, each reference-annotated one
+    immediately followed by its ref_index__<name> sibling.
+
+    Every column is classified through `records_column_role`. A no-role name
+    fails loudly; a column that classifies but is not a `prop__` column at this
+    position (a duplicated identity/lifecycle name, a `ref_index__` with no
+    reference-annotated predecessor, …) fails the block-shape clause — not the
+    no-role clause.
+
+    Args:
+        tname: Table name (for error messages).
+        block: The column list following `record_index`.
+        block_offset: The absolute column index of `block[0]` (for messages).
+        messages: Accumulator; failures are appended here.
+    """
+    i = 0
+    n = len(block)
+    while i < n:
+        col = block[i]
+        idx = block_offset + i
+        role = records_column_role(col.name)
+        if role is None:
+            messages.append(
+                f"table '{tname}' col[{idx}] '{col.name}': column matches no "
+                f"records-column taxonomy role"
+            )
+            i += 1
+            continue
+        if role != "payload":
+            messages.append(
+                f"table '{tname}' col[{idx}] '{col.name}': expected a prop__ "
+                f"column in the property block (classifies as {role!r})"
+            )
+            i += 1
+            continue
+
+        if col.references is None:
+            i += 1
+            continue
+
+        sibling_name = ref_index_sibling(col.name)
+        if i + 1 >= n or block[i + 1].name != sibling_name:
+            messages.append(
+                f"table '{tname}' col[{idx}] '{col.name}': reference-annotated "
+                f"prop__ column missing its ref_index__ sibling '{sibling_name}'"
+            )
+            i += 1
+            continue
+
+        sibling = block[i + 1]
+        if _normalize_type(sibling.type) != _normalize_type(_PS_REF_INDEX_TYPE):
+            messages.append(
+                f"table '{tname}' col[{idx + 1}] '{sibling.name}': type "
+                f"mismatch (got={sibling.type!r}, spec={_PS_REF_INDEX_TYPE!r})"
+            )
+        i += 2
+
+
 def _check_c5_table(
     tname: str,
     cols: list[ColumnSpec],
     messages: list[str],
 ) -> None:
-    """Check C5 shape for a single records table column list.
+    """Check C5 shape for a single records table column list (v6 layout).
 
-    The positional prefix is head -> optional presentation_id -> tail:
-    head = (fork_path, record_id) at idx 0-1; an optional projection-minted
-    presentation_id at idx 2 (scalar; its type is taken from the sidecar, not
-    pinned — C2 guarantees sidecar/catalog agreement); tail = (created_sim_time,
-    active, deactivated_at, last_mutation_sim_time) at the next four slots. A
-    presentation_id anywhere but idx 2 is not consumed here and so fails: it
-    displaces a pinned tail column (name mismatch) or lands in the prop block as a
-    non-prop__ column. The contiguous prop__ block follows the (possibly shifted)
-    prefix.
+    The positional prefix is head -> optional presentation_id -> lifecycle tail
+    -> record_index: head = (fork_path, record_id) at idx 0-1; an optional
+    projection-minted presentation_id at idx 2 (scalar; its type is taken from
+    the sidecar, not pinned — C2 guarantees sidecar/catalog agreement); the
+    lifecycle tail (created_sim_time, active, deactivated_at,
+    last_mutation_sim_time) at the next four (possibly shifted) slots; then
+    `record_index` (BIGINT). The property block follows: `prop__<name>`
+    columns in declaration order, each reference-annotated one immediately
+    followed by its `ref_index__<name>` sibling — classified via the taxonomy
+    (`records_column_role`), never by fall-through. A presentation_id anywhere
+    but idx 2 is not consumed here and so fails: it displaces a pinned
+    lifecycle column (name mismatch) or lands in the property block as a
+    no-role/wrong-role column.
 
     Args:
         tname: Table name (for error messages).
-        cols: Ordered column list (from sidecar or catalog).
+        cols: Ordered column list (from the sidecar).
         messages: Accumulator; failures are appended here.
     """
     head_ps = _PS_RECORDS_PREFIX_COLUMNS[:2]  # fork_path, record_id
@@ -462,46 +539,36 @@ def _check_c5_table(
                 f"(got={sc_col.type!r}, spec={ps_type!r})"
             )
 
-    # Columns after the (possibly shifted) prefix must all be prop__ columns
-    after_prefix = cols[prefix_len:]
-    for i, sc_col in enumerate(after_prefix):
-        if not sc_col.name.startswith("prop__"):
+    # record_index sits immediately after the (possibly shifted) lifecycle prefix.
+    record_index_idx = prefix_len
+    ri_name, ri_type = _PS_RECORD_INDEX_COLUMN
+    if record_index_idx >= len(cols) or cols[record_index_idx].name != ri_name:
+        got_name = cols[record_index_idx].name if record_index_idx < len(cols) else None
+        messages.append(
+            f"table '{tname}' col[{record_index_idx}]: name mismatch "
+            f"(got={got_name!r}, spec={ri_name!r})"
+        )
+        block_start = record_index_idx
+    else:
+        ri_col = cols[record_index_idx]
+        if _normalize_type(ri_col.type) != _normalize_type(ri_type):
             messages.append(
-                f"table '{tname}' col[{prefix_len + i}] '{sc_col.name}': "
-                f"expected a prop__ column in the prop block"
+                f"table '{tname}' col[{record_index_idx}] '{ri_name}': type "
+                f"mismatch (got={ri_col.type!r}, spec={ri_type!r})"
             )
+        block_start = record_index_idx + 1
 
-
-def _extract_prop_block(
-    cols: list[ColumnSpec],
-) -> list[str]:
-    """Extract the prop__ column names from a records table column list.
-
-    Returns the ordered list of prop__ column names. The extraction is
-    name-filtered (prop__ prefix), so it is correct whether or not the optional
-    presentation_id column is present — any non-prop__ column ahead of the prop
-    block (a shifted lifecycle column when presentation_id is present) is simply
-    skipped.
-
-    Args:
-        cols: Ordered column list.
-
-    Returns:
-        Ordered list of prop__ column names in the prop block.
-    """
-    prefix_len = len(_PS_RECORDS_PREFIX_COLUMNS)
-    after_prefix = cols[prefix_len:]
-    return [c.name for c in after_prefix if c.name.startswith("prop__")]
+    _check_c5_property_block(tname, cols[block_start:], block_start, messages)
 
 
 def _check_c5(emit: "Emit") -> CheckResult:
-    """C5: records__K shape: head + optional presentation_id + tail prefix, then a
-    contiguous prop__ block.
+    """C5: records__K shape: head + optional presentation_id + lifecycle tail +
+    record_index, then the property block (§ Contracts — v6 layout).
 
-    Checks the sidecar ColumnSpec list against the pinned spec (PS). Also verifies
-    that the catalog's prop__ columns for each records table match the sidecar's
-    declared prop__ columns — a discrepancy means the sidecar and catalog disagree
-    on which scalar properties exist, which is a C5 structural failure.
+    Checks the sidecar ColumnSpec list against the pinned spec (PS) and the
+    records-column taxonomy. C5 no longer re-checks the catalog's property
+    block against the sidecar — C2's element-wise catalog↔sidecar agreement is
+    the sole catalog carrier.
 
     Args:
         emit: An open emit.
@@ -510,58 +577,19 @@ def _check_c5(emit: "Emit") -> CheckResult:
         A CheckResult for C5.
     """
     messages: list[str] = []
-    skips: list[str] = []
     sidecar = emit.sidecar
-    catalog_table_set = _catalog_tables(emit)
 
     for table_spec in sidecar.tables():
         if table_spec.category != "records":
             continue
 
-        tname = table_spec.name
-
-        # Check sidecar column list shape against PS
-        _check_c5_table(tname, list(table_spec.columns), messages)
-
-        # If the table is present in catalog, verify catalog prop__ block
-
-        if tname in catalog_table_set:
-            cat_cols_raw = _catalog_columns(emit, tname)
-            cat_col_specs = [
-                ColumnSpec(
-                    name=n,
-                    type=t,
-                    references=None,
-                    history_tracked=None,
-                    temporal_class=None,
-                )
-                for n, t in cat_cols_raw
-            ]
-            sc_props = _extract_prop_block(list(table_spec.columns))
-            cat_props = _extract_prop_block(cat_col_specs)
-            if sc_props != cat_props:
-                for col in sc_props:
-                    if col not in cat_props:
-                        messages.append(
-                            f"table '{tname}': sidecar prop__ column '{col}' "
-                            f"absent from catalog"
-                        )
-                for col in cat_props:
-                    if col not in sc_props:
-                        messages.append(
-                            f"table '{tname}': catalog prop__ column '{col}' "
-                            f"not declared in sidecar"
-                        )
-        else:
-            skips.append(
-                f"table '{tname}' absent from catalog — C5 catalog check skipped"
-            )
+        _check_c5_table(table_spec.name, list(table_spec.columns), messages)
 
     return CheckResult(
         check="C5",
         passed=len(messages) == 0,
         messages=tuple(messages),
-        skips=tuple(skips),
+        skips=(),
     )
 
 

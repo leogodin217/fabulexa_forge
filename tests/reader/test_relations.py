@@ -10,6 +10,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
@@ -99,9 +100,10 @@ def _write_emit(
 def test_records_relation_full_column_list() -> None:
     """build_records_relation_sql includes all sidecar columns for the kind."""
     entity_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
         {"name": "active", "type": "BOOLEAN"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR"},
     ]
     sidecar = _make_sidecar(
@@ -132,8 +134,9 @@ def test_records_relation_filtered_to_fork_path() -> None:
                 "category": "records",
                 "record_kind": "entity",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
                 ],
                 "rows": 0,
             }
@@ -152,8 +155,9 @@ def test_records_relation_discriminator_filter_varchar() -> None:
                 "category": "records",
                 "record_kind": "entity",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
                     {"name": "prop__entity_type", "type": "VARCHAR"},
                 ],
                 "rows": 0,
@@ -175,8 +179,9 @@ def test_records_relation_discriminator_filter_integer() -> None:
                 "category": "records",
                 "record_kind": "entity",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
                     {"name": "prop__priority", "type": "BIGINT"},
                 ],
                 "rows": 0,
@@ -198,8 +203,9 @@ def test_records_relation_empty_filter_selects_all() -> None:
                 "category": "records",
                 "record_kind": "entity",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
                 ],
                 "rows": 0,
             }
@@ -219,8 +225,9 @@ def test_records_relation_no_order_by() -> None:
                 "category": "records",
                 "record_kind": "entity",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
                 ],
                 "rows": 0,
             }
@@ -363,8 +370,8 @@ def _sidecar_with_membership() -> Sidecar:
                 "record_kind": "journey",
                 "property": "team_members",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
                     {"name": "joined_sim_time", "type": "BIGINT"},
                     {"name": "left_sim_time", "type": "BIGINT"},
                     {"name": "elem__role_name", "type": "VARCHAR"},
@@ -442,8 +449,13 @@ def _build_records_emit(
         tmp_path.
     """
     entity_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__code", "type": col_type},
     ]
     sidecar_raw = _make_sidecar_raw(
@@ -459,15 +471,18 @@ def _build_records_emit(
     )
     db_ddl = (
         f'CREATE TABLE "records__entity" '
-        f'("fork_path" VARCHAR, "record_id" VARCHAR, "prop__code" {col_type})'
+        f'("fork_path" VARCHAR, "record_id" VARCHAR, "created_sim_time" BIGINT, '
+        f'"active" BOOLEAN, "deactivated_at" BIGINT, '
+        f'"last_mutation_sim_time" BIGINT, "record_index" BIGINT, '
+        f'"prop__code" {col_type})'
     )
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     conn.execute(db_ddl)
-    for fork_p, rec_id, val in rows:
+    for idx, (fork_p, rec_id, val) in enumerate(rows):
         conn.execute(
-            'INSERT INTO "records__entity" VALUES (?, ?, ?)',
-            [fork_p, rec_id, val],
+            'INSERT INTO "records__entity" VALUES (?, ?, 0, true, NULL, 0, ?, ?)',
+            [fork_p, rec_id, idx, val],
         )
     conn.close()
     _write_sidecar(
@@ -507,8 +522,8 @@ def test_distinct_prop_values_excludes_null(tmp_path: Path) -> None:
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, NULL)',
-        ["trunk", "e003"],
+        'INSERT INTO "records__entity" VALUES (?, ?, 0, true, NULL, 0, ?, NULL)',
+        ["trunk", "e003", 2],
     )
     conn.close()
     with open_emit(emit_dir) as emit:

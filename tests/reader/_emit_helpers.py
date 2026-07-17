@@ -60,6 +60,7 @@ def write_emit(
     sidecar: dict[str, object] | None = None,
     db_tables: dict[str, str] | None = None,
     garbage_db: bool = False,
+    records_shape_valid: bool = True,
 ) -> Path:
     """Write a base.json + run.duckdb pair into tmp_path and return tmp_path.
 
@@ -74,6 +75,9 @@ def write_emit(
         db_tables: Mapping of {table_name: CREATE TABLE DDL} for tables to create
             in run.duckdb; creates an empty DuckDB if None.
         garbage_db: If True, write random bytes to run.duckdb instead of a real DB.
+        records_shape_valid: Forwarded to `_support.sidecar_builder.write_emit`.
+            False opts a caller's deliberately mis-shaped records table out of
+            the v6 records-shape construction-time assertion.
 
     Returns:
         tmp_path (the emit directory).
@@ -92,6 +96,7 @@ def write_emit(
         branches=sidecar.get("branches"),  # type: ignore[arg-type]
         extra=extra or None,
         base_format_version=sidecar.get("base_format_version"),  # type: ignore[arg-type]
+        records_shape_valid=records_shape_valid,
     )
 
     db_path = tmp_path / "run.duckdb"

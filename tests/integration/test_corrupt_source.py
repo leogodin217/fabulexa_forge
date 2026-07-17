@@ -30,8 +30,10 @@ from fabulexa_forge.reader.emit import open_emit
 
 
 def _null_doctor_name_config() -> CorruptConfig:
-    """A one-operation corrupt config: null `records__doctor`'s sole
-    `prop__name` cell (the spanning fixture's only doctor row, d001).
+    """A one-operation corrupt config: null `records__doctor`'s `prop__name`
+    cell on d001 alone (the spanning fixture now carries three doctor rows —
+    `where` scopes the operation to exactly the one row this test declares
+    and later observes as the defect).
     """
     return CorruptConfig(
         seed=1,
@@ -39,7 +41,11 @@ def _null_doctor_name_config() -> CorruptConfig:
             NullCells(
                 kind="null_cells",
                 name="null_doctor_name",
-                target=Target(table="records__doctor", columns=["prop__name"]),
+                target=Target(
+                    table="records__doctor",
+                    where={"record_id": "d001"},
+                    columns=["prop__name"],
+                ),
                 amount=Amount(rate=1.0),
             ),
         ],

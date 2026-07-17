@@ -10,6 +10,7 @@ from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.derivations.versioned_intervals import (
@@ -24,11 +25,13 @@ from fabulexa_forge.reader.errors import TableNotFoundError
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__status", "type": "VARCHAR"},
     {"name": "prop__score", "type": "VARCHAR"},
 ]
@@ -79,6 +82,13 @@ def _build_emit(
     """Build a minimal emit for versioned-intervals tests.
 
     Creates records__<kind> and history tables. Inserts the supplied rows.
+
+    Each `record_rows` tuple is (fork_path, record_id, active, deactivated_at,
+    last_mutation_sim_time, *props) — the v6 identity columns
+    (`created_sim_time`, `record_index`) are injected at their pinned slots
+    here so every call site keeps the pre-v6 tuple shape. `created_sim_time`
+    is a fixed placeholder (unused by this derivation); `record_index` is the
+    row's 0-based position, matching the v6 dense per-kind ordinal.
     """
     if record_cols is None:
         record_cols = _RECORD_COLS
@@ -88,10 +98,23 @@ def _build_emit(
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     col_placeholders = ", ".join("?" for _ in record_cols)
-    for row in record_rows or []:
+    for record_index, row in enumerate(record_rows or []):
+        fork_path, record_id, active, deactivated_at, last_mutation_sim_time, *props = (
+            row
+        )
+        full_row = (
+            fork_path,
+            record_id,
+            0,  # created_sim_time
+            active,
+            deactivated_at,
+            last_mutation_sim_time,
+            record_index,
+            *props,
+        )
         conn.execute(
             f'INSERT INTO "records__{kind}" VALUES ({col_placeholders})',
-            list(row),
+            list(full_row),
         )
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))

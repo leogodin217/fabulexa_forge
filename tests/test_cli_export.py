@@ -31,6 +31,7 @@ from pathlib import Path
 import duckdb
 import pytest
 import yaml
+from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
@@ -49,11 +50,13 @@ from fabulexa_forge.config.models import (
 # ---------------------------------------------------------------------------
 
 _ACTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT", "history_tracked": False},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
 ]
 
@@ -65,8 +68,8 @@ def build_single_branch_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__actor", _ACTOR_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 100, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 50, True, 100, 0, "Alice"],
     )
     conn.close()
 
@@ -286,8 +289,8 @@ def build_runtime_emit(tmp_path: Path, start_datetime: str, timezone_str: str) -
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__actor", _ACTOR_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 10_000_000_000, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 0, True, 10_000_000_000, 0, "Alice"],
     )
     conn.close()
 
@@ -574,11 +577,13 @@ def test_cmd_export_empty_rebase_block_config_error(
 # ---------------------------------------------------------------------------
 
 _INCR_RECORDS_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT", "history_tracked": False},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
 ]
 
@@ -601,14 +606,24 @@ def build_incremental_emit(tmp_path: Path, slice_at: int = 250) -> Path:
     conn = duckdb.connect(str(db_path))
     col_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _INCR_RECORDS_COLUMNS)
     conn.execute(f'CREATE TABLE "records__entity" ({col_ddl})')
-    for entity_id, name, mutation_time in [
-        ("e001", "Alice", 10),
-        ("e002", "Bob", 110),
-        ("e003", "Carol", 210),
-    ]:
+    for record_index, (entity_id, name, mutation_time) in enumerate(
+        [
+            ("e001", "Alice", 10),
+            ("e002", "Bob", 110),
+            ("e003", "Carol", 210),
+        ]
+    ):
         conn.execute(
-            'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-            ["trunk", entity_id, True, mutation_time, name],
+            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+            [
+                "trunk",
+                entity_id,
+                mutation_time,
+                True,
+                mutation_time,
+                record_index,
+                name,
+            ],
         )
     conn.close()
 
@@ -1113,12 +1128,13 @@ def test_mode_cdc_config_rejected(
 # ---------------------------------------------------------------------------
 
 _SOURCE_LOCATION_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT", "history_tracked": False},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
 ]
 
@@ -1142,8 +1158,8 @@ def build_source_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__location", _SOURCE_LOCATION_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc001", 10, True, 10, "Ward A"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc001", 10, True, 10, 0, "Ward A"],
     )
     conn.close()
 

@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, write_emit
 
 from fabulexa_forge.corrupters.base_writer import write_base_emit
 from fabulexa_forge.corrupters.state import CorruptState, WorkingTable
@@ -30,7 +30,7 @@ def _source_sidecar(tmp_path: Path) -> dict[str, object]:
     placeholder_table: dict[str, object] = {
         "name": "placeholder",
         "category": "fixed",
-        "columns": [{"name": "fork_path", "type": "VARCHAR"}],
+        "columns": [identity_column("fork_path", "VARCHAR")],
         "rows": 0,
     }
     write_emit(
@@ -57,10 +57,12 @@ def _one_table_state() -> CorruptState:
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
             column_spec(
                 "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
             ),
             column_spec("prop__doctor_id", "VARCHAR", references="doctor"),
+            column_spec("ref_index__doctor_id", "BIGINT"),
         ),
         record_kind="actor",
     )
@@ -70,14 +72,18 @@ def _one_table_state() -> CorruptState:
             {
                 "fork_path": "trunk",
                 "record_id": "a002",
+                "record_index": 0,
                 "prop__name": "Bob",
                 "prop__doctor_id": "d001",
+                "ref_index__doctor_id": 0,
             },
             {
                 "fork_path": "trunk",
                 "record_id": "a001",
+                "record_index": 1,
                 "prop__name": "Alice",
                 "prop__doctor_id": "d002",
+                "ref_index__doctor_id": 1,
             },
         ],
     )
@@ -147,15 +153,23 @@ def test_duplicate_row_lands_adjacent_to_original(tmp_path: Path) -> None:
     spec = table_spec(
         "records__actor",
         "records",
-        (column_spec("fork_path", "VARCHAR"), column_spec("record_id", "VARCHAR")),
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
+        ),
         record_kind="actor",
     )
     wt = working_table(
         spec,
         [
-            {"fork_path": "trunk", "record_id": "a002"},
-            {"fork_path": "trunk", "record_id": "a001"},
-            {"fork_path": "trunk", "record_id": "a001"},  # exact duplicate
+            {"fork_path": "trunk", "record_id": "a002", "record_index": 0},
+            {"fork_path": "trunk", "record_id": "a001", "record_index": 1},
+            {
+                "fork_path": "trunk",
+                "record_id": "a001",
+                "record_index": 1,
+            },  # exact duplicate
         ],
     )
     state = CorruptState(tables={"records__actor": wt})
@@ -182,6 +196,7 @@ def test_untouched_column_types_survive_round_trip(tmp_path: Path) -> None:
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
             column_spec("prop__birthday", "DATE"),
             column_spec("prop__balance", "DECIMAL(10,2)"),
         ),
@@ -191,6 +206,7 @@ def test_untouched_column_types_survive_round_trip(tmp_path: Path) -> None:
         {
             "fork_path": pa.array(["trunk"], type=pa.string()),
             "record_id": pa.array(["a001"], type=pa.string()),
+            "record_index": pa.array([0], type=pa.int64()),
             "prop__birthday": pa.array([pa.scalar("2000-01-01").cast(pa.date32())]),
             "prop__balance": pa.array([pa.scalar(12.34).cast(pa.decimal128(10, 2))]),
         }
@@ -218,6 +234,7 @@ def test_renamed_column_carries_history_tracked_dropped_column_absent(
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
             column_spec(
                 "prop__full_name",
                 "VARCHAR",
@@ -229,7 +246,14 @@ def test_renamed_column_carries_history_tracked_dropped_column_absent(
     )
     wt = working_table(
         evolved_spec,
-        [{"fork_path": "trunk", "record_id": "a001", "prop__full_name": "Alice"}],
+        [
+            {
+                "fork_path": "trunk",
+                "record_id": "a001",
+                "record_index": 0,
+                "prop__full_name": "Alice",
+            }
+        ],
     )
     state = CorruptState(tables={"records__actor": wt})
     source_sidecar = _source_sidecar(tmp_path)
@@ -253,6 +277,7 @@ def test_all_temporal_class_values_round_trip(tmp_path: Path) -> None:
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
             column_spec(
                 "prop__ssn", "VARCHAR", history_tracked=True, temporal_class="constant"
             ),
@@ -274,6 +299,7 @@ def test_all_temporal_class_values_round_trip(tmp_path: Path) -> None:
             {
                 "fork_path": "trunk",
                 "record_id": "a001",
+                "record_index": 0,
                 "prop__ssn": "111-22-3333",
                 "prop__name": "Alice",
                 "prop__status": "active",
@@ -375,10 +401,17 @@ def _two_table_state() -> CorruptState:
     doctor_spec = table_spec(
         "records__doctor",
         "records",
-        (column_spec("fork_path", "VARCHAR"), column_spec("record_id", "VARCHAR")),
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
+        ),
         record_kind="doctor",
     )
-    doctors = working_table(doctor_spec, [{"fork_path": "trunk", "record_id": "d001"}])
+    doctors = working_table(
+        doctor_spec,
+        [{"fork_path": "trunk", "record_id": "d001", "record_index": 0}],
+    )
     tables = dict(state.tables)
     tables["records__doctor"] = doctors
     return CorruptState(tables=tables)
@@ -441,10 +474,16 @@ def test_bundle_sourced_table_name_with_embedded_quote_is_written_safely(
     spec = table_spec(
         evil_name,
         "records",
-        (column_spec("fork_path", "VARCHAR"), column_spec("record_id", "VARCHAR")),
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
+        ),
         record_kind="actor",
     )
-    wt = working_table(spec, [{"fork_path": "trunk", "record_id": "a001"}])
+    wt = working_table(
+        spec, [{"fork_path": "trunk", "record_id": "a001", "record_index": 0}]
+    )
     state = CorruptState(tables={evil_name: wt})
     source_sidecar = _source_sidecar(tmp_path)
     out_dir = tmp_path / "out"

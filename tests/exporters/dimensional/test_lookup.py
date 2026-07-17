@@ -7,6 +7,10 @@ plus end-to-end execution tests through build_query_specs.
 Phase 5: build_lookup_expr now composes build_reference_path_sql, emitting a
 single LEFT JOIN of a derivation subquery aliased _lookup_<col>_rp.  The
 SELECT expression projects <alias>."resolved".
+
+v6: every records table's fork_path/record_id route through identity_column
+and carries a record_index; every reference-annotated prop__ column carries
+its ref_index__ sibling.
 """
 
 from __future__ import annotations
@@ -15,7 +19,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
@@ -43,34 +47,42 @@ from fabulexa_forge.reader.sidecar import Sidecar
 # ---------------------------------------------------------------------------
 
 _ACTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR"},
     {"name": "prop__tier", "type": "VARCHAR"},
 ]
 
 _PRODUCT_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # references actor (owner)
     {"name": "prop__owner_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("ref_index__owner_id", "BIGINT"),
     {"name": "prop__category", "type": "VARCHAR"},
 ]
 
 _ORDER_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # references product (one hop to product, then product → actor is two hops)
     {"name": "prop__product_id", "type": "VARCHAR", "references": "product"},
+    identity_column("ref_index__product_id", "BIGINT"),
 ]
 
 _HISTORY_COLUMNS: list[dict[str, object]] = [
@@ -211,8 +223,8 @@ def test_zero_hop_self_lookup_history_interval_emits_reference_path_subquery() -
 def test_zero_hop_self_lookup_membership_grain_enriches_owner() -> None:
     """Zero-hop self lookup on membership grain: reference-path subquery to owner's records."""
     _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
         {"name": "joined_sim_time", "type": "BIGINT"},
         {"name": "left_sim_time", "type": "BIGINT"},
         {"name": "member__actor__kind", "type": "VARCHAR"},
@@ -481,11 +493,13 @@ def test_build_column_expr_null_mode_unaffected() -> None:
 def test_build_lookup_expr_raises_on_unresolvable_path() -> None:
     """build_lookup_expr raises ExportError when no path from anchor to terminal."""
     _WIDGET_COLUMNS: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__label", "type": "VARCHAR"},
     ]
     sidecar2 = _make_sidecar(
@@ -511,13 +525,17 @@ def test_build_lookup_expr_raises_on_unresolvable_path() -> None:
 def test_build_lookup_expr_raises_on_ambiguous_path() -> None:
     """build_lookup_expr raises ExportError when path is ambiguous and no hint given."""
     _AMBIGUOUS_PRODUCT_COLUMNS: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__owner_id", "type": "VARCHAR", "references": "actor"},
+        identity_column("ref_index__owner_id", "BIGINT"),
         {"name": "prop__alt_owner_id", "type": "VARCHAR", "references": "actor"},
+        identity_column("ref_index__alt_owner_id", "BIGINT"),
     ]
     sidecar = _make_sidecar(
         [
@@ -561,11 +579,13 @@ def _build_lookup_emit(tmp_path: Path) -> Path:
     should yield NULL for that row.
     """
     _ACTOR_COLS: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
     ]
     _HIST_COLS: list[dict[str, object]] = [
@@ -584,12 +604,12 @@ def _build_lookup_emit(tmp_path: Path) -> Path:
 
     # actor rows: a001 and a002 exist; a003 intentionally absent
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", 20, True, 20, 1, "Bob"],
     )
 
     # history: actor.status — a001 has two state changes, a002 has one, a003 unmatched
@@ -742,11 +762,13 @@ def _actor_cols_with_history_tracked(
         name_tracked: history_tracked value for prop__name.
     """
     return [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR", "history_tracked": name_tracked},
     ]
 
@@ -756,17 +778,20 @@ def _actor_cols_with_ref(
 ) -> list[dict[str, object]]:
     """Build product columns referencing actor, with history_tracked on the ref."""
     return [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {
             "name": "prop__owner_id",
             "type": "VARCHAR",
             "references": "actor",
             "history_tracked": ref_tracked,
         },
+        identity_column("ref_index__owner_id", "BIGINT"),
         {"name": "prop__category", "type": "VARCHAR", "history_tracked": False},
     ]
 
@@ -827,11 +852,13 @@ def test_temporal_safety_type1_terminal_property_passes() -> None:
 def test_temporal_safety_type2_hop_column_rejected() -> None:
     """A traversed hop column that is history_tracked: true is rejected."""
     actor_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
     ]
     product_cols = _actor_cols_with_ref(ref_tracked=True)
@@ -959,19 +986,23 @@ def test_temporal_safety_missing_terminal_property_rejected() -> None:
 def test_temporal_safety_unresolvable_path_rejected() -> None:
     """An unresolvable reference path is rejected (LookupPathResolvable)."""
     actor_cols_t1: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
     ]
     widget_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
     ]
     sidecar = _make_sidecar(
@@ -996,31 +1027,37 @@ def test_temporal_safety_unresolvable_path_rejected() -> None:
 def test_temporal_safety_ambiguous_path_rejected() -> None:
     """An ambiguous reference path with no hint is rejected."""
     actor_cols_t1: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
     ]
     ambig_product_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {
             "name": "prop__owner_id",
             "type": "VARCHAR",
             "references": "actor",
             "history_tracked": False,
         },
+        identity_column("ref_index__owner_id", "BIGINT"),
         {
             "name": "prop__alt_owner_id",
             "type": "VARCHAR",
             "references": "actor",
             "history_tracked": False,
         },
+        identity_column("ref_index__alt_owner_id", "BIGINT"),
     ]
     sidecar = _make_sidecar(
         [
@@ -1094,11 +1131,13 @@ def _build_temporal_emit(tmp_path: Path, name_tracked: bool) -> Path:
         name_tracked: history_tracked flag for prop__name.
     """
     actor_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR", "history_tracked": name_tracked},
     ]
     hist_cols: list[dict[str, object]] = [
@@ -1115,8 +1154,8 @@ def _build_temporal_emit(tmp_path: Path, name_tracked: bool) -> Path:
     conn.execute(_create_ddl("records__actor", actor_cols))
     conn.execute(_create_ddl("history", hist_cols))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
         'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
@@ -1210,29 +1249,35 @@ def _build_mixed_fk_lookup_emit(tmp_path: Path) -> Path:
       - records__journey_instance: j001 → a001, j002 → a002 via prop__actor_id
 
     All prop__ columns carry history_tracked: false so lookup temporal safety
-    passes.
+    passes. prop__actor_id's ref_index__actor_id sibling resolves to the
+    referenced actor's record_index (a001 -> 0, a002 -> 1).
     """
     actor_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
         {"name": "prop__tier", "type": "VARCHAR", "history_tracked": False},
     ]
     journey_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {
             "name": "prop__actor_id",
             "type": "VARCHAR",
             "references": "actor",
             "history_tracked": False,
         },
+        identity_column("ref_index__actor_id", "BIGINT"),
     ]
 
     db_path = tmp_path / "run.duckdb"
@@ -1240,20 +1285,20 @@ def _build_mixed_fk_lookup_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__actor", actor_cols))
     conn.execute(_create_ddl("records__journey_instance", journey_cols))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice", "gold"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "a001", 10, True, 10, 0, "Alice", "gold"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob", "silver"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "a002", 20, True, 20, 1, "Bob", "silver"],
     )
     conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 10, "a001"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 10, True, 10, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j002", True, 20, "a002"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j002", 20, True, 20, 1, "a002", 1],
     )
     conn.close()
 

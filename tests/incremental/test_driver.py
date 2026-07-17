@@ -10,7 +10,7 @@ from typing import Literal
 
 import duckdb
 import pytest
-from _support.sidecar_builder import write_emit
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters.source._source_fixtures import (
     build_day_scale_source_emit,
@@ -45,11 +45,13 @@ from fabulexa_forge.reader.emit import Emit, open_emit
 # ---------------------------------------------------------------------------
 
 _RECORDS_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT", "history_tracked": False},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
 ]
 
@@ -83,14 +85,24 @@ def _build_emit(tmp_path: Path, slice_at: int = 300) -> Path:
     col_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _RECORDS_COLUMNS)
     conn.execute(f'CREATE TABLE "records__entity" ({col_ddl})')
 
-    for entity_id, name, mutation_time in [
-        ("e001", "Alice", 10),
-        ("e002", "Bob", 110),
-        ("e003", "Carol", 210),
-    ]:
+    for record_index, (entity_id, name, mutation_time) in enumerate(
+        [
+            ("e001", "Alice", 10),
+            ("e002", "Bob", 110),
+            ("e003", "Carol", 210),
+        ]
+    ):
         conn.execute(
-            'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-            ["trunk", entity_id, True, mutation_time, name],
+            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+            [
+                "trunk",
+                entity_id,
+                mutation_time,
+                True,
+                mutation_time,
+                record_index,
+                name,
+            ],
         )
 
     hist_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _HISTORY_COLUMNS)
@@ -520,12 +532,12 @@ def test_duckdb_empty_window_is_emitted(tmp_path: Path) -> None:
     # no entity in window 1 (ns=[100,200))
     # entity at sim_time=210 (in window 2: ns=[200,300))
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "e001", True, 10, "Alice"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "e001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "e002", True, 210, "Carol"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "e002", 210, True, 210, 1, "Carol"],
     )
     conn.close()
 

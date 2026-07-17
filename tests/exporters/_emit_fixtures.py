@@ -9,8 +9,10 @@ Scenario:
   - membership__journey_instance__team_members: with elem__role_name, member__entity__{kind,id}
 
 Every base.json write routes through `_support.sidecar_builder.write_emit`;
-every value-carrying `prop__` column through `prop_column` — the one sidecar
-authority for fixture-building test code (design doc § Fixtures).
+every value-carrying `prop__` column through `prop_column`; every identity
+column (`fork_path`, `record_id`, `record_index`) through `identity_column` —
+the one sidecar authority for fixture-building test code (design doc §
+Fixtures).
 """
 
 from __future__ import annotations
@@ -18,7 +20,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import prop_column, write_emit
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 # ---------------------------------------------------------------------------
 # Sidecar column definitions
@@ -28,11 +30,13 @@ from _support.sidecar_builder import prop_column, write_emit
 # this fixture, so all three prop__ columns are class 'constant' —
 # type-2-eligible values that in fact never change here.
 _ENTITY_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__entity_type",
         "VARCHAR",
@@ -60,8 +64,8 @@ _HISTORY_COLUMNS: list[dict[str, object]] = [
 ]
 
 _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role_name", "type": "VARCHAR"},
@@ -133,12 +137,12 @@ def build_test_emit(tmp_path: Path) -> Path:
 
     # Two entity rows: one consultant, one nurse
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "e001", True, 10, "consultant", "Dr. Smith", "surgery"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e001", 10, True, 10, 0, "consultant", "Dr. Smith", "surgery"],
     )
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "e002", True, 20, "nurse", "Nurse Joy", "pediatrics"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e002", 20, True, 20, 1, "nurse", "Nurse Joy", "pediatrics"],
     )
 
     # history: journey_instance.state changes for record j001
@@ -268,12 +272,13 @@ def build_change_log_emit(tmp_path: Path) -> Path:
     ]
 
     patient_columns: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
         {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         prop_column(
             "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
         ),
@@ -293,18 +298,18 @@ def build_change_log_emit(tmp_path: Path) -> Path:
     # Every patient is created at sim_time=10.
     # p001: active record — no D event
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "p001", 10, True, 30, "Alice", "stable"],
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "p001", 10, True, 30, 0, "Alice", "stable"],
     )
     # p002: deactivated at sim_time=50, which also has a property change at 50
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "p002", 10, False, 50, 50, "Bob", "discharged"],
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "p002", 10, False, 50, 50, 1, "Bob", "discharged"],
     )
     # p003: deactivated record with no property-change collision
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "p003", 10, False, 80, 80, "Carol", "inactive"],
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "p003", 10, False, 80, 80, 2, "Carol", "inactive"],
     )
 
     history_rows: list[tuple[str, str, str, str, int, str | None, str]] = [
@@ -367,8 +372,8 @@ def build_no_runtime_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__entity", _ENTITY_COLUMNS))
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "e001", True, 10, "consultant", "Dr. Smith", "surgery"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e001", 10, True, 10, 0, "consultant", "Dr. Smith", "surgery"],
     )
     conn.execute(
         'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',

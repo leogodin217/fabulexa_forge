@@ -16,6 +16,9 @@ import jsonschema
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader._schema import _load_vendored_schema
+from fabulexa_forge.reader.conformance import _check_c5_table
+from fabulexa_forge.reader.records_columns import records_column_role
+from fabulexa_forge.reader.sidecar import ColumnSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -92,6 +95,92 @@ def prop_column(
     return column
 
 
+def identity_column(name: str, duckdb_type: str) -> dict[str, object]:
+    """Build one identity-column sidecar entry.
+
+    Sibling of `prop_column`: the sole constructor for identity fixture
+    entries (`fork_path` / `record_id` / `record_index` / `ref_index__<name>`)
+    — records and membership table entries alike, since the check is a pure
+    name rule and a membership table's `fork_path` / `record_id` entries flow
+    through it too. Emits a bare `{"name", "type"}` entry — a temporal
+    attribute or `references` annotation on an identity column is
+    inexpressible through it; negative variants mutate the returned dict.
+
+    Args:
+        name: The column name; must classify as `identity` under
+            `records_column_role`.
+        duckdb_type: The DuckDB type literal (`"BIGINT"` for both v6
+            families).
+
+    Returns:
+        The sidecar column entry dict.
+
+    Raises:
+        ValueError: `name` does not classify as `identity`.
+    """
+    if records_column_role(name) != "identity":
+        raise ValueError(
+            f"identity_column {name!r}: does not classify as 'identity' under "
+            "records_column_role"
+        )
+    return {"name": name, "type": duckdb_type}
+
+
+def _column_spec_from_raw(raw: dict[str, object]) -> ColumnSpec:
+    """Build a `ColumnSpec` from one raw fixture column dict.
+
+    Args:
+        raw: A column entry as passed to `write_emit`'s `tables`.
+
+    Returns:
+        The equivalent `ColumnSpec`, for reuse against the reader's own C5
+        shape check.
+    """
+    references = raw.get("references")
+    history_tracked = raw.get("history_tracked")
+    temporal_class = raw.get("temporal_class")
+    return ColumnSpec(
+        name=str(raw["name"]),
+        type=str(raw["type"]),
+        references=references if isinstance(references, str) else None,
+        history_tracked=history_tracked if isinstance(history_tracked, bool) else None,
+        temporal_class=temporal_class if isinstance(temporal_class, str) else None,
+    )
+
+
+def _assert_records_shape(tables: list[dict[str, object]]) -> None:
+    """Assert every records-category table classifies totally under the v6
+    records-column taxonomy, before a fixture is written.
+
+    Reuses the reader's own C5 positional check (`_check_c5_table`) so the
+    construction-time net and the read-time conformance check can never
+    silently drift apart. A fixture that has not learned the v6 shape fails
+    here, naming the table and column, rather than surfacing later as an
+    opaque C5 failure.
+
+    Args:
+        tables: The sidecar's `tables` list, as passed to `write_emit`.
+
+    Raises:
+        ValueError: A records-category table fails the v6 shape check.
+    """
+    for table in tables:
+        if table.get("category") != "records":
+            continue
+        tname = table.get("name")
+        raw_cols = table.get("columns")
+        if not isinstance(raw_cols, list):
+            continue
+        cols = [_column_spec_from_raw(c) for c in raw_cols if isinstance(c, dict)]
+        messages: list[str] = []
+        _check_c5_table(str(tname), cols, messages)
+        if messages:
+            raise ValueError(
+                f"fixture table {tname!r} fails the v6 records-shape assertion: "
+                + "; ".join(messages)
+            )
+
+
 def _validate_against_schema(sidecar: dict[str, object]) -> None:
     """Validate a constructed sidecar against the vendored v5 JSON Schema.
 
@@ -121,6 +210,7 @@ def write_emit(
     extra: dict[str, object] | None = None,
     base_format_version: int | None = None,
     schema_valid: bool = True,
+    records_shape_valid: bool = True,
 ) -> None:
     """Write one fixture emit's base.json.
 
@@ -150,12 +240,24 @@ def write_emit(
             fixtures whose declared defect is schema-level (a wrong version,
             an out-of-enum class) — they must remain writable, and their
             expectations name the C1 failure.
+        records_shape_valid: When True (the default), assert every
+            records-category table classifies totally under the v6 records
+            taxonomy (`record_index` in its slot, every reference-annotated
+            `prop__` entry immediately followed by its `ref_index__`
+            sibling, no no-role column) before writing — a fixture that has
+            not learned the v6 shape fails at construction, naming the table
+            and column. False is reserved for negative fixtures whose
+            declared defect is the v6 shape itself (a missing/misplaced
+            `record_index`, an unpaired `ref_index__`, …) — independent of
+            `schema_valid`, so the two nets stay independently addressable.
     """
     version = (
         SUPPORTED_BASE_FORMAT_VERSION
         if base_format_version is None
         else base_format_version
     )
+    if records_shape_valid:
+        _assert_records_shape(tables)
     sidecar: dict[str, object] = {
         "base_format_version": version,
         "branches": branches if branches is not None else _DEFAULT_BRANCHES,

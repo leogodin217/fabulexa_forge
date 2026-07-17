@@ -23,6 +23,7 @@ from unittest.mock import AsyncMock
 import duckdb
 import pytest
 import yaml
+from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.cli import _parse_join_flag, cmd_mixer, main
@@ -33,12 +34,13 @@ from fabulexa_forge.errors import KafkaConsumeError, KafkaDeliveryError
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
 ]
 
@@ -68,11 +70,11 @@ def _build_minimal_emit(tmp_path: Path) -> Path:
 
     _DAY = 86_400_000_000_000
     actor_rows: list[tuple[Any, ...]] = [
-        ("trunk", "a001", 1 * _DAY, True, None, 1 * _DAY, "active"),
+        ("trunk", "a001", 1 * _DAY, True, None, 1 * _DAY, 0, "active"),
     ]
     for row in actor_rows:
         conn.execute(
-            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)', list(row)
+            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', list(row)
         )
     history_rows: list[tuple[Any, ...]] = [
         ("trunk", "actor", "a001", "status", 1 * _DAY, "active"),

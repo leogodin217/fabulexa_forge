@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.anchor import EffectiveAnchor
@@ -38,24 +39,26 @@ from ._helpers import _ddl
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
     {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
 ]
 
 _RECORD_COLS_WITH_PID: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "presentation_id", "type": "BIGINT"},
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": True},
 ]
 
@@ -226,8 +229,8 @@ class TestSeq:
             tmp_path,
             "item",
             record_rows=[
-                ("trunk", "r1", 10, True, None, 10, "a", "x"),
-                ("trunk", "r2", 20, True, None, 20, "b", "y"),
+                ("trunk", "r1", 10, True, None, 10, 0, "a", "x"),
+                ("trunk", "r2", 20, True, None, 20, 1, "b", "y"),
             ],
             history_rows=[("trunk", "item", "r1", "status", 30, "c")],
         )
@@ -244,9 +247,9 @@ class TestSeq:
         emit_dir = _build_two_kind_emit(
             tmp_path,
             "alpha",
-            [("trunk", "a1", 10, True, None, 10, "x", "p")],
+            [("trunk", "a1", 10, True, None, 10, 0, "x", "p")],
             "beta",
-            [("trunk", "b1", 20, True, None, 20, "y", "q")],
+            [("trunk", "b1", 20, True, None, 20, 0, "y", "q")],
             history_rows=[],
         )
         config = _make_config([("alpha", []), ("beta", [])])
@@ -272,9 +275,9 @@ class TestOrdering:
         emit_dir = _build_two_kind_emit(
             tmp_path,
             "alpha",
-            [("trunk", "a1", 5, True, None, 5, "x", "p")],
+            [("trunk", "a1", 5, True, None, 5, 0, "x", "p")],
             "beta",
-            [("trunk", "b1", 3, True, None, 3, "y", "q")],
+            [("trunk", "b1", 3, True, None, 3, 0, "y", "q")],
             history_rows=[],
         )
         config = _make_config([("alpha", []), ("beta", [])])
@@ -290,9 +293,9 @@ class TestOrdering:
         emit_dir = _build_two_kind_emit(
             tmp_path,
             "alpha",
-            [("trunk", "a1", 10, True, None, 10, "x", "p")],
+            [("trunk", "a1", 10, True, None, 10, 0, "x", "p")],
             "beta",
-            [("trunk", "b1", 10, True, None, 10, "y", "q")],
+            [("trunk", "b1", 10, True, None, 10, 0, "y", "q")],
             history_rows=[],
         )
         config = _make_config([("alpha", []), ("beta", [])])
@@ -317,7 +320,7 @@ class TestRecordIdentity:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, False, 50, 50, "a", "x")],
+            record_rows=[("trunk", "r1", 10, False, 50, 50, 0, "a", "x")],
             history_rows=[("trunk", "item", "r1", "status", 30, "b")],
         )
         config = _make_config([("item", ["status"])])
@@ -336,7 +339,7 @@ class TestRecordIdentity:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 1001, 10, True, None, 10, "Alice")],
+            record_rows=[("trunk", "r1", 1001, 10, True, None, 10, 0, "Alice")],
             history_rows=[],
             record_cols=_RECORD_COLS_WITH_PID,
         )
@@ -355,7 +358,7 @@ class TestRecordIdentity:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "x")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
             history_rows=[],
         )
         config = _make_config([("item", [])])
@@ -379,7 +382,7 @@ class TestAfterImage:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, False, 50, 50, "a", "x")],
+            record_rows=[("trunk", "r1", 10, False, 50, 50, 0, "a", "x")],
             history_rows=[],
         )
         config = _make_config([("item", [])])
@@ -396,7 +399,7 @@ class TestAfterImage:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "x")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
             history_rows=[],
         )
         config = _make_config([("item", ["label"])])
@@ -424,7 +427,7 @@ class TestTimestampRendering:
             tmp_path,
             "item",
             record_rows=[
-                ("trunk", "r1", 42_000_000_000, True, None, 42_000_000_000, "a", "x")
+                ("trunk", "r1", 42_000_000_000, True, None, 42_000_000_000, 0, "a", "x")
             ],
             history_rows=[],
         )
@@ -457,6 +460,7 @@ class TestTimestampRendering:
                     True,
                     None,
                     3_600_000_000_000,
+                    0,
                     "a",
                     "x",
                 )
@@ -499,6 +503,7 @@ class TestTimestampRendering:
                     True,
                     None,
                     7_200_000_000_000,
+                    0,
                     "a",
                     "x",
                 )
@@ -531,7 +536,7 @@ class TestStreamKindResolvable:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "x")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
             history_rows=[],
         )
         config = _make_config([("ghost", [])])
@@ -546,7 +551,7 @@ class TestStreamKindResolvable:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "x")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
             history_rows=[],
         )
         # config has valid "item" and invalid "ghost"
@@ -569,7 +574,7 @@ class TestStreamPropertyResolvable:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "x")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
             history_rows=[],
         )
         config = _make_config([("item", ["nonexistent"])])
@@ -594,7 +599,7 @@ class TestSingleBranch:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "x")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
             history_rows=[],
             n_branches=2,
         )
@@ -610,12 +615,13 @@ class TestSingleBranch:
 
 # Interleaved col definition: tracked (status), current (label), tracked (rank)
 _RECORD_COLS_INTERLEAVED: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
     {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
     {"name": "prop__rank", "type": "VARCHAR", "history_tracked": True},
@@ -630,7 +636,7 @@ class TestEagerValidation:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "x")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
             history_rows=[],
         )
         config = _make_config([("ghost", [])])
@@ -644,7 +650,7 @@ class TestEagerValidation:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "x")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
             history_rows=[],
         )
         config = _make_config([("item", ["nonexistent"])])
@@ -657,7 +663,7 @@ class TestEagerValidation:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "x")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
             history_rows=[],
             n_branches=2,
         )
@@ -682,7 +688,7 @@ class TestFoldColOrder:
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "lbl", "1")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "lbl", "1")],
             history_rows=[],
             record_cols=_RECORD_COLS_INTERLEAVED,
         )
@@ -709,7 +715,7 @@ class TestFoldColOrder:
             tmp_path,
             "item",
             record_rows=[
-                ("trunk", "r1", 10, True, None, 20, "a", "x"),
+                ("trunk", "r1", 10, True, None, 20, 0, "a", "x"),
             ],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "a"),
@@ -735,23 +741,23 @@ class TestFoldColOrder:
 # ---------------------------------------------------------------------------
 
 _MEMBERSHIP_BASIC_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
 ]
 
 _MEMBERSHIP_SCALAR_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
 ]
 
 _MEMBERSHIP_REF_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "member__owner__kind", "type": "VARCHAR"},
@@ -1531,7 +1537,7 @@ class TestStateChangesRegression:
             tmp_path,
             "item",
             record_rows=[
-                ("trunk", "r1", 10, True, None, 20, "a", "x"),
+                ("trunk", "r1", 10, True, None, 20, 0, "a", "x"),
             ],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "a"),

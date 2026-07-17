@@ -58,7 +58,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import prop_column, write_emit
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 # One whole day in nanoseconds (sim_time unit = ns offset from runtime anchor).
 # 1*DAY → 2024-01-02, 2*DAY → 2024-01-03, 3*DAY → 2024-01-04.
@@ -69,12 +69,13 @@ DAY: int = 86_400_000_000_000
 # ---------------------------------------------------------------------------
 
 _PATIENT_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # history-tracked property — SCD-2 source
     prop_column(
         "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
@@ -91,6 +92,7 @@ _PATIENT_COLUMNS: list[dict[str, object]] = [
         temporal_class="slice_only",
         references="doctor",
     ),
+    identity_column("ref_index__doctor_id", "BIGINT"),
     # Two references to the SAME kind (staff) — an ambiguous patient→staff
     # pathfind that an fk/lookup must disambiguate with an explicit `path` hint.
     prop_column(
@@ -100,6 +102,7 @@ _PATIENT_COLUMNS: list[dict[str, object]] = [
         temporal_class="slice_only",
         references="staff",
     ),
+    identity_column("ref_index__primary_staff_id", "BIGINT"),
     prop_column(
         "prop__backup_staff_id",
         "VARCHAR",
@@ -107,27 +110,30 @@ _PATIENT_COLUMNS: list[dict[str, object]] = [
         temporal_class="slice_only",
         references="staff",
     ),
+    identity_column("ref_index__backup_staff_id", "BIGINT"),
 ]
 
 _DOCTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__name", "VARCHAR", history_tracked=False, temporal_class="slice_only"
     ),
 ]
 
 _STAFF_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__name", "VARCHAR", history_tracked=False, temporal_class="slice_only"
     ),
@@ -141,12 +147,13 @@ _STAFF_COLUMNS: list[dict[str, object]] = [
 ]
 
 _ADMISSION_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # Identity + lifecycle kind with one type-1 property, no history. Its sole
     # purpose is to exercise the streaming lifecycle: an active record yields a
     # create only; a deactivated record yields a create then a delete tombstone.
@@ -156,17 +163,17 @@ _ADMISSION_COLUMNS: list[dict[str, object]] = [
 ]
 
 _HISTORY_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
     {"name": "kind", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("record_id", "VARCHAR"),
     {"name": "property", "type": "VARCHAR"},
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
 ]
 
 _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__slot", "type": "VARCHAR"},
@@ -175,12 +182,13 @@ _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
 ]
 
 _QUEUE_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     prop_column(
         "prop__name", "VARCHAR", history_tracked=False, temporal_class="slice_only"
     ),
@@ -189,8 +197,8 @@ _QUEUE_COLUMNS: list[dict[str, object]] = [
 # Queue waiters: a scalar element field (elem__priority) plus a reference field
 # (member__patient__*). Owner is a queue; member is a patient.
 _WAITERS_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
@@ -257,63 +265,76 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     # p002: created before its first history event (2*DAY); latest history at 2*DAY.
     # prop__primary_staff_id / prop__backup_staff_id both reference staff:
     #   p001 → primary s001, backup s002; p002 → primary s002, backup NULL.
+    # record_index: p001=0, p002=1 (patient); d001=0 (doctor); s001=0, s002=1
+    # (staff) — ref_index__ cells below carry the target's ordinal, NULL
+    # together with the NULL reference cell (p002's backup_staff_id).
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO "records__patient" VALUES '
+        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "p001",
             DAY,
             True,
             3 * DAY,
+            0,
             "discharged",
             "Alice",
             "d001",
+            0,
             "s001",
+            0,
             "s002",
+            1,
         ],
     )
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO "records__patient" VALUES '
+        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "p002",
             2 * DAY,
             True,
             2 * DAY,
+            1,
             "pending",
             "Bob",
             "d001",
+            0,
             "s002",
+            1,
+            None,
             None,
         ],
     )
 
     # One doctor record
     conn.execute(
-        'INSERT INTO "records__doctor" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", 50, True, 50, "Dr. Carter"],
+        'INSERT INTO "records__doctor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "d001", 50, True, 50, 0, "Dr. Carter"],
     )
 
     # Two staff records with distinct sub-types (the discriminator-split source).
     conn.execute(
-        'INSERT INTO "records__staff" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "s001", 50, True, 50, "Nora Vega", "nurse"],
+        'INSERT INTO "records__staff" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "s001", 50, True, 50, 0, "Nora Vega", "nurse"],
     )
     conn.execute(
-        'INSERT INTO "records__staff" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "s002", 50, True, 50, "Owen Reed", "physician"],
+        'INSERT INTO "records__staff" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "s002", 50, True, 50, 1, "Owen Reed", "physician"],
     )
 
     # Two admission records (identity + lifecycle, no history):
     #   a001 active   — created@1*DAY, never deactivated → stream yields `c` only
     #   a002 closed   — created@1*DAY, deactivated@2*DAY → stream yields `c` then `d`
     conn.execute(
-        'INSERT INTO "records__admission" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", DAY, True, DAY, "north"],
+        'INSERT INTO "records__admission" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", DAY, True, DAY, 0, "north"],
     )
     conn.execute(
-        'INSERT INTO "records__admission" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a002", DAY, False, 2 * DAY, 2 * DAY, "south"],
+        'INSERT INTO "records__admission" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a002", DAY, False, 2 * DAY, 2 * DAY, 1, "south"],
     )
 
     # History rows (point-grain status changes only).
@@ -345,9 +366,10 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     )
 
     # One queue record (owner of the waiters collection), created before any join.
+    # record_index: q001=0 (queue).
     conn.execute(
-        'INSERT INTO "records__queue" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "q001", 50, True, 50, "Triage"],
+        'INSERT INTO "records__queue" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "q001", 50, True, 50, 0, "Triage"],
     )
 
     # Queue waiters on owner q001 — the membership-events unpivot source:

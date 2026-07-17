@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.config.models import (
@@ -46,34 +47,37 @@ _DAY = 86_400_000_000_000  # 1 day in nanoseconds
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS_ACTOR: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__actor_type", "type": "VARCHAR"},
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
 ]
 
 _RECORD_COLS_DEVICE: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
 ]
 
 # Entity columns — bare-role kind carrying a discriminator column
 _RECORD_COLS_ENTITY: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__entity_type", "type": "VARCHAR"},
     {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
 ]
@@ -133,8 +137,11 @@ def _build_actor_emit(
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     ph = ", ".join("?" for _ in _RECORD_COLS_ACTOR)
-    for row in actor_rows:
-        conn.execute(f'INSERT INTO "records__actor" VALUES ({ph})', list(row))
+    for i, row in enumerate(actor_rows):
+        conn.execute(
+            f'INSERT INTO "records__actor" VALUES ({ph})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
@@ -185,12 +192,18 @@ def _build_actor_device_emit(
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     ph_actor = ", ".join("?" for _ in _RECORD_COLS_ACTOR)
-    for row in actor_rows:
-        conn.execute(f'INSERT INTO "records__actor" VALUES ({ph_actor})', list(row))
+    for i, row in enumerate(actor_rows):
+        conn.execute(
+            f'INSERT INTO "records__actor" VALUES ({ph_actor})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
 
     ph_device = ", ".join("?" for _ in _RECORD_COLS_DEVICE)
-    for row in device_rows:
-        conn.execute(f'INSERT INTO "records__device" VALUES ({ph_device})', list(row))
+    for i, row in enumerate(device_rows):
+        conn.execute(
+            f'INSERT INTO "records__device" VALUES ({ph_device})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
 
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
@@ -248,8 +261,11 @@ def _build_nonsubtyped_emit(
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     ph = ", ".join("?" for _ in _RECORD_COLS_DEVICE)
-    for row in rows:
-        conn.execute(f'INSERT INTO "records__{kind}" VALUES ({ph})', list(row))
+    for i, row in enumerate(rows):
+        conn.execute(
+            f'INSERT INTO "records__{kind}" VALUES ({ph})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
@@ -292,8 +308,11 @@ def _build_entity_emit(
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     ph = ", ".join("?" for _ in _RECORD_COLS_ENTITY)
-    for row in entity_rows:
-        conn.execute(f'INSERT INTO "records__entity" VALUES ({ph})', list(row))
+    for i, row in enumerate(entity_rows):
+        conn.execute(
+            f'INSERT INTO "records__entity" VALUES ({ph})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
@@ -963,16 +982,16 @@ class TestRegressionNoRoutingBlock:
 # ---------------------------------------------------------------------------
 
 _MEM_QUEUE_WAITERS_COLS: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
 ]
 
 _MEM_TEAM_MEMBERS_COLS: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role", "type": "VARCHAR"},
@@ -1067,8 +1086,8 @@ _WAITER_ROW_OPEN = ("trunk", "w2", 2 * _DAY, None, "low")  # join only
 _MEMBER_ROW = ("trunk", "m1", 1 * _DAY, None, "lead")  # join only
 
 _MEM_QUEUE_TASKS_COLS: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__label", "type": "VARCHAR"},
