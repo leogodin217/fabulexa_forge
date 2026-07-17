@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 """
-Demo: Records-column taxonomy + posture ports (green at v5).
+Demo: Records-column taxonomy + posture ports.
 
-Builds a small v5 emit inline (no fixture files, no vendored-schema
-validation -- the demo stays green while the vendored contract is already
-pinned to v6, ahead of the Phase-2 flip). Shows:
+Builds a small v6 emit inline (no fixture files, no vendored-schema
+validation -- the same in-memory-DuckDB, no-`open_emit` pattern the Phase
+2/3/4 demos use). Shows:
 
 1. `records_column_role` classifying every v6 column family by name alone --
    identity, presentation, lifecycle, payload -- and a no-role name returning
@@ -12,10 +12,10 @@ pinned to v6, ahead of the Phase-2 flip). Shows:
 2. `ref_index_sibling` pairing a `prop__<name>` column with its
    `ref_index__<name>` sibling name.
 3. The source exporter's plan classifying every records column through the
-   taxonomy: at v5 the index families never occur, so a faithful table's
-   output columns are unchanged; a records table carrying a genuinely
-   unclassifiable column raises `SourceUnclassifiedColumn`, before any
-   output is written.
+   taxonomy: the identity family (`record_id` excepted) is dropped from a
+   faithful table's output regardless of whether it is `fork_path` or the
+   newer `record_index`; a records table carrying a genuinely unclassifiable
+   column raises `SourceUnclassifiedColumn`, before any output is written.
 4. `init` proposals now role-scoped to payload + presentation only --
    `created_sim_time` / `last_mutation_sim_time` no longer leak into the
    SCD-2 dim stub by enumeration accident.
@@ -30,6 +30,7 @@ from pathlib import Path
 
 import duckdb
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.errors import SourceUnclassifiedColumn
 from fabulexa_forge.exporters.dimensional.init import generate_init_config
 from fabulexa_forge.exporters.source.plan import build_source_plan
@@ -71,11 +72,14 @@ def _print_taxonomy_table() -> None:
 
 
 # ---------------------------------------------------------------------------
-# 2. A small v5 emit, built inline
+# 2. A small v6 emit, built inline
 # ---------------------------------------------------------------------------
 
 #: A single tracked (changelog-genre) kind with a plain scalar property --
 #: enough to exercise both the source plan and the init proposal loop.
+#: `record_index` sits in its v6 contract slot (immediately after the
+#: lifecycle prefix) so the source plan's identity drop is exercised against
+#: a genuine v6 index column, not merely its absence.
 _WIDGET_COLUMNS: list[dict[str, object]] = [
     {"name": "fork_path", "type": "VARCHAR"},
     {"name": "record_id", "type": "VARCHAR"},
@@ -83,6 +87,7 @@ _WIDGET_COLUMNS: list[dict[str, object]] = [
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    {"name": "record_index", "type": "BIGINT"},
     {
         "name": "prop__status",
         "type": "VARCHAR",
@@ -102,9 +107,9 @@ def _widget_table(columns: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
-def _build_v5_sidecar_raw(columns: list[dict[str, object]]) -> dict[str, object]:
+def _build_v6_sidecar_raw(columns: list[dict[str, object]]) -> dict[str, object]:
     return {
-        "base_format_version": 5,
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         "tables": [_widget_table(columns)],
         "record_roles": {"widget": "dimension"},
@@ -120,22 +125,22 @@ def _open_inline_emit(sidecar: Sidecar) -> Emit:
         'CREATE TABLE "records__widget" ('
         "fork_path VARCHAR, record_id VARCHAR, created_sim_time BIGINT,"
         " active BOOLEAN, deactivated_at BIGINT, last_mutation_sim_time BIGINT,"
-        " prop__status VARCHAR)"
+        " record_index BIGINT, prop__status VARCHAR)"
     )
     conn.execute(
-        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "w1", 0, True, 0, "online"],
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "w1", 0, True, 0, 0, "online"],
     )
     return Emit(sidecar=sidecar, emit_dir=Path("<inline>"), conn=conn)
 
 
 # ---------------------------------------------------------------------------
-# 3. Source plan: unchanged output at v5, and the raised no-role error
+# 3. Source plan: the identity family dropped, and the raised no-role error
 # ---------------------------------------------------------------------------
 
 
 def _print_source_plan_posture() -> None:
-    sidecar = Sidecar.from_raw(_build_v5_sidecar_raw(_WIDGET_COLUMNS))
+    sidecar = Sidecar.from_raw(_build_v6_sidecar_raw(_WIDGET_COLUMNS))
     plan = build_source_plan(sidecar, None)
     spec = plan[0]
     columns = [out for _, out in spec.columns]
@@ -144,7 +149,7 @@ def _print_source_plan_posture() -> None:
     assert not any(c.startswith("ref_index__") for c in columns)
 
     broken_columns = list(_WIDGET_COLUMNS) + [{"name": "mystery", "type": "VARCHAR"}]
-    broken_sidecar = Sidecar.from_raw(_build_v5_sidecar_raw(broken_columns))
+    broken_sidecar = Sidecar.from_raw(_build_v6_sidecar_raw(broken_columns))
     try:
         build_source_plan(broken_sidecar, None)
     except SourceUnclassifiedColumn as exc:
@@ -159,7 +164,7 @@ def _print_source_plan_posture() -> None:
 
 
 def _print_init_proposal_posture() -> None:
-    sidecar = Sidecar.from_raw(_build_v5_sidecar_raw(_WIDGET_COLUMNS))
+    sidecar = Sidecar.from_raw(_build_v6_sidecar_raw(_WIDGET_COLUMNS))
     emit = _open_inline_emit(sidecar)
     try:
         candidate = generate_init_config(emit)
@@ -184,8 +189,8 @@ def main() -> int:
     _print_init_proposal_posture()
     print(
         "\nSUCCESS: the records-column taxonomy classifies totally; the source"
-        " exporter and init proposal loop both read through it, and Phase-1"
-        " output stays byte-identical at v5."
+        " exporter and init proposal loop both read through it, dropping the"
+        " identity family (including v6's record_index) faithfully."
     )
     return 0
 
