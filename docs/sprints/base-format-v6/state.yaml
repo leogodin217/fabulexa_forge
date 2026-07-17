@@ -1,0 +1,85 @@
+sprint: base-format-v6
+parent_branch: revender_for_point_in_time
+started: 2026-07-17
+current_phase: 1
+capabilities:
+  - reader: [records-column taxonomy, version gate v6]
+  - conformance: [C5 v6 layout, catalog re-check removal]
+  - source-exporter: [taxonomy classification, identity drop posture]
+  - dimensional-init: [role-scoped proposals]
+  - corrupters: [pair-scoped reference writes, fresh record_index minting, stated identity invariants]
+  - fixtures: [identity_column constructor, v6 spanning + negatives, write_emit shape assertion]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "Records-column taxonomy + posture ports (green at v5)"
+    demo: "docs/sprints/base-format-v6/demos/phase_1_taxonomy_posture.py"
+  2:
+    status: pending
+    name: "The v6 flip (atomic)"
+    demo: "docs/sprints/base-format-v6/demos/phase_2_v6_flip.py"
+    steps:
+      - kind: source
+        summary: "Flip SUPPORTED_BASE_FORMAT_VERSION to 6; amend C5 to the v6 layout via the taxonomy (drop the catalog re-check); add identity_column + the write_emit records-shape assertion (with explicit opt-out); reshape the spanning fixture v6 (adversarial id mix), audit all negatives, add 5 new C5 negatives; create the phase demo"
+      - kind: migrate
+        tactic: fan-out
+        change: "Emits are v6-shaped: every records table adds record_index (identity_column entry + populated 0..rows-1 data); every reference-annotated prop__ gains a ref_index__ sibling (entry + values consistent with the target's ordinals, NULL-together); all hand-written fork_path/record_id entries route through identity_column (membership tables included). Assertions keep their intent — exporter/init output is unchanged by Phase 1's drop posture"
+        files:
+          - "tests/corrupters/test_base_writer.py"
+          - "tests/derivations/_fixtures.py"
+          - "tests/derivations/test_membership_events.py"
+          - "tests/derivations/test_reference_resolution.py"
+          - "tests/derivations/test_row_state_events.py"
+          - "tests/derivations/test_versioned_intervals.py"
+          - "tests/exporters/_emit_fixtures.py"
+          - "tests/exporters/dimensional/test_elapsed.py"
+          - "tests/exporters/dimensional/test_export_dimensional.py"
+          - "tests/exporters/dimensional/test_fk.py"
+          - "tests/exporters/dimensional/test_grains.py"
+          - "tests/exporters/dimensional/test_lookup.py"
+          - "tests/exporters/dimensional/test_rebasing.py"
+          - "tests/exporters/dimensional/test_scd.py"
+          - "tests/exporters/dimensional/test_scd2_source_filter.py"
+          - "tests/exporters/dimensional/test_windowed.py"
+          - "tests/exporters/dimensional/test_windowed_failfast.py"
+          - "tests/exporters/source/_source_fixtures.py"
+          - "tests/exporters/streaming/test_driver.py"
+          - "tests/exporters/streaming/test_engine.py"
+          - "tests/exporters/streaming/test_mixer.py"
+          - "tests/exporters/streaming/test_routing.py"
+          - "tests/exporters/streaming/test_routing_engine.py"
+          - "tests/incremental/test_driver.py"
+          - "tests/integration/kafka/test_kafka_cli.py"
+          - "tests/reader/test_conformance_data.py"
+          - "tests/reader/test_emit.py"
+          - "tests/reader/test_emit_query.py"
+          - "tests/reader/test_history_tracked.py"
+          - "tests/reader/test_open_emit.py"
+          - "tests/reader/test_query_arrow.py"
+          - "tests/reader/test_relations.py"
+          - "tests/reader/test_sidecar.py"
+          - "tests/reader/test_temporal_class.py"
+          - "tests/recipes/_recipe_fixture.py"
+          - "tests/test_cli_export.py"
+          - "tests/test_cli_init.py"
+          - "tests/test_cli_mixer.py"
+          - "tests/test_cli_stream.py"
+          - "tests/test_contract_vendored.py"
+          - "tests/writers/test_duckdb_window.py"
+      - kind: author
+        summary: "Intent-changing conformance/support test updates: new C5 clause tests over the five new negatives, drop the removed catalog re-check tests, v6 fixture-shape assertions, identity_column + write_emit shape-assertion tests (these files also migrate their own literals)"
+        files:
+          - "tests/reader/test_conformance_structural.py"
+          - "tests/reader/test_fixtures.py"
+          - "tests/_support/test_sidecar_builder.py"
+  3:
+    status: pending
+    name: "Corrupter pair-scoped reference writes"
+    demo: "docs/sprints/base-format-v6/demos/phase_3_pair_writes.py"
+  4:
+    status: pending
+    name: "Index minting + stated invariants"
+    demo: "docs/sprints/base-format-v6/demos/phase_4_index_minting.py"
