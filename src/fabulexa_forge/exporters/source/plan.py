@@ -39,12 +39,14 @@ from fabulexa_forge.errors import (
     SourceRenameUnresolved,
     SourceRoleUnknown,
     SourceSubtypesUndeclared,
+    SourceUnclassifiedColumn,
 )
 from fabulexa_forge.exporters.reserved_names import (
     is_reserved_column_name,
     is_reserved_table_name,
 )
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, _scalar_properties
+from fabulexa_forge.reader.records_columns import records_column_role
 
 #: Prefixes/suffixes the presentation-default renamer strips or recognizes.
 _ELEM_PREFIX = "elem__"
@@ -384,12 +386,41 @@ def _snapshot_columns(sidecar: "Sidecar", kind: str) -> tuple[tuple[str, str], .
     return tuple(pairs)
 
 
+def _require_all_columns_classified(sidecar: "Sidecar", source_table: str) -> None:
+    """Classify every column of a records table through the taxonomy.
+
+    The one validation point every genre shares: called before any genre-specific
+    column set is built, so a no-role column fails export planning uniformly and
+    before any output is written — the taxonomy's closed-world posture (design doc
+    § Semantics — the records-column taxonomy).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        source_table: The unit's records__<kind> table name.
+
+    Raises:
+        SourceUnclassifiedColumn: A column matches no records-column taxonomy role.
+    """
+    for col in sidecar.columns(source_table):
+        if records_column_role(col.name) is None:
+            raise SourceUnclassifiedColumn(
+                f"table '{source_table}': column '{col.name}' matches no"
+                " records-column taxonomy role"
+            )
+
+
 def _records_columns(
     sidecar: "Sidecar",
     source_table: str,
     drop_discriminator: str | None,
 ) -> tuple[tuple[str, str], ...]:
     """The reference/transaction render's faithful column set, source -> output.
+
+    Every column classifies through the records-column taxonomy: identity
+    columns are dropped, following `fork_path`'s precedent — except `record_id`,
+    which is identity but kept as `id` (design doc § Semantics — Phase-1 exporter
+    posture). Presentation and lifecycle columns keep their operational default
+    name; payload columns are prefix-stripped.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -399,18 +430,19 @@ def _records_columns(
             or None to retain every prop__ column (unsplit unit).
 
     Returns:
-        (source, output) pairs in sidecar column order, fork_path dropped,
-        the lifecycle columns renamed to their operational default, prop__
-        columns prefix-stripped.
+        (source, output) pairs in sidecar column order, identity columns dropped
+        (`record_id` kept), the lifecycle columns renamed to their operational
+        default, prop__ columns prefix-stripped.
     """
     pairs: list[tuple[str, str]] = []
     for col in sidecar.columns(source_table):
         name = col.name
-        if name == "fork_path":
+        role = records_column_role(name)
+        if role == "identity" and name != "record_id":
             continue
         if drop_discriminator is not None and name == drop_discriminator:
             continue
-        if name.startswith(_PROP_PREFIX):
+        if role == "payload":
             pairs.append((name, name[len(_PROP_PREFIX) :]))
         else:
             pairs.append((name, _LIFECYCLE_RENAMES.get(name, name)))
@@ -488,9 +520,14 @@ def _default_columns(
 
     Returns:
         The unit's default (source, output) column pairs.
+
+    Raises:
+        SourceUnclassifiedColumn: A records-category column of the unit's table
+            matches no records-column taxonomy role.
     """
     if unit.genre == "junction":
         return _junction_columns(sidecar, unit.source_table, unit.kind)
+    _require_all_columns_classified(sidecar, unit.source_table)
     if unit.genre == "changelog":
         if change_delivery == "snapshot":
             return _snapshot_columns(sidecar, unit.kind)
@@ -764,6 +801,8 @@ def build_source_plan(
         ExportError: A resolved output table name collides with the cross-mode
             bookkeeping names or reserved suffixes (checked at plan build so a
             full export and a later incremental drip on the same target agree).
+        SourceUnclassifiedColumn: A records-category column matches no
+            records-column taxonomy role.
     """
     units = _classify_units(sidecar)
 

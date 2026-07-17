@@ -20,10 +20,11 @@ from fabulexa_forge.errors import (
     SourceRenameUnresolved,
     SourceRoleUnknown,
     SourceSubtypesUndeclared,
+    SourceUnclassifiedColumn,
 )
 from fabulexa_forge.exporters.source.plan import build_source_plan
 from fabulexa_forge.reader.errors import TemporalClassUnavailableError
-from fabulexa_forge.reader.sidecar import Sidecar
+from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar
 
 # ---------------------------------------------------------------------------
 # Sidecar-building helpers
@@ -957,6 +958,59 @@ def test_snapshot_collision_check_runs_over_snapshot_columns() -> None:
     config = SourceConfig(change_delivery="snapshot")
     with pytest.raises(SourceNameCollision):
         build_source_plan(sidecar, config)
+
+
+# ---------------------------------------------------------------------------
+# Records-column taxonomy posture
+# ---------------------------------------------------------------------------
+
+
+def test_unclassified_column_on_reference_kind_raises() -> None:
+    """A records table carrying a no-role column raises SourceUnclassifiedColumn,
+    naming the table and column, before any output is written."""
+    sidecar = _sidecar(
+        tables=[
+            _records_table("location", [_col("prop__name", history_tracked=False)]),
+        ],
+        record_roles={"location": "dimension"},
+    )
+    # Inject a no-role column directly (the builder helpers only ever produce
+    # conformant columns).
+    table = sidecar.tables()[0]
+    assert table.name == "records__location"
+    object.__setattr__(
+        table,
+        "columns",
+        table.columns + (ColumnSpec("mystery", "VARCHAR", None, None, None),),
+    )
+    with pytest.raises(SourceUnclassifiedColumn, match="records__location.*mystery"):
+        build_source_plan(sidecar, None)
+
+
+def test_unclassified_column_on_changelog_kind_raises() -> None:
+    """A tracked (changelog-genre) kind carrying a no-role column also raises."""
+    sidecar = _tracked_sidecar()
+    table = sidecar.tables()[0]
+    assert table.name == "records__widget"
+    object.__setattr__(
+        table,
+        "columns",
+        table.columns + (ColumnSpec("mystery", "VARCHAR", None, None, None),),
+    )
+    with pytest.raises(SourceUnclassifiedColumn, match="records__widget.*mystery"):
+        build_source_plan(sidecar, None)
+
+
+def test_reference_genre_drops_no_columns_beyond_fork_path_at_v5() -> None:
+    """At v5 the identity index families do not occur; the taxonomy posture
+    changes nothing observable -- fork_path is dropped, record_id kept as id,
+    exactly as before."""
+    plan = build_source_plan(_spanning_sidecar(), None)
+    spec = next(s for s in plan if s.source_table == "records__location")
+    sources = [src for src, _ in spec.columns]
+    assert "fork_path" not in sources
+    assert "record_id" in sources
+    assert dict(spec.columns)["record_id"] == "id"
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 sprint: base-format-v6
 parent_branch: revender_for_point_in_time
 started: 2026-07-17
-current_phase: 1
+current_phase: 2
 capabilities:
   - reader: [records-column taxonomy, version gate v6]
   - conformance: [C5 v6 layout, catalog re-check removal]
@@ -14,7 +14,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Records-column taxonomy + posture ports (green at v5)"
     demo: "docs/sprints/base-format-v6/demos/phase_1_taxonomy_posture.py"
   2:

@@ -15,6 +15,7 @@ import io
 from typing import TYPE_CHECKING, Callable
 
 from fabulexa_forge.errors import InitRequiresRecordRoles
+from fabulexa_forge.reader.records_columns import records_column_role
 from fabulexa_forge.reader.relations import distinct_prop_values
 from fabulexa_forge.reader.sidecar import TableSpec
 
@@ -189,7 +190,7 @@ def _write_dim_scd2_stub(
     w("      columns:")
     w("        - {name: id, from: record_id}")
     for col in all_cols:
-        if col in ("fork_path", "record_id", "active", "deactivated_at"):
+        if records_column_role(col) not in ("payload", "presentation"):
             continue
         short = col.replace("prop__", "")
         if col in tracked_cols:

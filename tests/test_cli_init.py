@@ -41,6 +41,7 @@ _LOCATION_COLUMNS: list[dict[str, object]] = [
 _SENSOR_COLUMNS: list[dict[str, object]] = [
     {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
     {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    {"name": "created_sim_time", "type": "BIGINT", "history_tracked": False},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
@@ -162,8 +163,8 @@ def build_bare_dim_scd2_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__sensor", _SENSOR_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__sensor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "s1", True, 10, "SensorA", "online"],
+        'INSERT INTO "records__sensor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "s1", 0, True, 10, "SensorA", "online"],
     )
     conn.close()
     _write_sidecar(
@@ -465,6 +466,11 @@ def test_bare_dim_with_history_tracked_proposes_type2(tmp_path: Path) -> None:
     # scd_window columns present
     assert "valid_from" in content
     assert "valid_to" in content
+    # role-scoped: identity/lifecycle columns are never proposed
+    assert "created_sim_time" not in content
+    assert "last_mutation_sim_time" not in content
+    assert "from: active" not in content
+    assert "from: deactivated_at" not in content
 
 
 # ---------------------------------------------------------------------------
