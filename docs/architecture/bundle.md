@@ -127,6 +127,58 @@ properties have change rows in `history`), and the `record_roles` registry
 
 ---
 
+## The dense record index
+
+Beyond `prop__` payload, every `records__<kind>` table carries two identity
+column families (contract § Dense record index — the normative statement):
+
+- `record_index` — `BIGINT NOT NULL`, immediately after the lifecycle prefix:
+  the 0-based `(fork_path, kind)` creation-order ordinal.
+- `ref_index__<name>` — `BIGINT`, immediately following each reference-typed
+  property's `prop__<name>` column: the referenced record's `record_index`,
+  NULL iff the reference is NULL.
+
+Both are **identity columns**, like `record_id` and `fork_path`: they carry no
+`history_tracked` / `temporal_class` attributes, and `ref_index__<name>`
+carries no `references` annotation of its own — the sibling `prop__<name>`'s
+sidecar entry is authoritative for the target kind. `history` and membership
+tables carry neither family; there is no `ref_index` analog on membership
+reference pairs.
+
+The contract pins four guarantees a consumer may lean on:
+
+- **Density.** Per `(fork_path, kind)`, `record_index` values exactly cover
+  `0 .. rows − 1` — every integer assigned to exactly one row, so a consumer
+  MAY allocate an array of length `rows` and index it directly.
+- **Row-order corollary.** `record_index` equals the record's 0-based position
+  in the records table's guaranteed row order (creation order within kind) —
+  consumer-verifiable directly against the data.
+- **Slice stability.** A record keeps the same `record_index` in every emit of
+  its branch: an earlier slice drops a creation-order suffix, leaving the
+  remaining indices a dense prefix of the same enumeration; deactivation never
+  renumbers.
+- **Trust class.** Pair agreement (`ref_index__<name>` and its sibling
+  `prop__<name>` NULL together and resolving to the same target row) and
+  resolution of `ref_index__<name>` values against the target's `record_index`
+  are producer-guaranteed **by construction and not verified by C1–C13** — the
+  same trust class as `prop__` referential integrity.
+
+A records reference is thus **one edge with two encodings**: id-space
+`prop__<name>` (joins the target's `record_id`) and index-space
+`ref_index__<name>` (joins the target's `record_index`). The two families
+differ in temporal character — `record_index` is stable across slices of a
+branch, while `ref_index__<name>` is a **point-in-time key**: it renders the
+referenced record's `record_index` *at the emitted slice*, so it legitimately
+differs across slices of the same branch when the reference itself was
+rewritten between them. A reconstruction surface therefore re-derives index
+values rather than carrying an emitted slice's to another horizon (see
+[`derivations.md`](derivations.md) § Boundaries).
+
+The contract also binds `last_mutation_sim_time` as a high-water mark over the
+record's property writes; no forge check or mode reads that guarantee.
+
+---
+
 ## Guarantees that survive into an emit
 
 These invariants hold **by construction** in every conformant emit.

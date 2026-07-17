@@ -28,7 +28,7 @@ consumer builds current state (`MAX`-per-id), SCD-2 (`LEAD`), and a star schema
 opposite ends of the ETL pipeline it teaches.
 
 ```
-emit (run.duckdb + base.json @ v4)
+emit (run.duckdb + base.json @ the supported `base_format_version`)
    │  (reader: Emit + Sidecar; trunk-only — sole branch)
    ▼
 records__<kind> ──┬─ any history_tracked column ──▶ change-log table   (wide CDC, op = c/u/d)
@@ -125,7 +125,7 @@ constrains it), so the predicate consults the class — always through the sidec
 `temporal_class` accessor, the single narrowing point
 ([`reader.md`](reader.md) § Per-column temporal semantics) — only for the columns
 carrying the bit, under the `is True` convention (exactly `True` is flagged). The
-first row mirrors C11's and C13's skip guard rather than any legal v5 shape: v5
+first row mirrors C11's and C13's skip guard rather than any legal shape:
 coverage is total, and the version gate refuses an emit predating the attributes
 before the predicate ever runs; the guard is retained so the predicate is a correct
 standalone implementation — a kind with nothing flagged needs no class to be
@@ -145,8 +145,9 @@ Every `membership__<K>__<p>` table resolves to the fourth genre unconditionally:
 | `membership__<K>__<p>` | **junction** | one membership interval (owner, member, joined/left) |
 
 `history` is consumed by the change-log render and never passed through. The three
-sidecar table categories are exhaustive at `base_format_version: 5`, so this
-classification is total: the whole emit is covered, nothing else exists to classify.
+sidecar table categories are exhaustive at the supported `base_format_version`, so
+this classification is total: the whole emit is covered, nothing else exists to
+classify.
 
 Classification requires the sidecar to carry the `record_roles` registry and the
 per-column temporal attributes, and every **untracked** exported kind — and
@@ -223,10 +224,19 @@ contract this render exists for.
 
 ### The reference and transaction renders
 
-Both are the faithful records relation (the reader's records builder, full sidecar
-column list, discriminator-filtered for split units), differing only in genre label
+Both are the faithful records relation (the reader's records builder,
+discriminator-filtered for split units), differing only in genre label
 — the label carries role semantics for the consumer (what to `JOIN` vs. what to
-aggregate), not a schema difference. Reference-annotated `prop__` columns are
+aggregate), not a schema difference. The column set is **classified, never
+enumerated**: every records column resolves through the reader's records-column
+taxonomy ([`reader.md`](reader.md) § The records-column taxonomy) — identity
+columns other than `record_id` are dropped, presentation / lifecycle / payload
+columns render per the presentation defaults below, and a no-role column fails
+export validation with `SourceUnclassifiedColumn` (§ Validation Rules) rather
+than passing through. All four genre renders agree on this posture: the
+change-log render is property-driven and the snapshot render fixed-list, so
+identity columns are absent from them by the same rule, not by enumeration
+accident. Reference-annotated `prop__` columns are
 already id-only `VARCHAR` per the contract, equality-joinable against the target
 table's `id` — the FK columns are prominent by construction, no join is performed
 (FKs not joined is the genre's definition; the consumer joins).
@@ -270,6 +280,8 @@ the snapshot render — § Snapshot delivery), never in the CDC change-log table
 | Base column | Default |
 |---|---|
 | `fork_path` | **Dropped.** Constant under the trunk-only guard; a mechanism column no operational system carries |
+| `record_index` | **Dropped.** Identity ordinal, following `fork_path`'s precedent; not addressable by `rename` — there is no output column to name |
+| `ref_index__<name>` | **Dropped.** Index-space reference encoding; the id-space `prop__<name>` renders as `<name>`. Not addressable by `rename` |
 | `record_id` | `id` (records genres) / `<K>_id` (junction owner) |
 | `presentation_id` | Kept unprefixed and producer-typed (verbatim from records; `CAST` back from the fold's `VARCHAR` in the change-log render) |
 | `created_sim_time` | `created_at`, wallclock |
@@ -454,8 +466,12 @@ delivery. The `genre` label stays `changelog` — it selects the render — whil
 
 1. **Classification is total and deterministic.** Every `records__<kind>` and
    `membership__<K>__<p>` table in the sidecar resolves to exactly one genre from
-   the trichotomy; the three sidecar table categories are exhaustive at
-   `base_format_version: 5`, so nothing is left unclassified.
+   the trichotomy; the three sidecar table categories are exhaustive at the
+   supported `base_format_version`, so nothing is left unclassified. Within a records
+   table the same posture holds per column: every column resolves to a
+   records-column taxonomy role, and a no-role column is
+   `SourceUnclassifiedColumn` at plan time — never a silent pass-through or a
+   raw leak into output.
 2. **A tracked kind is never split.** Tracked-ness is a kind-level fact; a
    change-log table is emitted once per kind regardless of role-registry shape,
    retaining its `<kind>_type` discriminator if sub-typed.
@@ -508,6 +524,7 @@ funnel.
 | `SourceRecordRolesRequired` | The sidecar carries a `record_roles` registry | `"source export requires the record_roles registry; this emit predates it"` |
 | `SourceHistoryTrackedRequired` | The sidecar carries `history_tracked` flags | `"source export requires per-column history_tracked flags; this emit predates them"` |
 | `TemporalClassUnavailableError` (reader-owned; see [`reader.md`](reader.md)) | Every `prop__` column the genre predicate inspects (i.e. one flagged `history_tracked`) declares a `temporal_class` within the three-value enum. Resolved at plan time, against the open emit's sidecar, before any data read | `"… declares history_tracked but no temporal_class; the emit is non-conformant (C13). Run \`fabulexa-forge validate\`."` (an out-of-enum declared value raises the same error, its message naming the value) |
+| `SourceUnclassifiedColumn` | Every records column of every planned unit classifies to a records-column taxonomy role ([`reader.md`](reader.md) § The records-column taxonomy) — the exporter-side counterpart of C5's recorded failure. Resolved at plan time, before any output is written | Names the table and column; a direct `ExportError` subclass |
 | `SourceRoleUnknown` | Every **untracked** exported kind — and every declared sub-type of an untracked object-registry kind — resolves a role (a tracked kind needs none) | `"kind '{kind}'{sub_type_clause}: no role in record_roles"` |
 | `SourceSubtypesUndeclared` | An **untracked** object-registry kind declares a `<kind>_type` enum domain | `"kind '{kind}': role varies by sub-type but no {kind}_type enum domain declares the sub-types"` |
 | `SourceAnchorRequired` | An `EffectiveAnchor` resolved for the invocation | `"source export renders wallclock timestamps and requires a resolved anchor: the emit declares no runtime block; supply rebase.base_date/timezone or --base-date/--timezone"` |
@@ -534,6 +551,14 @@ funnel.
   `NULL` — splitting a tracked kind would either misfile deletes or require a
   discriminator the fold cannot supply. Role, not tracked-ness, is what varies by
   sub-type, so only untracked kinds ever split.
+- **Identity columns drop rather than carry.** The change-log and snapshot
+  renders are fold-driven and structurally cannot carry per-record identity
+  columns without new derivation work; carrying `record_index` / `ref_index__*`
+  only where a full-list enumeration happens to reach them would be incoherent
+  within a single export. Surfacing the index *well* — as the integer PK/FK a
+  real operational system shows — is adoption-scale design (key presentation,
+  join guidance, incremental-window interaction) that arrives as its own
+  design, never as an enumeration side effect.
 - **The anchor is required, not defaulted.** An operational dump has no natural
   "no timestamp" representation; silently emitting raw ns integers would be a
   fallback masking a missing anchor as valid output. Every other mode's
@@ -576,6 +601,13 @@ funnel.
   feature-store rows) will share the state-at derivation this mode introduced
   (see [`derivations.md`](derivations.md) § The state-at derivation) rather than
   reuse source's own plan/render surface.
+- **Normalized-export posture over denormalized payload is the author's
+  `exclude`.** A producer may retain a parent value on a child kind by
+  necessity — the published parent-child example's member kind carries
+  `prop__group_domain`, the projection input for the member's `email`
+  presentation property, so the upstream cannot drop it. Which payload columns
+  are "really" denormalized is not forge's to decide (Principle #7): dropping
+  one is an author `exclude`, never a mode default.
 - **No `slice_only` policy.** The genre predicate never consults a `slice_only`
   column (`history_tracked: false`), and the mode exports it like any other
   column — including into shapes that stamp its slice value at horizons the emit

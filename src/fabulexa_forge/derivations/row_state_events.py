@@ -230,7 +230,7 @@ def build_row_state_events_sql(
     current-value classes by reading each column's sidecar history_tracked flag,
     applying the shipped `is True` convention (_collect_tracked_props, scd.py): a
     flag of exactly True is type-2 (history); anything else — False, or None on a
-    non-conformant-but-v4 emit — is type-1 (current value). The class is never
+    non-conformant emit — is type-1 (current value). The class is never
     inferred from history and has no inference fallback. Reads history (filtered to
     the kind and the history-tracked subset) and records__<kind> (spine + current
     values + column order). Single-branch: filtered to fork_path. Values are raw —

@@ -57,6 +57,7 @@ class TemporalClassUnavailableError(ReaderError):
     declared class outside the three-value enum (both non-conformant, C13). The
     message distinguishes the cases; the non-conformant ones direct the caller to
     `fabulexa-forge validate`. Raised rather than inferring a class from
-    history_tracked: that inference is the fiction base_format_version 5 exists
-    to delete.
+    history_tracked: that inference is the fiction the contract's
+    `base_format_version 5` bump exists to delete (it introduced the explicit
+    `temporal_class` attribute so a reader never has to guess).
     """

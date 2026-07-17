@@ -84,11 +84,13 @@ def _build_emit(
     Creates records__<kind> and history tables. Inserts the supplied rows.
 
     Each `record_rows` tuple is (fork_path, record_id, active, deactivated_at,
-    last_mutation_sim_time, *props) — the v6 identity columns
+    last_mutation_sim_time, *props) — the identity columns
     (`created_sim_time`, `record_index`) are injected at their pinned slots
-    here so every call site keeps the pre-v6 tuple shape. `created_sim_time`
-    is a fixed placeholder (unused by this derivation); `record_index` is the
-    row's 0-based position, matching the v6 dense per-kind ordinal.
+    here so every call site can supply this shorter, derivation-relevant
+    tuple instead of repeating the full identity prefix per row.
+    `created_sim_time` is a fixed placeholder (unused by this derivation);
+    `record_index` is the row's 0-based position, matching the contract's
+    dense per-kind ordinal.
     """
     if record_cols is None:
         record_cols = _RECORD_COLS

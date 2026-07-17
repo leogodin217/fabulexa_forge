@@ -201,9 +201,8 @@ def is_mutable_column(name: str, category: str, references: str | None) -> bool:
     Returns:
         True iff the column is a records `prop__*` with `references` unset, a
         records `presentation_id`, a membership `elem__*`, or the `value`
-        column of a fixed-category table -- at `base_format_version` 4 that is
-        exactly `history.value`, since `history` is the contract's sole
-        fixed-category table.
+        column of a fixed-category table -- that is exactly `history.value`,
+        since `history` is the contract's sole fixed-category table.
     """
     if category == "records":
         if name == "presentation_id":

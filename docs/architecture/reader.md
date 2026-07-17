@@ -8,8 +8,8 @@
 [`reader/__init__.py`](../../src/fabulexa_forge/reader/__init__.py).
 
 The foundation every exporter and corrupter reads through. `open_emit(emit_dir)`
-opens a base-layer emit (`run.duckdb` + `base.json`), version-gates it to
-`base_format_version` 5, parses the sidecar into typed handles, and opens the single
+opens a base-layer emit (`run.duckdb` + `base.json`), version-gates it to the
+supported `base_format_version`, parses the sidecar into typed handles, and opens the single
 sanctioned read-only query surface over `run.duckdb`. It depends on nothing outside
 the vendored [`contract/`](../../contract/base-format.md) — that is the only
 coupling. Conformance assessment (C1–C13) is a separate surface that reads through
@@ -17,7 +17,7 @@ this one — see [`conformance.md`](conformance.md).
 
 ```
 open_emit(emit_dir)
-   ├─ base.json  ─► JSON parse ─► version gate (== 5) ─► structural floor ─► Sidecar
+   ├─ base.json  ─► JSON parse ─► version gate (== SUPPORTED_BASE_FORMAT_VERSION) ─► structural floor ─► Sidecar
    └─ run.duckdb ─► read-only DuckDB connection
                                                         └─► Emit (Sidecar + Emit.query)
 ```
@@ -30,13 +30,14 @@ open_emit(emit_dir)
 |---|---|
 | [`emit.py`](../../src/fabulexa_forge/reader/emit.py) | `open_emit`, the `Emit` handle (`query` row-tuples, `query_arrow` columnar, `close`, context manager), the read-only DuckDB open |
 | [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) | `Sidecar` and its frozen descriptors `ColumnSpec` / `TableSpec` / `BranchEntry` / `RuntimeAnchor`; the typed `RecordRoles` registry view + `Sidecar.record_roles()`; the per-column temporal pair — the `history_tracked` flag + `history_tracked_available()`, the `TemporalClass` literal, and the `Sidecar.temporal_class()` accessor (the single narrowing point); the version gate + structural floor (`Sidecar.from_raw`) |
+| [`records_columns.py`](../../src/fabulexa_forge/reader/records_columns.py) | The records-column taxonomy — `records_column_role`, `ref_index_sibling`, `REF_INDEX_PREFIX`: the one classifier every records-column consumer reads through (§ The records-column taxonomy) |
 | [`relations.py`](../../src/fabulexa_forge/reader/relations.py) | The faithful-read SQL builders (`build_records_relation_sql`, `build_history_relation_sql`, `build_membership_relation_sql`) and the faithful introspection helper `distinct_prop_values` — the reader's compose-time surface, the sole faithful namer of base tables |
 | [`errors.py`](../../src/fabulexa_forge/reader/errors.py) | The reader error hierarchy — operational/structural failures only |
 
 ## Boundary
 
-- **Input.** A directory holding `run.duckdb` + `base.json` at `base_format_version`
-  5. Extra entries in the directory are ignored — the gate checks the two required
+- **Input.** A directory holding `run.duckdb` + `base.json` at the supported
+  `base_format_version`. Extra entries in the directory are ignored — the gate checks the two required
   artifacts are present, not that they are the directory's only contents (an emit may
   sit inside a bundle alongside sibling files).
 - **Output.** An open `Emit`: a typed `Sidecar` plus a read-only DuckDB connection.
@@ -109,6 +110,41 @@ learns what exists by reading the `Sidecar`:
 Field shapes of the descriptors and accessors are the dataclass and method
 definitions in [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) — that is
 their authoritative statement, not a restated table here.
+
+### The records-column taxonomy
+
+Every records-category column classifies through one pure, context-free
+classifier — `records_column_role` in
+[`records_columns.py`](../../src/fabulexa_forge/reader/records_columns.py) —
+by name family alone (no sidecar lookup, no table state):
+
+| Column name | Role |
+|---|---|
+| `fork_path`, `record_id`, `record_index` | `identity` |
+| `ref_index__<name>` (prefix match) | `identity` |
+| `presentation_id` | `presentation` |
+| `created_sim_time`, `active`, `deactivated_at`, `last_mutation_sim_time` | `lifecycle` |
+| `prop__<name>` (prefix match) | `payload` |
+| anything else | **no role** (`None`) |
+
+*No role* is a first-class outcome every caller treats loudly: conformance
+records a C5 failure ([`conformance.md`](conformance.md) § C5 — the records
+layout); an exporter raises a named validation error ([`source.md`](source.md)
+§ Validation Rules). No caller may skip, drop, or pass through an unclassified
+column. This is the closed-world posture: a new contract column family changes
+the taxonomy in one place and turns every unprepared consumer red, instead of
+falling through some consumers silently.
+
+The classifier applies to **records-category** tables only. Sibling pairing is
+a pure name rule — `ref_index_sibling` maps `prop__<name>` to
+`ref_index__<name>`; whether a given `prop__` column *has* a sibling on a given
+table is determined by its own sidecar `references` field (annotation present
+⇒ sibling required — C5 enforces). Identity columns carry no temporal
+attributes and no `references` annotation of their own (see
+[`bundle.md`](bundle.md) § The dense record index); `ColumnSpec`'s optional
+fields already express them by absence. Signatures and the `ValueError`
+contract are the definitions in
+[`records_columns.py`](../../src/fabulexa_forge/reader/records_columns.py).
 
 ### The record-role registry overlays roles on discovered kinds
 
@@ -347,7 +383,12 @@ imposes no implicit ordering.
    sidecar. The reader hard-codes no column list from the spec for discovery; the
    only restated spec column lists live in the conformance checks, used solely to
    *validate* (see [`conformance.md`](conformance.md)).
-5. **Sub-typed-ness reads from the discriminator domain alone.** `subtype_values`
+5. **Total records-column classification.** Every records-category column
+   classifies through the one taxonomy (`records_column_role`), and *no role*
+   is loud everywhere: a recorded failure in conformance, a raised error in
+   export planning. No consumer of records columns falls through on an unknown
+   name.
+6. **Sub-typed-ness reads from the discriminator domain alone.** `subtype_values`
    derives a kind's sub-type split from `enum_domains[kind]["<kind>_type"]` and
    nothing else; a kind's `record_roles` warehouse role never affects whether it is
    sub-typed. The accessor is total — `()` is the not-sub-typed verdict, never an
@@ -361,7 +402,7 @@ imposes no implicit ordering.
 |---|---|---|
 | 1. Locate | `emit_dir`, `run.duckdb`, or `base.json` missing | `EmitNotFoundError` |
 | 2. JSON parse | `base.json` is not valid JSON | `SidecarParseError` |
-| 3. Version gate | `base_format_version` is a present integer ≠ `SUPPORTED_BASE_FORMAT_VERSION` (5) | `UnsupportedBaseFormatVersionError(found_version=…)` — no auto-upgrade |
+| 3. Version gate | `base_format_version` is a present integer ≠ `SUPPORTED_BASE_FORMAT_VERSION` | `UnsupportedBaseFormatVersionError(found_version=…)` — no auto-upgrade |
 | 4. Structural floor | `base_format_version` absent or non-integer; or a required floor field absent/mis-typed (branches a non-empty list; tables a list; each table has `name`/`category`/`columns`/`rows`; each column object has `name`/`type`; each branch has `fork_path`/`parent`/`slice_at`, `parent` present and `str` or `null`) | `SidecarStructureError` |
 | 5. Open DuckDB | `run.duckdb` present but not a readable DuckDB database | `RunDatabaseError` |
 | else | all of the above pass | an open `Emit` |

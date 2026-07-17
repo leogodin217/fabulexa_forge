@@ -90,7 +90,7 @@ def _write_emit(
 def _minimal_sidecar(
     tables: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Build a minimal valid v4 sidecar with only history (sanitised: no firings)."""
+    """Build a minimal valid sidecar with only history (sanitised: no firings)."""
     default_tables: list[dict[str, object]] = [
         {
             "name": "history",
@@ -177,7 +177,7 @@ class TestConformanceReport:
 
 
 class TestC1:
-    """C1: base.json validates against the vendored v4 JSON Schema."""
+    """C1: base.json validates against the vendored JSON Schema."""
 
     def test_passes_on_spanning(self, base_fixtures: dict[str, Path]) -> None:
         """C1 passes on the spanning fixture."""
@@ -535,7 +535,7 @@ class TestC5:
         self, base_fixtures: dict[str, Path]
     ) -> None:
         """C5's removed catalog re-check: c5_prop_missing's sidecar is itself a
-        well-formed v6 shape, so C5 passes even though the DuckDB catalog is
+        well-formed records shape, so C5 passes even though the DuckDB catalog is
         missing prop__name -- C2 is the sole carrier of that mismatch."""
         with open_emit(base_fixtures["c5_prop_missing"]) as emit:
             result = run_check(emit, "C5")
@@ -545,7 +545,7 @@ class TestC5:
         self, base_fixtures: dict[str, Path]
     ) -> None:
         """C5's removed catalog re-check: schema_mismatch's sidecar is itself a
-        well-formed v6 shape (a phantom trailing prop__ column), so C5 passes
+        well-formed records shape (a phantom trailing prop__ column), so C5 passes
         even though the DuckDB catalog lacks it -- C2 is the sole carrier."""
         with open_emit(base_fixtures["schema_mismatch"]) as emit:
             result = run_check(emit, "C5")
@@ -572,7 +572,7 @@ _TAIL = [
     _col("last_mutation_sim_time", "BIGINT"),
 ]
 # record_index sits immediately after the (possibly presentation_id-shifted)
-# lifecycle tail, before the property block (v6 layout).
+# lifecycle tail, before the property block.
 _RECORD_INDEX = _col("record_index", "BIGINT")
 
 
@@ -684,7 +684,7 @@ class TestC5DuplicatedRoleColumnInPropertyBlock:
 
 
 class TestC5NewNegativeFixtures:
-    """The five v6-specific C5 shape negatives (§ Contracts -- amended
+    """The five C5 shape negatives (§ Contracts -- amended
     _check_c5_table). Each fixture isolates one clause of the positional check
     to records__actor alone; the DuckDB catalog carries the identical broken
     shape (write_emit's own records-shape assertion is opted out for these

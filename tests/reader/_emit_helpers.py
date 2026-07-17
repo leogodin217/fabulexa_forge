@@ -77,7 +77,7 @@ def write_emit(
         garbage_db: If True, write random bytes to run.duckdb instead of a real DB.
         records_shape_valid: Forwarded to `_support.sidecar_builder.write_emit`.
             False opts a caller's deliberately mis-shaped records table out of
-            the v6 records-shape construction-time assertion.
+            the records-shape construction-time assertion.
 
     Returns:
         tmp_path (the emit directory).

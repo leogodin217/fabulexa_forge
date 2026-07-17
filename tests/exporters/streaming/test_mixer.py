@@ -1087,7 +1087,7 @@ def _build_single_membership_emit(
     property_name: str,
     mem_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal v4 emit with one membership table."""
+    """Build a minimal emit with one membership table."""
     table_name = f"membership__{owner_kind}__{property_name}"
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))

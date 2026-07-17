@@ -109,7 +109,7 @@ def identity_column(name: str, duckdb_type: str) -> dict[str, object]:
     Args:
         name: The column name; must classify as `identity` under
             `records_column_role`.
-        duckdb_type: The DuckDB type literal (`"BIGINT"` for both v6
+        duckdb_type: The DuckDB type literal (`"BIGINT"` for both
             families).
 
     Returns:
@@ -149,20 +149,20 @@ def _column_spec_from_raw(raw: dict[str, object]) -> ColumnSpec:
 
 
 def _assert_records_shape(tables: list[dict[str, object]]) -> None:
-    """Assert every records-category table classifies totally under the v6
+    """Assert every records-category table classifies totally under the
     records-column taxonomy, before a fixture is written.
 
     Reuses the reader's own C5 positional check (`_check_c5_table`) so the
     construction-time net and the read-time conformance check can never
-    silently drift apart. A fixture that has not learned the v6 shape fails
-    here, naming the table and column, rather than surfacing later as an
-    opaque C5 failure.
+    silently drift apart. A fixture that has not learned the records shape
+    fails here, naming the table and column, rather than surfacing later as
+    an opaque C5 failure.
 
     Args:
         tables: The sidecar's `tables` list, as passed to `write_emit`.
 
     Raises:
-        ValueError: A records-category table fails the v6 shape check.
+        ValueError: A records-category table fails the records shape check.
     """
     for table in tables:
         if table.get("category") != "records":
@@ -176,13 +176,13 @@ def _assert_records_shape(tables: list[dict[str, object]]) -> None:
         _check_c5_table(str(tname), cols, messages)
         if messages:
             raise ValueError(
-                f"fixture table {tname!r} fails the v6 records-shape assertion: "
+                f"fixture table {tname!r} fails the records-shape assertion: "
                 + "; ".join(messages)
             )
 
 
 def _validate_against_schema(sidecar: dict[str, object]) -> None:
-    """Validate a constructed sidecar against the vendored v5 JSON Schema.
+    """Validate a constructed sidecar against the vendored JSON Schema.
 
     Args:
         sidecar: The full sidecar dict about to be written.
@@ -241,13 +241,13 @@ def write_emit(
             an out-of-enum class) — they must remain writable, and their
             expectations name the C1 failure.
         records_shape_valid: When True (the default), assert every
-            records-category table classifies totally under the v6 records
+            records-category table classifies totally under the records
             taxonomy (`record_index` in its slot, every reference-annotated
             `prop__` entry immediately followed by its `ref_index__`
             sibling, no no-role column) before writing — a fixture that has
-            not learned the v6 shape fails at construction, naming the table
-            and column. False is reserved for negative fixtures whose
-            declared defect is the v6 shape itself (a missing/misplaced
+            not learned the records shape fails at construction, naming the
+            table and column. False is reserved for negative fixtures whose
+            declared defect is the records shape itself (a missing/misplaced
             `record_index`, an unpaired `ref_index__`, …) — independent of
             `schema_valid`, so the two nets stay independently addressable.
     """

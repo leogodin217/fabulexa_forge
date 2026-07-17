@@ -60,7 +60,7 @@ def _ddl(table: str, cols: list[dict[str, object]]) -> str:
 
 
 def _build_minimal_emit(tmp_path: Path) -> Path:
-    """Build a minimal single-branch v4 emit with one kind and a rebase anchor."""
+    """Build a minimal single-branch emit with one kind and a rebase anchor."""
     emit_dir = tmp_path / "emit"
     emit_dir.mkdir(parents=True, exist_ok=True)
     db_path = emit_dir / "run.duckdb"

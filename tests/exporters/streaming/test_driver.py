@@ -93,7 +93,7 @@ def _build_emit(
     record_rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal v5 emit with one kind."""
+    """Build a minimal emit with one kind."""
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     conn.execute(_ddl(f"records__{kind}", _RECORD_COLS))
@@ -944,7 +944,7 @@ def _build_membership_emit(
     waiters_rows: list[tuple[Any, ...]],
     members_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal v5 emit with two membership tables.
+    """Build a minimal emit with two membership tables.
 
     Table membership__queue__waiters has elem__priority; membership__team__members
     has no element fields. waiters_rows is (fork_path, record_id, joined_sim_time,

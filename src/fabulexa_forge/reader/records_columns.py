@@ -42,7 +42,7 @@ def records_column_role(name: str) -> RecordsColumnRole | None:
 
     Pure and context-free: classification is by name family alone (design doc
     § Semantics — the records-column taxonomy). `None` means the name matches no
-    v6 records-category column family and is a loud condition at every call
+    records-category column family and is a loud condition at every call
     site — conformance records a C5 failure; an exporter raises. Callers MUST
     NOT treat `None` as "skip".
 
@@ -51,7 +51,7 @@ def records_column_role(name: str) -> RecordsColumnRole | None:
             catalog) for a records-category table.
 
     Returns:
-        The column's role, or None when the name matches no v6 records-category
+        The column's role, or None when the name matches no records-category
         column family.
     """
     if name in _IDENTITY_NAMES:

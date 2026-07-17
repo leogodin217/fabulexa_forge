@@ -8,7 +8,7 @@ Phase 5: build_lookup_expr now composes build_reference_path_sql, emitting a
 single LEFT JOIN of a derivation subquery aliased _lookup_<col>_rp.  The
 SELECT expression projects <alias>."resolved".
 
-v6: every records table's fork_path/record_id route through identity_column
+Every records table's fork_path/record_id route through identity_column
 and carries a record_index; every reference-annotated prop__ column carries
 its ref_index__ sibling.
 """

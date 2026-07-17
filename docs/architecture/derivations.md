@@ -503,6 +503,16 @@ filter on; it raises `ExportError` on zero or more than one branch.
   fold substitutes a pure-`history` as-of read for it. A fold redesign that exploits
   the guarantee (dropping the `records__` fallback, an exact variable-horizon form)
   is a contract change to this layer, designed on its own.
+- **Reconstruction never carries `ref_index__` values.** `history.value` is
+  id-space only, and `ref_index__<name>` is a point-in-time key valid only at
+  its own slice ([`bundle.md`](bundle.md) § The dense record index) — so any
+  reconstruction surface that surfaces the index (a future state-at extension,
+  Stage-5 point-in-time export) **re-derives** `ref_index__<name>` from the
+  reconstructed `prop__<name>` via the target's `record_index`; it never
+  carries the emitted slice's `ref_index__` value to another horizon. Today no
+  resident reads or emits identity columns beyond `record_id`; state-at's
+  reconstructed column set is `STATE_AT_COLUMNS` plus selected `prop__` columns
+  only.
 - **A `slice_only` column has no faithful point-in-time read.** State-at and the
   row-state-events after-image render a type-1 column's *current* `records__` value
   at every horizon — the declared temporal-honesty exception. For a `constant` column

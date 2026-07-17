@@ -646,7 +646,7 @@ def test_rewritten_id_resolves_in_working_target_table() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pair-scoped reference writes (v6): a records reference prop__ cell's
+# Pair-scoped reference writes: a records reference prop__ cell's
 # mispoint co-points its ref_index__ sibling to the donor's record_index
 # ---------------------------------------------------------------------------
 

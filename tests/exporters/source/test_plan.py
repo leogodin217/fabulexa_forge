@@ -1002,7 +1002,7 @@ def test_unclassified_column_on_changelog_kind_raises() -> None:
 
 
 def test_reference_genre_drops_no_columns_beyond_fork_path_at_v5() -> None:
-    """At v5 the identity index families do not occur; the taxonomy posture
+    """The identity index families do not occur here; the taxonomy posture
     changes nothing observable -- fork_path is dropped, record_id kept as id,
     exactly as before."""
     plan = build_source_plan(_spanning_sidecar(), None)

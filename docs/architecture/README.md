@@ -10,7 +10,7 @@ doc owns the design and build order.
 | Doc | Subsystem |
 |---|---|
 | [`bundle.md`](bundle.md) | The input, understood — consumer-side orientation to the bundle: where emit data comes from, table-genre semantics, inherited guarantees, mechanism vs presentation columns, single-branch facts. Informational companion to the vendored contract |
-| [`reader.md`](reader.md) | The base reader — open + version-gate an emit, expose the typed sidecar, the row-tuple + columnar query surfaces, the faithful-read SQL builders (the sole faithful namer of base tables) |
+| [`reader.md`](reader.md) | The base reader — open + version-gate an emit, expose the typed sidecar, the records-column taxonomy (the one classifier every records-column consumer reads through), the row-tuple + columnar query surfaces, the faithful-read SQL builders (the sole faithful namer of base tables) |
 | [`conformance.md`](conformance.md) | C1–C13 conformance — `validate` / `fabulexa-forge validate`, the independent codec, comparison sources |
 | [`derivations.md`](derivations.md) | The derivations layer — interpretive shared folds between the reader and the modes; the versioned-intervals, reference-resolution, row-state-events, membership-events, and state-at residents, the layer contract (purity / anti-weld / traceability / temporal honesty), the single-branch guard |
 | [`dimensional.md`](dimensional.md) | The dimensional exporter — `mode: dimensional` star-schema reshape (config grammar, grains, FK pathfind, `lookup` enrichment, SCD-2, writers, `export` / `init`) |
@@ -47,7 +47,7 @@ Stage-3 mode (`base`) and later stages are planned.
 
 | Module | Role | Status |
 |---|---|---|
-| `reader/` | The foundation. Open an emit, parse + version-gate `base.json`, expose typed tables/branches/runtime/pins/enum_domains/record_roles and the per-column temporal pair (`history_tracked` + the `temporal_class` accessor), and run conformance C1–C13. The one path every exporter/corrupter reads through. See [`reader.md`](reader.md) + [`conformance.md`](conformance.md). | Implemented (Stage 1) |
+| `reader/` | The foundation. Open an emit, parse + version-gate `base.json`, expose typed tables/branches/runtime/pins/enum_domains/record_roles, the per-column temporal pair (`history_tracked` + the `temporal_class` accessor), and the records-column taxonomy, and run conformance C1–C13. The one path every exporter/corrupter reads through. See [`reader.md`](reader.md) + [`conformance.md`](conformance.md). | Implemented (Stage 1) |
 | `derivations/` | Interpretive shared folds between the reader and the modes. Pure SQL, anti-weld signatures (sidecar + plain values), one canonical raw relation each. Five residents — `history` → versioned-intervals, reference-resolution (reference-path · membership-edge), `history` → row-state-events (per-record `c`/`u`/`d`), `membership__<K>__<p>` → membership-events (`join`/`leave`), and `history` + `records__<kind>` → state-at (point-in-time row reconstruction); owns the single-branch guard. See [`derivations.md`](derivations.md). | Implemented (Stage 3) — five residents |
 | `exporters/` | Base → different shape. One sub-package per mode, plus two mode-neutral modules (`query_spec.py` — the shared compiled-table shape and full-export write dispatch; `reserved_names.py` — the shared bookkeeping-name check). `dimensional` (Stage 2), `streaming` (Stage 3), and `source` (Stage 3) ship; `base` is planned. The `streaming` mode includes the two-layer routing surface (`streaming/routing.py`). See [`dimensional.md`](dimensional.md), [`source.md`](source.md), [`streaming.md`](streaming.md), [`streaming-routing.md`](streaming-routing.md). | `dimensional`, `streaming` + `source` implemented; `base` planned (Stage 3) |
 | `corrupters/` | Base → broken base. The engine (`corrupt_emit`), the seeded selection surface (five-way table-selector resolution, pattern column matching, uniform + placement-weighted samplers), the `Corrupter` operation registry (`null_cells` / `mutate_cells` / `duplicate_rows` / `delete_rows` / `insert_rows` / `schema_drift` / `dangle_reference` / `mispoint_reference` / `freeze_series` / `drop_events` / `shift_sim_time`), the base-emit writer, and the defect manifest (`build_defect_manifest`, `defects.json`) — breaking C6/C7/C9–C12 while preserving C1–C5/C8 and C13's structural clauses by construction. See [`corrupters.md`](corrupters.md). | Implemented (Stage 4) |
@@ -138,7 +138,11 @@ repo, and the producer is never invoked.
 
 - A **spanning positive** emit exercises every table category in the sanitised
   subset — `history`, `records__*`, and `membership__*` — plus `pinned_ids`,
-  `runtime`, `enum_domains`, a `references` column, and a `record_roles` registry
+  `runtime`, `enum_domains`, a `references` column with its `ref_index__` sibling and
+  populated `record_index` ordinals (the dense-index shape — values consistent with the
+  target table's ordinals, at least one reference pair NULL-together, and the referenced
+  kind mixing decimal-string and hex-digest ids so an implementation that conflates the
+  id-space and index-space encodings cannot pass by coincidence), and a `record_roles` registry
   covering every emitted kind (including an `actor` object whose sub-types cover every
   `records__actor.prop__actor_type` value). Every value-carrying `prop__` column
   carries the temporal attribute pair, all three classes are represented (a
@@ -151,7 +155,10 @@ repo, and the producer is never invoked.
   C1–C13 check has live input.
 - Several **deliberately-broken** variants drive the negative suite — a retyped
   `history` column (C4), a dropped `prop__` column the sidecar still declares
-  (C2/C5), a half-NULL membership reference pair (C7), a phantom column (C2/C5), a
+  (C2/C5), a half-NULL membership reference pair (C7), a phantom column (C2/C5), the
+  five records-layout defects (each C5 alone — a missing `record_index`, a misplaced
+  `record_index`, a reference-annotated `prop__` without its `ref_index__` sibling, a
+  `ref_index__` with a non-reference predecessor, a non-`BIGINT` `ref_index__`), a
   `record_roles` registry that omits an emitted kind or an in-data `actor` sub-type
   (C12), a wrong `base_format_version` (the version gate), a broken temporal
   attribute pairing (C13's structural clause alone — the vendored schema does not
@@ -190,23 +197,48 @@ sidecar-shape churn):
   `write_emit`, which stamps the supported version by default and schema-validates
   against the vendored contract before writing, so a fixture that has not learned a
   new required field fails at construction naming the field, not as an unrelated C1
-  failure at read time. Negative fixtures whose declared defect is schema-level opt
-  out via `schema_valid=False`; deliberately *malformed* specimens exercising the
-  reader's rejection paths (invalid JSON, below-floor structure) are the only
-  literal writes.
+  failure at read time. Because the vendored JSON Schema's generic column shape cannot
+  require per-table columns, `write_emit` also asserts the records shape itself before
+  writing: every records-category entry classifies totally under the records-column
+  taxonomy, `record_index` sits in its slot, and each reference-annotated `prop__`
+  entry is immediately followed by its `ref_index__` sibling — failure is a
+  construction-time error naming table + column. Negative fixtures whose declared
+  defect is schema-level opt out via `schema_valid=False`; those whose declared defect
+  *is* a records-shape defect opt out via the sibling `records_shape_valid=False` — the
+  two nets stay independently addressable. Deliberately *malformed* specimens
+  exercising the reader's rejection paths (invalid JSON, below-floor structure) are the
+  only literal writes.
 - **Every value-carrying column that declares temporal attributes is constructed
   through one constructor** — `prop_column`, which requires the pair together and
   validates the contract's implication clauses, so a defective pairing is never
   expressible through it (negative variants mutate the returned dict). A new paired
   attribute at the next bump is one signature change, and the type checker names
   every call site.
+- **Every identity column entry is constructed through one constructor** —
+  `identity_column`, sibling of `prop_column`: the sole constructor for every fixture
+  identity entry (`fork_path` / `record_id` / `record_index` / `ref_index__<name>`),
+  records and membership table entries alike — the check is a pure name rule, so a
+  membership table's `fork_path` / `record_id` entries flow through it too. It emits a
+  bare `{name, type}` entry and rejects a non-identity-family name, so a temporal
+  attribute or `references` annotation on an identity column is inexpressible through
+  it (negative variants mutate the returned dict, mirroring `prop_column`'s
+  convention).
+- **Prose is version-free.** The supported version integer appears exactly twice
+  outside `contract/`: the code literal (`SUPPORTED_BASE_FORMAT_VERSION`) and the
+  status-table row in this README. All other prose — docstrings, comments, arch
+  docs, diagrams — names the contract or its sections ('the vendored schema', '§
+  Dense record index'), never the integer: the version gate admits exactly one
+  version, so 'a v6 shape' carries no information 'the contract's shape' doesn't,
+  and decays at the next bump. The version-literal hygiene test enforces this
+  against an explicit allowlist; a historical-rationale mention (where the version
+  *is* the content) is allowlisted with its reason.
 
 ## Status
 
 | Area | Status |
 |---|---|
 | Project skeleton + standalone-venv boundary | Scaffolded |
-| Vendored contract (`base_format_version 5`) | Vendored — re-synced on version bump (`contract/README.md`) |
+| Vendored contract (`base_format_version 6`) | Vendored — re-synced on version bump (`contract/README.md`) |
 | Reader + conformance | Implemented (Stage 1) — [`reader.md`](reader.md), [`conformance.md`](conformance.md) |
 | `fabulexa-forge validate` CLI verb | Implemented (Stage 1) |
 | Dimensional exporter + config + CSV/DuckDB writers | Implemented (Stage 2) — [`dimensional.md`](dimensional.md) |

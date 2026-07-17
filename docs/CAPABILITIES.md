@@ -40,7 +40,7 @@ streaming exporter (`fabulexa-forge stream` — `state-changes` `c`/`u`/`d` CDC 
 ## Overview
 
 ```
-base-layer emit (run.duckdb + base.json @ base_format_version 5)
+base-layer emit (run.duckdb + base.json @ the supported `base_format_version`)
         │
         ▼
    reader  ──▶ exporters  (base → different shape)
@@ -70,6 +70,11 @@ See [`architecture/reader.md`](architecture/reader.md) and
 - ✓ **Conformance C1–C13** — reimplemented independently of the producer (`fabulexa-forge
   validate <emit_dir>`). The producer's reference conformance checker is a reference to
   read, never a dependency.
+- ✓ **Records-column taxonomy** — `records_column_role` classifies every
+  records-category column by name family (`identity` / `presentation` / `lifecycle` /
+  `payload`, or loudly *no role*); the one classifier conformance C5, the source
+  planner, and dimensional `init` read through. `ref_index_sibling` owns the
+  `prop__<name>` ↔ `ref_index__<name>` pairing rule.
 - ✓ **Record-role registry accessor** — `Sidecar.record_roles()` exposes the optional
   `record_roles` registry as a typed `RecordRoles` view (or `None` when absent),
   resolving each kind's warehouse role (`dimension` / `fact`) — `actor` per sub-type,

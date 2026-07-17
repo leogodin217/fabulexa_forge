@@ -321,7 +321,7 @@ def test_untracked_prop_reference_declares_beyond_c1_c12() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pair-scoped reference writes (v6): a records reference prop__ cell's
+# Pair-scoped reference writes: a records reference prop__ cell's
 # dangle co-dangles its ref_index__ sibling to -(n + 1)
 # ---------------------------------------------------------------------------
 

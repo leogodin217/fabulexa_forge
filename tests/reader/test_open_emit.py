@@ -77,8 +77,9 @@ def test_invalid_json_raises_parse_error(tmp_path: Path) -> None:
 
 
 def test_unsupported_version_raises_before_db_open(tmp_path: Path) -> None:
-    """A base_format_version: 99 emit raises UnsupportedBaseFormatVersionError
-    before any DuckDB open (version gate precedes structure and DB open).
+    """An emit at the version-gate sentinel's out-of-range base_format_version
+    raises UnsupportedBaseFormatVersionError before any DuckDB open (version
+    gate precedes structure and DB open).
     """
     _write_sidecar(
         tmp_path,
@@ -92,7 +93,7 @@ def test_unsupported_version_raises_before_db_open(tmp_path: Path) -> None:
     (tmp_path / "run.duckdb").write_bytes(b"not a db")
     with pytest.raises(UnsupportedBaseFormatVersionError) as exc_info:
         open_emit(tmp_path)
-    assert exc_info.value.found_version == 99
+    assert exc_info.value.found_version == UNSUPPORTED_VERSION_SENTINEL
 
 
 # ---------------------------------------------------------------------------

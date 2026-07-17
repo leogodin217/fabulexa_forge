@@ -85,7 +85,12 @@ A `base_format_version` bump is adopted in two phases, each its own unit of work
    compatible and forge is not broken. Every red is a guarantee having changed
    underneath, and each red is a decision to make deliberately, never a test to
    silence. Phase 1 includes the conformance work the bump obliges: forge judges the
-   format, so it cannot adopt a version whose guarantees it does not check.
+   format, so it cannot adopt a version whose guarantees it does not check. Phase 1
+   touches the version integer in exactly the sites the hygiene test allowlists —
+   the code literal, the architecture README's status row, and `contract/` itself
+   (re-vendored wholesale). If the bump tempts you to write 'vN' anywhere else,
+   that sentence is delta voice: state the new contract plainly or cite its
+   section. The hygiene test failing on a new literal is the mechanism working.
 2. **Adoption.** Decide, deliberately, which new capability to *use* (a new
    attribute consulted, a fold redesigned around a new guarantee). Each is its own
    design and its own sprint.

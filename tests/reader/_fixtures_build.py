@@ -1,6 +1,6 @@
 """Fixture builder for base-reader conformance tests.
 
-Synthesizes a spanning-positive v6 emit and several deliberately-broken variants
+Synthesizes a spanning-positive emit and several deliberately-broken variants
 into a caller-supplied directory. Every base.json write routes through
 `_support.sidecar_builder.write_emit`; every value-carrying `prop__` column is
 built through `prop_column`; every identity column (`fork_path`, `record_id`,
@@ -39,7 +39,7 @@ _HISTORY_COLUMNS: list[dict[str, object]] = [
 
 # records__actor columns: fixed prefix + record_index + prop__/ref_index__ block
 # (no provenance). prop__doctor_id is reference-annotated, so its
-# ref_index__doctor_id sibling immediately follows it (v6 § Dense record index).
+# ref_index__doctor_id sibling immediately follows it (§ Dense record index).
 _RECORDS_ACTOR_COLUMNS: list[dict[str, object]] = [
     identity_column("fork_path", "VARCHAR"),
     identity_column("record_id", "VARCHAR"),
@@ -90,7 +90,7 @@ _RECORDS_DOCTOR_COLUMNS: list[dict[str, object]] = [
 ]
 
 # membership__actor__appointments columns (no ref_index analog: membership
-# reference pairs stay member__<name>__kind/member__<name>__id, unchanged by v6)
+# reference pairs stay member__<name>__kind/member__<name>__id)
 _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
     identity_column("fork_path", "VARCHAR"),
     identity_column("record_id", "VARCHAR"),
@@ -675,7 +675,7 @@ def _build_spanning_db(conn: duckdb.DuckDBPyConnection) -> tuple[int, int, int, 
 def build_spanning(dest: Path) -> None:
     """Build the spanning fixture into dest.
 
-    A single-branch (trunk-only) sanitised v6 emit with no firings table and
+    A single-branch (trunk-only) sanitised emit with no firings table and
     no provenance columns. Exercises: history (6 base cols), records__actor
     (two rows, record_index 0-1) with a references-annotated prop__doctor_id
     paired with ref_index__doctor_id (a001 resolves to d001; a002 is a
@@ -704,7 +704,7 @@ def build_spanning(dest: Path) -> None:
 
 
 def build_history_series(dest: Path) -> None:
-    """Build a spanning-shaped v6 emit whose history carries multi-event series.
+    """Build a spanning-shaped emit whose history carries multi-event series.
 
     Identical table set, membership rows, branches (slice_at=100), pins,
     enum_domains, and record_roles to build_spanning, with richer records
@@ -778,7 +778,7 @@ def build_history_series(dest: Path) -> None:
 
 
 def build_membership_intervals(dest: Path) -> None:
-    """Build a spanning-shaped v6 emit whose membership carries
+    """Build a spanning-shaped emit whose membership carries
     interval-rich member timelines.
 
     Identical history, records__actor, records__doctor,
@@ -905,7 +905,7 @@ def build_c5_prop_missing(dest: Path) -> None:
     """Build the c5_prop_missing fixture into dest.
 
     A prop__* column dropped from the records DuckDB table but still declared
-    in the sidecar (itself a well-formed v6 shape). C2 fails alone: C5's
+    in the sidecar (itself a well-formed records shape). C2 fails alone: C5's
     removed catalog re-check no longer sees the sidecar/catalog mismatch --
     C2's element-wise catalog<->sidecar agreement is the sole catalog carrier.
     """
@@ -983,7 +983,7 @@ def build_schema_mismatch(dest: Path) -> None:
     """Build the schema_mismatch fixture into dest.
 
     A phantom prop__phantom_column is declared in the sidecar (itself a
-    well-formed v6 shape -- an unreferenced trailing prop__ column) but
+    well-formed records shape -- an unreferenced trailing prop__ column) but
     absent in the DuckDB records table. C2 fails alone: C5's removed catalog
     re-check no longer sees the sidecar/catalog mismatch.
     """
@@ -1104,7 +1104,7 @@ def _c13_records_actor_columns(prop_col: dict[str, object]) -> list[dict[str, ob
 
     Shared by the C11/C13 negative fixtures below, which each isolate their
     defect to a single flagged prop__ column rather than the spanning
-    fixture's four. Carries `record_index` (v6-required on every
+    fixture's four. Carries `record_index` (required on every
     records-category table) so these C11/C13 negatives fail only the check
     they are named for, never C5.
     """
@@ -1324,7 +1324,7 @@ def build_c12_missing_subtype(dest: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# C5 shape negatives (v6) — each isolates one clause of the amended
+# C5 shape negatives — each isolates one clause of the amended
 # _check_c5_table positional check to records__actor alone.
 # ---------------------------------------------------------------------------
 
@@ -1335,7 +1335,7 @@ def _write_c5_negative(dest: Path, columns: list[dict[str, object]]) -> None:
     Each negative supplies a deliberately mis-shaped records__actor column
     list; the DuckDB catalog carries the identical (broken) shape so C2 stays
     silent and only C5's positional check can fail. Zero rows -- the defect
-    is purely structural, so no row data is needed. write_emit's own v6
+    is purely structural, so no row data is needed. write_emit's own
     records-shape assertion is the same net C5 enforces at read time, so it
     is opted out here via records_shape_valid=False -- the deliberate defect
     this harness exists to write.

@@ -170,18 +170,14 @@ class TestSpanning:
 
 
 class TestVersionGate:
-    """The version gate accepts SUPPORTED_BASE_FORMAT_VERSION (v6)."""
+    """The version gate accepts SUPPORTED_BASE_FORMAT_VERSION."""
 
-    def test_supported_base_format_version_is_6(self) -> None:
-        """The reader's supported version literal is 6."""
-        assert SUPPORTED_BASE_FORMAT_VERSION == 6
-
-    def test_opens_v6_spanning_fixture_without_raising(
+    def test_opens_spanning_fixture_without_raising(
         self, base_fixtures: dict[str, Path]
     ) -> None:
-        """open_emit accepts a base_format_version: 6 emit (mechanism untouched,
-        literal moved -- the spanning fixture picks the new value up through
-        write_emit's default)."""
+        """open_emit accepts an emit at the supported base_format_version
+        (mechanism untouched, literal moved -- the spanning fixture picks the
+        new value up through write_emit's default)."""
         with open_emit(base_fixtures["spanning"]) as emit:
             assert emit.sidecar.base_format_version == SUPPORTED_BASE_FORMAT_VERSION
 

@@ -64,7 +64,7 @@ def _table_spec(
 
 def _records_prefix() -> list[dict[str, object]]:
     """The fixed 7-column records-table prefix: identity head, lifecycle
-    tail, record_index (v6 records-column taxonomy) -- shared by every
+    tail, record_index (records-column taxonomy) -- shared by every
     records-category table this module builds.
     """
     return [

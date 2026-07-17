@@ -134,7 +134,7 @@ def _build_emit(
     kind: str = "item",
     record_cols: list[dict[str, object]] | None = None,
 ) -> Path:
-    """Build a minimal v5 emit with records__<kind> and history tables."""
+    """Build a minimal emit with records__<kind> and history tables."""
     if record_cols is None:
         record_cols = _RECORD_COLS
 

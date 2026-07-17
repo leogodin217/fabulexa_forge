@@ -122,7 +122,7 @@ def _build_actor_emit(
     actor_rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]] | None = None,
 ) -> Path:
-    """Build a minimal v4 emit with a sub-typed 'actor' kind.
+    """Build a minimal emit with a sub-typed 'actor' kind.
 
     record_roles maps actor to {customer, vip_customer, staff} sub-types.
     Columns: fork_path, record_id, created_sim_time, active, deactivated_at,
@@ -181,7 +181,7 @@ def _build_actor_device_emit(
     device_rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]] | None = None,
 ) -> Path:
-    """Build a v4 emit with sub-typed 'actor' and non-sub-typed 'device'."""
+    """Build a emit with sub-typed 'actor' and non-sub-typed 'device'."""
     if history_rows is None:
         history_rows = []
 
@@ -251,7 +251,7 @@ def _build_nonsubtyped_emit(
     rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]] | None = None,
 ) -> Path:
-    """Build a minimal v4 emit with one non-sub-typed kind, NO record_roles."""
+    """Build a minimal emit with one non-sub-typed kind, NO record_roles."""
     if history_rows is None:
         history_rows = []
 
@@ -292,7 +292,7 @@ def _build_entity_emit(
     entity_rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]] | None = None,
 ) -> Path:
-    """Build a v4 emit with a bare-role 'entity' kind carrying enum_domains.
+    """Build a emit with a bare-role 'entity' kind carrying enum_domains.
 
     record_roles maps entity to a bare "dimension" role; enum_domains[entity][entity_type]
     declares three sub-types so subtype_values("entity") returns ("type_a", "type_b", "type_c").
@@ -1021,7 +1021,7 @@ def _build_two_membership_emit(
     waiters_rows: list[tuple[Any, ...]],
     members_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a v4 emit with membership__queue__waiters and membership__team__members.
+    """Build a emit with membership__queue__waiters and membership__team__members.
 
     queue__waiters carries elem__priority; team__members carries elem__role.
     Both tables may have rows or be empty (for declared-but-empty topic testing).
@@ -1097,7 +1097,7 @@ _TASK_ROW_OPEN = ("trunk", "t1", 1 * _DAY, None, "urgent")  # join only
 
 
 def _build_two_same_owner_membership_emit(tmp_path: Path) -> Path:
-    """Build a v4 emit with membership__queue__waiters and membership__queue__tasks.
+    """Build a emit with membership__queue__waiters and membership__queue__tasks.
 
     Both tables are owned by 'queue'. queue__waiters carries elem__priority;
     queue__tasks carries elem__label. Used for owner_kind template collapse tests.

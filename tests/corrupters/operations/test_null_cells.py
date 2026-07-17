@@ -330,7 +330,7 @@ def test_deactivated_at_non_null_declares_c7() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Pair-scoped reference writes (v6): a records reference prop__ cell's write
+# Pair-scoped reference writes: a records reference prop__ cell's write
 # co-nulls its ref_index__ sibling in the same act
 # ---------------------------------------------------------------------------
 

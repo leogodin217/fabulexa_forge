@@ -109,7 +109,7 @@ def _build_emit(
     extra_tables: list[dict[str, Any]] | None = None,
     extra_db_ops: list[tuple[str, list[Any]]] | None = None,
 ) -> Path:
-    """Build a minimal v4 emit with one membership table."""
+    """Build a minimal emit with one membership table."""
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     table_name = f"membership__{owner_kind}__{property_name}"

@@ -73,7 +73,7 @@ def _build_subtyped_emit(
     cols: list[dict[str, Any]],
     rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal v4 emit with one sub-typed kind."""
+    """Build a minimal emit with one sub-typed kind."""
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     conn.execute(_ddl(f"records__{kind}", cols))

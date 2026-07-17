@@ -108,7 +108,7 @@ def _is_kind_tracked(sidecar: "Sidecar", source_table: str) -> bool:
     """Whether any property of `source_table`'s kind genuinely changes over time.
 
     A kind is tracked iff one of its prop__ columns is temporal_class 'tracked'.
-    Keyed on the class, not on history_tracked: at v5 every presentation column is
+    Keyed on the class, not on history_tracked: every presentation column is
     history_tracked, but one bound to an immutable source is class 'constant' and
     holds exactly its genesis row — a kind carrying only such a column does not
     change, and rendering it as a change log would render a change log with no
@@ -119,7 +119,7 @@ def _is_kind_tracked(sidecar: "Sidecar", source_table: str) -> bool:
     through the sidecar's temporal_class accessor, the single narrowing point. A
     kind carrying no history_tracked prop__ column is untracked without consulting
     any class — the same defensive skip signal C11 and C13 key on, unreachable past
-    the version gate against a producer-written v5 emit (coverage is total) and
+    the version gate against a producer-written emit (coverage is total) and
     retained so the predicate is correct standalone.
 
     Args:

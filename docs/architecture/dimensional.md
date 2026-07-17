@@ -22,7 +22,7 @@ target-schema file, and reads `record_roles` only in `init` — the export path 
 consults it. It reads through the Stage-1 reader only.
 
 ```
-emit (run.duckdb + base.json @ v4)
+emit (run.duckdb + base.json @ the supported `base_format_version`)
    │  (reader: Emit + Sidecar; trunk-only — sole branch)
    ├─ fabulexa-forge init   ─▶ commented candidate export config (sidecar-driven)
    └─ fabulexa-forge export ─▶ build_query_specs → one QuerySpec per declared table
@@ -551,6 +551,17 @@ The proposal per kind:
   a kind, so there is no second discriminator to fan out on — an `actor` fact sub-type (e.g.
   `ride`) behaves like a bare-string fact with no modelling discriminator.
 
+**Column proposals are role-scoped.** The proposal loop classifies every
+records column through the reader's records-column taxonomy
+([`reader.md`](reader.md) § The records-column taxonomy) and proposes **payload
+and presentation columns only**. Identity columns (`fork_path`, `record_id`,
+`record_index`, `ref_index__<name>`) are never proposed; lifecycle columns are
+never proposed either — the SCD-2 stub's `valid_from` / `valid_to` are
+`history`-derived, not read from lifecycle columns. Any base column stays
+reachable by explicit author projection: identity columns are neither proposed
+nor specially forbidden in author config — a base column named explicitly
+projects faithfully, as any base value does.
+
 `init` is a pure function of `(emit, code version)`: kind and sub-type order come from the
 registry's lexicographic key order, the fact fan-out from the reader's `SELECT DISTINCT`
 native-type order; no topology traversal, RNG, or clock participates.
@@ -595,6 +606,9 @@ as a clear stderr message with a non-zero exit.
 10. **`init` derives role from the registry, never from topology.** Role for every kind
     and sub-type is read from `record_roles`; reference topology influences no role or
     exclusion decision.
+11. **`init` column proposals are role-scoped.** Only payload and presentation
+    columns are proposed; identity and lifecycle columns never are. Explicit
+    author projection remains the path to any base column.
 
 ## Validation Rules
 

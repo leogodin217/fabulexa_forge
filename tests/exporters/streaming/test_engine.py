@@ -103,7 +103,7 @@ def _build_single_kind_emit(
     record_cols: list[dict[str, object]] | None = None,
     n_branches: int = 1,
 ) -> Path:
-    """Build a minimal v4 emit with one kind and optional multi-branch support."""
+    """Build a minimal emit with one kind and optional multi-branch support."""
     if record_cols is None:
         record_cols = _RECORD_COLS
 
@@ -157,7 +157,7 @@ def _build_two_kind_emit(
     cols_a: list[dict[str, object]] | None = None,
     cols_b: list[dict[str, object]] | None = None,
 ) -> Path:
-    """Build a minimal v4 emit with two kinds."""
+    """Build a minimal emit with two kinds."""
     if cols_a is None:
         cols_a = _RECORD_COLS
     if cols_b is None:
@@ -795,7 +795,7 @@ def _build_single_membership_emit(
     mem_cols: list[dict[str, object]],
     mem_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal v4 emit with one membership table."""
+    """Build a minimal emit with one membership table."""
     table_name = f"membership__{owner_kind}__{property_name}"
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -828,7 +828,7 @@ def _build_two_membership_emit(
     cols_b: list[dict[str, object]],
     rows_b: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal v4 emit with two membership tables."""
+    """Build a minimal emit with two membership tables."""
     table_a = f"membership__{owner_kind_a}__{property_a}"
     table_b = f"membership__{owner_kind_b}__{property_b}"
     db_path = tmp_path / "run.duckdb"

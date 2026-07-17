@@ -55,7 +55,7 @@ regenerated `base.json`. That seam — declare, then assemble — is internal, n
 cross-document contract, which is why both halves live in this one doc (§ Rationale).
 
 ```
-run.duckdb + base.json (v4, conformant)
+run.duckdb + base.json (conformant)
         │  open_emit  →  Emit (read-only)
         ▼
    require_single_branch  →  fork_path
@@ -74,7 +74,7 @@ run.duckdb + base.json (v4, conformant)
         │    Corrupter.apply → mutates + replaces the touched WorkingTables;
         │                      returns an OperationOutcome carrying its DefectRecords
         ▼
-   write_base_emit        →  run.duckdb + regenerated base.json (v4, structurally
+   write_base_emit        →  run.duckdb + regenerated base.json (structurally
         │                                        conformant, semantically broken)
    build_defect_manifest  →  canonicalised, id-assigned DefectManifest
    write_defect_manifest  →  defects.json (deterministic, label-grade ground truth)
@@ -113,7 +113,7 @@ out/
 ## Boundary
 
 - **Input.** An open `Emit` (trunk-only — sole branch) and a validated `CorruptConfig`.
-- **Output.** `run.duckdb` + a regenerated `base.json` (a structurally-conformant v4 base
+- **Output.** `run.duckdb` + a regenerated `base.json` (a structurally-conformant base
   emit — any exporter can run on it downstream) plus `defects.json`, into `out_dir`
   (created if absent). A corrupt run never clobbers an existing emit: it refuses if
   `out_dir` already holds a `run.duckdb` or `base.json`. The manifest is always written;
@@ -763,7 +763,9 @@ all-NULL pair — C7-conformant — so that second null declares `beyond-c1-c12`
 the first half's C7, leaving a declared-but-no-longer-firing code. That residual is a sound
 over-declaration, never an under-declaration (§ Manifest / validate agreement invariant).
 For `deactivated_at`, a non-NULL value marks an inactive row, so nulling it always violates
-NULL-iff-active and trips C7.
+NULL-iff-active and trips C7. Nulling a records reference `prop__` cell co-nulls its
+`ref_index__<name>` sibling in the same act — one defect, one `DefectRecord`
+(§ Reference pairs: one edge, two encodings).
 
 **Retype and the round-trip.** A `schema_drift` retype trips C6 only when the cast changes
 a tracked value's codec encoding: `BIGINT → VARCHAR` round-trips, `BIGINT → DOUBLE` does
@@ -785,7 +787,10 @@ uses a fixed sentinel prefix `DANGLING_ID_PREFIX = "__dangling__"` plus the smal
 non-negative integer suffix absent from the target table's id column on the sole
 `fork_path` — deterministic and guaranteed-absent, verified against the working set (so it
 accounts for prior operations). Only the id column is rewritten; its `kind` partner stays
-non-NULL, so the C7 pair stays whole while C10 resolution fails. A dangled records `prop__`
+non-NULL, so the C7 pair stays whole while C10 resolution fails. A dangled records
+`prop__` reference's sibling `ref_index__<name>` cell is co-written with the index
+sentinel `-(n+1)` in the same act (§ Reference pairs: one edge, two encodings). A
+dangled records `prop__`
 reference can additionally trip C6 when the column is `history_tracked` and the dangled
 row's series exists in the working state — the rewritten sentinel then fails the C6
 round-trip.
@@ -800,7 +805,9 @@ values on the sole `fork_path`, excluding the cell's current id, sorted ascendin
 non-empty. Each selected cell draws exactly one donor by pool index
 (`rng.randrange(len(pool))`, one draw per selected unit, ascending selected-unit order —
 the same fixed-order RNG discipline every sampling operation follows). Only the id cell
-is rewritten; its `kind` partner is untouched, so the C7 pair and C10's resolution both
+is rewritten — plus, for a records reference, its `ref_index__<name>` sibling, co-written
+with the donor's `record_index` (§ Reference pairs: one edge, two encodings); a
+membership id cell's `kind` partner is untouched, so the C7 pair and C10's resolution both
 stay intact by construction — `mispointed_reference` is invisible to `validate` and
 recoverable only via `defects.json`.
 
@@ -853,6 +860,54 @@ its type; a NULL cell stays NULL (no delta applied). Deltas are drawn in canonic
 order, then `target.columns` list order. A delta may vanish in the store (rounding,
 float absorption) — the copy is still injected, but its `C6` declaration follows the
 actual-divergence rule above, so a no-op perturbation never declares a code it cannot trip.
+
+### Reference pairs: one edge, two encodings
+
+A records reference is one edge with two encodings — id-space `prop__<name>`
+(joining the target's `record_id`) and index-space `ref_index__<name>` (joining
+the target's `record_index`; [`bundle.md`](bundle.md) § The dense record
+index). The rule: an operation that rewrites a reference rewrites the **edge,
+not a column** — it writes both encodings of the same row in the same act.
+Rewriting only the id-space encoding would leave the index-join still resolving
+to the old target: an undeclared recovery path, so `defects.json` would
+misdescribe the injected defect. One defect, one `DefectRecord`; the locator
+stays the `prop__<name>` cell; declared `class` and `impact` are computed
+exactly as for the id-space write alone (no semantic C-check reads
+`ref_index__` cell *values* — C2/C5 check shape, not values — and the column
+carries no history series, so no impact rule changes).
+
+| Operation | `prop__<name>` write | Sibling `ref_index__<name>` write | Pair state after |
+|---|---|---|---|
+| `null_cells` | NULL | NULL | consistent (NULL/NULL — a whole missing reference) |
+| `dangle_reference` | `__dangling__<n>` id sentinel | `-(n + 1)` — negative, hence guaranteed absent from the 0-based index domain; deterministic from the same suffix `n` | consistent-in-shape (both non-NULL, both unresolvable) |
+| `mispoint_reference` (both `constraint` modes) | donor's `record_id` | donor's `record_index`, read from the same operation-start working state as the donor pool | fully consistent — the defect stays invisible to `validate`, recoverable only via `defects.json` |
+
+The index sentinel `-(n+1)`: negative values are absent from a 0-based ordinal
+domain *by construction* — immune to later `insert_rows` phantoms (which mint
+upward) and requiring no working-set scan; deriving it from the id sentinel's
+suffix `n` keeps the pair visibly one defect and preserves determinism. `n` is
+minted once **per target kind** and shared by that kind's dangles (the existing
+id-sentinel rule), so every row dangled toward the same kind carries the same
+(`__dangling__<n>`, `-(n+1)`) pair — harmless, since pair consistency is a
+per-row property and each dangled row has its own `DefectRecord`.
+
+Row-scoped operations of the same table keep the pair whole by construction.
+`delete_rows` removes whole rows: inbound `ref_index__` cells elsewhere dangle
+*alongside* their `prop__` siblings — both encodings of the same now-broken
+edge, outside the declared surface exactly as inbound `prop__` dangles are
+(records referential integrity has no C-check; it is the contract's producer
+trust class), and the ordinal gap the removal leaves in the `record_index`
+domain is part of the same declared row-removal defect, exactly as the removed
+`record_id` is — density is contract prose, not a C-check. `duplicate_rows`
+copies whole rows: the pair travels together, and the copy's duplicated
+`record_index` is part of the declared duplicate-row defect, exactly as its
+duplicated `record_id` is. `insert_rows` clones the donor's `ref_index__` cells
+verbatim — they resolve to the same targets the donor's do, consistent with the
+cloned `prop__` references. No operation can write one *side* of a pair:
+jitter's eligibility carries an explicit reference-exclusion clause
+(`JitterColumnsNumeric`, § Validation Rules), `mutate_cells` and `schema_drift`
+exclude reference columns by their existing predicates, and resample
+eligibility excludes reference columns, so a resample can never split a pair.
 
 ### `duplicate_rows` — the `mutation` mode
 
@@ -952,6 +1007,22 @@ except:
   from the kind's id universe wins (termination: the universe is finite). The id is
   deliberately plausible — a transposed real id, not a sentinel — because a phantom's
   teaching value is looking real.
+- **`record_index`** — a fresh ordinal: per-table high-water mark `+ 1 + i`, for
+  the operation's *i*-th phantom in assignment order (ascending selected-unit
+  order, matching the id-assignment discipline). The high-water mark is engine
+  state per `records__<K>` working table — initialized to the table's maximum
+  `record_index` when the working set loads (`rows − 1`, by input density),
+  advanced past each minted phantom, never lowered — so a fresh ordinal is
+  strictly above every ordinal that has *ever* appeared in the working table,
+  not merely above the current maximum, which an earlier `delete_rows` may have
+  lowered. Deletion gaps are never reused, suffix gaps included: `max` over the
+  current working table alone would re-mint an ordinal whose row a deletion
+  removed, and a stale inbound `ref_index__` cell dangling toward that ordinal
+  would silently re-resolve to the phantom — an undeclared mispoint-shaped pair
+  state pair atomicity forbids. No tombstoned identity is resurrected. The fresh
+  index is part of the phantom's one declared defect, as the fresh id is; the
+  donor's `ref_index__` cells are cloned verbatim (§ Reference pairs: one edge,
+  two encodings).
 - **Resampled payload (optional).** When `target.columns` is present, each matched
   eligible cell of the phantom (records `prop__*` with `references` unset, or
   `presentation_id`) is replaced by an intra-column resample — the `mutate_cells`
@@ -1381,9 +1452,12 @@ spec and a dropped column drops it. Every other top-level sidecar field
 `record_roles`) is copied verbatim from the source `Sidecar.raw`.
 
 **The writer round-trips every sidecar column attribute the reader models** — a declared
-attribute is carried verbatim, an absent attribute stays absent. Both halves are
-load-bearing. A stripped `temporal_class` would emit a sidecar claiming v5 while
-violating C13's structural clauses *by construction and undeclared* — and would produce a
+attribute is carried verbatim, an absent attribute stays absent. Identity columns
+(`fork_path`, `record_id`, `record_index`, `ref_index__<name>`) therefore regenerate as
+bare `{name, type}` entries — no `references` annotation, no temporal pair — a stated,
+test-guarded invariant. Both halves are
+load-bearing. A stripped `temporal_class` would emit a sidecar claiming conformance
+while violating C13's structural clauses *by construction and undeclared* — and would produce a
 tape forge's own class-consulting surfaces could not read. And absence is the only
 representable form of "no class": the vendored schema types the attribute and
 enum-constrains its value, so an emitted `temporal_class: null` on a structural column
@@ -1421,7 +1495,8 @@ what makes the generated schema, `defects.json`, the round-trip read, and the
 ## Invariants
 
 1. **Structural preservation.** Corrupt output opens under `open_emit` and passes C1–C5,
-   C8, and C13's structural clauses; it is a valid `base_format_version: 5` emit. The
+   C8, and C13's structural clauses; it is a valid emit at the supported
+   `base_format_version`. The
    base-emit writer round-trips every sidecar column attribute the reader models —
    declared attributes verbatim, absent attributes absent (§ The base-emit writer).
 2. **Break locality.** An operation changes only cells/rows/columns of its `target`;
@@ -1489,6 +1564,9 @@ what makes the generated schema, `defects.json`, the round-trip read, and the
     absent from its kind's id universe: a phantom has no history series, no inbound
     reference, no pin, and never reuses an id any working-state row, cell, or tombstone
     carries — a `DANGLING_ID_PREFIX` sentinel sitting in a dangled cell included.
+    The phantom's `record_index` is likewise strictly above every ordinal that has ever
+    appeared in its table — the per-table high-water mark forecloses re-minting a
+    deleted row's ordinal (§ `insert_rows`).
     `insert_rows`' `beyond-c1-c12` declaration holds by construction for the insertion's
     own act, and no earlier defect is healed or resurrected. Isolation covers the
     id-linked surfaces only: payload inherited from an already-corrupted donor (a
@@ -1512,6 +1590,18 @@ what makes the generated schema, `defects.json`, the round-trip read, and the
     declared breaks.
 24. **Interval knobless determinism.** Every `distort_intervals` rewrite target is a pure
     function of the operation-start working state; the mode step consumes no RNG.
+25. **Pair atomicity.** No operation writes one side of a `prop__` ↔ `ref_index__`
+    reference pair — including by perturbation: jitter's reference exclusion is an
+    explicit clause, not a type coincidence. Every pair in a corrupted emit is either
+    faithful, or inconsistent *as declared by exactly one `DefectRecord`*
+    (§ Reference pairs: one edge, two encodings).
+26. **Identity columns are never corruption-selectable.** `record_index` and
+    `ref_index__*` join `record_id` / `fork_path`: invisible to family A,
+    `schema_drift`, jitter, and resample by predicate construction — stated and
+    negatively tested.
+27. **Identity round-trip.** The base-emit writer regenerates identity columns as bare
+    `{name, type}` sidecar entries — no `references` annotation, no temporal pair
+    (§ The base-emit writer).
 
 ## Validation Rules
 
@@ -1572,7 +1662,7 @@ against `WorkingTable.spec` agrees with the simulation by construction. Each rul
 | `MutableColumns` | `mutate_cells` targets only the family-wide name class (records `prop__*` without `references`, `presentation_id`, membership `elem__*`, the fixed-category `value` column) narrowed by the mutation kind's type gate — and, for `out_of_domain`, an `enum_domains` gate — per the simulated schema at this position (§ mutate_cells vocabulary and eligibility) |
 | `DriftColumnsNonStructural` | `schema_drift` renames/retypes/drops only payload columns, positively enumerated: a records `prop__*` without `references` that is not an `enum_domains` discriminator, or a membership `elem__*`. Every structural column, every reference column, and every discriminator column is ineligible — this positive enumeration is what keeps an eligible column's drift capable of tripping only C6/C11 or nothing, never an unrepresentable structural break, and never C10 (reference columns stay `dangle_reference`'s alone) |
 | `DriftRenamePreservesCategory` | a rename target keeps the source column's structural category (`prop__` → `prop__`, `elem__` → `elem__`), so a rename never lands a foreign-category column in the records or membership block. Complete given `DriftColumnsNonStructural` already restricts sources to those two prefixes |
-| `JitterColumnsNumeric` | when `jitter` is set, every `target.columns` entry is a numeric (`BIGINT`/`DOUBLE`) payload column (`prop__*`/`elem__*`) — never a `*_sim_time` or other structural column, even when numeric. Perturbing `joined_sim_time`/`left_sim_time` would break C10 and shift the membership row-identity prefix |
+| `JitterColumnsNumeric` | when `jitter` is set, every `target.columns` entry is a numeric (`BIGINT`/`DOUBLE`) payload column (`prop__*`/`elem__*`) — never a `*_sim_time` or other structural column, even when numeric. Perturbing `joined_sim_time`/`left_sim_time` would break C10 and shift the membership row-identity prefix. Reference columns are excluded by an **explicit clause**, not by the numeric-type gate alone — reference ids happen to be non-numeric, but pair atomicity (§ Reference pairs: one edge, two encodings) must not rest on a type coincidence; the exclusion is declared and negatively tested |
 | `HistoryOnlyTarget` | for the three family-C kinds (`freeze_series`, `drop_events`, `shift_sim_time`), every resolved table is the fixed-category `history` table |
 | `NonHistoryTarget` | `delete_rows`: every resolved table is records- or membership-category — never fixed-category (`history` removal is `drop_events`' alone) |
 | `RecordsCategoryTarget` | `insert_rows`: every resolved table is records-category |

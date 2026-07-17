@@ -1,7 +1,7 @@
 """Conformance checks C1–C13 for base-layer emits.
 
 Independent reimplementation of the base-format conformance procedure.
-Zero imports outside the vendored contract. Reads the vendored v5 JSON Schema and DuckDB
+Zero imports outside the vendored contract. Reads the vendored JSON Schema and DuckDB
 catalog/data via Emit.query; never raises on a conformance failure.
 """
 
@@ -80,7 +80,7 @@ _PS_RECORDS_PREFIX_COLUMNS: tuple[tuple[str, str], ...] = (
 )
 
 # records__K: the dense-index column immediately following the (possibly
-# shifted) lifecycle prefix (v6; § Dense record index). Nullability is not
+# shifted) lifecycle prefix (§ Dense record index). Nullability is not
 # compared (existing C2/C5 stance).
 _PS_RECORD_INDEX_COLUMN: tuple[str, str] = ("record_index", "BIGINT")
 
@@ -176,7 +176,7 @@ def _normalize_type(type_str: str) -> str:
 
 
 def _check_c1(emit: "Emit") -> CheckResult:
-    """C1: base.json validates against the vendored v4 JSON Schema.
+    """C1: base.json validates against the vendored JSON Schema.
 
     Unknown top-level fields are recorded in skips, not failures.
     Unknown nested fields (inside branch/table/column/runtime) fail C1.
@@ -420,7 +420,7 @@ def _check_c5_property_block(
     block_offset: int,
     messages: list[str],
 ) -> None:
-    """Check the v6 property block: prop__<name>, each reference-annotated one
+    """Check the property block: prop__<name>, each reference-annotated one
     immediately followed by its ref_index__<name> sibling.
 
     Every column is classified through `records_column_role`. A no-role name
@@ -483,7 +483,7 @@ def _check_c5_table(
     cols: list[ColumnSpec],
     messages: list[str],
 ) -> None:
-    """Check C5 shape for a single records table column list (v6 layout).
+    """Check C5 shape for a single records table column list.
 
     The positional prefix is head -> optional presentation_id -> lifecycle tail
     -> record_index: head = (fork_path, record_id) at idx 0-1; an optional
@@ -563,7 +563,7 @@ def _check_c5_table(
 
 def _check_c5(emit: "Emit") -> CheckResult:
     """C5: records__K shape: head + optional presentation_id + lifecycle tail +
-    record_index, then the property block (§ Contracts — v6 layout).
+    record_index, then the property block (§ Contracts).
 
     Checks the sidecar ColumnSpec list against the pinned spec (PS) and the
     records-column taxonomy. C5 no longer re-checks the catalog's property
@@ -1298,7 +1298,7 @@ def _any_records_prop_history_tracked(sidecar: "Sidecar") -> bool:
 
 
 def _check_c11(emit: "Emit") -> CheckResult:
-    """C11: Column SCD class consistency, bidirectional at v5.
+    """C11: Column SCD class consistency, bidirectional.
 
     Skips when no records-category prop__ column carries history_tracked (the
     published additive-field guard).
@@ -1307,13 +1307,14 @@ def _check_c11(emit: "Emit") -> CheckResult:
     (kind, property) in history (columns 2, 4), the prop__<property> column on
     records__<kind> is present in the sidecar and flagged history_tracked true.
 
-    Converse clause (v5): for each records__<kind> with at least one row, each
+    Converse clause: for each records__<kind> with at least one row, each
     prop__<property> column flagged history_tracked true has at least one history
     row for (kind, property). Zero rows is a violation — the unconditional creation
     seed removed the "created NULL, never changed" carve-out that made it legal at
-    v4. Gated by the same round-trippable-type set C6 uses (BIGINT, DOUBLE, BOOLEAN,
-    VARCHAR): a collection-struct property emits membership tables, never history
-    rows, and stays outside this clause's input set.
+    a prior contract version (v4). Gated by the same round-trippable-type set C6
+    uses (BIGINT, DOUBLE, BOOLEAN, VARCHAR): a collection-struct property emits
+    membership tables, never history rows, and stays outside this clause's input
+    set.
 
     C11 skips when the history table is absent from the catalog.
 
@@ -1745,7 +1746,7 @@ def _check_c13(emit: "Emit") -> CheckResult:
     """C13: Temporal-class consistency.
 
     Skips when no records-category prop__ column carries history_tracked (the
-    published additive-field guard; unreachable against a producer-written v5
+    published additive-field guard; unreachable against a producer-written
     emit, retained so the checker is a correct standalone implementation of the
     procedure).
 
@@ -1865,7 +1866,7 @@ def validate(emit: "Emit") -> ConformanceReport:
 
     Reimplements the base-format conformance procedure independently of the
     producer's emitters.conformance. C1 validates base.json against the vendored
-    v5 JSON Schema; C2–C5 check catalog/sidecar agreement, required tables,
+    JSON Schema; C2–C5 check catalog/sidecar agreement, required tables,
     and column shapes; C6–C13 check data-level integrity.
 
     A conformance failure is reported as a failing CheckResult, never raised:

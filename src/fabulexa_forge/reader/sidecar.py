@@ -440,14 +440,14 @@ class Sidecar:
     def from_raw(cls, raw: Mapping[str, object]) -> "Sidecar":
         """Version-gate and structurally parse a parsed base.json mapping.
 
-        Performs, in order: (1) the version gate — base_format_version must be a
+        Performs, in order: first, the version gate — base_format_version must be a
         present int (strict: isinstance(v, int) and not isinstance(v, bool)) equal to
-        the imported SUPPORTED_BASE_FORMAT_VERSION; (2) the structural floor — the
+        the imported SUPPORTED_BASE_FORMAT_VERSION. Second, the structural floor — the
         required, non-defaulted descriptor fields
         (TableSpec.{name,category,columns,rows}, ColumnSpec.{name,type},
         BranchEntry.{fork_path,parent,slice_at}) must be present and correctly typed.
-        Gating precedes structural parse so a future v4 sidecar fails with a clear
-        version error, never an opaque structural one.
+        Gating precedes structural parse so a future unsupported-version sidecar
+        fails with a clear version error, never an opaque structural one.
 
         Does NOT enforce schema patterns / enums / const / minItems /
         conditional-required — those are C1's job. record_kind and property are

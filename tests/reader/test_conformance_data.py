@@ -53,7 +53,7 @@ def _write_emit(
         schema_valid: Forwarded to sidecar_builder.write_emit. False for the
             deliberately schema-invalid negative fixtures.
         records_shape_valid: Forwarded to sidecar_builder.write_emit. False
-            for negative fixtures whose declared defect is the v6 records
+            for negative fixtures whose declared defect is the records
             shape itself.
 
     Returns:

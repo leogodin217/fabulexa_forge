@@ -28,7 +28,7 @@ reader only and composes the derivations layer's row-state-events fold (`state-c
 membership-events fold (`membership-events`) for its event content.
 
 ```
-emit (run.duckdb + base.json @ v5)
+emit (run.duckdb + base.json @ the supported `base_format_version`)
    │  (reader: Emit + Sidecar; trunk-only — sole branch)
    ▼
 content fold (per source, derivations layer)

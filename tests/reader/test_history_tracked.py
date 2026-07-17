@@ -12,7 +12,7 @@ from fabulexa_forge.reader.emit import open_emit
 
 from ._emit_helpers import write_emit
 
-# The v6 records-table positional prefix through record_index (fork_path,
+# The records-table positional prefix through record_index (fork_path,
 # record_id, lifecycle tail, record_index) -- kind-independent, so it is
 # reused verbatim for records__patient and records__nurse alike.
 _RECORDS_PATIENT_STATUS_DDL = (
@@ -38,7 +38,7 @@ _RECORDS_PATIENT_ZPROP_DDL = (
 
 
 def _records_prefix() -> list[dict[str, object]]:
-    """The v6 records-table positional prefix through record_index."""
+    """The records-table positional prefix through record_index."""
     return [
         identity_column("fork_path", "VARCHAR"),
         identity_column("record_id", "VARCHAR"),

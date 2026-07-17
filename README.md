@@ -53,7 +53,7 @@ Open http://localhost:5173
 
 **Now onto the LLM-generated stuff**
 
-Reads a base-layer emit (`run.duckdb` + `base.json`, `base_format_version 4`) and
+Reads a base-layer emit (`run.duckdb` + `base.json`) and
 writes differently-shaped datasets (exporters) or realistically-broken base layers
 (corrupters). A downstream consumer of Fabulexa composite base-layer emits — the
 vendored bundle contract is its only coupling.

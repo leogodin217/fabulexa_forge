@@ -79,7 +79,7 @@ def _table_spec(
 
 
 def _build_spanning_emit(tmp_path: Path) -> Path:
-    """Build a minimal single-branch v4 emit with two kinds."""
+    """Build a minimal single-branch emit with two kinds."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -1273,7 +1273,7 @@ _MEMBERS_COLS: list[dict[str, object]] = [
 
 
 def _build_membership_emit(tmp_path: Path) -> Path:
-    """Build a minimal single-branch v4 emit with two membership tables."""
+    """Build a minimal single-branch emit with two membership tables."""
     emit_dir = tmp_path / "emit"
     emit_dir.mkdir(parents=True, exist_ok=True)
     db_path = emit_dir / "run.duckdb"

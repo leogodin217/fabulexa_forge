@@ -26,9 +26,9 @@ _FIRINGS_TABLE: dict[str, object] = {
     "rows": 0,
 }
 
-# A well-formed v6 records__actor column list: head + lifecycle tail +
+# A well-formed records__actor column list: head + lifecycle tail +
 # record_index, then a reference-annotated prop__ column immediately followed
-# by its ref_index__ sibling (§ Contracts -- v6 layout). Shared by the
+# by its ref_index__ sibling (§ Contracts). Shared by the
 # write_emit records-shape negatives below, each of which mutates a copy.
 _WELL_FORMED_RECORDS_COLUMNS: list[dict[str, object]] = [
     identity_column("fork_path", "VARCHAR"),
@@ -192,7 +192,7 @@ def test_write_emit_extra_blocks_carried_verbatim(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# write_emit -- v6 records-shape assertion (records_shape_valid)
+# write_emit -- records-shape assertion (records_shape_valid)
 # ---------------------------------------------------------------------------
 
 

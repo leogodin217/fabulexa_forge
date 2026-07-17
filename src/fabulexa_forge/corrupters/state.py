@@ -42,8 +42,10 @@ def _table_record_index_mark(working_table: "WorkingTable") -> int | None:
     Returns:
         The table's maximum `record_index` value, `-1` when it carries zero
         rows (the first mint then yields `0`), or `None` when the table
-        carries no `record_index` column at all (a pre-v6 fixture never
-        targeted by `insert_rows`).
+        carries no `record_index` column at all -- unreachable for a
+        records-category table on a conformant source (C5 requires
+        `record_index` on every one), kept so the accessor stays total rather
+        than assuming the invariant.
     """
     if "record_index" not in working_table.data.column_names:
         return None
