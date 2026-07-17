@@ -39,6 +39,7 @@ from fabulexa_forge.corrupters.selection import (
 from fabulexa_forge.corrupters.state import WorkingTable
 from fabulexa_forge.errors import CorruptError
 from fabulexa_forge.reader.conformance import _ROUND_TRIPPABLE_TYPES, to_csv_text
+from fabulexa_forge.reader.records_columns import ref_index_sibling
 
 if TYPE_CHECKING:
     import random
@@ -47,12 +48,13 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import Distribution
     from fabulexa_forge.corrupters.manifest import ImpactCode, RowCategory
     from fabulexa_forge.corrupters.state import CorruptState
-    from fabulexa_forge.reader.sidecar import Sidecar, TableSpec
+    from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar, TableSpec
 
     _PooledUnit = tuple[int, int] | tuple[int, int, str] | tuple[int, int, str, str]
     """A pooled unit's shape: `(table_index, row_pos)`, optionally followed by
-    `column` (cell units) and `target_kind` (`dangle_reference`'s eligible
-    units) -- `unit_row_weights` only ever looks at the leading pair."""
+    `column` (cell units) and `target_kind` (`dangle_reference`'s and
+    `mispoint_reference`'s eligible units) -- `unit_row_weights` only ever
+    looks at the leading pair."""
 
 _ROW_ID_COLUMN = "__rowid__"
 
@@ -526,6 +528,27 @@ def membership_partner_column(name: str) -> str:
     if name.endswith("__id"):
         return name[: -len("__id")] + "__kind"
     raise ValueError(f"{name!r} is not a member__<f>__kind/__id column")
+
+
+def records_reference_sibling(column: str, col_spec: "ColumnSpec") -> str | None:
+    """The `ref_index__<name>` sibling column for a records reference
+    `prop__` cell -- the pair-write target `null_cells`, `dangle_reference`,
+    and `mispoint_reference` share whenever they rewrite a reference cell (an
+    operation that rewrites a reference rewrites the edge, not a column).
+
+    Args:
+        column: The reference column's current name.
+        col_spec: The column's current ColumnSpec.
+
+    Returns:
+        The paired `ref_index__<name>` column name when `column` is a
+        records `prop__` reference (its `references` is set); None for a
+        membership `member__<f>__id` reference or any non-reference column --
+        neither carries a `ref_index__` analog.
+    """
+    if not column.startswith("prop__") or col_spec.references is None:
+        return None
+    return ref_index_sibling(column)
 
 
 def membership_kind_id_pairs(state: "CorruptState") -> frozenset[tuple[str, str]]:

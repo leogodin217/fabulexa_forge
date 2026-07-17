@@ -46,6 +46,8 @@ def _patient_spec() -> "object":
                 temporal_class="tracked",
             ),
             column_spec("prop__notes", "VARCHAR"),
+            column_spec("prop__doctor_id", "VARCHAR", references="doctor"),
+            column_spec("ref_index__doctor_id", "BIGINT"),
         ),
         record_kind="patient",
     )
@@ -106,6 +108,8 @@ def _patient_row(**overrides: object) -> dict[str, object]:
         "prop__nickname": "Al",
         "prop__birthdate": "1990-01-01",
         "prop__notes": "hello",
+        "prop__doctor_id": "d1",
+        "ref_index__doctor_id": 3,
     }
     row.update(overrides)
     return row
@@ -323,6 +327,42 @@ def test_deactivated_at_non_null_declares_c7() -> None:
     state = CorruptState(tables={"history": history, "records__patient": patients})
     outcome = _apply(state, "records__patient", ["deactivated_at"], count=1)
     assert outcome.defects[0].impact == ("C7",)
+
+
+# ---------------------------------------------------------------------------
+# Pair-scoped reference writes (v6): a records reference prop__ cell's write
+# co-nulls its ref_index__ sibling in the same act
+# ---------------------------------------------------------------------------
+
+
+def test_records_reference_prop_cell_conulls_ref_index_sibling() -> None:
+    state = _state_with_series()
+    outcome = _apply(state, "records__patient", ["prop__doctor_id"], count=1)
+    assert outcome.units_affected == 1
+    assert len(outcome.defects) == 1
+    assert outcome.defects[0].location.column == "prop__doctor_id"
+    mutated = state.tables["records__patient"].data
+    assert mutated.column("prop__doctor_id").to_pylist() == [None]
+    assert mutated.column("ref_index__doctor_id").to_pylist() == [None]
+
+
+def test_non_reference_prop_cell_leaves_unrelated_ref_index_column_untouched() -> None:
+    state = _state_with_series()
+    outcome = _apply(state, "records__patient", ["prop__name"], count=1)
+    assert outcome.units_affected == 1
+    mutated = state.tables["records__patient"].data
+    assert mutated.column("prop__name").to_pylist() == [None]
+    assert mutated.column("ref_index__doctor_id").to_pylist() == [3]
+
+
+def test_membership_member_id_cell_null_has_no_sibling_write() -> None:
+    state = _state_with_membership()
+    outcome = _apply(
+        state, "membership__patient__visits", ["member__doctor__id"], count=1
+    )
+    assert outcome.units_affected == 1
+    mutated = state.tables["membership__patient__visits"].data
+    assert mutated.column("member__doctor__id").to_pylist() == [None]
 
 
 # ---------------------------------------------------------------------------

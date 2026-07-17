@@ -22,6 +22,7 @@ from fabulexa_forge.corrupters.operations._impact import (
     membership_partner_column,
     placement_populations,
     property_name_for_prop_column,
+    records_reference_sibling,
     resolve_pooled_populations,
     row_category_for_table,
     row_dict,
@@ -95,6 +96,23 @@ def _smallest_absent_sentinel(taken: set[str]) -> str:
     while f"{DANGLING_ID_PREFIX}{n}" in taken:
         n += 1
     return f"{DANGLING_ID_PREFIX}{n}"
+
+
+def _sentinel_ref_index(sentinel: str) -> int:
+    """The `ref_index__` sibling value paired with a `__dangling__<n>` id
+    sentinel: `-(n + 1)` -- negative, hence guaranteed absent from the
+    0-based `record_index` domain, and deterministic from the same suffix
+    `n` the id sentinel carries.
+
+    Args:
+        sentinel: A `__dangling__<n>` id sentinel, as `_smallest_absent_sentinel`
+            builds it.
+
+    Returns:
+        `-(n + 1)`.
+    """
+    n = int(sentinel[len(DANGLING_ID_PREFIX) :])
+    return -(n + 1)
 
 
 def _dangle_impact(
@@ -216,6 +234,14 @@ class DangleReferenceCorrupter:
                     column
                 ).to_pylist()
             py_columns[column][physical_row] = sentinel
+
+            sibling = records_reference_sibling(column, columns_by_name[column])
+            if sibling is not None:
+                if sibling not in py_columns:
+                    py_columns[sibling] = population.working_table.data.column(
+                        sibling
+                    ).to_pylist()
+                py_columns[sibling][physical_row] = _sentinel_ref_index(sentinel)
 
             row = row_dict(population.content, row_pos)
             record_id = row["record_id"]

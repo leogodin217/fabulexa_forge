@@ -46,7 +46,9 @@ def _patient_spec() -> object:
                 history_tracked=True,
                 temporal_class="tracked",
             ),
+            column_spec("ref_index__doctor_id", "BIGINT"),
             column_spec("prop__untracked_doctor_id", "VARCHAR", references="doctor"),
+            column_spec("ref_index__untracked_doctor_id", "BIGINT"),
         ),
         record_kind="patient",
     )
@@ -316,6 +318,78 @@ def test_untracked_prop_reference_declares_beyond_c1_c12() -> None:
     state = _patient_state_with_history([])
     outcome = _apply(state, "records__patient", ["prop__untracked_doctor_id"], count=1)
     assert outcome.defects[0].impact == ("beyond-c1-c12",)
+
+
+# ---------------------------------------------------------------------------
+# Pair-scoped reference writes (v6): a records reference prop__ cell's
+# dangle co-dangles its ref_index__ sibling to -(n + 1)
+# ---------------------------------------------------------------------------
+
+
+def test_records_reference_prop_cell_codangles_ref_index_sibling() -> None:
+    state = _patient_state_with_history([])
+    outcome = _apply(state, "records__patient", ["prop__doctor_id"], count=1)
+    assert outcome.units_affected == 1
+    assert len(outcome.defects) == 1
+    assert outcome.defects[0].location.column == "prop__doctor_id"
+    mutated = state.tables["records__patient"].data
+    assert mutated.column("prop__doctor_id").to_pylist() == [f"{DANGLING_ID_PREFIX}0"]
+    assert mutated.column("ref_index__doctor_id").to_pylist() == [-1]
+
+
+def test_codangle_pair_shares_the_same_suffix_across_rows_of_the_same_kind() -> None:
+    patients = working_table(
+        _patient_spec(),
+        [
+            {
+                "fork_path": _FORK_PATH,
+                "record_id": "p1",
+                "prop__name": "Alice",
+                "prop__doctor_id": "d1",
+                "prop__untracked_doctor_id": "d1",
+            },
+            {
+                "fork_path": _FORK_PATH,
+                "record_id": "p2",
+                "prop__name": "Bob",
+                "prop__doctor_id": "d1",
+                "prop__untracked_doctor_id": "d1",
+            },
+        ],
+    )
+    doctors = working_table(
+        _doctor_spec(), [{"fork_path": _FORK_PATH, "record_id": "d1"}]
+    )
+    history = working_table(_history_spec(), [])
+    state = CorruptState(
+        tables={
+            "records__patient": patients,
+            "records__doctor": doctors,
+            "history": history,
+        }
+    )
+    outcome = _apply(state, "records__patient", ["prop__doctor_id"], count=2)
+    assert outcome.units_affected == 2
+    mutated = state.tables["records__patient"].data
+    assert mutated.column("prop__doctor_id").to_pylist() == [
+        f"{DANGLING_ID_PREFIX}0",
+        f"{DANGLING_ID_PREFIX}0",
+    ]
+    assert mutated.column("ref_index__doctor_id").to_pylist() == [-1, -1]
+
+
+def test_membership_member_id_dangle_has_no_sibling_write() -> None:
+    """No `ref_index__` analog on membership reference pairs -- the write
+    stays scoped to the id column, exactly as today."""
+    state = _membership_state()
+    outcome = _apply(
+        state, "membership__patient__visits", ["member__doctor__id"], count=1
+    )
+    assert outcome.units_affected == 1
+    mutated = state.tables["membership__patient__visits"].data
+    assert mutated.column("member__doctor__id").to_pylist() == [
+        f"{DANGLING_ID_PREFIX}0"
+    ]
 
 
 # ---------------------------------------------------------------------------
