@@ -1294,6 +1294,39 @@ def test_junction_unit_untouched_no_notices() -> None:
     assert len(sink.notices) == 1  # the visit unit's one omitted column
 
 
+def test_split_unit_omission_notice_names_source_table_and_sub_type() -> None:
+    """A split (sub-typed) unit's slice-only-column-omitted notice names the
+    unit as "unit '<source_table> (sub_type '<sub_type>')'" (`_unit_label`),
+    not the bare kind — one notice per split unit sharing the omitted column."""
+    actor_table = _records_table(
+        "actor",
+        [
+            _col("prop__actor_type", history_tracked=False, temporal_class="constant"),
+            _slice_only_col("prop__loyalty_tier"),
+        ],
+    )
+    sidecar = _sidecar(
+        tables=[actor_table],
+        record_roles={"actor": {"consultant": "dimension", "nurse": "fact"}},
+        enum_domains={"actor": {"actor_type": ["consultant", "nurse"]}},
+    )
+    sink = RecordingNoticeSink()
+    build_source_plan(sidecar, None, notice_sink=sink)
+    notices = [n for n in sink.notices if n.code == "slice-only-column-omitted"]
+    assert len(notices) == 2
+    assert notices[0].code == "slice-only-column-omitted"
+    assert notices[0].message == (
+        "unit 'records__actor (sub_type 'consultant')': column"
+        " 'prop__loyalty_tier' is temporal_class: slice_only; omitted from"
+        " the source export"
+    )
+    assert notices[1].message == (
+        "unit 'records__actor (sub_type 'nurse')': column"
+        " 'prop__loyalty_tier' is temporal_class: slice_only; omitted from"
+        " the source export"
+    )
+
+
 def test_unsplit_subtyped_discriminator_exempt_even_when_slice_only() -> None:
     """A bare-role sub-typed kind's own discriminator is retained even when
     declared slice_only — the discriminator carve-out is exempt regardless of

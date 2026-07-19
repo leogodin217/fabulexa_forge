@@ -598,40 +598,19 @@ def _elapsed_col(
     )
 
 
-def test_derived_elapsed_correlate_on_refuses_slice_only() -> None:
-    """derived.elapsed.correlate_on: a non-exempt slice_only column raises."""
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        pytest.param({"correlate_on": "prop__tier"}, id="correlate_on"),
+        pytest.param({"start_source": "prop__tier"}, id="start_source"),
+        pytest.param({"end_source": "prop__tier"}, id="end_source"),
+        pytest.param({"other_where": {"prop__tier": "gold"}}, id="other_where_key"),
+    ],
+)
+def test_derived_elapsed_refuses_slice_only(kwargs: dict[str, object]) -> None:
+    """Each derived.elapsed surface refuses a non-exempt slice_only column."""
     sidecar = _slice_only_actor_sidecar()
-    col = _elapsed_col(correlate_on="prop__tier")
-    tbl = _make_table_decl(kind="actor", columns=[col], key=["wait"])
-    with pytest.raises(ExportError) as exc_info:
-        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
-    _assert_slice_only_message(str(exc_info.value))
-
-
-def test_derived_elapsed_start_source_refuses_slice_only() -> None:
-    """derived.elapsed.start_source: a non-exempt slice_only column raises."""
-    sidecar = _slice_only_actor_sidecar()
-    col = _elapsed_col(start_source="prop__tier")
-    tbl = _make_table_decl(kind="actor", columns=[col], key=["wait"])
-    with pytest.raises(ExportError) as exc_info:
-        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
-    _assert_slice_only_message(str(exc_info.value))
-
-
-def test_derived_elapsed_end_source_refuses_slice_only() -> None:
-    """derived.elapsed.end_source: a non-exempt slice_only column raises."""
-    sidecar = _slice_only_actor_sidecar()
-    col = _elapsed_col(end_source="prop__tier")
-    tbl = _make_table_decl(kind="actor", columns=[col], key=["wait"])
-    with pytest.raises(ExportError) as exc_info:
-        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
-    _assert_slice_only_message(str(exc_info.value))
-
-
-def test_derived_elapsed_other_where_key_refuses_slice_only() -> None:
-    """derived.elapsed.other_where key: a non-exempt slice_only column raises."""
-    sidecar = _slice_only_actor_sidecar()
-    col = _elapsed_col(other_where={"prop__tier": "gold"})
+    col = _elapsed_col(**kwargs)  # type: ignore[arg-type]
     tbl = _make_table_decl(kind="actor", columns=[col], key=["wait"])
     with pytest.raises(ExportError) as exc_info:
         check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
