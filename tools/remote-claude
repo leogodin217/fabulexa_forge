@@ -29,9 +29,15 @@ script_dir="$(cd "$(dirname "$0")" && pwd)"
 common_git_dir="$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir)"
 main_top="$(dirname "$common_git_dir")"
 
+# Name resolution only — peek/send/kill address the tmux session and must keep
+# working after the worktree is removed (e.g. kill after a sprint ACCEPT).
 resolve() {
     target="$1"
     session="claude-$target"
+}
+
+# Directory resolution — only launch needs a live directory to start in.
+resolve_dir() {
     if [ "$target" = "main" ]; then
         dir="$main_top"
     else
@@ -48,6 +54,7 @@ case "$cmd" in
 launch)
     [ $# -ge 1 ] || usage
     resolve "$1"
+    resolve_dir
     shift
     if tmux has-session -t "=$session" 2>/dev/null; then
         echo "error: session $session already exists (peek it, or kill it first)" >&2
