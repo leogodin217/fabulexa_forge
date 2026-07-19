@@ -13,8 +13,9 @@ implements (no incremental window — window membership is renders.py's concern)
 Layer-direction invariant: imports only the reader, the derivations layer
 (the row-state-events fold's column-naming helper and the state-at
 derivation's column order / property-partition helpers), fabulexa_forge.errors,
-the mode-neutral reserved_names module, the sibling source.columns module,
-config.models (TYPE_CHECKING only), and stdlib. Never imports
+the mode-neutral reserved_names, notices (for `Notice`, and `NoticeSink`
+TYPE_CHECKING-only), and slice_only modules, the sibling source.columns
+module, config.models (TYPE_CHECKING only), and stdlib. Never imports
 exporters.dimensional.* or exporters.streaming.*.
 """
 
@@ -25,6 +26,7 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from fabulexa_forge.config.models import ExcludeDecl, RenameEntry, SourceConfig
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.sidecar import RecordRoles, Sidecar
 
 from fabulexa_forge.derivations.properties import has_presentation_id
@@ -36,15 +38,18 @@ from fabulexa_forge.errors import (
     SourceHistoryTrackedRequired,
     SourceNameCollision,
     SourceRecordRolesRequired,
+    SourceRenameSliceOnly,
     SourceRenameUnresolved,
     SourceRoleUnknown,
     SourceSubtypesUndeclared,
     SourceUnclassifiedColumn,
 )
+from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.reserved_names import (
     is_reserved_column_name,
     is_reserved_table_name,
 )
+from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, _scalar_properties
 from fabulexa_forge.reader.records_columns import records_column_role
 
@@ -321,26 +326,58 @@ def _default_table_name(unit: _Unit) -> str:
     return unit.kind
 
 
-def _changelog_columns(sidecar: "Sidecar", kind: str) -> tuple[tuple[str, str], ...]:
+def _omitted_slice_only_columns(sidecar: "Sidecar", kind: str) -> tuple[str, ...]:
+    """The unit-invariant omitted set for one records kind.
+
+    Every non-exempt temporal_class: slice_only prop__ column of
+    records__<kind>, in sidecar column-declaration order
+    (is_non_exempt_slice_only per column). Never called for junction units
+    (membership columns carry no class).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The record kind owning the records__<kind> table.
+
+    Returns:
+        Omitted column names (prop__ prefix included), sidecar column order.
+
+    Raises:
+        TemporalClassUnavailableError: Propagated.
+    """
+    source_table = f"records__{kind}"
+    return tuple(
+        col.name
+        for col in sidecar.columns(source_table)
+        if is_non_exempt_slice_only(sidecar, kind, col.name)
+    )
+
+
+def _changelog_columns(
+    sidecar: "Sidecar", kind: str, omitted: frozenset[str]
+) -> tuple[tuple[str, str], ...]:
     """The change-log render's fold column set, source -> output.
 
     Composes the row-state-events fold's after-image column order
     (`resolve_stream_columns`) with the fold's own fixed op/changed_at prefix —
-    the same derivation streaming replays, invoked with the kind's full scalar
-    property set (tracked and untracked alike; event_class is ordering-only and
-    never projected).
+    the same derivation streaming replays, invoked with the kind's scalar
+    property set minus `omitted` (tracked and untracked alike; event_class is
+    ordering-only and never projected).
 
     Args:
         sidecar: The open emit's sidecar.
         kind: The (tracked) record kind.
+        omitted: The unit's policy-omitted prop__ column names (§
+            _omitted_slice_only_columns), excluded from the property set fed
+            to the stream-column resolution.
 
     Returns:
         (source, output) pairs: op, event_sim_time->changed_at, record_id->id,
-        presentation_id (when carried), then one prop__<p>-><p> per scalar
-        property in sidecar column-declaration order.
+        presentation_id (when carried), then one prop__<p>-><p> per non-omitted
+        scalar property in sidecar column-declaration order.
     """
     source_table = f"records__{kind}"
-    properties = _scalar_properties(sidecar, source_table)
+    omitted_properties = {name[len(_PROP_PREFIX) :] for name in omitted}
+    properties = _scalar_properties(sidecar, source_table) - omitted_properties
     stream_columns = resolve_stream_columns(sidecar, kind, properties)
 
     pairs: list[tuple[str, str]] = [("op", "op"), ("event_sim_time", "changed_at")]
@@ -354,7 +391,9 @@ def _changelog_columns(sidecar: "Sidecar", kind: str) -> tuple[tuple[str, str], 
     return tuple(pairs)
 
 
-def _snapshot_columns(sidecar: "Sidecar", kind: str) -> tuple[tuple[str, str], ...]:
+def _snapshot_columns(
+    sidecar: "Sidecar", kind: str, omitted: frozenset[str]
+) -> tuple[tuple[str, str], ...]:
     """The snapshot (state-at) render's column set, source -> output.
 
     A change-log kind delivered under `change_delivery: snapshot` renders the
@@ -367,12 +406,15 @@ def _snapshot_columns(sidecar: "Sidecar", kind: str) -> tuple[tuple[str, str], .
     Args:
         sidecar: The open emit's sidecar.
         kind: The (tracked) record kind.
+        omitted: The unit's policy-omitted prop__ column names (§
+            _omitted_slice_only_columns), dropped from the returned pairs.
 
     Returns:
         (source, output) pairs: `STATE_AT_COLUMNS` (lifecycle-renamed per
         `_LIFECYCLE_RENAMES`), `presentation_id` when carried, then one
-        `prop__<p>` -> `<p>` per scalar property in sidecar column-declaration
-        order — the same order `build_state_at_sql` produces.
+        `prop__<p>` -> `<p>` per non-omitted scalar property in sidecar
+        column-declaration order — the same order `build_state_at_sql`
+        produces.
     """
     source_table = f"records__{kind}"
     pairs: list[tuple[str, str]] = [
@@ -381,7 +423,7 @@ def _snapshot_columns(sidecar: "Sidecar", kind: str) -> tuple[tuple[str, str], .
     if has_presentation_id(sidecar, kind):
         pairs.append(("presentation_id", "presentation_id"))
     for col in sidecar.columns(source_table):
-        if col.name.startswith(_PROP_PREFIX):
+        if col.name.startswith(_PROP_PREFIX) and col.name not in omitted:
             pairs.append((col.name, col.name[len(_PROP_PREFIX) :]))
     return tuple(pairs)
 
@@ -413,6 +455,7 @@ def _records_columns(
     sidecar: "Sidecar",
     source_table: str,
     drop_discriminator: str | None,
+    omitted: frozenset[str],
 ) -> tuple[tuple[str, str], ...]:
     """The reference/transaction render's faithful column set, source -> output.
 
@@ -420,7 +463,10 @@ def _records_columns(
     columns are dropped, following `fork_path`'s precedent — except `record_id`,
     which is identity but kept as `id` (design doc § Semantics — Phase-1 exporter
     posture). Presentation and lifecycle columns keep their operational default
-    name; payload columns are prefix-stripped.
+    name; payload columns are prefix-stripped. `omitted` columns are dropped
+    like the discriminator — the degenerate unit (every property omitted)
+    still renders identity, lifecycle, and (for a split unit) the exempt
+    discriminator.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -428,11 +474,13 @@ def _records_columns(
         drop_discriminator: The split unit's own `prop__<kind>_type` column name
             to drop (constant within the table, recoverable from table identity),
             or None to retain every prop__ column (unsplit unit).
+        omitted: The unit's policy-omitted prop__ column names (§
+            _omitted_slice_only_columns), dropped from the returned pairs.
 
     Returns:
         (source, output) pairs in sidecar column order, identity columns dropped
         (`record_id` kept), the lifecycle columns renamed to their operational
-        default, prop__ columns prefix-stripped.
+        default, prop__ columns prefix-stripped, `omitted` columns absent.
     """
     pairs: list[tuple[str, str]] = []
     for col in sidecar.columns(source_table):
@@ -441,6 +489,8 @@ def _records_columns(
         if role == "identity" and name != "record_id":
             continue
         if drop_discriminator is not None and name == drop_discriminator:
+            continue
+        if name in omitted:
             continue
         if role == "payload":
             pairs.append((name, name[len(_PROP_PREFIX) :]))
@@ -509,6 +559,7 @@ def _default_columns(
     sidecar: "Sidecar",
     unit: _Unit,
     change_delivery: Literal["changelog", "snapshot"],
+    omitted: frozenset[str],
 ) -> tuple[tuple[str, str], ...]:
     """Dispatch a unit to its genre's default column-naming builder.
 
@@ -517,6 +568,10 @@ def _default_columns(
         unit: The export unit.
         change_delivery: The source config's delivery mode for change-log
             kinds; irrelevant to every other genre.
+        omitted: The unit's policy-omitted prop__ column names (§
+            _omitted_slice_only_columns) — the caller passes frozenset() for a
+            junction unit, whose membership columns carry no class and whose
+            builder does not consult it.
 
     Returns:
         The unit's default (source, output) column pairs.
@@ -530,12 +585,12 @@ def _default_columns(
     _require_all_columns_classified(sidecar, unit.source_table)
     if unit.genre == "changelog":
         if change_delivery == "snapshot":
-            return _snapshot_columns(sidecar, unit.kind)
-        return _changelog_columns(sidecar, unit.kind)
+            return _snapshot_columns(sidecar, unit.kind, omitted)
+        return _changelog_columns(sidecar, unit.kind, omitted)
     drop_discriminator = (
         f"{_PROP_PREFIX}{unit.kind}_type" if unit.sub_type is not None else None
     )
-    return _records_columns(sidecar, unit.source_table, drop_discriminator)
+    return _records_columns(sidecar, unit.source_table, drop_discriminator, omitted)
 
 
 # ---------------------------------------------------------------------------
@@ -606,18 +661,25 @@ def _apply_rename_entry(
     entry: "RenameEntry",
     default_name: str,
     default_columns: tuple[tuple[str, str], ...],
+    omitted: frozenset[str],
 ) -> tuple[str, tuple[tuple[str, str], ...]]:
     """Apply one matched rename entry to a unit's default name/columns.
 
     Args:
         entry: The matched RenameEntry.
         default_name: The unit's default output table name.
-        default_columns: The unit's default (source, output) column pairs.
+        default_columns: The unit's default (source, output) column pairs
+            (already narrowed — `omitted` columns are absent).
+        omitted: The unit's policy-omitted prop__ column names (§
+            _omitted_slice_only_columns), checked before the not-a-source-column
+            check so the message names the omission reason.
 
     Returns:
         The (possibly overridden) table name and column pairs.
 
     Raises:
+        SourceRenameSliceOnly: A columns key names a policy-omitted
+            slice_only column.
         SourceRenameUnresolved: A columns key does not name a source column of
             this unit's default columns.
     """
@@ -628,6 +690,12 @@ def _apply_rename_entry(
 
     default_sources = {src for src, _ in default_columns}
     for src_key in column_overrides:
+        if src_key in omitted:
+            raise SourceRenameSliceOnly(
+                f"rename entry '{entry.table}': column '{src_key}' is"
+                " temporal_class: slice_only and is omitted from this unit's"
+                " export; the rename is unsatisfiable"
+            )
         if src_key not in default_sources:
             raise SourceRenameUnresolved(
                 f"rename entry '{entry.table}': column '{src_key}' is not a"
@@ -639,13 +707,52 @@ def _apply_rename_entry(
     return name, columns
 
 
+def _unit_label(unit: _Unit) -> str:
+    """Render one export unit's identity for a notice message.
+
+    Args:
+        unit: The export unit.
+
+    Returns:
+        The source table name, with the sub-type appended for a split unit.
+    """
+    if unit.sub_type is not None:
+        return f"{unit.source_table} (sub_type '{unit.sub_type}')"
+    return unit.source_table
+
+
+def _slice_only_omission_notice(unit: _Unit, column_name: str) -> Notice:
+    """Build the 'slice-only-column-omitted' notice for one unit x column.
+
+    Args:
+        unit: The export unit the column was omitted from.
+        column_name: The omitted prop__ column name.
+
+    Returns:
+        The rendered Notice, naming the unit and the column.
+    """
+    return Notice(
+        code="slice-only-column-omitted",
+        message=(
+            f"unit '{_unit_label(unit)}': column '{column_name}' is"
+            " temporal_class: slice_only; omitted from the source export"
+        ),
+    )
+
+
 def _resolve_specs(
     sidecar: "Sidecar",
     units: tuple[_Unit, ...],
     rename: "list[RenameEntry] | None",
     change_delivery: Literal["changelog", "snapshot"],
+    notice_sink: "NoticeSink",
 ) -> tuple[SourceTableSpec, ...]:
     """Resolve every unit's default naming, then apply matching rename entries.
+
+    The emission point for `slice-only-column-omitted`: per unit, computes the
+    unit's omitted set (empty for a junction unit — membership columns carry
+    no class) and emits one notice per unit x column, unit order then sidecar
+    column order, before rename resolution and spec assembly.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -653,13 +760,17 @@ def _resolve_specs(
         rename: The source.rename entries, or None.
         change_delivery: The source config's delivery mode for change-log
             kinds.
+        notice_sink: Receiver for slice-only-column-omitted notices.
 
     Returns:
         One SourceTableSpec per unit, in unit order.
 
     Raises:
+        SourceRenameSliceOnly: A rename entry's columns key names a
+            policy-omitted slice_only column.
         SourceRenameUnresolved: A rename entry's (table, sub_type) does not
             match any unit, or one of its columns keys is unresolved.
+        TemporalClassUnavailableError: Propagated from the omitted-column scan.
     """
     rename_by_key: dict[tuple[str, str | None], RenameEntry] = {}
     if rename is not None:
@@ -669,14 +780,23 @@ def _resolve_specs(
     matched_keys: set[tuple[str, str | None]] = set()
     specs: list[SourceTableSpec] = []
     for unit in units:
+        omitted_names = (
+            ()
+            if unit.genre == "junction"
+            else _omitted_slice_only_columns(sidecar, unit.kind)
+        )
+        for column_name in omitted_names:
+            notice_sink(_slice_only_omission_notice(unit, column_name))
+        omitted = frozenset(omitted_names)
+
         name = _default_table_name(unit)
-        columns = _default_columns(sidecar, unit, change_delivery)
+        columns = _default_columns(sidecar, unit, change_delivery, omitted)
 
         key = (unit.source_table, unit.sub_type)
         matched_entry = rename_by_key.get(key)
         if matched_entry is not None:
             matched_keys.add(key)
-            name, columns = _apply_rename_entry(matched_entry, name, columns)
+            name, columns = _apply_rename_entry(matched_entry, name, columns, omitted)
 
         specs.append(
             SourceTableSpec(
@@ -769,6 +889,7 @@ def _check_reserved_names(specs: tuple[SourceTableSpec, ...]) -> None:
 def build_source_plan(
     sidecar: "Sidecar",
     config: "SourceConfig | None",
+    notice_sink: "NoticeSink",
 ) -> tuple[SourceTableSpec, ...]:
     """
     Classify the emit and resolve every output table's genre, name, and columns.
@@ -779,9 +900,16 @@ def build_source_plan(
     renames, then the collision checks. Deterministic: sidecar table order, with
     split units in enum-domain declaration order.
 
+    Each unit's delivered column set excludes non-exempt slice_only columns
+    (one 'slice-only-column-omitted' Notice per omitted column per unit, in
+    plan order); the collision check and rename resolution run over the
+    narrowed set; a rename columns key naming an omitted column raises
+    SourceRenameSliceOnly.
+
     Args:
         sidecar: The open emit's sidecar.
         config: The source section, or None for the bare-mode full dump.
+        notice_sink: Receiver for slice-only-column-omitted notices.
 
     Returns:
         One SourceTableSpec per output table, in deterministic order.
@@ -794,6 +922,8 @@ def build_source_plan(
         SourceSubtypesUndeclared: An untracked object-registry kind declares no
             <kind>_type enum domain to enumerate its units from.
         SourceExcludeUnresolved: An exclude entry matches nothing in the sidecar.
+        SourceRenameSliceOnly: A rename entry's columns key names a
+            policy-omitted slice_only column.
         SourceRenameUnresolved: A rename entry's table or sub_type does not resolve, or
             a columns key does not name a source column of the table.
         SourceNameCollision: Two output tables share a name, or two columns of one
@@ -803,6 +933,8 @@ def build_source_plan(
             full export and a later incremental drip on the same target agree).
         SourceUnclassifiedColumn: A records-category column matches no
             records-column taxonomy role.
+        TemporalClassUnavailableError: A consulted column's temporal pair is
+            unavailable (non-conformant emit).
     """
     units = _classify_units(sidecar)
 
@@ -811,7 +943,7 @@ def build_source_plan(
 
     rename = config.rename if config is not None else None
     change_delivery = config.change_delivery if config is not None else "changelog"
-    specs = _resolve_specs(sidecar, units, rename, change_delivery)
+    specs = _resolve_specs(sidecar, units, rename, change_delivery, notice_sink)
 
     _check_collisions(specs)
     _check_reserved_names(specs)

@@ -34,7 +34,7 @@ if TYPE_CHECKING:
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
 from fabulexa_forge.derivations.row_state_events import build_row_state_events_sql
 from fabulexa_forge.derivations.state_at import build_state_at_sql
-from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, _scalar_properties
+from fabulexa_forge.exporters.source.columns import _PROP_PREFIX
 from fabulexa_forge.reader.relations import (
     build_membership_relation_sql,
     build_records_relation_sql,
@@ -316,7 +316,11 @@ def build_changelog_render_sql(
     invoked once per kind, carrying no discriminator predicate, so a `d` row
     (whose after-image is already `NULL` from the fold) is never misfiled to a
     sub-type. With a window: filters to `event_sim_time` in `[window.start_ns,
-    window.end_ns)` (append).
+    window.end_ns)` (append). The fold's property set derives from
+    `spec.columns`' prop__ sources — the pattern the snapshot render already
+    uses — so a plan-narrowed (policy-omitted slice_only columns excluded)
+    spec folds only the delivered properties; the row set (c/u/d and `seq`)
+    is unchanged by the narrowing (column-projection-only invariance).
 
     Args:
         sidecar: The open emit's sidecar.
@@ -330,7 +334,11 @@ def build_changelog_render_sql(
         record_id)` — the fold's own order (raw, never `changed_at`).
     """
     kind = spec.source_table[len("records__") :]
-    properties = _scalar_properties(sidecar, spec.source_table)
+    properties = frozenset(
+        src[len(_PROP_PREFIX) :]
+        for src, _ in spec.columns
+        if src.startswith(_PROP_PREFIX)
+    )
     fold_sql = build_row_state_events_sql(sidecar, fork_path, kind, properties)
     col_types = _column_types(sidecar, spec.source_table)
 

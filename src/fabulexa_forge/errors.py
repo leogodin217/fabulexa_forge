@@ -209,6 +209,13 @@ class SourceRenameUnresolved(ExportError):
     name a source column of that unit."""
 
 
+class SourceRenameSliceOnly(ExportError):
+    """A `source.rename` entry's `columns` key names a policy-omitted
+    `temporal_class: slice_only` column — the column carries no value to
+    deliver under this rename, so the rename is unsatisfiable rather than
+    silently ignored."""
+
+
 class SourceNameCollision(ExportError):
     """Two resolved output tables share a name, or two columns of one resolved
     output table share a name, after presentation defaults and `source.rename`

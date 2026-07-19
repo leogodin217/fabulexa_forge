@@ -15,6 +15,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import ExportConfig, SourceConfig
@@ -60,7 +61,9 @@ def test_build_source_query_specs_anchor_required(tmp_path: Path) -> None:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is None
         with pytest.raises(SourceAnchorRequired):
-            build_source_query_specs(emit, config, anchor, None)
+            build_source_query_specs(
+                emit, config, anchor, None, notice_sink=discard_notice_sink
+            )
 
 
 def test_export_source_anchor_required(tmp_path: Path) -> None:
@@ -69,7 +72,14 @@ def test_export_source_anchor_required(tmp_path: Path) -> None:
     config = ExportConfig(mode="source")
     with open_emit(emit_dir) as emit:
         with pytest.raises(SourceAnchorRequired):
-            export_source(emit, config, tmp_path / "out.duckdb", "duckdb", None)
+            export_source(
+                emit,
+                config,
+                tmp_path / "out.duckdb",
+                "duckdb",
+                None,
+                notice_sink=discard_notice_sink,
+            )
 
 
 def test_build_source_query_specs_full_export_write_mode(tmp_path: Path) -> None:
@@ -78,7 +88,9 @@ def test_build_source_query_specs_full_export_write_mode(tmp_path: Path) -> None
     config = ExportConfig(mode="source")
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(emit, config, anchor, None)
+        specs = build_source_query_specs(
+            emit, config, anchor, None, notice_sink=discard_notice_sink
+        )
 
     assert specs
     for spec in specs:
@@ -96,7 +108,9 @@ def test_export_source_duckdb_row_counts(tmp_path: Path) -> None:
     out_path = tmp_path / "out.duckdb"
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(emit, config, out_path, "duckdb", anchor)
+        row_counts = export_source(
+            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+        )
 
     assert row_counts == _EXPECTED_ROW_COUNTS
 
@@ -118,7 +132,9 @@ def test_export_source_csv_writes_one_file_per_table(tmp_path: Path) -> None:
     out_dir.mkdir()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(emit, config, out_dir, "csv", anchor)
+        row_counts = export_source(
+            emit, config, out_dir, "csv", anchor, notice_sink=discard_notice_sink
+        )
 
     assert row_counts == _EXPECTED_ROW_COUNTS
     for table_name, expected in _EXPECTED_ROW_COUNTS.items():
@@ -139,8 +155,12 @@ def test_export_source_zero_row_table_still_emitted(tmp_path: Path) -> None:
     csv_out.mkdir()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        duckdb_counts = export_source(emit, config, duckdb_out, "duckdb", anchor)
-        csv_counts = export_source(emit, config, csv_out, "csv", anchor)
+        duckdb_counts = export_source(
+            emit, config, duckdb_out, "duckdb", anchor, notice_sink=discard_notice_sink
+        )
+        csv_counts = export_source(
+            emit, config, csv_out, "csv", anchor, notice_sink=discard_notice_sink
+        )
 
     assert duckdb_counts == {"location": 0}
     assert csv_counts == {"location": 0}
@@ -172,7 +192,9 @@ def test_build_source_query_specs_windowed_write_mode_per_genre(tmp_path: Path) 
     window, _, _ = windowed_test_windows()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(emit, config, anchor, window)
+        specs = build_source_query_specs(
+            emit, config, anchor, window, notice_sink=discard_notice_sink
+        )
 
     write_mode_by_table = {spec.table_name: spec.write_mode for spec in specs}
     assert write_mode_by_table == {
@@ -202,7 +224,13 @@ def test_build_source_query_specs_snapshot_full_export_raises(tmp_path: Path) ->
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         with pytest.raises(SourceSnapshotRequiresWindows):
-            build_source_query_specs(emit, _SNAPSHOT_SOURCE_CONFIG, anchor, None)
+            build_source_query_specs(
+                emit,
+                _SNAPSHOT_SOURCE_CONFIG,
+                anchor,
+                None,
+                notice_sink=discard_notice_sink,
+            )
 
 
 def test_export_source_snapshot_full_export_raises(tmp_path: Path) -> None:
@@ -213,7 +241,12 @@ def test_export_source_snapshot_full_export_raises(tmp_path: Path) -> None:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         with pytest.raises(SourceSnapshotRequiresWindows):
             export_source(
-                emit, _SNAPSHOT_SOURCE_CONFIG, tmp_path / "out.duckdb", "duckdb", anchor
+                emit,
+                _SNAPSHOT_SOURCE_CONFIG,
+                tmp_path / "out.duckdb",
+                "duckdb",
+                anchor,
+                notice_sink=discard_notice_sink,
             )
 
 
@@ -227,7 +260,13 @@ def test_build_source_query_specs_windowed_snapshot_write_mode_and_render(
     window, _, _ = windowed_test_windows()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(emit, _SNAPSHOT_SOURCE_CONFIG, anchor, window)
+        specs = build_source_query_specs(
+            emit,
+            _SNAPSHOT_SOURCE_CONFIG,
+            anchor,
+            window,
+            notice_sink=discard_notice_sink,
+        )
 
         by_table = {spec.table_name: spec for spec in specs}
         assert by_table["visit"].write_mode == "replace"  # changelog, snapshot delivery
@@ -235,7 +274,11 @@ def test_build_source_query_specs_windowed_snapshot_write_mode_and_render(
         assert by_table["location"].write_mode == "replace"  # reference, unaffected
 
         fork_path = require_single_branch(emit.sidecar)
-        table_specs = build_source_plan(emit.sidecar, _SNAPSHOT_SOURCE_CONFIG.source)
+        table_specs = build_source_plan(
+            emit.sidecar,
+            _SNAPSHOT_SOURCE_CONFIG.source,
+            notice_sink=discard_notice_sink,
+        )
         visit_spec = next(s for s in table_specs if s.source_table == "records__visit")
         order_spec = next(s for s in table_specs if s.source_table == "records__order")
         expected_visit_sql = build_snapshot_render_sql(
@@ -264,7 +307,9 @@ def test_tracked_presentation_column_exports_as_changelog(tmp_path: Path) -> Non
     out_dir.mkdir()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(emit, config, out_dir, "csv", anchor)
+        row_counts = export_source(
+            emit, config, out_dir, "csv", anchor, notice_sink=discard_notice_sink
+        )
 
     assert row_counts == {"venue": 1}
     with (out_dir / "venue.csv").open(encoding="utf-8") as f:
@@ -282,7 +327,9 @@ def test_constant_presentation_column_exports_as_reference(tmp_path: Path) -> No
     out_dir.mkdir()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(emit, config, out_dir, "csv", anchor)
+        row_counts = export_source(
+            emit, config, out_dir, "csv", anchor, notice_sink=discard_notice_sink
+        )
 
     assert row_counts == {"venue": 1}
     with (out_dir / "venue.csv").open(encoding="utf-8") as f:

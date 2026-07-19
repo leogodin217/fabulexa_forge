@@ -730,3 +730,163 @@ def build_empty_source_emit(tmp_path: Path) -> Path:
         },
     )
     return tmp_path
+
+
+_SLICE_ONLY_PATIENT_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__loyalty_tier",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="slice_only",
+    ),
+]
+
+
+def build_slice_only_source_emit(tmp_path: Path) -> Path:
+    """Build a `mode: source` emit whose sole (changelog-genre) kind carries one
+    non-exempt `temporal_class: slice_only` property alongside a tracked one —
+    the Phase-3 column-projection-only invariance fixture: the fold's c/u/d
+    row set and `seq` assignment are unaffected by whether `prop__loyalty_tier`
+    is included in the projected column set, since an untracked property never
+    drives fold event generation.
+
+    Scenario: p001 created only ('c'); p002 created then its (tracked) status
+    changes ('c' then 'u'). Both carry a `prop__loyalty_tier` value set at
+    creation and never reasserted (the class forbids it changing).
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__patient", _SLICE_ONLY_PATIENT_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "p001", 100 * _MS, True, 100 * _MS, 0, "open", "gold"],
+    )
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "p002", 100 * _MS, True, 150 * _MS, 1, "closed", "silver"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "patient", "p001", "status", 100 * _MS, "open"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "patient", "p002", "status", 100 * _MS, "open"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "patient", "p002", "status", 150 * _MS, "closed"],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__patient",
+                "records",
+                _SLICE_ONLY_PATIENT_COLUMNS,
+                2,
+                record_kind="patient",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 3),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra={
+            "record_roles": {"patient": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
+def slice_only_horizon_window() -> Window:
+    """The single window spanning `build_slice_only_source_emit`'s whole
+    activity — the snapshot render's reconstruction horizon for the Phase-3
+    row-set invariance test."""
+    return Window(index=0, start_ns=0, end_ns=300 * _MS, label="w00000")
+
+
+_SLICE_ONLY_ONLY_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__tier",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="slice_only",
+    ),
+]
+
+
+def build_degenerate_slice_only_source_emit(tmp_path: Path) -> Path:
+    """Build a `mode: source` emit whose sole (reference-genre) kind's every
+    property is a non-exempt `temporal_class: slice_only` column — the
+    Phase-3 degenerate-unit fixture: the unit is never suppressed, still
+    rendering its identity and lifecycle columns with every prop__ column
+    omitted.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__member", _SLICE_ONLY_ONLY_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__member" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "mem001", 10 * _MS, True, 10 * _MS, 0, "bronze"],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__member",
+                "records",
+                _SLICE_ONLY_ONLY_COLUMNS,
+                1,
+                record_kind="member",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 20 * _MS}],
+        extra={
+            "record_roles": {"member": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path

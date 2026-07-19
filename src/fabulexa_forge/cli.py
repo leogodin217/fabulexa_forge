@@ -187,7 +187,7 @@ def _dispatch_export(
     if config.mode == "source":
         from fabulexa_forge.exporters.source.engine import export_source
 
-        full_counts = export_source(emit, config, out, fmt, anchor)
+        full_counts = export_source(emit, config, out, fmt, anchor, notice_sink)
     else:
         from fabulexa_forge.exporters.dimensional.engine import export_dimensional
 

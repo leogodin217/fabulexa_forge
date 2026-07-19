@@ -24,6 +24,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _support.notices import discard_notice_sink
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.loader import load_export_config
@@ -93,10 +94,19 @@ def test_source_recipe_run_and_assert(
         )
         if config.source is not None and config.source.change_delivery == "snapshot":
             window = Window(index=None, start_ns=0, end_ns=4 * DAY, label="full-range")
-            specs = build_source_query_specs(emit, config, anchor, window)
+            specs = build_source_query_specs(
+                emit, config, anchor, window, notice_sink=discard_notice_sink
+            )
             write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
         else:
-            export_source(emit, config, out_path, "duckdb", anchor)
+            export_source(
+                emit,
+                config,
+                out_path,
+                "duckdb",
+                anchor,
+                notice_sink=discard_notice_sink,
+            )
 
     assert_recipe_output(expectation, out_path)
 

@@ -129,9 +129,9 @@ def export_window(
     """Run one pure windowed export (the body --next wraps; also --from/--to).
 
     The compile step dispatches on `config.mode`: `source` calls
-    `build_source_query_specs`; `dimensional` calls `build_query_specs`,
-    threading notice_sink to it — the source mode contributes only its
-    windowed compile, the window math, cursor, fingerprint, drained
+    `build_source_query_specs`; `dimensional` calls `build_query_specs`;
+    both thread notice_sink to their compile — the source mode contributes
+    only its windowed compile, the window math, cursor, fingerprint, drained
     detection, and staging below are mode-neutral. Dispatches to the fmt's
     windowed write path. fingerprint is None iff window.index is None (an
     explicit range): the output is then a standalone artifact — a fresh
@@ -182,7 +182,7 @@ def export_window(
     if config.mode == "source":
         from fabulexa_forge.exporters.source.engine import build_source_query_specs
 
-        specs = build_source_query_specs(emit, config, anchor, window)
+        specs = build_source_query_specs(emit, config, anchor, window, notice_sink)
     else:
         from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 

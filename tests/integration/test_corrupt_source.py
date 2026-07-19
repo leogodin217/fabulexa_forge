@@ -14,6 +14,7 @@ import csv
 import json
 from pathlib import Path
 
+from _support.notices import discard_notice_sink
 from reader._fixtures_build import build_spanning
 
 from fabulexa_forge.anchor import resolve_effective_anchor
@@ -76,7 +77,9 @@ def test_corrupt_then_source_export_surfaces_declared_defect(tmp_path: Path) -> 
     out_dir.mkdir()
     with open_emit(corrupt_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(emit, config, out_dir, "csv", anchor)
+        row_counts = export_source(
+            emit, config, out_dir, "csv", anchor, notice_sink=discard_notice_sink
+        )
 
     assert "doctor" in row_counts
 
