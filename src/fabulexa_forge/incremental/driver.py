@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.query_spec import QuerySpec
     from fabulexa_forge.reader.emit import Emit
 
@@ -123,21 +124,26 @@ def export_window(
     anchor: "EffectiveAnchor | None",
     window: Window,
     fingerprint: str | None,
+    notice_sink: "NoticeSink",
 ) -> dict[str, int]:
     """Run one pure windowed export (the body --next wraps; also --from/--to).
 
     The compile step dispatches on `config.mode`: `source` calls
-    `build_source_query_specs`; `dimensional` calls `build_query_specs`
-    (unchanged) — the source mode contributes only its windowed compile, the
-    window math, cursor, fingerprint, drained detection, and staging below
-    are mode-neutral. Dispatches to the fmt's windowed write path.
-    fingerprint is None iff window.index is None (an explicit range):
-    the output is then a standalone artifact — a fresh .duckdb / a single
-    drop directory at out (a CSV range stages at the sibling
-    <out parent>/.tmp_<label> and renames to out), refused if out already
-    exists — with no cursor touched and no bookkeeping tables written.
-    Under --next, fingerprint is the drip fingerprint the writer stores on
-    warehouse creation.
+    `build_source_query_specs`; `dimensional` calls `build_query_specs`,
+    threading notice_sink to it — the source mode contributes only its
+    windowed compile, the window math, cursor, fingerprint, drained
+    detection, and staging below are mode-neutral. Dispatches to the fmt's
+    windowed write path. fingerprint is None iff window.index is None (an
+    explicit range): the output is then a standalone artifact — a fresh
+    .duckdb / a single drop directory at out (a CSV range stages at the
+    sibling <out parent>/.tmp_<label> and renames to out), refused if out
+    already exists — with no cursor touched and no bookkeeping tables
+    written. Under --next, fingerprint is the drip fingerprint the writer
+    stores on warehouse creation.
+
+    One invocation compiles exactly once — an explicit --from/--to range is
+    a single range-window — so every plan notice reaches notice_sink once,
+    with no forwarding or dedup logic.
 
     Args:
         emit: The open emit.
@@ -148,6 +154,7 @@ def export_window(
         window: The half-open window to export.
         fingerprint: The drip fingerprint (--next), or None (explicit
             range — standalone, bookkeeping-free).
+        notice_sink: Receiver for plan notices.
 
     Returns:
         Mapping of every declared table name -> rows written this window
@@ -159,6 +166,7 @@ def export_window(
         SourceAnchorRequired: config.mode == 'source' and anchor is None.
         ExportError / ExportRuntimeError: As export_dimensional /
             export_source today.
+        TemporalClassUnavailableError: Non-conformant temporal pair.
     """
     from fabulexa_forge.writers.duckdb import write_duckdb_window
 
@@ -179,7 +187,7 @@ def export_window(
         from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 
         assert config.dimensional is not None
-        specs = build_query_specs(emit, config.dimensional, anchor, window)
+        specs = build_query_specs(emit, config.dimensional, anchor, window, notice_sink)
 
     if fmt == "duckdb":
         return write_duckdb_window(emit, specs, out, window, fingerprint)
@@ -275,17 +283,20 @@ def export_incremental_next(
     out: Path,
     fmt: Literal["csv", "duckdb"],
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
 ) -> IncrementalOutcome:
     """Emit the next window and advance the cursor; or report drained.
 
     Reads the cursor of record for fmt, verifies the fingerprint, derives
     the next window, and — unless the window's start_ns exceeds the sole
     branch's slice_at (drained: nothing written, cursor untouched) — runs
-    the windowed export and commits window data and cursor advance per the
-    fmt's atomicity rule (duckdb: same transaction; csv: stage, rename,
-    then write cursor). A fresh target starts at window 0. An empty window
-    is emitted, never skipped. A leftover .tmp_* staging directory is
-    discarded at the next staging.
+    the windowed export (threading notice_sink to export_window) and commits
+    window data and cursor advance per the fmt's atomicity rule (duckdb:
+    same transaction; csv: stage, rename, then write cursor). A fresh
+    target starts at window 0. An empty window is emitted, never skipped.
+    A leftover .tmp_* staging directory is discarded at the next staging.
+    Each drip invocation compiles exactly once and re-emits its compile's
+    notices.
 
     Args:
         emit: The open emit (trunk-only).
@@ -294,6 +305,7 @@ def export_incremental_next(
             directory (csv).
         fmt: Output format.
         anchor: The resolved anchor, or None.
+        notice_sink: Receiver for plan notices.
 
     Returns:
         IncrementalOutcome — status 'emitted' with the window and per-table
@@ -309,6 +321,7 @@ def export_incremental_next(
         ExportError: A windowed business rule fails, or any existing rule.
         ExportRuntimeError: A writer failure; the window's transaction or
             staging directory is rolled back / discarded.
+        TemporalClassUnavailableError: Non-conformant temporal pair.
     """
     if config.incremental is None:
         raise IncrementalConfigMissing(
@@ -352,7 +365,9 @@ def export_incremental_next(
         )
 
     # Run the windowed export
-    row_counts = export_window(emit, config, out, fmt, anchor, window, fingerprint)
+    row_counts = export_window(
+        emit, config, out, fmt, anchor, window, fingerprint, notice_sink
+    )
 
     # For CSV: write the cursor after the atomic rename
     if fmt == "csv":

@@ -10,6 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
@@ -356,7 +357,9 @@ def test_reference_single_hop(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -383,7 +386,9 @@ def test_reference_multi_hop(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -413,7 +418,7 @@ def test_reference_ambiguous_no_hint_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="ambiguous reference path"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 def test_reference_path_hint_disambiguates(tmp_path: Path) -> None:
@@ -439,7 +444,9 @@ def test_reference_path_hint_disambiguates(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -471,7 +478,7 @@ def test_reference_path_hint_non_references_column_raises(tmp_path: Path) -> Non
             ]
         )
         with pytest.raises(ExportError, match="not a references column"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 def test_reference_no_path_raises(tmp_path: Path) -> None:
@@ -494,7 +501,7 @@ def test_reference_no_path_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="no reference path"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -525,7 +532,9 @@ def test_membership_fk_inferred_table_and_field(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -559,7 +568,9 @@ def test_membership_fk_where_selects_role(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -592,7 +603,9 @@ def test_membership_null_for_different_member_kind(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -622,7 +635,9 @@ def test_membership_on_membership_grain(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_bindings")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -655,7 +670,7 @@ def test_membership_where_not_elem_column_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="membership FK.*unresolvable"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -688,7 +703,7 @@ def test_fk_target_is_dim_raises_for_fact(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="is not a declared dimension"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 def test_fk_target_undeclared_raises(tmp_path: Path) -> None:
@@ -709,7 +724,7 @@ def test_fk_target_undeclared_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="is not a declared dimension"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -740,7 +755,9 @@ def test_history_grain_fk_null_for_unresolvable_rows(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey_states")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -855,7 +872,9 @@ def test_membership_fk_where_bigint_elem_column_selects_correctly(
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         # SQL must use CAST form for BIGINT elem__ where
         assert "CAST('1' AS BIGINT)" in fact_spec.sql
@@ -890,7 +909,9 @@ def test_membership_fk_where_varchar_elem_stays_quoted(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         # VARCHAR where must NOT use CAST form
         assert "CAST('consultant'" not in fact_spec.sql
@@ -1039,7 +1060,9 @@ def test_reference_single_hop_surrogate(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1074,7 +1097,9 @@ def test_reference_multi_hop_surrogate(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1113,7 +1138,9 @@ def test_membership_on_records_surrogate(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1152,7 +1179,9 @@ def test_membership_on_grain_surrogate(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_bindings")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1185,7 +1214,7 @@ def test_target_key_presentation_id_missing_column_raises(tmp_path: Path) -> Non
             ]
         )
         with pytest.raises(ExportError, match="presentation_id"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -1419,7 +1448,9 @@ def test_pit_membership_resolves_holder_covering_t(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1450,7 +1481,9 @@ def test_pit_membership_outside_all_holds_is_null(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1479,7 +1512,9 @@ def test_pit_membership_presentation_id_projected(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1510,7 +1545,9 @@ def test_pit_membership_no_grain_fanout(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1549,7 +1586,7 @@ def test_pit_membership_missing_as_of_column_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="as_of column"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 def test_pit_membership_unresolvable_member_path_raises(tmp_path: Path) -> None:
@@ -1582,7 +1619,7 @@ def test_pit_membership_unresolvable_member_path_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="not a references column"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -1616,7 +1653,9 @@ def test_reference_fk_on_membership_grain_walks_from_owner(tmp_path: Path) -> No
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_binding")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1668,7 +1707,9 @@ def test_two_reference_fks_on_one_table_do_not_collide(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1711,7 +1752,9 @@ def test_two_reference_fks_on_membership_grain(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_binding")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1742,8 +1785,12 @@ def test_fk_target_dim_declared_after_fact_resolves(tmp_path: Path) -> None:
         config_fact_first = DimensionalConfig(tables=[fact, dim])
         config_dim_first = DimensionalConfig(tables=[dim, fact])
 
-        specs_fact_first = build_query_specs(emit, config_fact_first, None, None)
-        specs_dim_first = build_query_specs(emit, config_dim_first, None, None)
+        specs_fact_first = build_query_specs(
+            emit, config_fact_first, None, None, notice_sink=discard_notice_sink
+        )
+        specs_dim_first = build_query_specs(
+            emit, config_dim_first, None, None, notice_sink=discard_notice_sink
+        )
 
         fact_spec = next(s for s in specs_fact_first if s.table_name == "fact_journey")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -1866,7 +1913,9 @@ def test_membership_fk_surrogate_with_bigint_where_on_records_grain(
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         # BIGINT elem__ where must render as a CAST literal, not a quoted string
         assert "CAST('1' AS BIGINT)" in fact_spec.sql
@@ -1910,7 +1959,9 @@ def test_membership_grain_fk_surrogate_with_bigint_source_where(
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_bindings")
         # The grain where on a BIGINT elem__ column renders as a CAST literal
         assert "CAST('1' AS BIGINT)" in fact_spec.sql
@@ -1954,7 +2005,9 @@ def test_two_membership_fks_on_one_table_do_not_collide(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 

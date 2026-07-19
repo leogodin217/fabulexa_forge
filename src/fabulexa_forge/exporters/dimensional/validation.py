@@ -24,7 +24,6 @@ independently testable.
 from __future__ import annotations
 
 import logging
-import warnings
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -34,6 +33,7 @@ if TYPE_CHECKING:
         SourceDecl,
         TableDecl,
     )
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -44,6 +44,7 @@ from fabulexa_forge.derivations.reference_resolution import (
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
+from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.reserved_names import (
     is_reserved_column_name,
     is_reserved_table_name,
@@ -384,12 +385,18 @@ def check_elapsed_columns_exist(
 def check_discriminator_value_observed(
     source: "SourceDecl",
     sidecar: "Sidecar",
+    notice_sink: "NoticeSink",
 ) -> None:
-    """Warn (not error) if a records filter value is not observed in the emit.
+    """Emit a 'discriminator-value-unobserved' Notice if a records filter value
+    is not observed in the emit.
 
     Args:
         source: The grain source binding (must be records grain with a filter).
         sidecar: The open emit's sidecar.
+        notice_sink: Receiver for the notice.
+
+    Raises:
+        Nothing. Never affects output data or exit code.
     """
     if source.grain != "records" or not source.filter:
         return
@@ -401,10 +408,14 @@ def check_discriminator_value_observed(
         bare_prop = prop.removeprefix("prop__") if prop.startswith("prop__") else prop
         observed_values = kind_domains.get(bare_prop, ()) or kind_domains.get(prop, ())
         if observed_values and value not in observed_values:
-            warnings.warn(
-                f"discriminator value '{value}' not observed for"
-                f" '{source.kind}.{prop}'; table will be empty",
-                stacklevel=4,
+            notice_sink(
+                Notice(
+                    code="discriminator-value-unobserved",
+                    message=(
+                        f"discriminator value '{value}' not observed for"
+                        f" '{source.kind}.{prop}'; table will be empty"
+                    ),
+                )
             )
 
 
@@ -1013,6 +1024,7 @@ def validate_table(
     config: "DimensionalConfig",
     sidecar: "Sidecar",
     window: "Window | None",
+    notice_sink: "NoticeSink",
 ) -> str:
     """Run all business rules for a single table declaration.
 
@@ -1034,6 +1046,8 @@ def validate_table(
         config: The dimensional config.
         sidecar: The open emit's sidecar.
         window: The window for windowed export, or None for full export.
+        notice_sink: Receiver for plan notices (threaded to
+            check_discriminator_value_observed).
 
     Returns:
         The resolved DuckDB source table name.
@@ -1056,7 +1070,7 @@ def validate_table(
     source_table_name = check_source_table_exists(source, sidecar)
     check_excluded_table_not_sourced(table_decl, source_table_name, config)
     check_key_columns_declared(table_decl)
-    check_discriminator_value_observed(source, sidecar)
+    check_discriminator_value_observed(source, sidecar, notice_sink)
 
     if table_decl.scd == "type2":
         check_scd2_needs_history(table_decl, source_table_name, sidecar)

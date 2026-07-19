@@ -15,6 +15,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, write_emit
 
 from fabulexa_forge.config.models import (
@@ -263,7 +264,9 @@ def test_fresh_file_creates_tables_and_meta(tmp_path: Path) -> None:
     window = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, window)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
     assert _table_exists_in_db(out_path, "dim_entity")
@@ -280,7 +283,9 @@ def test_fresh_file_export_windows_row_written(tmp_path: Path) -> None:
     window = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, window)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
     windows_rows = _read_table(out_path, "_export_windows")
@@ -299,7 +304,9 @@ def test_fresh_file_views_installed(tmp_path: Path) -> None:
     window = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _scd2_config(), None, window)
+        specs = build_query_specs(
+            emit, _scd2_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
     assert _view_exists_in_db(out_path, "dim_actor")
@@ -319,9 +326,13 @@ def test_second_window_facts_append(tmp_path: Path) -> None:
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _fact_dim_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+        )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # type-1 dim is replaced: full snapshot count returned
@@ -336,9 +347,13 @@ def test_second_window_export_windows_gains_row(tmp_path: Path) -> None:
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _fact_dim_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     windows_rows = _read_table(out_path, "_export_windows")
@@ -353,9 +368,13 @@ def test_second_window_scd2_rows_append(tmp_path: Path) -> None:
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _scd2_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _scd2_config(), None, w0, notice_sink=discard_notice_sink
+        )
         result0 = write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _scd2_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _scd2_config(), None, w1, notice_sink=discard_notice_sink
+        )
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # w0 [0,15) catches change at sim_time=10 → 1 row
@@ -374,9 +393,13 @@ def test_second_window_scd2_view_latest_version_null_valid_to(tmp_path: Path) ->
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _scd2_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _scd2_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _scd2_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _scd2_config(), None, w1, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     conn = duckdb.connect(str(out_path), read_only=True)
@@ -399,7 +422,9 @@ def test_atomicity_bad_sql_rolls_back(tmp_path: Path) -> None:
     w0 = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, w0, fingerprint="fp")
 
     # Capture pre-failure state
@@ -434,7 +459,9 @@ def test_connect_failure_raises_export_runtime_error(tmp_path: Path) -> None:
     w0 = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         with pytest.raises(ExportRuntimeError, match="failed to open warehouse DuckDB"):
             write_duckdb_window(emit, specs, bad_path, w0, fingerprint="fp")
 
@@ -453,7 +480,9 @@ def test_range_path_no_meta_no_windows(tmp_path: Path) -> None:
     window = Window(index=None, start_ns=0, end_ns=35, label="range")
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, window)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
     assert not _table_exists_in_db(out_path, "_export_meta")
@@ -468,7 +497,9 @@ def test_range_path_author_tables_present(tmp_path: Path) -> None:
     window = Window(index=None, start_ns=0, end_ns=35, label="range")
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _scd2_config(), None, window)
+        specs = build_query_specs(
+            emit, _scd2_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
     assert _table_exists_in_db(out_path, "dim_actor__rows")
@@ -490,9 +521,13 @@ def test_empty_window_still_logs_window_row(tmp_path: Path) -> None:
     w1 = _make_window(100, 200, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _fact_dim_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+        )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # window row must be logged even for empty window
@@ -514,9 +549,13 @@ def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _fact_dim_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+        )
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # After 2 windows, snapshot should show 3 total entities

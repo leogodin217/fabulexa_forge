@@ -1,16 +1,16 @@
 """Tests for dimensional exporter business rules.
 
 Each test verifies one business rule raises ExportError with the documented
-message, or (DiscriminatorValueObserved) emits a warning.
+message, or (DiscriminatorValueObserved) emits a Notice.
 """
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+from _support.notices import RecordingNoticeSink, discard_notice_sink
 
 from exporters._emit_fixtures import build_test_emit
 from fabulexa_forge.config.models import (
@@ -316,12 +316,12 @@ def test_joined_sim_time_off_membership_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# DiscriminatorValueObserved (warn, not error)
+# DiscriminatorValueObserved (notice, not error)
 # ---------------------------------------------------------------------------
 
 
-def test_discriminator_value_observed_warns(tmp_path: Path) -> None:
-    """Declared-but-unobserved filter value triggers a warning, not an error."""
+def test_discriminator_value_observed_emits_notice(tmp_path: Path) -> None:
+    """Declared-but-unobserved filter value emits one Notice, not an error."""
     emit_dir = build_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         src = SourceDecl(
@@ -329,15 +329,15 @@ def test_discriminator_value_observed_warns(tmp_path: Path) -> None:
             kind="entity",
             filter={"prop__entity_type": "nonexistent_type"},
         )
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            from fabulexa_forge.exporters.dimensional.validation import (
-                check_discriminator_value_observed,
-            )
+        from fabulexa_forge.exporters.dimensional.validation import (
+            check_discriminator_value_observed,
+        )
 
-            check_discriminator_value_observed(src, emit.sidecar)
-            assert len(w) == 1
-            assert "nonexistent_type" in str(w[0].message)
+        sink = RecordingNoticeSink()
+        check_discriminator_value_observed(src, emit.sidecar, sink)
+        assert len(sink.notices) == 1
+        assert sink.notices[0].code == "discriminator-value-unobserved"
+        assert "nonexistent_type" in sink.notices[0].message
 
 
 # ---------------------------------------------------------------------------
@@ -442,5 +442,5 @@ def test_validate_table_passes(tmp_path: Path) -> None:
             key=["id"],
         )
         config = DimensionalConfig(tables=[tbl])
-        src_name = validate_table(tbl, config, emit.sidecar, None)
+        src_name = validate_table(tbl, config, emit.sidecar, None, discard_notice_sink)
     assert src_name == "records__entity"

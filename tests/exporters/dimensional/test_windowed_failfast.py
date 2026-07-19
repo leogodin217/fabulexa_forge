@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
@@ -253,7 +254,7 @@ def test_validate_table_forecloses_dim_membership_grain_under_window() -> None:
         match="table 'dim_mem': grain 'membership' is not supported with"
         " incremental export; model interval ends as history_point events",
     ):
-        validate_table(tbl, config, sidecar, _WINDOW)
+        validate_table(tbl, config, sidecar, _WINDOW, notice_sink=discard_notice_sink)
 
 
 def test_validate_table_forecloses_dim_history_interval_grain_under_window() -> None:
@@ -284,7 +285,7 @@ def test_validate_table_forecloses_dim_history_interval_grain_under_window() -> 
         match="table 'dim_hist': grain 'history_interval' is not supported with"
         " incremental export; model interval ends as history_point events",
     ):
-        validate_table(tbl, config, sidecar, _WINDOW)
+        validate_table(tbl, config, sidecar, _WINDOW, notice_sink=discard_notice_sink)
 
 
 def test_grain_records_passes_with_none_window() -> None:

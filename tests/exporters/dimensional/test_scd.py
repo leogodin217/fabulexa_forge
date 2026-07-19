@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
@@ -175,7 +176,9 @@ def test_n_versions_from_n_change_points(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
     assert len(specs) == 1
     sql = specs[0].sql
@@ -203,7 +206,9 @@ def test_valid_from_to_windowing(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     rows = result.to_pydict()
@@ -232,7 +237,9 @@ def test_tracked_column_takes_per_version_value(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     rows = result.to_pydict()
@@ -256,7 +263,9 @@ def test_static_column_constant_across_versions(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     rows = result.to_pydict()
@@ -285,7 +294,9 @@ def test_flag_authoritative_tracked_but_unchanged_single_version(
 
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     rows = result.to_pydict()
@@ -314,7 +325,9 @@ def test_projection_introduced_column_never_tracked(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     rows = result.to_pydict()
@@ -340,7 +353,9 @@ def test_total_order_by_record_id_valid_from(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
     sql = specs[0].sql
     assert "ORDER BY" in sql
@@ -359,8 +374,12 @@ def test_build_twice_yields_identical_sql(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs1 = build_query_specs(emit, config, None, None)
-        specs2 = build_query_specs(emit, config, None, None)
+        specs1 = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+        specs2 = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
     assert specs1[0].sql == specs2[0].sql
 
@@ -517,7 +536,9 @@ def test_multiple_records_multiple_versions(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     # 2 versions for a001 + 1 version for a002 = 3 rows total
@@ -655,7 +676,9 @@ def test_build_scd2_sql_flag_path_uses_cast_for_bigint(tmp_path: Path) -> None:
     )
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
     sql = specs[0].sql
     # admission_count is BIGINT tracked → projected from derivation with CAST(... AS BIGINT)
@@ -678,7 +701,9 @@ def test_scd2_bigint_column_execution_succeeds(tmp_path: Path) -> None:
     )
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     # Should produce rows without SQL type errors
@@ -727,7 +752,9 @@ def test_scd2_sql_embeds_versioned_intervals_derivation(tmp_path: Path) -> None:
     )
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
     sql = specs[0].sql
     # The composed SQL must reference _versions (derivation alias) and _records

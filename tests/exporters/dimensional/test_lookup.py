@@ -19,6 +19,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
@@ -668,7 +669,9 @@ def test_history_interval_zero_hop_lookup_execution(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         spec = next(s for s in specs if s.table_name == "fact_actor_status")
 
     # Execute generated SQL after emit is closed
@@ -734,8 +737,12 @@ def test_history_interval_zero_hop_lookup_row_count_matches_baseline(
                 )
             ]
         )
-        specs_lookup = build_query_specs(emit, config_lookup, None, None)
-        specs_baseline = build_query_specs(emit, config_baseline, None, None)
+        specs_lookup = build_query_specs(
+            emit, config_lookup, None, None, notice_sink=discard_notice_sink
+        )
+        specs_baseline = build_query_specs(
+            emit, config_baseline, None, None, notice_sink=discard_notice_sink
+        )
 
         spec_l = next(s for s in specs_lookup if s.table_name == "fact_actor_status")
         spec_b = next(s for s in specs_baseline if s.table_name == "fact_actor_status")
@@ -1191,7 +1198,9 @@ def test_validate_table_rejects_type2_lookup_fact(tmp_path: Path) -> None:
         )
         config = DimensionalConfig(tables=[table_decl])
         with pytest.raises(ExportError, match="history_tracked: true"):
-            validate_table(table_decl, config, emit.sidecar, None)
+            validate_table(
+                table_decl, config, emit.sidecar, None, notice_sink=discard_notice_sink
+            )
 
 
 def test_validate_table_passes_type1_lookup_fact(tmp_path: Path) -> None:
@@ -1210,7 +1219,9 @@ def test_validate_table_passes_type1_lookup_fact(tmp_path: Path) -> None:
             property="status",
         )
         config = DimensionalConfig(tables=[table_decl])
-        src_name = validate_table(table_decl, config, emit.sidecar, None)
+        src_name = validate_table(
+            table_decl, config, emit.sidecar, None, notice_sink=discard_notice_sink
+        )
     assert src_name == "history"
 
 
@@ -1238,7 +1249,7 @@ def test_build_query_specs_raises_for_type2_lookup_fact(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 def _build_mixed_fk_lookup_emit(tmp_path: Path) -> Path:
@@ -1358,7 +1369,9 @@ def test_mixed_fk_and_two_lookups_share_hop_chain_no_collision(
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey")
 
         # Each column kind keeps its own alias namespace
@@ -1393,8 +1406,12 @@ def test_build_query_specs_deterministic_sql_lookup(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs1 = build_query_specs(emit, config, None, None)
-        specs2 = build_query_specs(emit, config, None, None)
+        specs1 = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+        specs2 = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
     sql1 = next(s.sql for s in specs1 if s.table_name == "fact_actor_status")
     sql2 = next(s.sql for s in specs2 if s.table_name == "fact_actor_status")

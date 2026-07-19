@@ -82,14 +82,14 @@ _PATIENT_COLUMNS: list[dict[str, object]] = [
     ),
     # non-tracked property — type-1 source
     prop_column(
-        "prop__name", "VARCHAR", history_tracked=False, temporal_class="slice_only"
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
     ),
     # FK to doctor kind
     prop_column(
         "prop__doctor_id",
         "VARCHAR",
         history_tracked=False,
-        temporal_class="slice_only",
+        temporal_class="constant",
         references="doctor",
     ),
     identity_column("ref_index__doctor_id", "BIGINT"),
@@ -99,7 +99,7 @@ _PATIENT_COLUMNS: list[dict[str, object]] = [
         "prop__primary_staff_id",
         "VARCHAR",
         history_tracked=False,
-        temporal_class="slice_only",
+        temporal_class="constant",
         references="staff",
     ),
     identity_column("ref_index__primary_staff_id", "BIGINT"),
@@ -107,7 +107,7 @@ _PATIENT_COLUMNS: list[dict[str, object]] = [
         "prop__backup_staff_id",
         "VARCHAR",
         history_tracked=False,
-        temporal_class="slice_only",
+        temporal_class="constant",
         references="staff",
     ),
     identity_column("ref_index__backup_staff_id", "BIGINT"),
@@ -122,7 +122,7 @@ _DOCTOR_COLUMNS: list[dict[str, object]] = [
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
     prop_column(
-        "prop__name", "VARCHAR", history_tracked=False, temporal_class="slice_only"
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
     ),
 ]
 
@@ -135,9 +135,12 @@ _STAFF_COLUMNS: list[dict[str, object]] = [
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
     prop_column(
-        "prop__name", "VARCHAR", history_tracked=False, temporal_class="slice_only"
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
     ),
     # Sub-type discriminator — splits the staff kind into per-type dimensions.
+    # Stays slice_only: the discriminator is exempt from the slice-only policy
+    # (is_exempt_discriminator), so this is the one column deliberately left
+    # unreclassed.
     prop_column(
         "prop__staff_type",
         "VARCHAR",
@@ -158,7 +161,7 @@ _ADMISSION_COLUMNS: list[dict[str, object]] = [
     # purpose is to exercise the streaming lifecycle: an active record yields a
     # create only; a deactivated record yields a create then a delete tombstone.
     prop_column(
-        "prop__ward", "VARCHAR", history_tracked=False, temporal_class="slice_only"
+        "prop__ward", "VARCHAR", history_tracked=False, temporal_class="constant"
     ),
 ]
 
@@ -190,7 +193,7 @@ _QUEUE_COLUMNS: list[dict[str, object]] = [
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
     prop_column(
-        "prop__name", "VARCHAR", history_tracked=False, temporal_class="slice_only"
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
     ),
 ]
 

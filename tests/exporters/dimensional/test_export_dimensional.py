@@ -12,6 +12,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
@@ -229,7 +230,9 @@ def test_export_dimensional_csv_writes_one_file_per_table(tmp_path: Path) -> Non
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(emit, config, out_dir, "csv", None)
+        counts = export_dimensional(
+            emit, config, out_dir, "csv", None, notice_sink=discard_notice_sink
+        )
 
     assert set(counts.keys()) == {
         "dim_actor",
@@ -249,7 +252,9 @@ def test_export_dimensional_csv_empty_table_is_header_only(tmp_path: Path) -> No
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(emit, config, out_dir, "csv", None)
+        counts = export_dimensional(
+            emit, config, out_dir, "csv", None, notice_sink=discard_notice_sink
+        )
 
     assert counts["fact_empty"] == 0
     csv_path = out_dir / "fact_empty.csv"
@@ -266,7 +271,9 @@ def test_export_dimensional_duckdb_writes_all_tables(tmp_path: Path) -> None:
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(emit, config, out_path, "duckdb", None)
+        counts = export_dimensional(
+            emit, config, out_path, "duckdb", None, notice_sink=discard_notice_sink
+        )
 
     assert set(counts.keys()) == {
         "dim_actor",
@@ -292,7 +299,9 @@ def test_export_dimensional_duckdb_empty_table_typed_not_dropped(
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(emit, config, out_path, "duckdb", None)
+        counts = export_dimensional(
+            emit, config, out_path, "duckdb", None, notice_sink=discard_notice_sink
+        )
 
     assert counts["fact_empty"] == 0
     out_conn = duckdb.connect(str(out_path), read_only=True)
@@ -312,9 +321,13 @@ def test_export_dimensional_idempotent_csv(tmp_path: Path) -> None:
     out_dir2.mkdir()
 
     with open_emit(emit_dir) as emit:
-        counts1 = export_dimensional(emit, config, out_dir1, "csv", None)
+        counts1 = export_dimensional(
+            emit, config, out_dir1, "csv", None, notice_sink=discard_notice_sink
+        )
     with open_emit(emit_dir) as emit:
-        counts2 = export_dimensional(emit, config, out_dir2, "csv", None)
+        counts2 = export_dimensional(
+            emit, config, out_dir2, "csv", None, notice_sink=discard_notice_sink
+        )
 
     assert counts1 == counts2
     for table_name in counts1:
@@ -332,9 +345,13 @@ def test_export_dimensional_idempotent_duckdb_row_counts(tmp_path: Path) -> None
     out2 = tmp_path / "out2.duckdb"
 
     with open_emit(emit_dir) as emit:
-        counts1 = export_dimensional(emit, config, out1, "duckdb", None)
+        counts1 = export_dimensional(
+            emit, config, out1, "duckdb", None, notice_sink=discard_notice_sink
+        )
     with open_emit(emit_dir) as emit:
-        counts2 = export_dimensional(emit, config, out2, "duckdb", None)
+        counts2 = export_dimensional(
+            emit, config, out2, "duckdb", None, notice_sink=discard_notice_sink
+        )
 
     assert counts1 == counts2
 
@@ -349,4 +366,6 @@ def test_export_dimensional_writer_failure_raises_export_runtime_error(
 
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportRuntimeError):
-            export_dimensional(emit, config, bad_path, "duckdb", None)
+            export_dimensional(
+                emit, config, bad_path, "duckdb", None, notice_sink=discard_notice_sink
+            )
