@@ -42,7 +42,12 @@ _RECORD_COLS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     _identity_column("record_index", "BIGINT"),
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
 ]
 
 _HISTORY_COLS: list[dict[str, object]] = [

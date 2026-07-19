@@ -31,6 +31,7 @@ from fabulexa_forge.exporters.streaming.engine import (
     iter_stream_events,
 )
 from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.errors import TemporalClassUnavailableError
 
 from ._helpers import _ddl
 
@@ -46,8 +47,18 @@ _RECORD_COLS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
-    {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
+    {
+        "name": "prop__label",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
 ]
 
 _RECORD_COLS_WITH_PID: list[dict[str, object]] = [
@@ -59,7 +70,12 @@ _RECORD_COLS_WITH_PID: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": True},
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
 ]
 
 _HISTORY_COLS: list[dict[str, object]] = [
@@ -102,6 +118,7 @@ def _build_single_kind_emit(
     history_rows: list[tuple[Any, ...]],
     record_cols: list[dict[str, object]] | None = None,
     n_branches: int = 1,
+    extra: dict[str, object] | None = None,
 ) -> Path:
     """Build a minimal emit with one kind and optional multi-branch support."""
     if record_cols is None:
@@ -143,6 +160,7 @@ def _build_single_kind_emit(
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
         branches=branches,
+        extra=extra,
     )
     return tmp_path
 
@@ -622,9 +640,24 @@ _RECORD_COLS_INTERLEAVED: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
-    {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__rank", "type": "VARCHAR", "history_tracked": True},
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
+    {
+        "name": "prop__label",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__rank",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
 ]
 
 
@@ -671,6 +704,164 @@ class TestEagerValidation:
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="single-branch emit"):
                 iter_stream_events(emit, config, None)
+
+
+# ---------------------------------------------------------------------------
+# StreamPropertySliceOnly column definitions (Phase 4)
+# ---------------------------------------------------------------------------
+
+_RECORD_COLS_SLICE_ONLY: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
+    {
+        "name": "prop__secret",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "slice_only",
+    },
+]
+
+_RECORD_COLS_UNAVAILABLE_CLASS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    # history_tracked declared with no paired temporal_class — C13-violating.
+    {"name": "prop__ghost", "type": "VARCHAR", "history_tracked": True},
+]
+
+_RECORD_COLS_DISCRIMINATOR: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    # Declared slice_only, yet exempt as the kind's discriminator — the class
+    # is never consulted for it.
+    {
+        "name": "prop__widget_type",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "slice_only",
+    },
+]
+
+
+class TestStreamPropertySliceOnly:
+    """StreamPropertySliceOnly: a non-exempt slice_only property is refused."""
+
+    def test_slice_only_property_raises_before_next(self, tmp_path: Path) -> None:
+        """A non-exempt slice_only property is refused at call time, naming the
+        kind, the property, and the class."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "s1")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_SLICE_ONLY,
+        )
+        config = _make_config([("item", ["secret"])])
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                ExportError,
+                match=(
+                    "stream kind 'item': property 'secret' is temporal_class:"
+                    " slice_only; it cannot ride the state-changes after-image"
+                ),
+            ):
+                # No list() — error must come from the call itself
+                iter_stream_events(emit, config, None)
+
+    def test_tracked_and_constant_properties_unaffected(self, tmp_path: Path) -> None:
+        """A tracked property selected alongside the slice_only column stays
+        unaffected as long as it is not itself selected."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "s1")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_SLICE_ONLY,
+        )
+        config = _make_config([("item", ["status"])])
+        with open_emit(emit_dir) as emit:
+            events = list(iter_stream_events(emit, config, None))
+        assert len(events) == 1
+
+    def test_exempt_discriminator_streams_normally(self, tmp_path: Path) -> None:
+        """The <kind>_type discriminator column passes StreamPropertySliceOnly
+        at any declared class, and a 'types' sub-type selection streams
+        normally."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "widget",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "alpha")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_DISCRIMINATOR,
+            extra={"enum_domains": {"widget": {"widget_type": ["alpha", "beta"]}}},
+        )
+        config = StreamConfig(
+            content="state-changes",
+            kinds=[
+                StreamKindSelection(
+                    kind="widget", properties=["widget_type"], types=["alpha"]
+                )
+            ],
+        )
+        with open_emit(emit_dir) as emit:
+            events = list(iter_stream_events(emit, config, None))
+        assert len(events) == 1
+        assert events[0].after is not None
+        assert events[0].after["prop__widget_type"] == "alpha"
+
+    def test_missing_temporal_pair_raises_unavailable(self, tmp_path: Path) -> None:
+        """A selected property with history_tracked declared but no paired
+        temporal_class raises TemporalClassUnavailableError, not ExportError."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "g1")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_UNAVAILABLE_CLASS,
+        )
+        config = _make_config([("item", ["ghost"])])
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(TemporalClassUnavailableError):
+                iter_stream_events(emit, config, None)
+
+    def test_membership_events_content_unaffected(self, tmp_path: Path) -> None:
+        """membership-events content never reads a records column's class."""
+        emit_dir = _build_single_membership_emit(
+            tmp_path,
+            "item",
+            "team",
+            _MEMBERSHIP_BASIC_COLS,
+            mem_rows=[("trunk", "r1", 10, None)],
+        )
+        config = StreamConfig(
+            content="membership-events",
+            memberships=[
+                MembershipSelection(owner_kind="item", property="team", fields=[])
+            ],
+        )
+        with open_emit(emit_dir) as emit:
+            events = list(iter_stream_events(emit, config, None))
+        assert len(events) == 1
 
 
 # ---------------------------------------------------------------------------

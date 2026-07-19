@@ -84,6 +84,6 @@ phases:
           - "tests/exporters/source/test_renders.py"
           - "tests/exporters/source/_source_fixtures.py"
   4:
-    status: pending
+    status: complete
     name: "Streaming refusal"
     demo: "docs/sprints/slice-only-policy/demos/phase_4_streaming_refusal.py"
