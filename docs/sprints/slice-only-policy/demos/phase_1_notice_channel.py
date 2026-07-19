@@ -40,8 +40,18 @@ _RECORDS_COLUMNS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     {"name": "record_index", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__entity_type", "type": "VARCHAR", "history_tracked": False},
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__entity_type",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
 ]
 
 # The export config: an unobserved discriminator filter value ('admin') on a
