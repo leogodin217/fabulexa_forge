@@ -54,14 +54,18 @@ reimplementation of forge's reshaping.
 
 A new `playback` package exposing **one API in two tiers**, both pull-only,
 deterministic, permissive/total, and keyed on **one inclusive-T event-time
-line**:
+line**. Repo-local term, defined here: a **tape** is the emit under playback —
+its event-time line driven as replayable media. It names the seam's *view*, not
+the artifact: the input remains *the emit*, and contract prose never aliases
+it. The **truncated tape** — the emit presented as if its slice ended at T —
+is the load-bearing instance (§ Shaped state).
 
 ```
 tape (run.duckdb + base.json)
    │  reader (version gate, sidecar, single-branch guard)
    ▼
 derivations ── row-state-events · membership-events · state-at
-               · NEW: membership-state-at
+               · NEW: membership-state-at · NEW: truncated-tape surface
    ▼
 TIER 1 · primitive playback  (atoms in; below the modes)
    ├─ events(start, end)   → canonical-order PlaybackEvent iterator, entry-point-invariant seq
@@ -72,7 +76,8 @@ modes (dimensional · source · base later) — compile a declared target shape
    ▼
 TIER 2 · shaped playback  (a target shape in; above the modes)
    ├─ window(T1, T2)       → the shape's tables, per-table-class membership, stateless
-   └─ state(T)             → the shape's tables as if the slice ended at T
+   └─ state(T)             → the shape's tables as if the slice ended at T:
+                             the mode's full-export compile over the truncated tape
    ▲
 callers: loom channels · base mode (slot #2) · forge verbs (re-seam later) · scripts
 ```
@@ -86,7 +91,10 @@ target shape (an `ExportConfig`): window k of a star schema or a source
 system as data with the caller owning the frontier, and the whole shape as of
 T — promoting the per-table-class window membership the incremental driver
 already computes internally (each mode's pure windowed compile) from driver
-internals to seam contract. Every answer in both tiers renders `sim_time` raw
+internals to seam contract. Shaped `state` is the same compile at a different
+tape: the mode's full-export compile over the truncated tape
+(§ Shaped state) — as-of-T correctness by construction, not per-class
+reassembly. Every answer in both tiers renders `sim_time` raw
 and, when an anchor resolves, wallclock through the one effective-anchor
 surface — tier 1 Python-side as offset-bearing ISO-8601 (streaming's rule),
 tier 2 as each mode's shipped full-export rendering: two representations,
@@ -104,32 +112,91 @@ boundary razor); semantic validation belongs to `validate`.
   reader, the derivations layer, the anchor surface, and `errors` — never
   `exporters.*`, never `config`. **Tier 2 (shaped)**: `ShapedPlayback` —
   stateless shaped `window` / `state` over a declared target shape. Sits above
-  the modes: imports `config` (the shape envelope) and the modes' pure compile
-  surfaces. The dependency chain is acyclic by construction: tier 2 → modes →
-  derivations → reader, with tier 1 a sibling consumer of derivations — no
-  mode imports either tier. Loom's "via the playback API only" rule covers
+  the modes: imports `config` (the shape envelope), the modes' pure compile
+  surfaces, the derivations truncated-tape surface, and the reader's `Emit`
+  for the truncated emit-view composition (the seam slices the tape; the
+  modes stay time-agnostic). The dependency chain is acyclic by
+  construction: tier 2 → modes → derivations → reader (tier 2's direct
+  derivations edge adds no cycle), with tier 1 a sibling consumer of
+  derivations — no mode imports either tier. Loom's "via the playback API only" rule covers
   both tiers.
-- **Exporters (dimensional + source)** — contract promotion, no behavior
-  change: each mode's pure windowed compile (the cursor-free, writer-free
-  function the incremental driver already wraps) and its full/state render
-  become the conforming implementations behind tier 2. The modes keep owning
-  compilation; the seam owns the ask contract.
+- **Exporters (dimensional + source)** — two additive, time-agnostic
+  extensions, one redefined semantic, and one naming reservation. The
+  extensions leave every path that produces output today byte-identical.
+  For `window`, contract promotion: each mode's pure windowed compile (the
+  cursor-free, writer-free function the incremental driver already wraps)
+  becomes the conforming implementation behind tier 2. For `state`, the
+  mode's *full-export* compile runs over the truncated tape: the pure
+  compile surfaces gain one optional `base_relations` mapping (physical
+  base-table name → replacing relation), realized by name shadowing over
+  the compiled plan, and are invoked against the truncated emit view —
+  their sidecar input is the truncated sidecar view, so the faithful
+  builders enumerate exactly the columns the replacing relations carry —
+  the modes never see a horizon (§ Interface Contracts, The compile
+  indirection). One shipped semantic is redefined rather than gated:
+  horizon-less `change_delivery: snapshot` — today a refusal, because a
+  full export names no instant to snapshot at — becomes "reconstruct at
+  the tape's end" (§ Shaped state), turning a refused path into a
+  meaningful output. The naming reservation is the **presentation-name
+  posture**, the companion product decision this change ratifies:
+  `last_mutation_sim_time` is a sim-internal bookkeeping column — read it
+  freely, deliver it under its own name never. Its value channels are
+  untouched, byte for byte: the source mode's `updated_at` presentation
+  default, the dimensional records-grain sources (`from:` /
+  `correlation:` / `derived: value_map`, and `derived: timestamp`, where
+  it remains the sole permitted records-grain timestamp source), window
+  membership keying, the contract-endorsed high-water-mark use, and
+  records-grain `ordinal.order_by` all keep their shipped semantics. What
+  is withdrawn is the raw name on an output column:
+  `last_mutation_sim_time` joins the shared reserved output-name check,
+  closing the two paths that can deliver it today — a dimensional
+  author-named column and a source `rename` target — as load-time errors
+  naming the fix. Under `state`, the truncated tape presents the column
+  itself as the honest as-of-T value (§ Shaped state, the recorded
+  trail), so every shipped value channel works over it unchanged.
+  `slice_only` keeps its shipped export-wide refuse posture (no exporter
+  projects one, `init` never proposes one — the contract's mandate). The
+  modes keep owning compilation; the seam owns the ask contract; the
+  derivations layer owns the tape at T.
 - **Incremental driver** — its per-table-class / per-genre window-membership
   rules are promoted to tier-2 contract. The driver's own mechanics — the
   calendar/sim window-boundary sequence, cursor, fingerprint, drained
   detection, labels, staging, writers — remain driver-side, above the seam;
   the driver becomes tier 2's first re-seam customer (deferred per claim C).
-- **Derivations layer** — gains one resident: **membership-state-at**
-  (interval containment at an exclusive horizon), under the existing six-rule
-  layer contract (pure SQL fold, anti-weld signature, canonical raw output,
-  traceability, determinism, temporal honesty). No existing resident changes.
+- **Derivations layer** — gains two additions. **membership-state-at**
+  (interval containment at an exclusive horizon), a fold under the existing
+  six-rule layer contract (pure SQL fold, anti-weld signature, canonical raw
+  output, traceability, determinism, temporal honesty). And the
+  **truncated-tape surface**: three relation builders and the truncated
+  sidecar view, presenting the emit as the producer would have emitted it
+  sliced at T (§ Shaped state). The builders are pure, anti-weld,
+  deterministic, and total like the folds, but relation *presenters* that
+  replace base tables inside a compile, so each carries the replaced
+  table's column shape (deviations declared in its contract) rather than a
+  canonical ORDER BY. The view is a pure `Sidecar` derivation whose
+  records column lists mirror the builders' declared deviations, so a
+  compile run against it enumerates exactly the columns the truncated
+  relations carry. No existing resident changes.
 - **Streaming exporter** — contract promotion, no behavior change: the
-  canonical total order `(event_sim_time, event_class, source_identity,
-  record_id[, field tail])` and the global-`seq` definition, today defined by
-  the streaming engine for its own stream, become seam-owned guarantees that
-  streaming's output conforms to by construction. Re-seaming the `stream` verb
+  canonical total order `(event_sim_time, event_class, family,
+  source_identity, record_id[, field tail])` and the global-`seq` definition,
+  today realized by the streaming engine per content (a shipped stream never
+  merges record and membership events), become seam-owned guarantees that
+  streaming's per-content output conforms to by construction — exactly under
+  full-set selections. Two scoped subset divergences, one per fold:
+  streaming invokes the membership fold over its config-selected `fields`,
+  so a field-subset config's intra-instant tail spans the subset (agreement
+  up to intra-instant, same-class, same-owner ties); and it invokes the
+  record fold over its config-selected `properties`, so a tracked-subset
+  config's `u` row set — and therefore its `seq` numbering — spans the
+  subset's change points, where the seam's row set is selection-invariant
+  by design (§ The atom selection surface, the full-set invocation
+  rule). Re-seaming the `stream` verb
   onto the playback head is explicitly deferred (ratified relationship claim C:
-  re-seam when next materially touched, byte-identical output as the bar).
+  re-seam when next materially touched, byte-identical output as the bar —
+  which for a subset config includes reproducing its subset row set and
+  tail, an invocation of the folds the head's `events` deliberately does
+  not expose).
 - **Anchor** — a new consumer, contract unchanged: tier 1 renders wallclock
   from the resolved `EffectiveAnchor` in the absolute-frame Python rule
   (offset-bearing ISO-8601), the same computation the streaming engine performs
@@ -137,8 +204,14 @@ boundary razor); semantic validation belongs to `validate`.
   `render_anchor_timestamp_expr` SQL surface) because every tier-2 value is
   its full-export value.
 - **Reader** — a new consumer, contract unchanged: `open_emit`, the sidecar
-  accessors (`subtype_values`, `columns`, `pinned_ids`), the faithful records
-  relation (population restriction), and the columnar `query_arrow` surface.
+  accessors (`subtype_values`, `columns`, `pinned_ids`, `temporal_class`),
+  the faithful records relation (population restriction), and the columnar
+  `query_arrow` surface. Tier-2 `state` additionally composes the public
+  `Emit` constructor to present the truncated sidecar view over the
+  already-open connection — a composition by a new consumer, not a reader
+  change. The view shares the caller's connection and the seam never
+  closes it: the caller owns the emit's lifetime, and closing the view
+  would close the shared connection.
 
 ## What Doesn't Change
 
@@ -148,9 +221,18 @@ boundary razor); semantic validation belongs to `validate`.
   ORDER BY contracts of versioned-intervals, row-state-events,
   membership-events, state-at, and reference-resolution are untouched. The
   seam composes them; it does not modify them.
-- **Every shipped verb, byte for byte** — `validate`, `export` (dimensional +
-  source), `stream`, `mixer`, `corrupt`, `init`, and the incremental flags
-  produce identical output. No re-seam happens in this change.
+- **Every shipped verb, byte for byte — with two declared changes.**
+  `validate`, `export` (dimensional + source), `stream`, `mixer`, `corrupt`,
+  `init`, and the incremental flags produce identical output on every input
+  they accept today, with exactly two declared changes. The unlock: a full
+  `export` of a `change_delivery: snapshot` shape — refused today, so it
+  has no bytes to preserve — becomes legal, reconstructing at the tape's
+  end (§ Shaped state). The reservation: the presentation-name posture
+  (§ Affected Subsystems) — a config that names an output column
+  `last_mutation_sim_time` (a dimensional author-named column, a source
+  `rename` target — both accepted today) goes from accepted to refused at
+  load; no output a shipped config delivers under any other name changes
+  by a byte. No re-seam happens in this change.
 - **The incremental driver's mechanics** — window-boundary sequences
   (calendar and sim regimes), the cursor, the fingerprint, drained detection,
   labels, empty-window emission, staging, and the writers stay driver-side.
@@ -213,7 +295,9 @@ state (a notational basis case, not a valid ask),
 > applied in `seq` order)
 
 where ⊕ means: a `c` inserts the after-image row, a `u` replaces it, a `d`
-deactivates it, a `join` adds a containment row, a `leave` removes one
+deactivates it — `active` false, `deactivated_at` the event's
+`event_sim_time` (the event's `after` is `None`; the deactivation instant is
+the event key itself), a `join` adds a containment row, a `leave` removes one
 containment row matching `(record_id, payload)` — unique up to byte-identical
 duplicates under intact interval semantics, so ⊕ is well-defined. A snapshot
 at T, a window ending at `T + 1`, and a stream advanced through T agree
@@ -247,12 +331,13 @@ owner's sub-type derived from the record spine. No playback code keys on
 
 | Selection element | Meaning |
 |---|---|
-| `RecordSelection(kind, sub_types=())` | the whole kind — no discriminator filter; the only form for a non-sub-typed kind |
-| `RecordSelection(kind, sub_types=("doctor", "nurse"))` | the named sub-type populations only |
-| `RecordSelection(..., properties=())` | identity + lifecycle only, no `prop__` columns |
-| `RecordSelection(..., record_ids=frozenset({...}))` | instance axis: restrict to the named record ids (pins are the canonical source — the caller feeds `sidecar.pinned_ids`) |
-| `RecordSelection(..., record_ids=None)` | no instance restriction |
-| `MembershipSelection(owner_kind, owner_sub_types, property_name, fields, owner_record_ids)` | one membership table, optionally restricted to owner sub-type populations and owner instances |
+| `RecordAtomSelection(kind, sub_types=())` | the whole kind — no discriminator filter; the only form for a non-sub-typed kind |
+| `RecordAtomSelection(kind, sub_types=("doctor", "nurse"))` | the named sub-type populations only |
+| `RecordAtomSelection(..., properties=())` | identity + lifecycle only, no `prop__` columns |
+| `RecordAtomSelection(..., properties=None)` | every selectable property — the kind's full `tracked` + `constant` set, resolved against the sidecar at open (`slice_only` sits outside the selectable domain, so the full set never includes one) |
+| `RecordAtomSelection(..., record_ids=frozenset({...}))` | instance axis: restrict to the named record ids (pins are the canonical source — the caller feeds `sidecar.pinned_ids`) |
+| `RecordAtomSelection(..., record_ids=None)` | no instance restriction |
+| `MembershipAtomSelection(owner_kind, owner_sub_types, property_name, fields, owner_record_ids)` | one membership table, optionally restricted to owner sub-type populations and owner instances |
 
 Population restriction is one mechanism applied uniformly: the in-scope
 record ids for an atom set are the record spine's ids whose discriminator
@@ -262,9 +347,12 @@ predicate; whole-kind selection applies no discriminator predicate),
 intersected with `record_ids` when given. The restriction is applied as an outer row filter
 over each fold's canonical relation, re-imposing the fold's declared ORDER BY
 — pure row selection, never recomputation, so every surviving value equals its
-unrestricted value. The discriminator is read from the record spine as a
-temporally constant classification — the same convention the shipped streaming
-routing surface uses for its Layer A `route_table`.
+unrestricted value. The discriminator is read from the record spine's current value as a
+classification — the shipped streaming routing surface's convention for its
+Layer A `route_table`. This is a declared convention, not an as-of-T
+derivation: the contract does not pin the discriminator's `temporal_class`,
+and the seam stamps the spine's current value at every T regardless — the
+classification carve-out invariant 5 states.
 
 Two verbatim-playback rules keep the selection surface total over corrupted
 tapes. First, **the stamp is data; the declared domain is only the selection
@@ -284,25 +372,74 @@ orphan) still plays — verbatim, never dropped — stamped `owner_sub_type`
 `NULL`; it matches no named `owner_sub_types` value (a predicate, not an
 error, exactly like unknown `record_ids`), and the empty tuple (no owner
 filter) includes it. The seam never decides what corruption intended: it
-emits the data as it is.
+emits the data as it is. One drifted-tape case completes the rules:
+`schema_drift` can drop the discriminator column while `record_roles`
+still declares the sub-type domain — presence is registry-driven, the
+read is a column. When the sidecar does not declare `prop__<kind>_type`
+on a sub-typed kind, the stamp is `NULL` on every record (the table
+genuinely lacks the classification), whole-kind selection — no
+predicate — plays everything so stamped, and a selection *naming*
+`sub_types` fails resolvability at open, exactly as naming a dropped
+property does: the predicate needs a column the tape lacks
+(`SubTypesDeclared`). The owner side mirrors it: an undeclared owner
+discriminator stamps `owner_sub_type` `NULL` and fails a named
+`owner_sub_types` at open.
 
 Property and field selection is **column projection only**: it narrows
-after-images and snapshot columns, never the event row set. A `u` whose
+after-images and snapshot columns, never the event row set. Each axis has a
+full-set form: `properties=None` / `fields=None` means every selectable
+column — the kind's `tracked` + `constant` properties, the table's full
+element-schema field set — resolved against the sidecar at open into the
+head's effective set (every later "selected" means the resolved set); the
+empty tuple means identity only; a named tuple is validated per Validation
+Rules. The effective set is *ordered* — sidecar declaration order,
+whichever form named it (a selection is a set; the answer's column order
+is canonical, never an echo of the caller's tuple order). A `u` whose
 coincident changes touch only unselected properties still plays (its
 after-image then equals its predecessor's on the selected columns), so `seq`
 is invariant under `properties` / `fields` — only the population axes (the
 atom set, `sub_types`, `record_ids` / `owner_record_ids`) change the in-scope
-stream.
+stream. Normative mechanism, both event folds: the shipped record-event fold
+derives its event row set from the *history-tracked* properties it is
+invoked with (a constant property rides after-images as a current-value
+column and contributes no events), so the seam always invokes it over the
+kind's **full** tracked + constant property set and applies `properties` as
+column projection afterwards — invoking the fold over a tracked subset
+would silently change the row set and `seq`. The
+membership-events fold is invoked the same way for a different reason: its
+row set is field-independent, but its declared ORDER BY tail — the canonical
+order's field-value tail — spans exactly the fields it is invoked with, so
+the seam always invokes it over the table's **full** element-schema field
+set and applies `fields` as column projection afterwards, making the tail
+(and therefore `seq`) selection-independent by construction. (The two
+state folds — state-at and membership-state-at — carry no event order and
+their row sets are property- and field-independent; both are invoked over
+the selected properties / fields directly.)
+
+Property selection is additionally gated by the contract's point-in-time
+dispatch (`temporal_class`, read per column from the sidecar): a `properties`
+entry naming a `slice_only` column fails at open with `PlaybackError`
+(`properties=None` resolves to the `tracked` + `constant` set — the refusal
+is for *naming* one; the full-set form never includes one). Every
+playback answer presents values at an event time or a horizon, and the
+contract forbids presenting a `slice_only` column as an as-of-T value — the
+value at T is unknowable; these are simulation-internal mechanism columns
+whose history is deliberately not captured, not data-domain values (the
+export-wide refuse posture: no exporter projects one, `init` never proposes
+one). `constant` and `tracked` properties are both selectable. Membership
+`fields` carry no temporal class (interval-constant by contract) and are
+ungated.
 
 Two consequences of the atom grammar:
 
 - **Answers are stamped with atom identity.** Every `PlaybackEvent` carries
   its `RecordAtom` or `MembershipAtom` (per-record sub-type read verbatim
   from the spine); snapshot record tables carry a `sub_type` column (`NULL`
-  when the kind is not sub-typed or the discriminator cell is `NULL`) and
+  when the kind is not sub-typed, the discriminator cell is `NULL`, or the
+  discriminator column is undeclared — a drifted tape) and
   membership tables an `owner_sub_type` column (`NULL` when the owner kind is
-  not sub-typed, the owner row is an orphan, or the owner's discriminator
-  cell is `NULL`). Callers partition by atom without re-deriving anything;
+  not sub-typed, the owner row is an orphan, the owner's discriminator
+  cell is `NULL`, or its column is undeclared). Callers partition by atom without re-deriving anything;
   grouping lives above the seam.
 - **The event stream interleaves kinds; tables never do.** One head merges
   all selected atoms — record and membership alike — into one canonical-order
@@ -317,16 +454,39 @@ Two consequences of the atom grammar:
 
 The seam owns the canonical total order over all in-scope events:
 
-> `(event_sim_time ASC, event_class ASC, source_identity ASC, record_id ASC[, field-value tail])`
+> `(event_sim_time ASC, event_class ASC, family ASC, source_identity ASC, record_id ASC[, field-value tail])`
 
-where `source_identity` is the kind for record events and the
-`(owner_kind, property)` pair for membership events, and `event_class` is the
-folds' ordering key (`c`=0 < `u`=1 < `d`=2; `join`=0 < `leave`=1). This is the
-order the streaming engine already realizes; promoting it to the seam makes it
-a guarantee streaming conforms to rather than defines. The k-way merge
-semantics are unchanged: per-source folds arrive pre-sorted, `source_identity`
-makes the inter-stream tie-break deterministic, and field tails are never
-compared across folds.
+where `event_class` is one shared integer domain across both event families
+(`c`=0 < `u`=1 < `d`=2; `join`=0 < `leave`=1), `family` ranks record events
+before membership events (`record`=0 < `membership`=1), and `source_identity`
+is compared within one family only: the kind for record events, the
+`(owner_kind, property)` pair componentwise for membership events. The family
+rank is what keeps the comparison total on every contract-legal tape: a kind
+name may itself contain `__`, so no string-flattening of the membership
+identity could be collision-free against a kind. Two intra-instant
+consequences fall out: an owner's `c` precedes its coincident `join` (class
+tie, family tie-break), and a `leave` precedes its owner's coincident `d`
+(class 1 < 2) — containment drains before the owner deactivates.
+
+This order is **seam-defined**. Within each family it is the order the
+streaming engine realizes for its stream — a shipped stream is
+single-content and never merges the two families — with two scoped
+subset divergences, one per fold. Streaming invokes the membership fold
+over its config-selected `fields`, so its intra-instant field tail spans
+that subset, not the full element schema: order agreement is up to
+intra-instant, same-class, same-owner ties. And it invokes the record
+fold over its config-selected `properties`, so a tracked-subset config
+emits only the subset's change points as `u` events: the same order over
+a smaller row set — and therefore different `seq` numbering — than the
+seam's selection-invariant stream. Streaming conforms by construction
+exactly when its selection spans the full tracked property set (record
+content) / the full element-schema field set (membership content); the
+cross-family interleave is new at the seam. The k-way merge
+semantics are unchanged: per-source folds arrive pre-sorted,
+`(family, source_identity)` makes the inter-stream tie-break deterministic,
+and field tails are never compared across folds — each membership fold's
+tail spans its table's full element-schema field set, selection-independent
+(§ The atom selection surface).
 
 `seq` is the event's 1-based position in that order **over the whole in-scope
 stream** — a pure function of `(tape, selection)`, never of where the head
@@ -347,7 +507,14 @@ replay. Consequences:
 `events(start, end)` yields `PlaybackEvent`s lazily in canonical order.
 Nothing is computed until the iterator is pulled (the pull commitment: pacing,
 buffering, and delivery are caller concerns, so timing authority cannot exist
-at the seam). Event content is the shipped fold semantics unchanged:
+at the seam). Outstanding answers are **independently pullable** — a stated
+guarantee, not an accident: pulling one lazy answer never invalidates
+another on the same open emit, so `seek`'s two halves interleave freely, a
+snapshot table may materialize mid-iteration, and two heads over one emit
+do not contend (the seam realizes each pull over its own cursor on the
+caller's connection, never assuming exclusive use — the consistency
+algebra is worthless if exercising one side of it invalidates the other).
+Event content is the shipped fold semantics unchanged:
 
 - Record events: `c`/`u`/`d` per the row-state-events derivation — genesis at
   `created_sim_time` carrying creation values, one `u` per distinct history
@@ -366,10 +533,15 @@ at the seam). Event content is the shipped fold semantics unchanged:
   kind carries one; it is never the key.
 
 `ts` renders per the anchor exactly as streaming renders it: when an anchor
-resolves, the absolute instant `start_instant(UTC) + event_sim_time ns`
-projected into `anchor.timezone` as an offset-bearing ISO-8601 `str`; when no
-anchor resolves, the raw `event_sim_time` `int`. Never a naive local
-timestamp, never `now()`.
+resolves, the absolute instant `start_instant(UTC) + event_sim_time`
+projected into `anchor.timezone` as an offset-bearing ISO-8601 `str` — with
+streaming's shipped precision rule inherited verbatim: the ns offset is
+truncated to whole microseconds before projection (Python datetime
+precision), so the seam's `ts` is byte-identical to streaming's for the
+same instant and anchor. When no anchor resolves, the raw `event_sim_time`
+`int`. Never a naive local timestamp, never `now()`. Snapshot `_ts`
+siblings render through this same rule — invariant 7 is byte identity, so
+the truncation is contract, not implementation detail.
 
 ### Snapshot
 
@@ -379,7 +551,7 @@ typed even at zero rows). Two table families:
 
 | Family | One table per | Contents |
 |---|---|---|
-| Record state | selected kind | the state-at fold at horizon `T + 1`, restricted to the selection's population and instances: one row per in-scope record with `created_sim_time ≤ T`; `active` / `deactivated_at` horizon-rendered; selected `prop__` columns as-of T (history-tracked) or current-value (untracked — the declared temporally-constant exception); plus a `sub_type` stamp column |
+| Record state | selected kind | the state-at fold at horizon `T + 1`, restricted to the selection's population and instances: one row per in-scope record with `created_sim_time ≤ T`; `active` / `deactivated_at` horizon-rendered; selected `prop__` columns as-of T (`tracked`) or current-value (`constant` — the contract declares the current value valid at every T); a `slice_only` property is never present (unselectable — § The atom selection surface); plus the fold's own `presentation_id` column when the kind carries one, and a `sub_type` stamp column composed from the spine by the seam (the fold's canonical columns untouched) |
 | Membership containment | selected membership table | the new membership-state-at fold at horizon `T + 1`, restricted to in-scope owners: one row per interval containing T; plus an `owner_sub_type` stamp column |
 
 A record created after T is absent — not present-with-nulls. A membership
@@ -391,11 +563,34 @@ order.
 **Wallclock siblings.** When the head's anchor resolves, each raw-ns lifecycle
 column on a snapshot table — `created_sim_time`, `deactivated_at`,
 `joined_sim_time` — gains a sibling `<name>_ts` column: the offset-bearing
-ISO-8601 rendering of the same instant, `NULL` where the raw value is `NULL`.
+ISO-8601 rendering of the same instant through the tier-1 rule (§ The event
+stream — microsecond truncation included), `NULL` where the raw value is
+`NULL`.
 When no anchor resolves, no sibling columns exist. The raw ns columns are
 always present; ordering and the consistency algebra always key on raw ns.
 One instant renders byte-identically as an event `ts` and as a snapshot
 `_ts` value.
+
+**Column order is contract.** Each snapshot table is the composed fold's
+canonical relation verbatim — its declared column order, with `prop__` /
+field columns in the order the seam invokes the fold with: the effective
+set's sidecar declaration order (§ The atom selection surface) — followed
+by the seam-appended columns, in this order: the stamp (`sub_type` /
+`owner_sub_type`), then the `_ts` siblings in their raw columns' order
+(`created_sim_time_ts`, `deactivated_at_ts`; `joined_sim_time_ts`). Event
+after-images follow the same rule in dict-insertion order: the canonical
+column-order producers' order verbatim.
+
+**Identity columns.** The records-column taxonomy's identity posture holds at
+the seam: `record_index` and `ref_index__<name>` appear in no playback answer
+— `properties` names `prop__` payload columns only, and every composed fold's
+canonical relation carries no identity family beyond `record_id` (and
+`presentation_id` where declared). Load-bearing for any future ask that
+surfaces the index at a horizon: `ref_index__<name>` is a point-in-time key
+stamped at the emitted slice, so such an ask must **re-derive** it from the
+reconstructed `prop__<name>` via the target kind's `record_index` — carrying
+the slice `ref_index__` beside an as-of-T reference value would pair two
+different instants.
 
 ### The membership-state-at derivation (new resident)
 
@@ -408,8 +603,10 @@ under the six-rule layer contract:
   sidecar, filtered to `fork_path`) satisfying
   `joined_sim_time < horizon_ns AND (left_sim_time IS NULL OR left_sim_time >= horizon_ns)`.
 - **Canonical columns** (`MEMBERSHIP_STATE_AT_COLUMNS`): `record_id` (the
-  owner), `joined_sim_time` (raw ns `BIGINT`), then one column per selected
-  element-schema field in `resolve_membership_columns` order, each cast to
+  owner), `joined_sim_time` (raw ns `BIGINT`), then each selected
+  element-schema field's column shape in `resolve_membership_columns` order —
+  `elem__<f>` for a scalar field, the `member__<f>__kind` /
+  `member__<f>__id` pair for a reference field — each cast to
   codec `VARCHAR`. `left_sim_time` is **never projected** — for a contained
   interval it is either `NULL` or strictly future state relative to the
   horizon, and carrying it would violate temporal honesty.
@@ -422,7 +619,8 @@ under the six-rule layer contract:
   on).
 - **Totality.** The predicate is total over any structurally-conformant
   table: an inverted interval (`left < joined`) satisfies it for no horizon
-  between the swapped bounds and answers deterministically; overlapping
+  at all — every horizon fails one of the two conjuncts — and answers
+  deterministically; overlapping
   duplicate intervals yield one row each. Faithfully wrong, never an error.
 - **Errors.** A missing membership table raises `TableNotFoundError`; an
   unresolvable field raises `ExportError` — the layer's cause-based taxonomy.
@@ -432,6 +630,8 @@ under the six-rule layer contract:
 `window(start_sim_time, end_sim_time)` returns one relation per output table
 the shape declares, each tagged with its **delivery class** so a caller lands
 it correctly (`append`: merge rows in; `snapshot`: replace the table). The
+classes are static per table class / genre and declared at open through
+`tables()`, so a caller provisions sinks before the first ask. The
 content contract is the shipped per-table-class / per-genre window membership,
 promoted verbatim — stateless, relations out, caller owns the frontier. All
 membership tests run on raw sim-time ns, half-open `[start, end)`.
@@ -443,7 +643,7 @@ Dimensional shape:
 | Fact, records grain | `last_mutation_sim_time` | rows whose key ∈ window — final on arrival, never revised | append |
 | Fact, history_point grain | `sim_time` | rows whose key ∈ window | append |
 | Dim, SCD-2 | the version's `valid_from` change point | version rows born in the window, as the physical projection: declared columns minus `valid_to` slots plus the raw `__valid_from_ns` bookkeeping column — `valid_to` is never materialized; closing versions is the consumer's merge (or a view above the seam) | append |
-| Dim, type-1 | — | full current-state table every window (columns gated temporally constant; row set is the end-of-run population — the shipped carve-out) | snapshot |
+| Dim, type-1 | — | full current-state table every window (columns gated `temporal_class: constant`; row set is the end-of-run population — the shipped carve-out) | snapshot |
 | history_interval / membership grain | — | rejected (the shipped windowed-grain rule) | — |
 
 Source shape:
@@ -459,43 +659,204 @@ Source shape:
 The window predicate stays the outermost filter over the shape's full-export
 relation: every emitted value is its full-export value; the window selects
 rows, never recomputes them. The shipped windowed business rules (immutable
-`fk` hops, raw-key ordinals, temporally constant slice reads and dim filters)
+`fk` hops, raw-window-key ordinals, temporally constant slice reads and dim
+filters)
 gate the config so selecting-not-recomputing is temporally honest — they
 apply to tier-2 `window` exactly as they apply to the incremental driver
 today, validated on the first `window` ask (the shipped driver's
-window-gated pass; a shape used only for `state` never runs them).
+window-gated pass; a shape used only for `state` never runs them). The
+windowed-grain rule is among them and is **whole-shape, as shipped**: a
+shape declaring a history_interval or membership grain table cannot
+`window()` at all — the first ask fails naming the table (the shipped
+config-level rejection, passed through), never a silent per-table skip.
+`tables()` marks the offender `window_delivery=None` at open, so a caller
+learns before asking which table its config must drop to make the shape
+windowable.
 
-### Shaped state (tier 2): truncated-tape semantics
+### Shaped state (tier 2): the truncated tape
 
 `state(at_sim_time=T)` returns the shape's tables **as if the emit's slice
-ended at T** — one definition covering every class, with the delivery tag
-`snapshot` on every table:
+ended at T** — implemented literally, not per class: the mode's full-export
+compile runs over the **truncated tape**, the derivations-owned
+presentation of the emit as the producer would have emitted it sliced at T.
+Delivery is `snapshot` on every table.
 
-| Table class / genre | State at T |
+The truncated tape — one relation per base table the compile reads, and
+the sidecar view that describes them:
+
+| Base table | Truncated relation |
 |---|---|
-| Dim, SCD-2 | version rows with change point ≤ T; `valid_to` materialized per the full-export rules, the latest version open |
-| Fact, history_interval grain | interval rows with `sim_time ≤ T`; `lead_sim_time` horizon-masked (`NULL` unless `lead_sim_time ≤ T`) — the junction rule's dimensional twin |
-| Dim, type-1 / reference genre | one row per record created ≤ T; values current (untracked properties are the declared temporally-constant exception) |
-| Fact, records grain / transaction genre | one row per record created ≤ T, reconstructed as of T (the state-at fold), not end-of-run values |
-| Fact, history_point / change-log genre (`changelog`) | event rows with key ≤ T |
-| Junction / membership grain | interval rows with `joined_sim_time ≤ T`, `left_at` horizon-masked (`NULL` unless `left_sim_time ≤ T`) |
+| `history` | rows with `sim_time ≤ T` — a pure filter |
+| `membership__<K>__<p>` | intervals with `joined_sim_time ≤ T`; `left_sim_time` masked `NULL` when `> T` — an interval still open at T, exactly as a slice-at-T emit renders it |
+| `records__<kind>` | one row per record with `created_sim_time ≤ T`: identity columns and `record_index` verbatim (`record_index` is slice-stable by contract); `active` / `deactivated_at` horizon-rendered; `constant` properties verbatim; `tracked` properties reconstructed as of T and TRY_CAST back to their sidecar-declared types (the codec round-trip; `NULL` where a corrupted history value does not parse as the declared type — a cast never errors, § Permissive playback); each `ref_index__<name>` re-derived from the reconstructed `prop__<name>` via the target kind's *truncated* spine (§ One consistent truncated world; the § Snapshot identity-columns rule, applied — an unresolvable value re-derives `NULL`); **`last_mutation_sim_time` presented as the recorded trail** — `greatest(created_sim_time, the record's latest tracked history instant ≤ T, deactivated_at when ≤ T)`, the last *recorded* content change (§ Shaped state, The recorded trail); **`slice_only` columns absent** (a sub-typed kind's `slice_only` discriminator `prop__<kind>_type` excepted — carried verbatim as the classification column the shipped routing / sub-type-split convention reads, under invariant 5's carve-out; a `tracked` or `constant` discriminator needs no exception, following its class's own rule) — the declared deviations from the physical shape, the column-list ones mirrored by the truncated sidecar view |
+
+**One consistent truncated world.** The truncated relations are mutually
+consistent by definition: wherever a truncated relation's own recipe reads a
+base table *other than the one it presents* — the records builder's tracked
+reconstruction reads `history`; its `ref_index__` re-derivation reads the
+target kind's spine — the read carries truncated-world semantics: its
+result must equal a read of that table's truncated presentation, never of
+the physical table. For `history` the two coincide (the truncation filter
+is idempotent); the rule is load-bearing exactly for the `ref_index__`
+re-derivation, where the physical spine would mint an index from a record
+created after T — future base state, an invariant-5 leak, and a dangling
+index inside the delivered dataset besides. A reconstructed reference value
+that resolves to no truncated spine row — a dangling or mispointed value,
+or one naming a record created after T on a shifted tape — re-derives
+`ref_index__<name>` as `NULL` beside the verbatim non-NULL reference: a
+deliberate, faithful break of the physical pair-agreement (the pair agrees
+on every temporally-intact tape; where it disagrees, the defect manifest is
+the answer key). A builder's read of the base table it *presents* is by
+definition the physical table — the source being truncated. Realization:
+§ The compile indirection, binding rules.
+
+**The truncated sidecar view.** The truncated tape carries its own
+sidecar: a pure `Sidecar` derivation identical to the physical one except
+that each `records__<kind>` entry's column list drops exactly the columns
+its truncated relation lacks. The `state` compile runs against an emit
+view — the same open connection presenting this sidecar — so the faithful
+builders, which enumerate their column lists from the sidecar they are
+handed, name exactly the columns the replacing relations carry, and the
+compiled plan binds against the truncated tape by construction.
+Column-list agreement between the view and the truncated relations is a
+stated invariant of the surface. So is this: every sidecar field the view
+does not rewrite stays physical — the branch's slice bound included — so
+no compile path under `state` may read a slice bound from the sidecar;
+the truncated world's end is defined by its data, never by metadata (the
+same rule the snapshot-delivery redefinition below states for its own
+reconstruction). Everything else — open-time validation,
+`tables()`, `window()`, and both ask gates — reads the physical sidecar;
+only the `state` compile sees the view.
+
+Because the compile is the shipped full-export compile, as-of-T correctness
+is by construction — no per-class rules, no recomputation gates: type-1 dims
+and reference tables read as-of-T values from the truncated records relation
+(equal to current values exactly for `constant` columns); SCD-2's `LEAD` over
+truncated `history` yields change points ≤ T with the latest version open and
+`valid_to` materialized per the full-export rules; `history_interval`'s
+`lead_sim_time` and the junction's `left_at` mask themselves (their `LEAD` /
+render runs over truncated rows); records-grain facts and transaction tables
+reconstruct as of T — fk hops join as-of-T reference values into as-of-T
+targets, lookups read as-of-T attributes; `change_delivery: snapshot`
+reconstructs at horizon `T + 1`. The windowed business rules are not
+involved: they exist to make select-not-recompute temporally honest, and
+`state` recomputes everything.
+
+**One mode semantic, redefined to make this total.** The shipped source
+compile refuses horizon-less snapshot delivery (`change_delivery: snapshot`
+with no window) because a one-shot full export names no instant to snapshot
+at. This change defines it instead: with no window, snapshot delivery
+reconstructs at the tape's end — the state-at reconstruction with every
+event applied, where "every event" spans everything the fold keys on its
+horizon: `history` rows *and* the spine's lifecycle instants
+(`created_sim_time`, `deactivated_at`), which need not appear in
+`history` — a deactivation is a spine fact, not a history row. The tape's
+end is a property of the data, never of metadata: the reconstruction is
+unbounded — any horizon strictly beyond every such instant on the
+(possibly replaced) relations yields identical output, and a horizon
+cleared against `history` alone is wrong (it can render a
+later-deactivated record active) — and the compile must not read a slice
+bound from the sidecar, which the truncated tape does not re-present. The redefinition is additive in effect (the refusal was the
+only path that produced nothing, so no shipped byte changes) and
+deliberately ungated: a plain full export of such a shape becomes legal,
+yielding end-of-run state tables, and over the truncated tape the end *is*
+T, so `state(T)` yields the reconstruction at horizon `T + 1` with the mode
+still never seeing a horizon — one rule, both callers, and the bridging
+theorem holds for the class with no carve-out.
+
+Per-class consequences (derived from the one definition above, stated for
+testability):
+
+| Table class / genre | `state(T)` |
+|---|---|
+| Dim, SCD-2 | version rows with change point ≤ T; the latest version open |
+| Dim, type-1 / reference genre | one row per record created ≤ T; `constant` columns current (valid at every T), `tracked` columns as of T |
+| Fact, records grain / transaction genre | one row per record created ≤ T, values as of T — not end-of-run |
+| Fact, history_point grain / change-log genre (`changelog`) | event rows with key ≤ T |
+| Fact, history_interval grain | interval rows with `sim_time ≤ T`; `lead_sim_time` `NULL` past the horizon |
+| Junction / membership grain | interval rows with `joined_sim_time ≤ T`; `left_at` `NULL` when the leave is after T |
 | change-log genre (`snapshot` delivery) | the state-at reconstruction at horizon `T + 1` |
 
-**The reconstructibility gate.** A value whose base source cannot be
-faithfully reconstructed at a past horizon — `last_mutation_sim_time`
-projected as a column value (untracked writes advance it but leave no
-history; the shipped source-snapshot render already omits `updated_at` for
-exactly this reason) — fails the `state` ask with `PlaybackError` when the
-shape projects it, checked sidecar-only on the first `state` call; `window`
-on the same head stays legal. Fail-fast, never fabricated, never understated:
-the source-snapshot precedent, generalized. Window keys are unaffected
-(keying on `last_mutation_sim_time` needs no per-horizon reconstruction;
-projecting it does).
+**The recorded trail.** One records column cannot be read back at a past
+T: the physical `last_mutation_sim_time` advances on *every* content
+event, and the contract binds it in one direction only — a high-water
+mark over the record's lifecycle — so a `slice_only` write may advance it
+without leaving history. The truncated records relation therefore
+presents the column as the **recorded trail**:
+`greatest(created_sim_time, the record's latest tracked history instant
+≤ T, deactivated_at when ≤ T)` — the last *recorded* content change,
+computable at every T from truncated-world reads alone. Membership
+activity is deliberately not a component: a membership interval is its
+own fact with its own timestamps (`joined_sim_time` / `left_sim_time`),
+leading or lagging the owner row exactly as tables do in a real estate of
+services — its timeline is delivered by the membership tables, never
+folded into the owner's. By the high-water clause the trail never exceeds
+the physical value; equality is producer behavior, not contract — a
+producer whose every advance is a recorded event never diverges (the
+reference producer holds equality on every record), and where one
+advanced the column invisibly, the trail is the defensible delivered
+value and the divergence is one-sided. Every shipped value channel then
+works over the truncated tape unchanged: the source `updated_at` default,
+a dimensional records-grain `from:` / `correlation:` / `value_map` /
+`derived: timestamp` source, and a records-grain `ordinal.order_by` all
+read the presented column — honest at T by construction. (The shipped
+`change_delivery: snapshot` render, which composes state-at, carries no
+`updated_at` — unchanged.)
 
-**The bridging invariant.** `state(T_slice)` — T at the slice bound — is
-value-identical to the shape's full export. This is the equation that makes
-`base` mode a thin renderer over shaped state (claim A) and defines the
-incremental driver's re-seam bar (claim C).
+**The slice_only value-read gate.** A `slice_only` property never reaches
+any projecting shape — the contract's mandate (a consumer MUST NOT
+present a `slice_only` column as an as-of-T value), enforced by the
+modes' own validation, inherited as a precondition, not a seam rule. What
+remains at the seam is one ask-scoped gate over value-*reads*: a shape
+whose plan reads a `slice_only` records-table column as a value — a
+`filter:` source, an `fk` hop's reference property, a lookup key — must
+fail the first `state` ask, because the value at T is unknowable and the
+truncated tape does not carry the column. The gate is not a parallel
+enumeration of the plan's reads — an `fk` hop's reference properties are
+pathfind results, not config declarations; only the mode knows them.
+**`ShapedStateReadable` is the mode's own full validation, re-run
+against the truncated sidecar view** on the first `state` ask —
+config-and-sidecar-only, before any compile, the same validation
+`open_shaped_playback` ran against the physical sidecar. A plan reading
+a dropped column fails the mode's own column resolution naturally; the
+seam re-raises the failure as `PlaybackError`, naming the column and
+adding the slice_only framing (the seam knows exactly which columns the
+view drops), and naming the reading config path where the mode's
+existing unresolvable-column error does (improving those messages to
+name the path is mode-side hygiene, not a seam requirement). Gate and
+world cannot disagree: the check and the compile consult the same
+sidecar view, so "validates" and "binds" are one fact. The carve-outs
+are structural, never branches in the gate: the sub-type split's
+discriminator read passes because the view *carries* the discriminator
+(the classification column, the same current-value convention as the
+tier-1 stamps — invariant 5's carve-out), and `last_mutation_sim_time`
+reads pass because the view presents the recorded trail. That is the
+domain fact the mechanism encodes — `slice_only` is one temporal class
+in two roles: sim-minted classification (the discriminator, written at
+creation and read everywhere as a filing label — carried) and
+scenario-author mechanism state (steering bookkeeping that is part of
+the domain at no T — the reason for the export-wide refuse posture),
+distinguished mechanically by the discriminator name rule the truncated
+surface already declares, never by per-column judgment — so validating
+against the view *is* asking whether the read names something in the
+exported world. `window` on the same head is separately gated by the
+shipped windowed business rules.
+
+**The bridging theorem.** Truncation at the slice bound is the identity
+presentation of the tape, so `state(T_slice)` is value-identical to the
+shape's full export for every shape whose `state` ask is legal (its
+value-read gate passes) — with one declared condition: an
+lmst-sourced value equals its full-export value exactly when the emit's
+physical `last_mutation_sim_time` equals its recorded trail, which the
+high-water clause makes the only possible direction of divergence and
+which a producer whose every advance is a recorded event — the reference
+producer — satisfies on every record. This is the
+equation that makes `base` mode a thin renderer over shaped state (claim A)
+and defines the incremental driver's re-seam bar (claim C). The interior-T
+generalization is likewise a stated property: `state(T)` equals the shape's
+full export over a *materialized* truncated emit — one whose tables are the
+truncated relations written out physically, the trail column included — so
+the virtual mechanism always has a dumb-but-obviously-correct oracle.
 
 ### Permissive playback — totality over structurally-conformant tapes
 
@@ -517,8 +878,8 @@ or cast may silently drop or error on a row a semantic defect made weird.
 | `delete_rows` | the record's events/state are simply absent; a `record_ids` filter naming it matches nothing; surviving membership rows whose owner was deleted play as orphans (`owner_sub_type` `NULL`) |
 | `shift_sim_time` / non-monotonic `history` | events order by the shifted values under the canonical key; snapshots reconstruct from the shifted values (the consistency algebra's temporal precondition is broken — the manifest declares it) |
 | `distort_intervals` (overlap / gap / inverted) | membership events unpivot verbatim; containment answers by the total predicate (likewise outside the algebra's precondition) |
-| `null_cells` / `mutate_cells` | values flow through as codec `VARCHAR` / `NULL` — the sub-type discriminator included: a resampled record plays as the sub-type its cell now names, out-of-domain / string dirt stamps verbatim (reachable via whole-kind selection), a nulled discriminator stamps `NULL` |
-| `schema_drift` | reads follow the regenerated sidecar; a selection naming a dropped column fails resolvability at open — faithful, because the table genuinely lacks it |
+| `null_cells` / `mutate_cells` | values flow through as codec `VARCHAR` / `NULL` — the sub-type discriminator included: a resampled record plays as the sub-type its cell now names, out-of-domain / string dirt stamps verbatim (reachable via whole-kind selection), a nulled discriminator stamps `NULL`. Under tier-2 `state`, a tracked value whose corrupted history text does not parse as its column's declared type reconstructs `NULL` (TRY_CAST — a cast never errors; the manifest is the answer key) |
+| `schema_drift` | reads follow the regenerated sidecar; a selection naming a dropped column fails resolvability at open — faithful, because the table genuinely lacks it. A dropped discriminator on a still-sub-typed kind stamps `sub_type` / `owner_sub_type` `NULL` on every record; naming `sub_types` / `owner_sub_types` against it fails at open (the predicate needs the column) |
 
 Anything genuinely wrong with a tape is fixed upstream (producer or
 corrupter); the seam never defends downstream.
@@ -535,7 +896,7 @@ corrupter); the seam never defends downstream.
 | empty population (a sub-type with zero rows in the slice) | zero events; zero-row typed tables — declared atoms always answer (the declared-but-empty rule) |
 | selection resolvability failure (unknown kind, sub-type, property, membership table, field) | `PlaybackError` at `open_playback` — fail-fast at open, before any data read |
 | shaped config invalid (the mode's own full validation) | fail-fast at `open_shaped_playback` — the mode's existing validation errors pass through |
-| ask-scoped shape gates (the windowed business rules at `window`; the reconstructibility gate at `state`) | fail-fast on the ask's first call, sidecar-only — the rules' existing errors pass through; the seam-level gate raises `PlaybackError` |
+| ask-scoped shape gates (the windowed business rules at `window`; the `ShapedStateReadable` view re-validation at `state`) | fail-fast on the ask's first call, config-and-sidecar-only — the windowed rules' existing errors pass through; the view re-validation re-raises as `PlaybackError`, naming the column (and the reading config path where the mode's error names it) |
 | source shape with `anchor=None` | error at `open_shaped_playback` — the source mode's mandatory-anchor rule, surfaced at open |
 | `window` / `state` on an empty window / empty population | zero-row typed tables, every declared table present (the declared-but-empty rule) |
 | upstream guard/reader errors | pass through unchanged (`ExportError` from the single-branch guard, `TableNotFoundError`, the reader's version-gate errors) |
@@ -545,7 +906,9 @@ corrupter); the seam never defends downstream.
 1. **Pull-only.** No operation performs I/O until an answer is pulled;
    `open_playback` reads the sidecar only. The seam contains no clock reads,
    no sleeps, no sinks, no sessions — timing authority cannot exist here by
-   construction.
+   construction. Outstanding lazy answers are independently pullable:
+   pulling one never invalidates another on the same emit (§ The event
+   stream).
 2. **Deterministic.** Same tape + same selection + same anchor + same ask
    arguments + same code version → identical events, identical `seq`,
    identical tables. Corrupted tapes included.
@@ -562,15 +925,34 @@ corrupter); the seam never defends downstream.
    tables, junction / history_interval extract-on-change, SCD-2's
    never-materialized `valid_to`), so their per-T agreement is up to the
    class's documented consumer merge, with exact equality guaranteed at the
-   slice bound (the bridging invariant). Across tiers, a shaped change-log
+   slice bound (the bridging theorem). Across tiers, a shaped change-log
    table over `[T1, T2)` and a tier-1 `events(T1, T2)` pull carry the same
    change set. Cross-paradigm *and* cross-shape consistency is a seam
    guarantee — scoped and stated per class, never implied where a class's
    delivery cannot support it.
 5. **Faithful reshaping + temporal honesty, inherited per answer.** Every
    delivered value traces to a base value or a declared recoding; no value on
-   an answer derives from base state later than the answer's time key (the
-   declared temporally-constant sources excepted).
+   an answer derives from base state later than the answer's time key, with
+   two stated exceptions: `temporal_class: constant` sources — current values
+   the contract declares valid at every T — and the discriminator
+   classification reads: the `sub_type` / `owner_sub_type` stamps and the
+   sub-type split, which read the spine discriminator's current value at
+   every T (the routing surface's shipped convention; the contract does not
+   pin the discriminator's temporal class). Dispatch is on `temporal_class`,
+   the contract's point-in-time surface. A `slice_only` source appears in no
+   answer of either tier — refused at selection (tier 1) and by the modes'
+   own validation before any export runs (tier 2, the contract-mandated
+   refusal). `last_mutation_sim_time` appears under its own name in no
+   answer of either tier — never selectable at tier 1 (not a `prop__`
+   column), a reserved output name at tier 2 (the presentation-name
+   posture) — while its value flows freely under presentation names; in a
+   `state` answer the presented value is the recorded trail (§ Shaped
+   state), the last recorded content change at T, honest by construction.
+   A `state` plan additionally never *reads* a `slice_only` column as a
+   value (`ShapedStateReadable` — the mode's validation re-run against
+   the truncated sidecar view), the discriminator classification reads
+   excepted structurally (the view carries the discriminator); the seam
+   never substitutes a slice value.
 6. **Permissive totality.** Every operation is total over
    structurally-conformant input; semantic defects flow through unchanged.
 7. **Rendered-instant agreement.** One absolute instant renders
@@ -580,13 +962,19 @@ corrupter); the seam never defends downstream.
    resolved instant.
 8. **Layer direction.** Tier 1 imports the reader, derivations, the anchor
    surface, and `errors` — never `exporters.*`, never `config`. Tier 2
-   imports `config` and the modes' pure compile surfaces. The chain
-   tier 2 → modes → derivations → reader is acyclic by construction, with
-   tier 1 a sibling consumer of derivations; a mode never imports either
-   tier.
-9. **Bridging.** `state(T_slice)` equals the shape's full export — the seam
-   is provably sufficient to re-write the shipped verbs on (the CLI is the
-   seam's permanent proof of sufficiency).
+   imports `config`, the modes' pure compile surfaces, the derivations
+   truncated-tape surface, and the reader's `Emit` (the truncated emit-view
+   composition). The chain tier 2 → modes → derivations → reader
+   is acyclic by construction (tier 2's direct derivations edge adds no
+   cycle), with tier 1 a sibling consumer of derivations; a mode never
+   imports either tier.
+9. **Bridging (a theorem, not a stipulation).** Truncation at the slice
+   bound is the identity presentation of the tape, so `state(T_slice)`
+   equals the shape's full export for every shape whose `state` ask is
+   legal — lmst-sourced values under the recorded-trail condition
+   (§ Shaped state, The bridging theorem) —
+   the seam is provably sufficient to re-write the shipped verbs on (the CLI
+   is the seam's permanent proof of sufficiency).
 10. **Inherited.** Version-gated input, sidecar-driven schema discovery,
     single-branch guard, no producer dependency.
 
@@ -601,15 +989,22 @@ config model, no new CLI flag.
 
 ### Selection and identity types
 
+The selection pair carries the `Atom` infix deliberately: a shipped
+config-level `MembershipSelection` (streaming's per-kind selection) already
+exists, and one name never means two shapes — the playback pair is named
+apart, symmetrically.
+
 ```python
 @dataclass(frozen=True)
 class RecordAtom:
     """One record population: a sub-type of a kind, or a whole non-sub-typed kind.
 
-    sub_type is None when the kind declares no discriminator domain, or when
-    the record's discriminator cell is NULL (a corrupted tape). On a
-    corrupted tape it may hold an undeclared value verbatim — the stamp is
-    data; the declared domain is only the selection vocabulary.
+    sub_type is None when the kind declares no discriminator domain, when
+    the record's discriminator cell is NULL (a corrupted tape), or when
+    the sidecar does not declare the discriminator column (a drifted
+    tape). On a corrupted tape it may hold an undeclared value verbatim —
+    the stamp is data; the declared domain is only the selection
+    vocabulary.
     """
     kind: str
     sub_type: str | None
@@ -622,8 +1017,8 @@ class MembershipAtom:
     owner_sub_type is None when the owner kind declares no discriminator
     domain, when the owner has no spine row (a corrupted tape's orphan
     membership row — played verbatim, never dropped), or when the owner's
-    discriminator cell is NULL. May hold an undeclared value verbatim on a
-    corrupted tape.
+    discriminator cell is NULL or its column is undeclared (a drifted
+    tape). May hold an undeclared value verbatim on a corrupted tape.
     """
     owner_kind: str
     owner_sub_type: str | None
@@ -631,36 +1026,43 @@ class MembershipAtom:
 
 
 @dataclass(frozen=True)
-class RecordSelection:
+class RecordAtomSelection:
     """Select record populations of one kind, with properties and instances.
 
     sub_types: declared discriminator values to include — a predicate over
         the spine discriminator; the empty tuple means the whole kind (no
         discriminator filter; the bare kind when not sub-typed). Non-empty is
-        legal only for a sub-typed kind.
+        legal only for a sub-typed kind whose discriminator column the
+        sidecar declares (the drifted-tape rule).
     properties: bare property names riding after-images and snapshot rows, of
-        either SCD class; the empty tuple means identity + lifecycle only.
-        Projection only — never changes the event row set or seq.
+        temporal class tracked or constant — a slice_only property fails at
+        open (the contract's as-of-T refusal); the empty tuple means
+        identity + lifecycle only; None means the full selectable set —
+        every tracked + constant property, resolved at open (never a
+        slice_only column). Projection only — never changes the event
+        row set or seq.
     record_ids: the instance axis — restrict to these record ids; None means
         no instance restriction. Must be non-empty when given. Unknown ids
         select nothing (never an error).
     """
     kind: str
     sub_types: tuple[str, ...]
-    properties: tuple[str, ...]
+    properties: tuple[str, ...] | None
     record_ids: frozenset[str] | None
 
 
 @dataclass(frozen=True)
-class MembershipSelection:
+class MembershipAtomSelection:
     """Select one membership table, with owner populations and instances.
 
     owner_sub_types: declared owner discriminator values to include — a spine
         predicate (an orphan owner matches no named value); empty tuple = all
         owners, orphans included. Non-empty is legal only for a sub-typed
-        owner kind.
+        owner kind whose discriminator column the sidecar declares (the
+        drifted-tape rule).
     fields: bare element-schema field names riding payloads and containment
-        rows; empty tuple = owner identity only. Projection only — never
+        rows; empty tuple = owner identity only; None = the full
+        element-schema field set, resolved at open. Projection only — never
         changes the event row set or seq.
     owner_record_ids: restrict to these owner ids; None = no restriction.
         Must be non-empty when given. Unknown ids select nothing.
@@ -668,7 +1070,7 @@ class MembershipSelection:
     owner_kind: str
     owner_sub_types: tuple[str, ...]
     property_name: str
-    fields: tuple[str, ...]
+    fields: tuple[str, ...] | None
     owner_record_ids: frozenset[str] | None
 
 
@@ -676,11 +1078,11 @@ class MembershipSelection:
 class PlaybackSelection:
     """The head's full atom selection.
 
-    At most one RecordSelection per kind and one MembershipSelection per
+    At most one RecordAtomSelection per kind and one MembershipAtomSelection per
     (owner_kind, property_name); at least one selection overall.
     """
-    records: tuple[RecordSelection, ...]
-    memberships: tuple[MembershipSelection, ...]
+    records: tuple[RecordAtomSelection, ...]
+    memberships: tuple[MembershipAtomSelection, ...]
 ```
 
 ### The event type
@@ -741,8 +1143,10 @@ def open_playback(
     Raises:
         PlaybackError: The selection fails a validation rule (empty selection,
             duplicate atom, unknown kind / sub-type / property / membership
-            table / field, sub_types on a non-sub-typed kind, empty
-            record_ids set).
+            table / field, a duplicate property / field name, a slice_only
+            property, sub_types / owner_sub_types on a non-sub-typed kind
+            or against an undeclared discriminator column,
+            an empty record_ids / owner_record_ids set).
         ExportError: The sidecar enumerates zero or more than one branch
             (single-branch guard, passed through).
     """
@@ -829,13 +1233,17 @@ class PlaybackSnapshot:
     def record_state(self, kind: str) -> pyarrow.Table:
         """The kind's state table at T.
 
-        Columns: STATE_AT_COLUMNS (record_id; presentation_id when the kind
-        carries it; created_sim_time; active; deactivated_at), a sub_type
-        stamp (the spine discriminator verbatim, undeclared values included;
-        NULL when the kind is not sub-typed or the cell is NULL), one
-        prop__<p> per selected property, and — when the head's anchor
-        resolves — a <name>_ts sibling per raw-ns lifecycle column. Typed at
-        zero rows.
+        Columns: STATE_AT_COLUMNS (record_id; created_sim_time; active;
+        deactivated_at), the fold's own presentation_id column when the kind
+        carries one, a sub_type stamp (the spine
+        discriminator verbatim, undeclared values included; NULL when the
+        kind is not sub-typed, the cell is NULL, or the discriminator
+        column is undeclared), one prop__<p> per
+        selected property, and — when the head's anchor resolves — a
+        <name>_ts sibling per raw-ns lifecycle column. Typed at zero rows.
+        Column order is contract (§ Snapshot): the fold's canonical
+        relation verbatim — properties in sidecar declaration order — then
+        sub_type, then the _ts siblings in raw-column order.
 
         Args:
             kind: A kind named by the head's selection.
@@ -855,11 +1263,16 @@ class PlaybackSnapshot:
         """The membership table's containment rows at T.
 
         Columns: MEMBERSHIP_STATE_AT_COLUMNS (record_id — the owner;
-        joined_sim_time; one column per selected field), an owner_sub_type
+        joined_sim_time; each selected field's column shape — scalar
+        elem__<f> or the reference member__<f>__kind / member__<f>__id
+        pair), an owner_sub_type
         stamp (verbatim; NULL when the owner kind is not sub-typed, the owner
-        row is an orphan, or its discriminator cell is NULL), and — when the
+        row is an orphan, its discriminator cell is NULL, or the
+        discriminator column is undeclared), and — when the
         anchor resolves — joined_sim_time_ts. left_sim_time is never present.
-        Typed at zero rows.
+        Typed at zero rows. Column order is contract (§ Snapshot): the
+        fold's canonical relation verbatim — fields in sidecar
+        element-schema order — then owner_sub_type, then joined_sim_time_ts.
 
         Args:
             owner_kind: The owner kind of a selected membership table.
@@ -905,7 +1318,9 @@ class PlaybackPosition:
 class ShapedTable:
     """One output table of a shaped answer.
 
-    name: the shape's declared output table name (author-verbatim).
+    name: the shape's output table name, exactly as its full export names it
+        (author-declared for a dimensional shape; genre-derived and
+        `rename`-mapped for a source shape).
     delivery: how a caller lands this relation — 'append' (land the rows
         additively; where a class revises a row across windows — junction /
         history_interval extract-on-change — reconciling is the class's
@@ -918,6 +1333,26 @@ class ShapedTable:
     table: pyarrow.Table
 
 
+@dataclass(frozen=True)
+class ShapedTableDecl:
+    """One declared output table of the shape — knowable at open, no data read.
+
+    name: the shape's output table name, exactly as its full export names it.
+    window_delivery: the table's delivery class under window() — static per
+        table class / genre (§ Shaped window) — or None for a table class
+        the windowed-grain rule rejects (history_interval / membership
+        grain). None is diagnostic, never a skip: the rule is whole-shape,
+        so while any declared table carries None, window() refuses the
+        whole shape on its first ask, naming the table; the decl tells the
+        caller at open which table its config must drop to window this
+        shape. state() is unaffected — every table of state() is delivered
+        'snapshot' regardless. This is the only delivery fact a caller
+        needs before its first ask (sink provisioning, DDL, topic setup).
+    """
+    name: str
+    window_delivery: Literal["append", "snapshot"] | None
+
+
 def open_shaped_playback(
     emit: Emit,
     config: ExportConfig,
@@ -926,9 +1361,14 @@ def open_shaped_playback(
     """Bind a shaped head to an open emit and a declared target shape.
 
     Runs the mode's full config validation at open (sidecar-only, no data
-    reads). The windowed business rules and the reconstructibility gate are
-    ask-scoped — validated on the first window() / state() call respectively
-    — so a shape legal for one ask but not the other still opens. The
+    reads) — a shape projecting a slice_only column is refused here by the
+    mode's own rules (the contract's refuse posture), and an output column
+    named last_mutation_sim_time by the mode's reserved output-name check
+    (the presentation-name posture). The windowed business rules and the
+    state value-read
+    gate are ask-scoped — validated on the first window() / state() call
+    respectively — so a shape legal for one ask but not the other still
+    opens. The
     shape is the config's mode + mode section + shared exporter features;
     the config's rebase block is not read (the caller resolves the anchor)
     and its incremental block is not read (cadence-boundary sequences are
@@ -955,12 +1395,17 @@ def open_shaped_playback(
 class ShapedPlayback:
     """A shaped tape head: the target shape's tables per window or as of T."""
 
-    def tables(self) -> tuple[str, ...]:
-        """The shape's declared output table names, in declaration order.
+    def tables(self) -> tuple[ShapedTableDecl, ...]:
+        """The shape's declared output tables, in the shape's canonical
+        order: config declaration order for a dimensional shape; the source
+        mode's deterministic full-export enumeration order for a source
+        shape.
 
         Returns:
-            Every table window() and state() will deliver, independent of
-            data (the declared-but-empty rule).
+            One ShapedTableDecl per table window() and state() will deliver,
+            independent of data (the declared-but-empty rule) — name and
+            static window delivery class, so a caller can provision sinks
+            before any ask.
         """
 
     def window(
@@ -974,7 +1419,7 @@ class ShapedPlayback:
         genre is the promoted window-membership contract (§ Shaped window);
         every value is its full-export value — the window selects rows, never
         recomputes them. One ShapedTable per declared table, zero-row typed
-        relations included, in declaration order.
+        relations included, in tables() order.
 
         Args:
             start_sim_time: Inclusive lower bound (ns); >= 0.
@@ -992,19 +1437,29 @@ class ShapedPlayback:
     def state(self, at_sim_time: int) -> tuple[ShapedTable, ...]:
         """The shape's tables as if the emit's slice ended at T (inclusive).
 
-        Truncated-tape semantics per table class (§ Shaped state); delivery
-        is 'snapshot' on every table. state(T_slice) is value-identical to
-        the shape's full export (the bridging invariant).
+        The mode's full-export compile over the truncated tape (§ Shaped
+        state); delivery is 'snapshot' on every table. state(T_slice) is
+        value-identical to the shape's full export (the bridging theorem).
 
         Args:
             at_sim_time: The inclusive position T (ns); >= 0.
 
         Returns:
-            One ShapedTable per declared output table.
+            One ShapedTable per declared output table, in tables() order.
 
         Raises:
-            PlaybackError: at_sim_time < 0, or the shape fails the
-                reconstructibility gate (first state call).
+            PlaybackError: at_sim_time < 0, or the shape fails the mode's
+                own validation re-run against the truncated sidecar view
+                (first state call — ShapedStateReadable): a plan reading
+                a slice_only records-table column as a value (a filter,
+                fk hop, or lookup key) fails column resolution against
+                the view; the re-raised error names the column, and the
+                reading config path where the mode's error names it.
+                Projection of a slice_only column cannot
+                reach here: the modes' own validation refuses it at open
+                (the contract's refuse posture). last_mutation_sim_time
+                reads need no gate — the view presents the recorded
+                trail, honest at T.
         """
 ```
 
@@ -1025,7 +1480,8 @@ def build_membership_state_at_sql(
     the exclusive horizon: joined_sim_time < horizon_ns AND (left_sim_time IS
     NULL OR left_sim_time >= horizon_ns). Columns are
     MEMBERSHIP_STATE_AT_COLUMNS — record_id (the owner), joined_sim_time (raw
-    ns) — plus one column per selected element-schema field in
+    ns) — plus each selected element-schema field's column shape (scalar
+    elem__<f>, or the reference pair member__<f>__kind / member__<f>__id) in
     resolve_membership_columns order, each cast to codec VARCHAR.
     left_sim_time is never projected (future state relative to the horizon).
     Ordered by (joined_sim_time, record_id, <field tail>), the tail compared
@@ -1053,14 +1509,220 @@ def build_membership_state_at_sql(
     """
 ```
 
+### The truncated-tape surface (new derivations residents)
+
+Three relation builders and one sidecar view presenting the emit as if its
+slice ended at `at_sim_time` (inclusive). Each builder returns a complete
+SELECT that replaces its base table inside a mode's full-export compile
+(§ Shaped state); totality
+over structurally-conformant input holds as for the folds. Cross-reads
+inside a builder follow the one-consistent-truncated-world rule via inline
+truncation predicates; a builder's read of the table it presents names the
+physical table (§ The compile indirection, binding rules). No ORDER BY
+contract — a replacing relation's order is imposed by the compile that reads
+it.
+
+```python
+def build_truncated_history_sql(
+    fork_path: str,
+    at_sim_time: int,
+) -> str:
+    """The history table truncated at T.
+
+    Rows with sim_time <= at_sim_time, filtered to fork_path; column shape
+    verbatim (history is a fixed table).
+
+    Args:
+        fork_path: The sole branch, from require_single_branch.
+        at_sim_time: The inclusive truncation position T (ns); >= 0.
+
+    Returns:
+        A complete SELECT with the history table's column shape.
+    """
+
+
+def build_truncated_membership_sql(
+    sidecar: Sidecar,
+    fork_path: str,
+    owner_kind: str,
+    property_name: str,
+    at_sim_time: int,
+) -> str:
+    """membership__<owner_kind>__<property_name> truncated at T.
+
+    Intervals with joined_sim_time <= at_sim_time, filtered to fork_path;
+    left_sim_time masked NULL when > at_sim_time (an interval still open at
+    T, exactly as a slice-at-T emit renders it); every other column verbatim.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from require_single_branch.
+        owner_kind: The membership table's owner kind.
+        property_name: The membership table's collection property.
+        at_sim_time: The inclusive truncation position T (ns); >= 0.
+
+    Returns:
+        A complete SELECT with the membership table's column shape.
+
+    Raises:
+        TableNotFoundError: No membership__<owner_kind>__<property_name>
+            table is in the sidecar.
+    """
+
+
+def build_truncated_records_sql(
+    sidecar: Sidecar,
+    fork_path: str,
+    kind: str,
+    at_sim_time: int,
+) -> str:
+    """records__<kind> reconstructed as of T.
+
+    One row per record with created_sim_time <= at_sim_time, filtered to
+    fork_path. Columns are the physical table's shape with the declared
+    deviations. Slice_only columns are absent (the export-wide refuse
+    posture; ShapedStateReadable — the mode's validation re-run against
+    the truncated sidecar view — refuses the plans that would read one as
+    a value) — except a sub-typed kind's slice_only discriminator
+    prop__<kind>_type, carried verbatim as the classification column the
+    routing / sub-type-split convention reads (invariant 5's carve-out; a
+    tracked or constant discriminator follows its class's own rule); the
+    column-list deviation is mirrored by the truncated sidecar view.
+    last_mutation_sim_time is presented as the recorded trail —
+    greatest(created_sim_time, the record's latest tracked history
+    sim_time <= at_sim_time, deactivated_at when <= at_sim_time): the last
+    recorded content change at T, never the physical value (whose
+    advances need not leave history — the contract binds it as a
+    high-water mark only); membership activity is deliberately not a
+    component (its timeline belongs to the membership tables). Otherwise:
+    identity columns and record_index verbatim
+    (record_index is slice-stable by contract); active / deactivated_at
+    horizon-rendered; presentation_id verbatim; each prop__<p> of
+    temporal_class constant verbatim, of class tracked reconstructed as of T
+    and TRY_CAST back to the column's sidecar-declared type (the codec
+    round-trip; NULL where a corrupted history value does not parse as the
+    declared type — a cast never errors, the totality invariant); each
+    ref_index__<name> re-derived from the reconstructed
+    prop__<name> via the target kind's truncated spine (the
+    one-consistent-truncated-world rule; the cross-read carries its inline
+    truncation predicate — § The compile indirection): NULL beside a NULL
+    reference, and NULL beside a verbatim non-NULL reference that resolves
+    to no truncated spine row (dangling, mispointed, or naming a record
+    created after T).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from require_single_branch.
+        kind: The record kind to reconstruct.
+        at_sim_time: The inclusive truncation position T (ns); >= 0.
+
+    Returns:
+        A complete SELECT with the records table's column shape minus its
+        slice_only columns (the discriminator carve-out excepted), the
+        last_mutation_sim_time column presenting the recorded trail.
+
+    Raises:
+        TableNotFoundError: records__<kind> is not in the sidecar.
+    """
+
+
+def build_truncated_sidecar(
+    sidecar: Sidecar,
+) -> Sidecar:
+    """The truncated tape's sidecar view.
+
+    Identical to the physical sidecar except that each records__<kind>
+    table entry's column list drops every temporal_class slice_only
+    column — a sub-typed kind's slice_only discriminator
+    prop__<kind>_type excepted (the classification carve-out) — exactly
+    the columns build_truncated_records_sql does not project
+    (last_mutation_sim_time stays declared: the truncated relation
+    presents it as the recorded trail). Every other table entry and every
+    other sidecar field is unchanged — the branch's slice bound included,
+    which is why no compile path under state may read a slice bound from
+    the sidecar (a stated invariant of the compile indirection). Pure and
+    T-independent: the dropped column set is a
+    function of the declared schema, not of the truncation position.
+    Column-list agreement with the relation builders is a stated invariant
+    of the surface.
+
+    Args:
+        sidecar: The open emit's physical sidecar.
+
+    Returns:
+        A Sidecar describing the truncated tape; tier-2 state presents it
+        over the already-open connection through the reader's public Emit
+        composition (the truncated emit view).
+    """
+```
+
+### The compile indirection (tier 2 `state`)
+
+Each mode's pure compile surface gains one additive, time-agnostic
+parameter:
+
+```python
+base_relations: Mapping[str, str] | None = None
+```
+
+Physical base-table name (`history`, `records__<kind>`,
+`membership__<K>__<p>`) → replacing relation (a complete SELECT). When
+given, every base-table read in the compiled plan — the faithful-read
+builders and the folds the mode composes — resolves through the mapping,
+falling back to the physical name when unmapped. When absent, compilation is
+byte-identical to today; the full-export and windowed paths never pass it.
+Tier-2 `state` builds the mapping with **one entry per base table the
+sidecar declares** — `history`, every `records__<kind>`, every
+`membership__<K>__<p>` — never just the shape's declared sources: fk-hop
+target spines and lookup reads must resolve truncated too, so an unmapped
+fallback to a physical base table is unreachable under `state` (an
+unreferenced CTE costs nothing — the engine prunes it). It invokes the
+mode's full-export compile with the mapping and against the truncated emit
+view (§ Shaped state, The truncated sidecar view) — the compile's sidecar
+input is the view, so every faithful builder enumerates exactly the
+columns the replacing relations carry — and the mode never sees a horizon.
+
+**Realization: name shadowing.** The mode applies the mapping by wrapping
+its compiled query in one CTE per mapped name — `WITH history AS
+(<replacing SELECT>), ... SELECT * FROM (<compiled query>)`; a wrap, not a
+textual prefix, because a compiled query may already open with its own
+`WITH`. Every read of a mapped name inside fold- and builder-authored SQL
+then resolves to the replacing relation, with no signature change anywhere
+below the mode (the folds and the reader stay untouched, as declared).
+Name binding is contract, never an engine default — three rules:
+
+- **A replacing relation's self-read binds physical.** Each replacing
+  SELECT reads the base table it presents; inside its own CTE that read
+  binds to the physical table (standard non-recursive `WITH` scoping — a
+  CTE's own name is not in scope in its body). The implementation pins this
+  binding with a test, so an engine upgrade cannot silently rebind it.
+- **A replacing relation's cross-reads are binding-insensitive by
+  construction.** A replacing SELECT's read of a *different* base table
+  carries truncated-world semantics (§ One consistent truncated world). It
+  never relies on sibling-CTE resolution — kinds may reference each other
+  mutually, so sibling references could cycle: the builder inlines the
+  truncation predicate on every cross-read (`sim_time <= T` on a `history`
+  read, `created_sim_time <= T` on a spine read). Because every column such
+  a read touches is verbatim under truncation (spine identity columns,
+  `history` rows), the inlined predicate makes the read's result identical
+  whether the engine binds the name to a sibling CTE or the physical table
+  — the semantics hold under either binding.
+- **The mode's own reads shadow totally.** Two existing conventions thereby
+  become stated invariants of the compiled-SQL surface: base tables are
+  always read as unqualified identifiers naming the physical table exactly
+  — the shipped SQL quotes them (`FROM "history"`), which still resolves to
+  a same-named CTE; schema-qualification would not, and is therefore barred
+  — and no internal CTE alias may equal a physical base-table name (the
+  underscore-prefixed alias convention, now load-bearing).
+
 ### Errors
 
 ```python
 class PlaybackError(Exception):
     """A playback-seam contract violation: an unresolvable selection, an
-    invalid ask argument, or a seam-level shape gate (reconstructibility,
-    source-shape anchor). Never raised for a data condition — semantic
-    defects flow through (permissive playback)."""
+    invalid ask argument, or a seam-level shape gate (the state slice_only
+    value-read refusal, source-shape anchor). Never raised for a data
+    condition — semantic defects flow through (permissive playback)."""
 ```
 
 ## Validation Rules
@@ -1078,18 +1740,22 @@ methods (argument rules). Every violation raises `PlaybackError`.
 | Rule | Checks | Error message shape |
 |---|---|---|
 | `SelectionNonEmpty` | `records` + `memberships` name at least one selection | `"playback selection is empty"` |
-| `RecordKindResolvable` | each `RecordSelection.kind` has a `records__<kind>` table in the sidecar | `"unknown kind {kind!r}"` |
-| `SubTypesDeclared` | each `sub_types` value is in `subtype_values(kind)`; `sub_types` non-empty only when the kind is sub-typed; no duplicate values | `"kind {kind!r} declares no sub-type {value!r}"` / `"kind {kind!r} is not sub-typed"` |
-| `PropertiesResolvable` | each `properties` name has a `prop__<name>` column on the kind | `"kind {kind!r} has no property {name!r}"` |
+| `RecordKindResolvable` | each `RecordAtomSelection.kind` has a `records__<kind>` table in the sidecar | `"unknown kind {kind!r}"` |
+| `SubTypesDeclared` | each `sub_types` value is in `subtype_values(kind)`; `sub_types` non-empty only when the kind is sub-typed *and* the sidecar declares the discriminator column `prop__<kind>_type` (a drifted tape may lack it — the predicate needs the column); no duplicate values | `"kind {kind!r} declares no sub-type {value!r}"` / `"kind {kind!r} is not sub-typed"` / `"kind {kind!r} lacks its discriminator column"` |
+| `PropertiesResolvable` | each `properties` name has a `prop__<name>` column on the kind; no duplicate names | `"kind {kind!r} has no property {name!r}"` / `"duplicate property {name!r}"` |
+| `PropertiesNotSliceOnly` | no `properties` name resolves to a `temporal_class: slice_only` column (`Sidecar.temporal_class`) — the contract's as-of-T refusal | `"property {name!r} on kind {kind!r} is slice_only — its value at T is unknowable"` |
 | `MembershipResolvable` | each `(owner_kind, property_name)` resolves to a sidecar membership table | `"no membership table for {owner_kind!r}.{property_name!r}"` |
-| `MembershipFieldsResolvable` | each `fields` name resolves to exactly one column shape (scalar or reference) on the table | `"membership {owner_kind!r}.{property_name!r} has no field {name!r}"` |
-| `AtomsUnique` | at most one `RecordSelection` per kind; at most one `MembershipSelection` per `(owner_kind, property_name)` | `"duplicate selection for {identity!r}"` |
-| `InstanceSetNonEmpty` | `record_ids` / `owner_record_ids` is `None` or a non-empty frozenset | `"empty record_ids — pass None for no restriction"` |
+| `OwnerSubTypesDeclared` | each `owner_sub_types` value is in `subtype_values(owner_kind)`; `owner_sub_types` non-empty only when the owner kind is sub-typed *and* the sidecar declares its discriminator column (the drifted-tape rule, as `SubTypesDeclared`); no duplicate values | `"kind {owner_kind!r} declares no sub-type {value!r}"` / `"kind {owner_kind!r} is not sub-typed"` / `"kind {owner_kind!r} lacks its discriminator column"` |
+| `MembershipFieldsResolvable` | each `fields` name resolves to exactly one column shape (scalar or reference) on the table; no duplicate names | `"membership {owner_kind!r}.{property_name!r} has no field {name!r}"` / `"duplicate field {name!r}"` |
+| `AtomsUnique` | at most one `RecordAtomSelection` per kind; at most one `MembershipAtomSelection` per `(owner_kind, property_name)` | `"duplicate selection for {identity!r}"` |
+| `InstanceSetNonEmpty` | `record_ids` / `owner_record_ids` is `None` or a non-empty frozenset | `"empty {record_ids|owner_record_ids} — pass None for no restriction"` (naming the offending field) |
 | `AskBoundsValid` | `events`: bounds non-negative, `start <= end` when both given; `snapshot` / `seek`: `at_sim_time >= 0` | `"invalid event-time bound"` |
 
-Unknown record *ids* are deliberately not a rule — an id filter is a
-predicate, and a corrupted tape may have deleted any id (see § Permissive
-playback).
+The naming rules (`PropertiesResolvable`, `PropertiesNotSliceOnly`,
+`MembershipFieldsResolvable`) apply to named tuples; `None` — the full-set
+form — resolves against the sidecar at open and cannot fail them. Unknown
+record *ids* are deliberately not a rule — an id filter is a predicate, and
+a corrupted tape may have deleted any id (see § Permissive playback).
 
 Tier-2 rules — the first two applied by `open_shaped_playback`, the rest
 ask-scoped (validated once, on the ask's first call):
@@ -1099,5 +1765,5 @@ ask-scoped (validated once, on the ask's first call):
 | `ShapedModeValid` | at open | the config passes its mode's full existing validation (dimensional plan rules, source plan/collision rules) | the mode's errors, passed through |
 | `ShapedAnchorRequired` | at open | a source shape has a non-None anchor | `PlaybackError` |
 | `ShapedWindowedRules` | first `window` ask | the shipped windowed business rules hold for the shape (immutable `fk` hops, raw-key ordinals, temporally constant slice reads / dim filters, no history_interval / membership grain under `window`) | the rules' existing errors, passed through |
-| `ShapedStateReconstructible` | first `state` ask | the shape projects no value source unreconstructible at a past horizon (`last_mutation_sim_time` as a projected value) | `PlaybackError` |
+| `ShapedStateReadable` | first `state` ask | the mode's own full validation, re-run against the truncated sidecar view (config-and-sidecar-only, before any compile): a plan reading a `slice_only` records-category column *as a value* (a `filter:` source, an `fk` hop's reference property, a lookup key) fails column resolution against the view — its value at a past T is unknowable, and the view does not carry the column. Carve-outs are structural, not gate branches: the carried discriminator (the sub-type split's classification read) and `last_mutation_sim_time` (presented as the recorded trail) are in the view, so those reads pass. (Projection of a `slice_only` column is refused by the modes' own validation at open — the contract's refuse posture, an inherited precondition, not a seam rule) | `PlaybackError` — the re-raised view-validation failure, naming the column and adding the slice_only framing; the reading config path where the mode's existing error names it |
 | `AskBoundsValid` (shared) | every ask | `window`: bounds non-negative, `start <= end`; `state`: `at_sim_time >= 0` | `PlaybackError` |
