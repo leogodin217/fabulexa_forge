@@ -22,7 +22,7 @@ target-schema file, and reads `record_roles` only in `init` — the export path 
 consults it. It reads through the Stage-1 reader only.
 
 ```
-emit (run.duckdb + base.json @ v4)
+emit (run.duckdb + base.json @ the supported `base_format_version`)
    │  (reader: Emit + Sidecar; trunk-only — sole branch)
    ├─ fabulexa-forge init   ─▶ commented candidate export config (sidecar-driven)
    └─ fabulexa-forge export ─▶ build_query_specs → one QuerySpec per declared table
@@ -287,18 +287,29 @@ and in not requiring a dim target.
 
 **Temporal safety (the crux).** `records__<kind>` holds only the *slice* value — each
 record's state at the branch's `slice_at`. That value is exact at a past interval only
-if the property never changes, i.e. it is **type-1** (`history_tracked: false`). A
-type-2 property's slice value is its *final* value; stamping it onto a past
-history-grain interval would fabricate a value that never held there. So `lookup` is
-gated to type-1 **along the entire path** — the terminal property and every reference
-hop column — and refused at validation otherwise. The SCD class is read per column from
-the sidecar (`ColumnSpec.history_tracked`).
+if the property is contract-valid at every T, i.e. `temporal_class: constant`. A
+`tracked` property's slice value is its *final* value; a `slice_only` property's past
+is unknowable outright; stamping either onto a past history-grain interval would
+fabricate a value that never (verifiably) held there. So `lookup` is gated to
+`temporal_class: constant` **along the entire path** — the terminal property and every
+reference hop column — the exempt sub-typed discriminator excepted (a classification
+read, any class — see [`slice-only.md`](slice-only.md) § The discriminator carve-out).
+The class is read per column through the sidecar's narrowing accessor.
 
-| Path SCD class | Result |
+| Path class (terminal or any hop) | Result |
 |---|---|
-| Terminal property and all hop columns `history_tracked: false` | Allowed — the slice value equals the value at every past interval |
-| Terminal property or any traversed hop column `history_tracked: true` | Refused — a type-2 slice value would fabricate a past value |
-| Emit does not carry the flag (`history_tracked_available()` is `False`) | Refused — the SCD class is unverifiable, and there is no `history`-table inference fallback: a false negative would admit a temporal paradox |
+| All `constant` | Allowed — the value is contract-valid at every T; projection is exact at any interval |
+| Exempt discriminator on the path, any class | Allowed — a classification read: the row's type tag at its current value, never presented as as-of. This admits a `tracked` discriminator terminal |
+| Any other `tracked` | Refused — a capability boundary: the slice value is the *final* value, and an as-of reconstruction is not a `lookup`; the error names the tracked column |
+| Any other `slice_only` | Refused — permanent: the value at the row's interval is unknowable; the error names the column and the class |
+| Temporal pair unavailable on a consulted column | Refused via the reader's `TemporalClassUnavailableError` — unverifiable is refused, never inferred |
+
+(A discriminator can appear on a `lookup` path only as the terminal property — hop
+columns carry references, and `prop__<K>_type` is an enum classification — but the
+exemption predicate is applied per consulted column, mechanically, with no
+terminal-vs-hop special case.) `Scd2NeedsHistory` keeps its `history_tracked` keying:
+it asks the SCD-class question ("does this kind have priors in `history`?"), which is
+exactly what the bit answers; only point-in-time safety keys on the class.
 
 Resolution and grain applicability:
 
@@ -513,7 +524,7 @@ carries the same declared sub-type set *and* the per-sub-type role, so one field
 set and the roles coherent, and its object-vs-string shape is itself the sub-typed-kind
 signal.
 
-`init` trusts a C1–C12-conformant emit exactly as the engine does — it does not
+`init` trusts a C1–C13-conformant emit exactly as the engine does — it does not
 re-validate — and relies on these guarantees:
 
 - `record_roles` is present whenever the emit carries ≥ 1 records kind; its absence raises
@@ -551,6 +562,21 @@ The proposal per kind:
   a kind, so there is no second discriminator to fan out on — an `actor` fact sub-type (e.g.
   `ride`) behaves like a bare-string fact with no modelling discriminator.
 
+**Column proposals are role-scoped.** The proposal loop classifies every
+records column through the reader's records-column taxonomy
+([`reader.md`](reader.md) § The records-column taxonomy) and proposes **payload
+and presentation columns only**. Identity columns (`fork_path`, `record_id`,
+`record_index`, `ref_index__<name>`) are never proposed; lifecycle columns are
+never proposed either — the SCD-2 stub's `valid_from` / `valid_to` are
+`history`-derived, not read from lifecycle columns. Non-exempt `slice_only`
+columns join them as never-proposed ([`slice-only.md`](slice-only.md)), each
+skip emitting one `slice-only-column-omitted` notice; the skip is column-level —
+it never removes a kind from proposal — and the exempt discriminator remains
+proposable and drives `filter` pre-fill. Any base column stays
+reachable by explicit author projection: identity columns are neither proposed
+nor specially forbidden in author config — a base column named explicitly
+projects faithfully, as any base value does.
+
 `init` is a pure function of `(emit, code version)`: kind and sub-type order come from the
 registry's lexicographic key order, the fact fan-out from the reader's `SELECT DISTINCT`
 native-type order; no topology traversal, RNG, or clock participates.
@@ -581,10 +607,11 @@ as a clear stderr message with a non-zero exit.
 6. **Author owns role and grain.** The engine never infers `role` or grain; `init`
    only proposes a candidate.
 7. **Lookup enrichment is temporally exact.** An accepted `lookup` column reads only
-   `history_tracked: false` columns along its entire path, so its projected value is
-   independent of `slice_at` and equals the value that held at the output row's
-   interval. A path that reads any type-2 column, or an emit that cannot verify the SCD
-   class, is refused at `build_query_specs` — never silently approximated.
+   `temporal_class: constant` columns along its entire path (the exempt discriminator
+   excepted — a classification read), so its projected value is independent of
+   `slice_at` and equals the value that held at the output row's interval. A path that
+   reads any other `tracked` or `slice_only` column, or a column whose temporal pair
+   is unavailable, is refused at `build_query_specs` — never silently approximated.
 8. **Authors no base-table SQL.** The engine names no base table in SQL it writes; it
    composes the reader's faithful-read builders and the derivations layer's interpretive
    relations and represents over them. A base-table name appears only inside an embedded
@@ -595,6 +622,13 @@ as a clear stderr message with a non-zero exit.
 10. **`init` derives role from the registry, never from topology.** Role for every kind
     and sub-type is read from `record_roles`; reference topology influences no role or
     exclusion decision.
+11. **`init` column proposals are role-scoped.** Only payload and presentation
+    columns are proposed; identity, lifecycle, and non-exempt `slice_only` columns
+    never are. Explicit author projection remains the path to any base column —
+    except a non-exempt `slice_only` column, which `SliceOnlyColumnRefused` rejects.
+12. **The `slice_only` posture.** No config-referenced value-read resolves to a
+    non-exempt `slice_only` column; the rules run always-on, full export included
+    ([`slice-only.md`](slice-only.md)).
 
 ## Validation Rules
 
@@ -626,11 +660,12 @@ error message. The remaining business rules run against the sidecar in
 | `FkTargetIsDim` | Each `fk.to` names a declared `role: dim` table |
 | `ReferencePathResolvable` | A `via: reference` FK has exactly one `references` `prop__` chain from the anchor kind to the dim's source kind, or a `path` hint naming one (each entry a `references` column whose target is the next hop) |
 | `MembershipEdgeResolvable` | A `via: membership` FK resolves to exactly one `membership__<kind>__<property>` table (`property` names it when the kind owns several); every `where` column is a real `elem__` column; `member_field` is a reference field (inferred when unique); some rows' `member__<member_field>__kind` equals the dim's source kind |
-| `DiscriminatorValueObserved` | A records `filter` value is among the kind's observed `enum_domains` values for that property (warn, not error — a declared-but-unobserved value yields an empty table). A property absent from `enum_domains` (e.g. a modelling discriminator like `decision_type`) carries no observed-value set, so its filter is not checked |
+| `DiscriminatorValueObserved` | A records `filter` value is among the kind's observed `enum_domains` values for that property (a notice, not an error — a declared-but-unobserved value yields an empty table; emitted as a `discriminator-value-unobserved` [`Notice`](notices.md) through the caller's sink). A property absent from `enum_domains` (e.g. a modelling discriminator like `decision_type`) carries no observed-value set, so its filter is not checked |
+| `SliceOnlyColumnRefused` | No config-referenced value-read resolves to a non-exempt `temporal_class: slice_only` column ([`slice-only.md`](slice-only.md)). The surface list is exhaustive over the grammar: `from`, `correlation`, records `filter` keys, `value_map.from`, `derived: timestamp` `source`, `derived: elapsed` `correlate_on` / `start_source` / `end_source` / `other_where` keys, `fk via: reference` resolved-path hop columns (the check runs over the hops the resolution actually traverses), `fk via: membership` `member_path` hop columns and `as_of`. (`lookup` reads are `LookupColumnSafety`'s. Membership element predicates and history-grain scoping are outside the population — those columns carry no class.) Always-on, full export included |
 | `OrdinalRefsSiblings` | `ordinal.partition_by` / `order_by` name sibling output columns of the same table |
 | `TimestampSourceAvailable` | Each `derived: timestamp`'s `source` is available on the table's grain (§ Timestamp source) |
 | `Scd2NeedsHistory` | An `scd: type2` table declares a `valid_from` `scd_window` column in `key`, the emit carries the `history_tracked` flag, and the kind has at least one tracked column (flag-authoritative; a tracked-but-unchanged column qualifies). A flag-absent emit is refused — re-emit with `history_tracked` — never reconstructed by `history`-table inference |
-| `LookupColumnSafety` | A `lookup` column resolves and reads only type-1 data: the terminal `records__<kind>` table and its `prop__<property>` exist; a unique reference path resolves from the anchor kind to `to` (or the `path` hint validates hop-by-hop); the emit carries `history_tracked` and the terminal property plus every traversed hop column are `history_tracked: false`; a zero-hop self lookup is not on a `records` grain (redundant with `from`); and the table is not `scd: type2` (the SCD-2 wide builder does not project lookup columns) |
+| `LookupColumnSafety` | A `lookup` column resolves and reads only temporally exact data: the terminal `records__<kind>` table and its `prop__<property>` exist; a unique reference path resolves from the anchor kind to `to` (or the `path` hint validates hop-by-hop); the terminal property plus every traversed hop column are `temporal_class: constant` (the exempt discriminator excepted, any class — § Lookup); a zero-hop self lookup is not on a `records` grain (redundant with `from`); and the table is not `scd: type2` (the SCD-2 wide builder does not project lookup columns) |
 | `ExcludedKindNotSourced` | No declared table sources an `exclude.kinds` kind |
 | `ExcludedTableNotSourced` | No declared table's source resolves to an `exclude.tables` sidecar table name |
 
@@ -640,8 +675,11 @@ author-authoritative (Principle #7), and the registry informs only `init`'s prop
 `ReferencePathResolvable`, `MembershipEdgeResolvable`, and `LookupColumnSafety` share
 the reference-resolution derivations' path-resolution logic
 ([`derivations.md`](derivations.md)), so validation's "is this resolvable?" and the
-executed resolution give one answer; all three read the sidecar and the
-`history_tracked` flag, never base tables.
+executed resolution give one answer; all three read the sidecar (the temporal pair
+included), never base tables.
+
+`build_query_specs` and every entry point that can emit a notice take a required
+`notice_sink` ([`notices.md`](notices.md)); the CLI supplies the stderr renderer.
 
 Output `fmt` is not a business rule: it is a CLI argument, so `cmd_export` rejects an
 unknown `--fmt` as a usage error before the emit opens, and `export_dimensional`
@@ -780,7 +818,7 @@ What the dimensional exporter deliberately does not own:
   the writers; Parquet is not.
 - **Conformance re-validation.** Neither the engine nor `init` re-validates the emit: the
   engine consumes `history_tracked` (C11) and `init` reads `record_roles` (C12) on an emit
-  both trust to be conformant (as they trust all of C1–C12) — see
+  both trust to be conformant (as they trust all of C1–C13) — see
   [`conformance.md`](conformance.md) § Boundaries.
 
 ## Related
@@ -790,7 +828,7 @@ What the dimensional exporter deliberately does not own:
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` resolution surface — origin/zone precedence, the `rebase` config + CLI flags, the anchor `derived: timestamp` renders through |
 | [`derivations.md`](derivations.md) | The interpretive layer this mode composes — versioned-intervals and reference-resolution; the source of the shared `require_single_branch` guard |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — `query_arrow`, the `history_tracked` flag, the faithful-read builders, the per-type decode contract |
-| [`conformance.md`](conformance.md) | The C1–C12 contract the input is trusted to satisfy |
+| [`conformance.md`](conformance.md) | The C1–C13 contract the input is trusted to satisfy |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The config grammar these semantics bind |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The input contract (table categories, `references`, membership, `history_tracked`) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |

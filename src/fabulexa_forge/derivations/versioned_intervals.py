@@ -222,7 +222,7 @@ def build_versioned_intervals_sql(
         TableNotFoundError: records__<kind> is not in the sidecar (its column list
             orders the prop columns). The fold's primary read, history, raises
             nothing for absence: it is a contract-guaranteed fixed-category table
-            (base-format C3), always present in a v4 emit.
+            (base-format C3), always present in an emit.
     """
     ordered_props = _ordered_tracked_properties(sidecar, kind, tracked_properties)
 

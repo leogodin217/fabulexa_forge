@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.source.plan import SourceTableSpec
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
@@ -123,16 +124,17 @@ def build_source_query_specs(
     config: "ExportConfig",
     anchor: "EffectiveAnchor | None",
     window: "Window | None",
+    notice_sink: "NoticeSink",
 ) -> list[QuerySpec]:
     """
     Compile the source plan to writer-ready QuerySpecs, optionally windowed.
 
     The source counterpart of the dimensional compile. Builds the source
-    plan, then one SELECT per output table composing the reader relations and
-    the row-state-events derivation (the mode authors no base-table SQL);
-    every structural sim-time column renders wallclock through the shared
-    anchor renderer, every change-log payload column casts from the fold's
-    codec VARCHAR back to its sidecar type.
+    plan, threading notice_sink to it, then one SELECT per output table
+    composing the reader relations and the row-state-events derivation (the
+    mode authors no base-table SQL); every structural sim-time column renders
+    wallclock through the shared anchor renderer, every change-log payload
+    column casts from the fold's codec VARCHAR back to its sidecar type.
 
     window=None keeps the full-export contract: every spec write_mode='create'.
     With a window, applies per-genre window membership and tags write_mode per
@@ -150,6 +152,7 @@ def build_source_query_specs(
         config: The validated export config (mode='source').
         anchor: The resolved effective anchor. Required.
         window: The window to filter to, or None for the full export.
+        notice_sink: Receiver for plan notices (slice-only-column-omitted).
 
     Returns:
         One QuerySpec per output table, in deterministic order.
@@ -160,13 +163,15 @@ def build_source_query_specs(
             'snapshot'` and window is None.
         ExportError: The single-branch guard or a source business rule fails
             (the SourceTableSpec resolution errors — § build_source_plan).
+        TemporalClassUnavailableError: A consulted column's temporal pair is
+            unavailable (non-conformant emit).
     """
     if anchor is None:
         raise SourceAnchorRequired(_ANCHOR_REQUIRED_MESSAGE)
 
     sidecar = emit.sidecar
     fork_path = require_single_branch(sidecar)
-    table_specs = build_source_plan(sidecar, config.source)
+    table_specs = build_source_plan(sidecar, config.source, notice_sink)
 
     change_delivery = (
         config.source.change_delivery if config.source is not None else "changelog"
@@ -194,13 +199,14 @@ def export_source(
     out: "Path",
     fmt: Literal["csv", "duckdb"],
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
 ) -> dict[str, int]:
     """
     Run the source exporter and write the operational dump.
 
-    Builds the full-export source query specs, flattens them to name->SQL,
-    and dispatches to the writer selected by fmt (mirroring
-    export_dimensional's full-export path).
+    Builds the full-export source query specs, threading notice_sink to the
+    plan, flattens them to name->SQL, and dispatches to the writer selected
+    by fmt (mirroring export_dimensional's full-export path).
 
     Args:
         emit: The open emit.
@@ -212,6 +218,7 @@ def export_source(
             point.
         anchor: The resolved effective anchor. Source requires one; None
             raises.
+        notice_sink: Receiver for plan notices (slice-only-column-omitted).
 
     Returns:
         Mapping of every output table name -> row count written (0-row tables
@@ -224,6 +231,8 @@ def export_source(
             window=None, which the mode refuses.
         ExportError: The single-branch guard or a source business rule fails.
         ExportRuntimeError: A writer fails.
+        TemporalClassUnavailableError: A consulted column's temporal pair is
+            unavailable (non-conformant emit).
     """
-    specs = build_source_query_specs(emit, config, anchor, None)
+    specs = build_source_query_specs(emit, config, anchor, None, notice_sink)
     return write_query_specs(emit, specs, out, fmt)

@@ -39,6 +39,7 @@ from fabulexa_forge.corrupters.selection import (
 from fabulexa_forge.corrupters.state import WorkingTable
 from fabulexa_forge.errors import CorruptError
 from fabulexa_forge.reader.conformance import _ROUND_TRIPPABLE_TYPES, to_csv_text
+from fabulexa_forge.reader.records_columns import ref_index_sibling
 
 if TYPE_CHECKING:
     import random
@@ -47,12 +48,13 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import Distribution
     from fabulexa_forge.corrupters.manifest import ImpactCode, RowCategory
     from fabulexa_forge.corrupters.state import CorruptState
-    from fabulexa_forge.reader.sidecar import Sidecar, TableSpec
+    from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar, TableSpec
 
     _PooledUnit = tuple[int, int] | tuple[int, int, str] | tuple[int, int, str, str]
     """A pooled unit's shape: `(table_index, row_pos)`, optionally followed by
-    `column` (cell units) and `target_kind` (`dangle_reference`'s eligible
-    units) -- `unit_row_weights` only ever looks at the leading pair."""
+    `column` (cell units) and `target_kind` (`dangle_reference`'s and
+    `mispoint_reference`'s eligible units) -- `unit_row_weights` only ever
+    looks at the leading pair."""
 
 _ROW_ID_COLUMN = "__rowid__"
 
@@ -72,6 +74,10 @@ SeriesKey = tuple[str, str, str]
 """A series' `(kind, property, record_id)` identity triple -- the parameter
 order `resolve_c6_anchor` / `series_round_trip_fails` take, so a key unpacks
 directly into either call. Shared by `drop_events` and `shift_sim_time`."""
+
+PairKey = tuple[str, str]
+"""A `(kind, property)` pair identity -- C11's converse grain, coarser than
+`SeriesKey` (no `record_id`). Shared by `drop_events`' emptied-series clause."""
 
 
 def is_round_trippable_type(type_string: str) -> bool:
@@ -524,6 +530,27 @@ def membership_partner_column(name: str) -> str:
     raise ValueError(f"{name!r} is not a member__<f>__kind/__id column")
 
 
+def records_reference_sibling(column: str, col_spec: "ColumnSpec") -> str | None:
+    """The `ref_index__<name>` sibling column for a records reference
+    `prop__` cell -- the pair-write target `null_cells`, `dangle_reference`,
+    and `mispoint_reference` share whenever they rewrite a reference cell (an
+    operation that rewrites a reference rewrites the edge, not a column).
+
+    Args:
+        column: The reference column's current name.
+        col_spec: The column's current ColumnSpec.
+
+    Returns:
+        The paired `ref_index__<name>` column name when `column` is a
+        records `prop__` reference (its `references` is set); None for a
+        membership `member__<f>__id` reference or any non-reference column --
+        neither carries a `ref_index__` analog.
+    """
+    if not column.startswith("prop__") or col_spec.references is None:
+        return None
+    return ref_index_sibling(column)
+
+
 def membership_kind_id_pairs(state: "CorruptState") -> frozenset[tuple[str, str]]:
     """Every `(kind, id)` pair a non-NULL membership member pair carries,
     across every working membership-category table.
@@ -828,6 +855,57 @@ def anchor_participant_impact(
     if is_anchor_participant and round_trip_fails:
         return ("C6",)
     return ("beyond-c1-c12",)
+
+
+def history_pair_row_count(
+    history_data: pa.Table, kind: str, property_name: str
+) -> int:
+    """The number of `history` rows for a `(kind, property)` pair.
+
+    Args:
+        history_data: A working `history` table's current Arrow.
+        kind: The pair's record kind.
+        property_name: The pair's property.
+
+    Returns:
+        The count of rows matching (kind, property), across every record_id and
+        fork_path -- C11's converse grain (no series/fork narrowing).
+    """
+    kinds = history_data.column("kind")
+    properties = history_data.column("property")
+    return sum(
+        1
+        for i in range(history_data.num_rows)
+        if kinds[i].as_py() == kind and properties[i].as_py() == property_name
+    )
+
+
+def c11_converse_broken(
+    state: "CorruptState", history_data: pa.Table, kind: str, property_name: str
+) -> bool:
+    """Whether removing rows emptied a `(kind, property)` pair's C11 converse.
+
+    True iff `history_data` (the post-removal working `history` Arrow) carries
+    zero rows for `(kind, property)` while `records__<kind>` still has at least
+    one row -- the emptied-series clause's grain (§ Corrupters — behavioral
+    contracts, `drop_events` emptied-series clause). C11's converse is scoped to
+    the whole `(kind, property)` pair, coarser than `SeriesKey`: emptying one
+    record's series while a sibling keeps rows is not this clause.
+
+    Args:
+        state: The engine's current working set (records tables untouched by
+            `drop_events`, so their row counts are pre- and post-removal alike).
+        history_data: The post-removal working `history` Arrow.
+        kind: The pair's record kind.
+        property_name: The pair's property.
+
+    Returns:
+        True iff the emptied-series clause applies to this pair.
+    """
+    records_working = state.tables.get(f"records__{kind}")
+    if records_working is None or records_working.data.num_rows == 0:
+        return False
+    return history_pair_row_count(history_data, kind, property_name) == 0
 
 
 def enumerate_series_units(

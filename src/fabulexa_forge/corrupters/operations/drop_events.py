@@ -3,7 +3,10 @@
 See `docs/architecture/pending/corrupter-history-sequence-operations.md`
 § What each operation does, § The impact rule (normative) for the
 source-coordinate locator stance and the anchor-participant impact rule this
-handler implements.
+handler implements. A removal that empties a `(kind, property)` pair's
+`history` rows entirely (C11's converse grain) takes the emptied-series
+clause instead: every row of that pair's removals declares `impact: ("C11",)`
+alone, ahead of the anchor-participant rule.
 """
 
 from __future__ import annotations
@@ -15,9 +18,11 @@ import pyarrow as pa
 from fabulexa_forge.config.models import DropEvents
 from fabulexa_forge.corrupters.manifest import DefectRecord
 from fabulexa_forge.corrupters.operations._impact import (
+    PairKey,
     SeriesKey,
     anchor_participant_impact,
     branch_slice_at,
+    c11_converse_broken,
     enumerate_row_units,
     placement_populations,
     resolve_c6_anchor,
@@ -41,6 +46,7 @@ if TYPE_CHECKING:
     import random
 
     from fabulexa_forge.config.models import CorruptOperation
+    from fabulexa_forge.corrupters.manifest import ImpactCode
     from fabulexa_forge.corrupters.state import CorruptState
     from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -107,6 +113,13 @@ class DropEventsCorrupter:
         new_data = history_table.data.take(pa.array(keep_indices, type=pa.int64()))
         state.tables["history"] = WorkingTable(spec=history_table.spec, data=new_data)
 
+        pair_keys: set[PairKey] = {
+            (kind, prop) for kind, prop, _record_id in series_keys
+        }
+        pair_emptied = {
+            pair: c11_converse_broken(state, new_data, *pair) for pair in pair_keys
+        }
+
         round_trip_fails = {
             key: series_round_trip_fails(state, fork_path, slice_at, *key)
             for key in series_keys
@@ -116,9 +129,13 @@ class DropEventsCorrupter:
         defects: list[DefectRecord] = []
         for _physical_row, row in selected:
             key = series_key(row)
-            impact = anchor_participant_impact(
-                row, pre_anchor[key], round_trip_fails[key]
-            )
+            impact: tuple["ImpactCode", ...]
+            if pair_emptied[(key[0], key[1])]:
+                impact = ("C11",)
+            else:
+                impact = anchor_participant_impact(
+                    row, pre_anchor[key], round_trip_fails[key]
+                )
             defects.append(
                 DefectRecord.model_validate(
                     {

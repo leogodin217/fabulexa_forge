@@ -10,7 +10,7 @@ impact_union:
 contains_defects:
   - class: deleted_row
     rule: hard_delete_referenced_doctor
-    impact: [C10]
+    impact: [C6, C10]
     location.table: records__doctor
 
   - class: deleted_row

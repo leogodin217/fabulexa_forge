@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
 
@@ -36,6 +37,7 @@ def build_query_specs(
     config: DimensionalConfig,
     anchor: "EffectiveAnchor | None",
     window: "Window | None",
+    notice_sink: "NoticeSink",
 ) -> list[QuerySpec]:
     """Compile table declarations; optionally windowed.
 
@@ -52,11 +54,18 @@ def build_query_specs(
     predicate); write modes are tagged append (facts, SCD-2 rows) / replace
     (type-1 dims). Windowed business rules run before any SQL is emitted.
 
+    New behavior: SliceOnlyColumnRefused runs always-on over every
+    config-referenced source-column resolution; LookupColumnSafety keys on
+    temporal_class: constant (exempt discriminator excepted, any class);
+    DiscriminatorValueObserved emits a 'discriminator-value-unobserved'
+    Notice through notice_sink instead of warnings.warn.
+
     Args:
         emit: The open emit (trunk-only; sole branch).
         config: The validated dimensional config.
         anchor: The resolved EffectiveAnchor, or None for raw sim_time.
         window: The window to filter to, or None for the full export.
+        notice_sink: Receiver for plan notices.
 
     Returns:
         One QuerySpec per declared table, in declaration order.
@@ -68,6 +77,8 @@ def build_query_specs(
             IncrementalOrdinalOrderBy, IncrementalSliceColumnMutable,
             IncrementalFilterColumnMutable, IncrementalScd2IdentityKey,
             IncrementalScd2ValidFromUnique, IncrementalReservedName.
+        TemporalClassUnavailableError: A consulted column's temporal pair is
+            absent or out of enum (non-conformant emit).
     """
     sidecar = emit.sidecar
     fork_path = require_single_branch(sidecar)
@@ -75,7 +86,9 @@ def build_query_specs(
     specs: list[QuerySpec] = []
 
     for table_decl in config.tables:
-        source_table_name = validate_table(table_decl, config, sidecar, window)
+        source_table_name = validate_table(
+            table_decl, config, sidecar, window, notice_sink
+        )
         sql, write_mode, view_name, view_sql = build_grain_sql(
             table_decl, source_table_name, sidecar, anchor, fork_path, config, window
         )
@@ -104,12 +117,13 @@ def export_dimensional(
     out: "Path",
     fmt: Literal["csv", "duckdb"],
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
 ) -> dict[str, int]:
     """Run the dimensional exporter and write the star schema.
 
-    Builds the QuerySpecs, then dispatches by `fmt` to the matching writer,
-    handing it the open `emit` (the writer materializes each spec through
-    `Emit.query_arrow`).
+    Builds the QuerySpecs, threading notice_sink to the compile, then
+    dispatches by `fmt` to the matching writer, handing it the open `emit`
+    (the writer materializes each spec through `Emit.query_arrow`).
 
     Args:
         emit: The open emit.
@@ -122,6 +136,7 @@ def export_dimensional(
         fmt: Output format. The CLI constrains the raw `--fmt` string to
             `{'csv','duckdb'}` before this is reached (see `cmd_export`).
         anchor: The resolved EffectiveAnchor, or None for raw sim_time integers.
+        notice_sink: Receiver for plan notices.
 
     Returns:
         Mapping of **every** declared table name -> row count written (`0` for a
@@ -132,7 +147,8 @@ def export_dimensional(
     Raises:
         ExportError: Branch guard or a business rule fails.
         ExportRuntimeError: A writer fails.
+        TemporalClassUnavailableError: Non-conformant temporal pair.
     """
     assert config.dimensional is not None
-    specs = build_query_specs(emit, config.dimensional, anchor, None)
+    specs = build_query_specs(emit, config.dimensional, anchor, None, notice_sink)
     return write_query_specs(emit, specs, out, fmt)

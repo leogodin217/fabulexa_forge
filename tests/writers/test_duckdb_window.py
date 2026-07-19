@@ -11,13 +11,13 @@ Verifies:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
+from _support.sidecar_builder import identity_column, write_emit
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
@@ -37,13 +37,25 @@ from fabulexa_forge.writers.duckdb import write_duckdb_window
 # ---------------------------------------------------------------------------
 
 _ENTITY_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT", "history_tracked": False},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    identity_column("record_index", "BIGINT"),
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
 ]
 
 _HISTORY_COLUMNS: list[dict[str, object]] = [
@@ -69,8 +81,8 @@ def _build_scd2_emit(tmp_path: Path) -> Path:
     col_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _ENTITY_COLUMNS)
     conn.execute(f'CREATE TABLE "records__actor" ({col_ddl})')
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a001", True, None, 30, "Alice", "discharged"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a001", 10, True, None, 30, 0, "Alice", "discharged"],
     )
 
     hist_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _HISTORY_COLUMNS)
@@ -86,10 +98,9 @@ def _build_scd2_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             {
                 "name": "records__actor",
                 "category": "records",
@@ -104,8 +115,8 @@ def _build_scd2_emit(tmp_path: Path) -> Path:
                 "rows": 3,
             },
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -122,21 +133,32 @@ def _build_fact_emit(tmp_path: Path) -> Path:
 
     col_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _ENTITY_COLUMNS)
     conn.execute(f'CREATE TABLE "records__entity" ({col_ddl})')
-    for rec_id, sim_time, name, status in [
-        ("e001", 10, "Alice", "active"),
-        ("e002", 20, "Bob", "active"),
-        ("e003", 30, "Carol", "active"),
-    ]:
+    for record_index, (rec_id, sim_time, name, status) in enumerate(
+        [
+            ("e001", 10, "Alice", "active"),
+            ("e002", 20, "Bob", "active"),
+            ("e003", 30, "Carol", "active"),
+        ]
+    ):
         conn.execute(
-            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?, ?)',
-            ["trunk", rec_id, True, None, sim_time, name, status],
+            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [
+                "trunk",
+                rec_id,
+                sim_time,
+                True,
+                None,
+                sim_time,
+                record_index,
+                name,
+                status,
+            ],
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             {
                 "name": "records__entity",
                 "category": "records",
@@ -145,8 +167,8 @@ def _build_fact_emit(tmp_path: Path) -> Path:
                 "record_kind": "entity",
             },
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -252,7 +274,9 @@ def test_fresh_file_creates_tables_and_meta(tmp_path: Path) -> None:
     window = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, window)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
     assert _table_exists_in_db(out_path, "dim_entity")
@@ -269,7 +293,9 @@ def test_fresh_file_export_windows_row_written(tmp_path: Path) -> None:
     window = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, window)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
     windows_rows = _read_table(out_path, "_export_windows")
@@ -288,7 +314,9 @@ def test_fresh_file_views_installed(tmp_path: Path) -> None:
     window = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _scd2_config(), None, window)
+        specs = build_query_specs(
+            emit, _scd2_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
     assert _view_exists_in_db(out_path, "dim_actor")
@@ -308,9 +336,13 @@ def test_second_window_facts_append(tmp_path: Path) -> None:
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _fact_dim_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+        )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # type-1 dim is replaced: full snapshot count returned
@@ -325,9 +357,13 @@ def test_second_window_export_windows_gains_row(tmp_path: Path) -> None:
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _fact_dim_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     windows_rows = _read_table(out_path, "_export_windows")
@@ -342,9 +378,13 @@ def test_second_window_scd2_rows_append(tmp_path: Path) -> None:
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _scd2_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _scd2_config(), None, w0, notice_sink=discard_notice_sink
+        )
         result0 = write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _scd2_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _scd2_config(), None, w1, notice_sink=discard_notice_sink
+        )
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # w0 [0,15) catches change at sim_time=10 → 1 row
@@ -363,9 +403,13 @@ def test_second_window_scd2_view_latest_version_null_valid_to(tmp_path: Path) ->
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _scd2_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _scd2_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _scd2_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _scd2_config(), None, w1, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     conn = duckdb.connect(str(out_path), read_only=True)
@@ -388,7 +432,9 @@ def test_atomicity_bad_sql_rolls_back(tmp_path: Path) -> None:
     w0 = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, w0, fingerprint="fp")
 
     # Capture pre-failure state
@@ -423,7 +469,9 @@ def test_connect_failure_raises_export_runtime_error(tmp_path: Path) -> None:
     w0 = _make_window(0, 15, index=0)
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         with pytest.raises(ExportRuntimeError, match="failed to open warehouse DuckDB"):
             write_duckdb_window(emit, specs, bad_path, w0, fingerprint="fp")
 
@@ -442,7 +490,9 @@ def test_range_path_no_meta_no_windows(tmp_path: Path) -> None:
     window = Window(index=None, start_ns=0, end_ns=35, label="range")
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _fact_dim_config(), None, window)
+        specs = build_query_specs(
+            emit, _fact_dim_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
     assert not _table_exists_in_db(out_path, "_export_meta")
@@ -457,7 +507,9 @@ def test_range_path_author_tables_present(tmp_path: Path) -> None:
     window = Window(index=None, start_ns=0, end_ns=35, label="range")
 
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, _scd2_config(), None, window)
+        specs = build_query_specs(
+            emit, _scd2_config(), None, window, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
     assert _table_exists_in_db(out_path, "dim_actor__rows")
@@ -479,9 +531,13 @@ def test_empty_window_still_logs_window_row(tmp_path: Path) -> None:
     w1 = _make_window(100, 200, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _fact_dim_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+        )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # window row must be logged even for empty window
@@ -503,9 +559,13 @@ def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:
     w1 = _make_window(15, 35, index=1)
 
     with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(emit, _fact_dim_config(), None, w0)
+        specs0 = build_query_specs(
+            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+        )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(emit, _fact_dim_config(), None, w1)
+        specs1 = build_query_specs(
+            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+        )
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # After 2 windows, snapshot should show 3 total entities

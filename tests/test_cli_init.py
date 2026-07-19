@@ -12,18 +12,23 @@ Covers:
 - No exclude block proposed; no "likely-internal"/topology comments
 - record_roles absent -> cmd_init / main(["init", ...]) prints ERROR: to stderr, returns 1
 - Output deterministic across two runs of the same emit
+- Non-exempt slice_only column: omitted from the SCD-2 stub's column list, one
+  'slice-only-column-omitted' notice on stderr per skip, the kind itself still
+  proposed (the skip is column-level)
+- Exempt discriminator (subtyped kind's prop__<kind>_type, even when its own
+  class is slice_only): still proposed, filter pre-fill unchanged
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import write_emit as _write_emit_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.cli import cmd_init, main
 
 # ---------------------------------------------------------------------------
@@ -31,57 +36,113 @@ from fabulexa_forge.cli import cmd_init, main
 # ---------------------------------------------------------------------------
 
 _LOCATION_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
-    {"name": "active", "type": "BOOLEAN", "history_tracked": False},
-    {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
-    {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
 ]
 
 _SENSOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
-    {"name": "active", "type": "BOOLEAN", "history_tracked": False},
-    {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
-    {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
-    {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__label", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+#: Same shape as `_SENSOR_COLUMNS` plus one non-exempt `slice_only` payload
+#: column, for the init skip + notice tests.
+_SENSOR_COLUMNS_WITH_SLICE_ONLY: list[dict[str, object]] = [
+    *_SENSOR_COLUMNS,
+    prop_column(
+        "prop__region", "VARCHAR", history_tracked=False, temporal_class="slice_only"
+    ),
 ]
 
 _EVENT_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__location_id", "type": "VARCHAR", "references": "location"},
+    identity_column("ref_index__location_id", "BIGINT"),
 ]
 
 _TRIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__trip_type", "type": "VARCHAR"},
     {"name": "prop__location_id", "type": "VARCHAR", "references": "location"},
+    identity_column("ref_index__location_id", "BIGINT"),
 ]
 
+
+def _actor_identity_prefix() -> list[dict[str, object]]:
+    """The identity + lifecycle column prefix shared by every actor fixture."""
+    return [
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
+    ]
+
+
 _ACTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
-    {"name": "active", "type": "BOOLEAN"},
-    {"name": "deactivated_at", "type": "BIGINT"},
-    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    *_actor_identity_prefix(),
     {"name": "prop__actor_type", "type": "VARCHAR"},
-    {"name": "prop__name", "type": "VARCHAR"},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+#: Same shape as `_ACTOR_COLUMNS`, but the discriminator itself is declared
+#: `temporal_class: slice_only` — proves the exempt-discriminator carve-out
+#: survives even when the column's own class literally is slice_only.
+_ACTOR_COLUMNS_SLICE_ONLY_DISCRIMINATOR: list[dict[str, object]] = [
+    *_actor_identity_prefix(),
+    prop_column(
+        "prop__actor_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="slice_only",
+    ),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role_name", "type": "VARCHAR"},
@@ -95,23 +156,38 @@ _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
 # ---------------------------------------------------------------------------
 
 
+_SIDECAR_TOP_LEVEL_KEYS = frozenset({"base_format_version", "branches", "tables"})
+
+
 def _write_sidecar(tmp_path: Path, sidecar: dict[str, object]) -> None:
-    """Write the sidecar JSON file to tmp_path."""
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    """Write the sidecar JSON file to tmp_path via the canonical sidecar writer."""
+    extra = {
+        key: value
+        for key, value in sidecar.items()
+        if key not in _SIDECAR_TOP_LEVEL_KEYS
+    }
+    _write_emit_sidecar(
+        tmp_path,
+        tables=sidecar["tables"],  # type: ignore[arg-type]
+        branches=sidecar.get("branches"),  # type: ignore[arg-type]
+        extra=extra or None,
+    )
 
 
 def _base_sidecar(
     tables: list[dict[str, object]],
     record_roles: dict[str, object] | None,
+    enum_domains: dict[str, dict[str, list[str]]] | None = None,
 ) -> dict[str, object]:
-    """Build a minimal sidecar dict with optional record_roles."""
+    """Build a minimal sidecar dict with optional record_roles and enum_domains."""
     result: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 200}],
         "tables": tables,
     }
     if record_roles is not None:
         result["record_roles"] = record_roles
+    if enum_domains is not None:
+        result["enum_domains"] = enum_domains
     return result
 
 
@@ -122,8 +198,8 @@ def build_bare_dim_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.close()
     _write_sidecar(
@@ -144,16 +220,37 @@ def build_bare_dim_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def build_bare_dim_scd2_emit(tmp_path: Path) -> Path:
-    """Build an emit with a bare-string dimension kind with history_tracked."""
+def build_bare_dim_scd2_emit(
+    tmp_path: Path,
+    columns: list[dict[str, object]] | None = None,
+    extra_row_values: list[object] | None = None,
+) -> Path:
+    """Build an emit with a bare-string dimension kind with history_tracked.
+
+    `columns` overrides `_SENSOR_COLUMNS` (e.g. to add a non-exempt slice_only
+    payload column); `extra_row_values` supplies the row value(s) for any
+    columns appended past the base eight.
+    """
+    sensor_columns = columns if columns is not None else _SENSOR_COLUMNS
     tmp_path.mkdir(parents=True, exist_ok=True)
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
-    conn.execute(_create_ddl("records__sensor", _SENSOR_COLUMNS))
-    conn.execute(
-        'INSERT INTO "records__sensor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "s1", True, 10, "SensorA", "online"],
-    )
+    conn.execute(_create_ddl("records__sensor", sensor_columns))
+    row_values: list[object] = [
+        "trunk",
+        "s1",
+        0,
+        True,
+        None,
+        10,
+        0,
+        "SensorA",
+        "online",
+    ]
+    if extra_row_values:
+        row_values += extra_row_values
+    placeholders = ", ".join(["?"] * len(row_values))
+    conn.execute(f'INSERT INTO "records__sensor" VALUES ({placeholders})', row_values)
     conn.close()
     _write_sidecar(
         tmp_path,
@@ -162,7 +259,7 @@ def build_bare_dim_scd2_emit(tmp_path: Path) -> Path:
                 _table_spec(
                     "records__sensor",
                     "records",
-                    _SENSOR_COLUMNS,
+                    sensor_columns,
                     1,
                     record_kind="sensor",
                 ),
@@ -173,6 +270,13 @@ def build_bare_dim_scd2_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def build_bare_dim_scd2_with_slice_only_column_emit(tmp_path: Path) -> Path:
+    """Build a bare-string SCD-2 dim kind with one non-exempt slice_only column."""
+    return build_bare_dim_scd2_emit(
+        tmp_path, columns=_SENSOR_COLUMNS_WITH_SLICE_ONLY, extra_row_values=["north"]
+    )
+
+
 def build_bare_fact_no_discriminator_emit(tmp_path: Path) -> Path:
     """Build an emit with a bare-string fact kind and no prop__<kind>_type."""
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -181,12 +285,12 @@ def build_bare_fact_no_discriminator_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(_create_ddl("records__event", _EVENT_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.execute(
-        'INSERT INTO "records__event" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "ev1", True, 10, "loc1"],
+        'INSERT INTO "records__event" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "ev1", 10, True, 10, 0, "loc1", 0],
     )
     conn.close()
     _write_sidecar(
@@ -222,16 +326,16 @@ def build_bare_fact_with_discriminator_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(_create_ddl("records__trip", _TRIP_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.execute(
-        'INSERT INTO "records__trip" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "t1", True, 10, "delivery", "loc1"],
+        'INSERT INTO "records__trip" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "t1", 10, True, 10, 0, "delivery", "loc1", 0],
     )
     conn.execute(
-        'INSERT INTO "records__trip" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "t2", True, 20, "pickup", "loc1"],
+        'INSERT INTO "records__trip" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "t2", 20, True, 20, 1, "pickup", "loc1", 0],
     )
     conn.close()
     _write_sidecar(
@@ -259,15 +363,22 @@ def build_bare_fact_with_discriminator_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def build_object_valued_actor_emit(tmp_path: Path) -> Path:
-    """Build an emit with an object-valued actor:{driver: dimension, ride: fact} kind."""
+def build_object_valued_actor_emit(
+    tmp_path: Path, columns: list[dict[str, object]] | None = None
+) -> Path:
+    """Build an emit with an object-valued actor:{driver: dimension, ride: fact} kind.
+
+    `columns` overrides `_ACTOR_COLUMNS` (e.g. to mark the discriminator
+    itself `temporal_class: slice_only` for the exempt-discriminator test).
+    """
+    actor_columns = columns if columns is not None else _ACTOR_COLUMNS
     tmp_path.mkdir(parents=True, exist_ok=True)
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
-    conn.execute(_create_ddl("records__actor", _ACTOR_COLUMNS))
+    conn.execute(_create_ddl("records__actor", actor_columns))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "a1", True, 10, "driver", "Alice", "active"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "a1", 10, True, 10, 0, "driver", "Alice", "active"],
     )
     # "bus" sub-type is declared but has no rows - tests unobserved sub-type stub
     conn.close()
@@ -278,7 +389,7 @@ def build_object_valued_actor_emit(tmp_path: Path) -> Path:
                 _table_spec(
                     "records__actor",
                     "records",
-                    _ACTOR_COLUMNS,
+                    actor_columns,
                     1,
                     record_kind="actor",
                 ),
@@ -286,6 +397,7 @@ def build_object_valued_actor_emit(tmp_path: Path) -> Path:
             record_roles={
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
             },
+            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
         ),
     )
     return tmp_path
@@ -299,8 +411,8 @@ def build_membership_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(_create_ddl("membership__location__zones", _MEMBERSHIP_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.execute(
         'INSERT INTO "membership__location__zones" VALUES (?, ?, ?, NULL, ?, ?, ?)',
@@ -340,8 +452,8 @@ def build_no_record_roles_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__location", _LOCATION_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "loc1", True, 10, "Depot"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Depot"],
     )
     conn.close()
     _write_sidecar(
@@ -454,6 +566,115 @@ def test_bare_dim_with_history_tracked_proposes_type2(tmp_path: Path) -> None:
     # scd_window columns present
     assert "valid_from" in content
     assert "valid_to" in content
+    # role-scoped: identity/lifecycle columns are never proposed
+    assert "created_sim_time" not in content
+    assert "last_mutation_sim_time" not in content
+    assert "from: active" not in content
+    assert "from: deactivated_at" not in content
+
+
+# ---------------------------------------------------------------------------
+# Tests: non-exempt slice_only column skipped from SCD-2 stub, with notice
+# ---------------------------------------------------------------------------
+
+
+def test_slice_only_column_omitted_from_scd2_columns(tmp_path: Path) -> None:
+    """A non-exempt slice_only column is absent from the SCD-2 stub's columns."""
+    emit_dir = build_bare_dim_scd2_with_slice_only_column_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "{name: region, from: prop__region}" not in content
+    # Its unaffected sibling columns still appear
+    assert "{name: label, from: prop__label}" in content
+    assert "{name: status, from: prop__status}  # tracked -> per-version" in content
+
+
+def test_slice_only_skip_does_not_suppress_the_kind(tmp_path: Path) -> None:
+    """The kind is still proposed (as dim/type2) — the skip is column-level."""
+    emit_dir = build_bare_dim_scd2_with_slice_only_column_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "dim_sensor" in content
+    assert "role: dim" in content
+    assert "scd: type2" in content
+
+
+def test_slice_only_skip_emits_stderr_notice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """One 'slice-only-column-omitted' notice per skip is written to stderr,
+    naming the kind and column, via cmd_init's render_notice_stderr sink."""
+    emit_dir = build_bare_dim_scd2_with_slice_only_column_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    captured = capsys.readouterr()
+    assert "notice:" in captured.err
+    assert "kind 'sensor'" in captured.err
+    assert "column 'prop__region'" in captured.err
+    assert "temporal_class: slice_only" in captured.err
+    assert "omitted from the SCD-2 stub's column proposal" in captured.err
+
+
+def test_slice_only_skip_notice_via_main(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """main(['init', ...]) surfaces the same skip notice on stderr."""
+    emit_dir = build_bare_dim_scd2_with_slice_only_column_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    exit_code = main(["init", str(emit_dir), str(out_path)])
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "notice:" in captured.err
+    assert "column 'prop__region'" in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Tests: exempt discriminator remains proposable, filter pre-fill unchanged
+# ---------------------------------------------------------------------------
+
+
+def test_exempt_discriminator_slice_only_class_still_proposed(tmp_path: Path) -> None:
+    """A subtyped kind's prop__<kind>_type is exempt at any class — even
+    temporal_class: slice_only — and remains in the SCD-2 stub's columns."""
+    emit_dir = build_object_valued_actor_emit(
+        tmp_path / "emit", columns=_ACTOR_COLUMNS_SLICE_ONLY_DISCRIMINATOR
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "dim_actor_driver" in content
+    assert "fact_actor_ride" in content
+    assert "{name: actor_type, from: prop__actor_type}" in content
+
+
+def test_exempt_discriminator_filter_prefill_unchanged(tmp_path: Path) -> None:
+    """The filter pre-fill per sub-type is unaffected by the discriminator's
+    own temporal_class."""
+    emit_dir = build_object_valued_actor_emit(
+        tmp_path / "emit", columns=_ACTOR_COLUMNS_SLICE_ONLY_DISCRIMINATOR
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "prop__actor_type: driver" in content
+    assert "prop__actor_type: ride" in content
+
+
+def test_exempt_discriminator_slice_only_no_skip_notice(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The exempt discriminator never triggers a slice-only-column-omitted
+    notice, regardless of its own class."""
+    emit_dir = build_object_valued_actor_emit(
+        tmp_path / "emit", columns=_ACTOR_COLUMNS_SLICE_ONLY_DISCRIMINATOR
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    captured = capsys.readouterr()
+    assert "slice-only-column-omitted" not in captured.err
+    assert "actor_type" not in captured.err
 
 
 # ---------------------------------------------------------------------------

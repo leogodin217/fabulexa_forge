@@ -8,14 +8,14 @@ row counts for every table (including 0-row tables), idempotent re-run
 from __future__ import annotations
 
 import csv
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
@@ -35,28 +35,49 @@ from fabulexa_forge.reader.emit import open_emit
 # ---------------------------------------------------------------------------
 
 _ACTOR_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
-    {"name": "active", "type": "BOOLEAN", "history_tracked": False},
-    {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
-    {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
-]
-
-_JOURNEY_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("record_index", "BIGINT"),
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
+]
+
+_JOURNEY_COLUMNS = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {
+        "name": "prop__actor_id",
+        "type": "VARCHAR",
+        "references": "actor",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
 _HISTORY_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
     {"name": "kind", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("record_id", "VARCHAR"),
     {"name": "property", "type": "VARCHAR"},
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
@@ -75,22 +96,23 @@ def _build_export_emit(tmp_path: Path) -> Path:
 
     # Two actors
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a001", True, None, 100, "Alice", "active"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a001", 0, True, None, 100, 0, "Alice", "active"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a002", True, None, 200, "Bob", "active"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a002", 0, True, None, 200, 1, "Bob", "active"],
     )
 
-    # Two journeys referencing actors
+    # Two journeys referencing actors (ref_index__actor_id mirrors the
+    # referenced actor's record_index)
     conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 10, "a001"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 0, True, 10, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j002", True, 20, "a002"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j002", 0, True, 20, 1, "a002", 1],
     )
 
     # History: status changes for a001 at two sim_times
@@ -105,10 +127,9 @@ def _build_export_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -125,11 +146,13 @@ def _build_export_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 2),
         ],
-        "enum_domains": {
-            "journey_instance": {"entity_type": ["type_a", "type_b"]},
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+        extra={
+            "enum_domains": {
+                "journey_instance": {"entity_type": ["type_a", "type_b"]},
+            }
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path
 
 
@@ -223,7 +246,9 @@ def test_export_dimensional_csv_writes_one_file_per_table(tmp_path: Path) -> Non
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(emit, config, out_dir, "csv", None)
+        counts = export_dimensional(
+            emit, config, out_dir, "csv", None, notice_sink=discard_notice_sink
+        )
 
     assert set(counts.keys()) == {
         "dim_actor",
@@ -243,7 +268,9 @@ def test_export_dimensional_csv_empty_table_is_header_only(tmp_path: Path) -> No
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(emit, config, out_dir, "csv", None)
+        counts = export_dimensional(
+            emit, config, out_dir, "csv", None, notice_sink=discard_notice_sink
+        )
 
     assert counts["fact_empty"] == 0
     csv_path = out_dir / "fact_empty.csv"
@@ -260,7 +287,9 @@ def test_export_dimensional_duckdb_writes_all_tables(tmp_path: Path) -> None:
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(emit, config, out_path, "duckdb", None)
+        counts = export_dimensional(
+            emit, config, out_path, "duckdb", None, notice_sink=discard_notice_sink
+        )
 
     assert set(counts.keys()) == {
         "dim_actor",
@@ -286,7 +315,9 @@ def test_export_dimensional_duckdb_empty_table_typed_not_dropped(
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(emit, config, out_path, "duckdb", None)
+        counts = export_dimensional(
+            emit, config, out_path, "duckdb", None, notice_sink=discard_notice_sink
+        )
 
     assert counts["fact_empty"] == 0
     out_conn = duckdb.connect(str(out_path), read_only=True)
@@ -306,9 +337,13 @@ def test_export_dimensional_idempotent_csv(tmp_path: Path) -> None:
     out_dir2.mkdir()
 
     with open_emit(emit_dir) as emit:
-        counts1 = export_dimensional(emit, config, out_dir1, "csv", None)
+        counts1 = export_dimensional(
+            emit, config, out_dir1, "csv", None, notice_sink=discard_notice_sink
+        )
     with open_emit(emit_dir) as emit:
-        counts2 = export_dimensional(emit, config, out_dir2, "csv", None)
+        counts2 = export_dimensional(
+            emit, config, out_dir2, "csv", None, notice_sink=discard_notice_sink
+        )
 
     assert counts1 == counts2
     for table_name in counts1:
@@ -326,9 +361,13 @@ def test_export_dimensional_idempotent_duckdb_row_counts(tmp_path: Path) -> None
     out2 = tmp_path / "out2.duckdb"
 
     with open_emit(emit_dir) as emit:
-        counts1 = export_dimensional(emit, config, out1, "duckdb", None)
+        counts1 = export_dimensional(
+            emit, config, out1, "duckdb", None, notice_sink=discard_notice_sink
+        )
     with open_emit(emit_dir) as emit:
-        counts2 = export_dimensional(emit, config, out2, "duckdb", None)
+        counts2 = export_dimensional(
+            emit, config, out2, "duckdb", None, notice_sink=discard_notice_sink
+        )
 
     assert counts1 == counts2
 
@@ -343,4 +382,6 @@ def test_export_dimensional_writer_failure_raises_export_runtime_error(
 
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportRuntimeError):
-            export_dimensional(emit, config, bad_path, "duckdb", None)
+            export_dimensional(
+                emit, config, bad_path, "duckdb", None, notice_sink=discard_notice_sink
+            )

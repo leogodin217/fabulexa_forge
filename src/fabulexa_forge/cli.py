@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.corrupters.state import CorruptReport
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.conformance import CheckResult
     from fabulexa_forge.reader.emit import Emit
 
@@ -137,6 +138,7 @@ def _dispatch_export(
     next_window: bool,
     range_from: str | None,
     range_to: str | None,
+    notice_sink: "NoticeSink",
 ) -> int:
     """Run the full, next-window, or explicit-range export for either mode.
 
@@ -153,6 +155,7 @@ def _dispatch_export(
         next_window: When True, emit the next incremental window (--next).
         range_from: Inclusive start for an explicit range (--from), or None.
         range_to: Exclusive end for an explicit range (--to), or None.
+        notice_sink: Receiver for plan notices.
 
     Returns:
         0 on a written window/range/full export (per-table counts printed,
@@ -162,7 +165,7 @@ def _dispatch_export(
     if next_window:
         from fabulexa_forge.incremental.driver import export_incremental_next
 
-        outcome = export_incremental_next(emit, config, out, fmt, anchor)
+        outcome = export_incremental_next(emit, config, out, fmt, anchor, notice_sink)
         if outcome.status == "drained":
             print("drained: no more windows to emit")
             return 3
@@ -175,18 +178,20 @@ def _dispatch_export(
         from fabulexa_forge.incremental.windows import parse_range
 
         window = parse_range(range_from, range_to, anchor)
-        range_counts = export_window(emit, config, out, fmt, anchor, window, None)
+        range_counts = export_window(
+            emit, config, out, fmt, anchor, window, None, notice_sink
+        )
         _print_window_counts(window.label, range_counts)
         return 0
 
     if config.mode == "source":
         from fabulexa_forge.exporters.source.engine import export_source
 
-        full_counts = export_source(emit, config, out, fmt, anchor)
+        full_counts = export_source(emit, config, out, fmt, anchor, notice_sink)
     else:
         from fabulexa_forge.exporters.dimensional.engine import export_dimensional
 
-        full_counts = export_dimensional(emit, config, out, fmt, anchor)
+        full_counts = export_dimensional(emit, config, out, fmt, anchor, notice_sink)
     _print_full_counts(full_counts)
     return 0
 
@@ -227,6 +232,8 @@ def cmd_export(
         prefixed by the window label when windowed); 3 when --next finds the
         run drained; 1 on any handled error.
     """
+    from fabulexa_forge.exporters.notices import render_notice_stderr
+
     # Usage-error checks before the emit opens
     if next_window and (range_from is not None or range_to is not None):
         print(
@@ -270,6 +277,7 @@ def cmd_export(
                 next_window,
                 range_from,
                 range_to,
+                render_notice_stderr,
             )
 
     except (ReaderError, ExporterError) as exc:
@@ -294,10 +302,11 @@ def cmd_init(emit_dir: Path, out_path: Path | None) -> int:
         Process exit code.
     """
     from fabulexa_forge.exporters.dimensional.init import generate_init_config
+    from fabulexa_forge.exporters.notices import render_notice_stderr
 
     try:
         with open_emit(emit_dir) as emit:
-            candidate = generate_init_config(emit)
+            candidate = generate_init_config(emit, render_notice_stderr)
     except (ReaderError, ExporterError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

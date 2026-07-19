@@ -17,8 +17,11 @@ horizon-rendering `active`/`deactivated_at`.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterator
+
+from _support.notices import discard_notice_sink
 
 from fabulexa_forge.anchor import (
     EffectiveAnchor,
@@ -39,8 +42,11 @@ from fabulexa_forge.exporters.source.renders import (
 from fabulexa_forge.reader.emit import Emit, open_emit
 
 from ._source_fixtures import (
+    build_degenerate_slice_only_source_emit,
+    build_slice_only_source_emit,
     build_source_test_emit,
     build_windowed_source_test_emit,
+    slice_only_horizon_window,
     windowed_test_windows,
 )
 
@@ -53,7 +59,7 @@ def _spanning_emit(
     emit_dir = build_source_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         fork_path = require_single_branch(emit.sidecar)
-        specs = build_source_plan(emit.sidecar, None)
+        specs = build_source_plan(emit.sidecar, None, notice_sink=discard_notice_sink)
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         yield emit, specs, fork_path, anchor
@@ -74,7 +80,7 @@ def _windowed_emit(
     emit_dir = build_windowed_source_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         fork_path = require_single_branch(emit.sidecar)
-        specs = build_source_plan(emit.sidecar, config)
+        specs = build_source_plan(emit.sidecar, config, notice_sink=discard_notice_sink)
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         yield emit, specs, fork_path, anchor
@@ -526,3 +532,111 @@ def test_snapshot_render_horizon_renders_active_deactivated_at(tmp_path: Path) -
     # ...but at or before w2's horizon.
     assert rows_w2["v002"]["active"] is False
     assert "2024-01-01" in str(rows_w2["v002"]["deactivated_at"])
+
+
+# ---------------------------------------------------------------------------
+# slice_only column omission (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+@contextmanager
+def _slice_only_emit(
+    tmp_path: Path,
+    config: "SourceConfig | None" = None,
+) -> Iterator[tuple[Emit, tuple[SourceTableSpec, ...], str, EffectiveAnchor]]:
+    """Open the slice_only fixture emit and resolve its plan, fork_path, and anchor."""
+    emit_dir = build_slice_only_source_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        fork_path = require_single_branch(emit.sidecar)
+        specs = build_source_plan(emit.sidecar, config, notice_sink=discard_notice_sink)
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        assert anchor is not None
+        yield emit, specs, fork_path, anchor
+
+
+def test_changelog_render_slice_only_omission_preserves_row_set(
+    tmp_path: Path,
+) -> None:
+    """A non-exempt slice_only column is absent from the after-image; the c/u/d
+    row set and seq assignment are unchanged from a control render whose
+    columns carry the slice_only column too (the column-projection-only
+    invariance the changelog render's docstring documents)."""
+    with _slice_only_emit(tmp_path) as (emit, specs, fork_path, anchor):
+        spec = _spec_for(specs, "records__patient")
+        assert all(src != "prop__loyalty_tier" for src, _ in spec.columns)
+
+        narrowed_sql = build_changelog_render_sql(
+            emit.sidecar, fork_path, spec, anchor, None
+        )
+        narrowed_rows = _mapped_rows(emit, spec, narrowed_sql)
+
+        control_spec = replace(
+            spec, columns=spec.columns + (("prop__loyalty_tier", "loyalty_tier"),)
+        )
+        control_sql = build_changelog_render_sql(
+            emit.sidecar, fork_path, control_spec, anchor, None
+        )
+        control_rows = _mapped_rows(emit, control_spec, control_sql)
+
+    narrowed_shape = [(r["id"], r["op"], r["status"]) for r in narrowed_rows]
+    control_shape = [(r["id"], r["op"], r["status"]) for r in control_rows]
+    assert narrowed_shape == control_shape
+    assert narrowed_shape == [
+        ("p001", "c", "open"),
+        ("p002", "c", "open"),
+        ("p002", "u", "closed"),
+    ]
+
+
+def test_snapshot_render_slice_only_column_absent_and_row_set_unchanged(
+    tmp_path: Path,
+) -> None:
+    """Under snapshot delivery, the slice_only column is absent from the
+    state-at projection; the snapshot row set (identity, active, tracked
+    property) is unchanged from a control render carrying the column."""
+    horizon = slice_only_horizon_window()
+    config = SourceConfig(change_delivery="snapshot")
+    with _slice_only_emit(tmp_path, config) as (emit, specs, fork_path, anchor):
+        spec = _spec_for(specs, "records__patient")
+        assert all(src != "prop__loyalty_tier" for src, _ in spec.columns)
+
+        narrowed_sql = build_snapshot_render_sql(
+            emit.sidecar, fork_path, spec, anchor, horizon
+        )
+        narrowed_rows = _mapped_rows(emit, spec, narrowed_sql)
+
+        control_spec = replace(
+            spec, columns=spec.columns + (("prop__loyalty_tier", "loyalty_tier"),)
+        )
+        control_sql = build_snapshot_render_sql(
+            emit.sidecar, fork_path, control_spec, anchor, horizon
+        )
+        control_rows = _mapped_rows(emit, control_spec, control_sql)
+
+    narrowed_shape = {r["id"]: (r["active"], r["status"]) for r in narrowed_rows}
+    control_shape = {r["id"]: (r["active"], r["status"]) for r in control_rows}
+    assert narrowed_shape == control_shape
+    assert narrowed_shape == {"p001": (True, "open"), "p002": (True, "closed")}
+
+
+def test_degenerate_unit_still_renders_identity_and_lifecycle(
+    tmp_path: Path,
+) -> None:
+    """A unit whose every property is non-exempt slice_only is never
+    suppressed: it still renders its row, carrying identity and lifecycle
+    columns with every prop__ column omitted."""
+    emit_dir = build_degenerate_slice_only_source_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        fork_path = require_single_branch(emit.sidecar)
+        specs = build_source_plan(emit.sidecar, None, notice_sink=discard_notice_sink)
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        assert anchor is not None
+        spec = _spec_for(specs, "records__member")
+        assert all(not src.startswith("prop__") for src, _ in spec.columns)
+
+        sql = build_records_render_sql(emit.sidecar, fork_path, spec, anchor, None)
+        rows = _mapped_rows(emit, spec, sql)
+
+    assert len(rows) == 1
+    assert rows[0]["id"] == "mem001"
+    assert rows[0]["active"] is True

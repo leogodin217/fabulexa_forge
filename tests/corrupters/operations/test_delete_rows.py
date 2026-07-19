@@ -30,8 +30,15 @@ def _patient_spec() -> "object":
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
-            column_spec("prop__age", "BIGINT", history_tracked=True),
-            column_spec("prop__birthdate", "DATE", history_tracked=True),
+            column_spec(
+                "prop__age", "BIGINT", history_tracked=True, temporal_class="tracked"
+            ),
+            column_spec(
+                "prop__birthdate",
+                "DATE",
+                history_tracked=True,
+                temporal_class="tracked",
+            ),
             column_spec("prop__doctor_id", "VARCHAR", references="doctor"),
         ),
         record_kind="patient",

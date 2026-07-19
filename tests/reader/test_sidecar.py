@@ -4,6 +4,7 @@ and RecordRoles accessor."""
 from __future__ import annotations
 
 import pytest
+from _support.sidecar_builder import identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.errors import (
@@ -71,12 +72,14 @@ def _full_raw() -> dict[str, object]:
                 "category": "records",
                 "record_kind": "patient",
                 "columns": [
-                    {"name": "record_id", "type": "VARCHAR"},
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
                     {
                         "name": "prop__doctor",
                         "type": "VARCHAR",
                         "references": "doctor",
                     },
+                    identity_column("ref_index__doctor", "BIGINT"),
                 ],
                 "rows": 10,
             },
@@ -85,7 +88,7 @@ def _full_raw() -> dict[str, object]:
                 "category": "membership",
                 "record_kind": "patient",
                 "property": "tags",
-                "columns": [{"name": "record_id", "type": "VARCHAR"}],
+                "columns": [identity_column("record_id", "VARCHAR")],
                 "rows": 5,
             },
         ],
@@ -147,7 +150,11 @@ def test_from_raw_fully_populated_tables() -> None:
     assert history.rows == 42
     assert len(history.columns) == 2
     assert history.columns[0] == ColumnSpec(
-        name="fork_path", type="VARCHAR", references=None, history_tracked=None
+        name="fork_path",
+        type="VARCHAR",
+        references=None,
+        history_tracked=None,
+        temporal_class=None,
     )
 
     records_table = tables[1]
@@ -155,7 +162,7 @@ def test_from_raw_fully_populated_tables() -> None:
     assert records_table.category == "records"
     assert records_table.record_kind == "patient"
     assert records_table.property is None
-    ref_col = records_table.columns[1]
+    ref_col = records_table.columns[2]
     assert ref_col.references == "doctor"
 
     membership_table = tables[2]
@@ -405,24 +412,24 @@ def test_branches_order_preserved() -> None:
 
 
 def test_unsupported_version_raises_with_found_version() -> None:
-    """from_raw raises UnsupportedBaseFormatVersionError(found_version=5) for version 5."""
-    raw = _minimal_raw(base_format_version=5)
+    """from_raw raises UnsupportedBaseFormatVersionError(found_version=99) for version 99."""
+    raw = _minimal_raw(base_format_version=99)
     with pytest.raises(UnsupportedBaseFormatVersionError) as exc_info:
         Sidecar.from_raw(raw)
-    assert exc_info.value.found_version == 5
+    assert exc_info.value.found_version == 99
 
 
 def test_unsupported_version_found_version_is_int() -> None:
-    """The carried found_version is the int 5."""
-    raw = _minimal_raw(base_format_version=5)
+    """The carried found_version is the int 99."""
+    raw = _minimal_raw(base_format_version=99)
     with pytest.raises(UnsupportedBaseFormatVersionError) as exc_info:
         Sidecar.from_raw(raw)
     assert isinstance(exc_info.value.found_version, int)
-    assert exc_info.value.found_version == 5
+    assert exc_info.value.found_version == 99
 
 
 # ---------------------------------------------------------------------------
-# SidecarStructureError: non-version-4 values of base_format_version
+# SidecarStructureError: non-version-5 values of base_format_version
 # ---------------------------------------------------------------------------
 
 

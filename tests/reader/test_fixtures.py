@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader import (
     UnsupportedBaseFormatVersionError,
     conformance,
@@ -142,6 +143,44 @@ class TestSpanning:
         assert roles is not None
         assert len(roles.kinds()) == 2
 
+    def test_records_table_has_record_index_column(
+        self, base_fixtures: dict[str, Path]
+    ) -> None:
+        """A records table declares a BIGINT record_index identity column."""
+        with open_emit(base_fixtures["spanning"]) as emit:
+            records_table = _records_table(emit)
+            record_index = next(
+                c for c in records_table.columns if c.name == "record_index"
+            )
+        assert record_index.type == "BIGINT"
+
+    def test_reference_annotated_prop_has_ref_index_sibling(
+        self, base_fixtures: dict[str, Path]
+    ) -> None:
+        """A reference-annotated prop__ column is immediately followed by its
+        BIGINT ref_index__ sibling, in declaration order."""
+        with open_emit(base_fixtures["spanning"]) as emit:
+            records_table = _records_table(emit)
+            columns = list(records_table.columns)
+        ref_col = next(c for c in columns if c.references is not None)
+        sibling_idx = columns.index(ref_col) + 1
+        sibling = columns[sibling_idx]
+        assert sibling.name == f"ref_index__{ref_col.name.removeprefix('prop__')}"
+        assert sibling.type == "BIGINT"
+
+
+class TestVersionGate:
+    """The version gate accepts SUPPORTED_BASE_FORMAT_VERSION."""
+
+    def test_opens_spanning_fixture_without_raising(
+        self, base_fixtures: dict[str, Path]
+    ) -> None:
+        """open_emit accepts an emit at the supported base_format_version
+        (mechanism untouched, literal moved -- the spanning fixture picks the
+        new value up through write_emit's default)."""
+        with open_emit(base_fixtures["spanning"]) as emit:
+            assert emit.sidecar.base_format_version == SUPPORTED_BASE_FORMAT_VERSION
+
 
 class TestHistorySeries:
     """history_series carries multi-event series and is C1-C12 conformant."""
@@ -216,9 +255,18 @@ class TestNegativeFixturesOpen:
     _NEGATIVE_NAMES = [
         "c4_wrong_history_type",
         "c5_prop_missing",
+        "c5_missing_record_index",
+        "c5_misplaced_record_index",
+        "c5_prop_without_ref_index",
+        "c5_ref_index_without_reference",
+        "c5_ref_index_wrong_type",
         "c7_half_null_member",
         "c12_missing_kind",
         "c12_missing_subtype",
+        "c13_broken_pairing",
+        "c13_out_of_enum_class",
+        "c13_missing_genesis",
+        "c11_emptied_series",
         "wrong_version",
         "schema_mismatch",
         "history_duplicate_tick",

@@ -5,11 +5,49 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
+from _support.sidecar_builder import identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.emit import open_emit
 
 from ._emit_helpers import write_emit
+
+# The records-table positional prefix through record_index (fork_path,
+# record_id, lifecycle tail, record_index) -- kind-independent, so it is
+# reused verbatim for records__patient and records__nurse alike.
+_RECORDS_PATIENT_STATUS_DDL = (
+    "CREATE TABLE records__patient "
+    "(fork_path VARCHAR, record_id VARCHAR, created_sim_time BIGINT, "
+    "active BOOLEAN, deactivated_at BIGINT, last_mutation_sim_time BIGINT, "
+    "record_index BIGINT, prop__status VARCHAR)"
+)
+
+_RECORDS_NURSE_NAME_DDL = (
+    "CREATE TABLE records__nurse "
+    "(fork_path VARCHAR, record_id VARCHAR, created_sim_time BIGINT, "
+    "active BOOLEAN, deactivated_at BIGINT, last_mutation_sim_time BIGINT, "
+    "record_index BIGINT, prop__name VARCHAR)"
+)
+
+_RECORDS_PATIENT_ZPROP_DDL = (
+    "CREATE TABLE records__patient "
+    "(fork_path VARCHAR, record_id VARCHAR, created_sim_time BIGINT, "
+    "active BOOLEAN, deactivated_at BIGINT, last_mutation_sim_time BIGINT, "
+    "record_index BIGINT, prop__z_prop VARCHAR)"
+)
+
+
+def _records_prefix() -> list[dict[str, object]]:
+    """The records-table positional prefix through record_index."""
+    return [
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
+    ]
 
 
 def _sidecar_with_history_tracked(with_flag: bool) -> dict[str, object]:
@@ -38,11 +76,7 @@ def _sidecar_with_history_tracked(with_flag: bool) -> dict[str, object]:
                 "name": "records__patient",
                 "category": "records",
                 "record_kind": "patient",
-                "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
-                    prop_col,
-                ],
+                "columns": [*_records_prefix(), prop_col],
                 "rows": 0,
             },
         ],
@@ -64,7 +98,7 @@ def test_column_spec_history_tracked_false(tmp_path: Path) -> None:
     sidecar = _sidecar_with_history_tracked(with_flag=True)
     # Overwrite the prop_col to use False
     records_table = sidecar["tables"][1]  # type: ignore[index]
-    prop_col = records_table["columns"][2]  # type: ignore[index]
+    prop_col = records_table["columns"][-1]  # type: ignore[index]
     prop_col["history_tracked"] = False  # type: ignore[index]
     emit_dir = write_emit(tmp_path, sidecar=sidecar)
     with open_emit(emit_dir) as emit:
@@ -113,10 +147,7 @@ def test_history_tracked_passes_validate_c1(tmp_path: Path) -> None:
         sidecar=sidecar,
         db_tables={
             "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
-            "records__patient": (
-                "CREATE TABLE records__patient "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__status VARCHAR)"
-            ),
+            "records__patient": _RECORDS_PATIENT_STATUS_DDL,
         },
     )
     with open_emit(emit_dir) as emit:
@@ -162,11 +193,7 @@ def _build_c11_sidecar(
             "name": "records__patient",
             "category": "records",
             "record_kind": "patient",
-            "columns": [
-                {"name": "fork_path", "type": "VARCHAR"},
-                {"name": "record_id", "type": "VARCHAR"},
-                prop_col,
-            ],
+            "columns": [*_records_prefix(), prop_col],
             "rows": 0,
         },
     ]
@@ -213,10 +240,7 @@ def test_c11_positive_tracked_col_with_history_row_passes(tmp_path: Path) -> Non
         sidecar=sidecar,
         db_tables={
             "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
-            "records__patient": (
-                "CREATE TABLE records__patient "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__status VARCHAR)"
-            ),
+            "records__patient": _RECORDS_PATIENT_STATUS_DDL,
             "history": (
                 "CREATE TABLE history "
                 "(fork_path VARCHAR, kind VARCHAR, record_id VARCHAR, "
@@ -244,10 +268,7 @@ def test_c11_skip_no_history_tracked_flags(tmp_path: Path) -> None:
         sidecar=sidecar,
         db_tables={
             "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
-            "records__patient": (
-                "CREATE TABLE records__patient "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__status VARCHAR)"
-            ),
+            "records__patient": _RECORDS_PATIENT_STATUS_DDL,
             "history": (
                 "CREATE TABLE history "
                 "(fork_path VARCHAR, kind VARCHAR, record_id VARCHAR, "
@@ -275,10 +296,7 @@ def test_c11_negative_absent_prop_column(tmp_path: Path) -> None:
         sidecar=sidecar,
         db_tables={
             "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
-            "records__patient": (
-                "CREATE TABLE records__patient "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__status VARCHAR)"
-            ),
+            "records__patient": _RECORDS_PATIENT_STATUS_DDL,
             "history": (
                 "CREATE TABLE history "
                 "(fork_path VARCHAR, kind VARCHAR, record_id VARCHAR, "
@@ -306,10 +324,7 @@ def test_c11_negative_flagged_false(tmp_path: Path) -> None:
         sidecar=sidecar,
         db_tables={
             "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
-            "records__patient": (
-                "CREATE TABLE records__patient "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__status VARCHAR)"
-            ),
+            "records__patient": _RECORDS_PATIENT_STATUS_DDL,
             "history": (
                 "CREATE TABLE history "
                 "(fork_path VARCHAR, kind VARCHAR, record_id VARCHAR, "
@@ -338,10 +353,7 @@ def test_c11_one_directional_no_history_rows(tmp_path: Path) -> None:
         sidecar=sidecar,
         db_tables={
             "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
-            "records__patient": (
-                "CREATE TABLE records__patient "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__status VARCHAR)"
-            ),
+            "records__patient": _RECORDS_PATIENT_STATUS_DDL,
             "history": (
                 "CREATE TABLE history "
                 "(fork_path VARCHAR, kind VARCHAR, record_id VARCHAR, "
@@ -374,10 +386,7 @@ def test_c11_skip_when_history_table_absent(tmp_path: Path) -> None:
         sidecar=sidecar,
         db_tables={
             "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
-            "records__patient": (
-                "CREATE TABLE records__patient "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__status VARCHAR)"
-            ),
+            "records__patient": _RECORDS_PATIENT_STATUS_DDL,
             # history table intentionally absent
         },
     )
@@ -420,8 +429,7 @@ def test_c11_multiple_kinds_partial_failure(tmp_path: Path) -> None:
                 "category": "records",
                 "record_kind": "patient",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    *_records_prefix(),
                     # prop__status is tracked and will have a matching history row
                     {
                         "name": "prop__status",
@@ -436,8 +444,7 @@ def test_c11_multiple_kinds_partial_failure(tmp_path: Path) -> None:
                 "category": "records",
                 "record_kind": "nurse",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    *_records_prefix(),
                     # prop__name is tracked but history will reference prop__score (absent)
                     {
                         "name": "prop__name",
@@ -467,14 +474,8 @@ def test_c11_multiple_kinds_partial_failure(tmp_path: Path) -> None:
         sidecar=sidecar,
         db_tables={
             "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
-            "records__patient": (
-                "CREATE TABLE records__patient "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__status VARCHAR)"
-            ),
-            "records__nurse": (
-                "CREATE TABLE records__nurse "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__name VARCHAR)"
-            ),
+            "records__patient": _RECORDS_PATIENT_STATUS_DDL,
+            "records__nurse": _RECORDS_NURSE_NAME_DDL,
             "history": (
                 "CREATE TABLE history "
                 "(fork_path VARCHAR, kind VARCHAR, record_id VARCHAR, "
@@ -526,8 +527,7 @@ def test_c11_message_order_deterministic(tmp_path: Path) -> None:
                 "category": "records",
                 "record_kind": "patient",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
+                    *_records_prefix(),
                     # Only prop__z_prop tracked; prop__a_prop absent
                     {
                         "name": "prop__z_prop",
@@ -557,10 +557,7 @@ def test_c11_message_order_deterministic(tmp_path: Path) -> None:
         sidecar=sidecar,
         db_tables={
             "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
-            "records__patient": (
-                "CREATE TABLE records__patient "
-                "(fork_path VARCHAR, record_id VARCHAR, prop__z_prop VARCHAR)"
-            ),
+            "records__patient": _RECORDS_PATIENT_ZPROP_DDL,
             "history": (
                 "CREATE TABLE history "
                 "(fork_path VARCHAR, kind VARCHAR, record_id VARCHAR, "

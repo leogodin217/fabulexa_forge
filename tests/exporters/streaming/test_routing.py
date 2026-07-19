@@ -6,12 +6,13 @@ resolve_subtype_index tests build a minimal in-process emit via duckdb.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.config.models import RoutingConfig
 from fabulexa_forge.errors import ExportError
@@ -26,29 +27,34 @@ from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import _ddl
 
-SUPPORTED_VERSION = 4
-
 # ---------------------------------------------------------------------------
 # Emit builder for resolve_subtype_index tests
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS_WITH_TYPE: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__actor_type", "type": "VARCHAR"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
 ]
 
 _RECORD_COLS_WITHOUT_TYPE: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
 ]
 
 _HISTORY_COLS: list[dict[str, Any]] = [
@@ -67,7 +73,7 @@ def _build_subtyped_emit(
     cols: list[dict[str, Any]],
     rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal v4 emit with one sub-typed kind."""
+    """Build a minimal emit with one sub-typed kind."""
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     conn.execute(_ddl(f"records__{kind}", cols))
@@ -80,10 +86,9 @@ def _build_subtyped_emit(
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             {
                 "name": f"records__{kind}",
                 "category": "records",
@@ -98,8 +103,8 @@ def _build_subtyped_emit(
                 "rows": 0,
             },
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -335,9 +340,9 @@ class TestResolveSubtypeIndex:
     def test_maps_record_id_to_discriminator(self, tmp_path: Path) -> None:
         """Every record_id maps to its discriminator value."""
         rows = [
-            ("trunk", "r1", 1, True, None, 1, "customer"),
-            ("trunk", "r2", 2, True, None, 2, "vip_customer"),
-            ("trunk", "r3", 3, True, None, 3, "staff"),
+            ("trunk", "r1", 1, True, None, 1, 0, "customer"),
+            ("trunk", "r2", 2, True, None, 2, 1, "vip_customer"),
+            ("trunk", "r3", 3, True, None, 3, 2, "staff"),
         ]
         emit_dir = _build_subtyped_emit(tmp_path, "actor", _RECORD_COLS_WITH_TYPE, rows)
         with open_emit(emit_dir) as emit:
@@ -349,7 +354,7 @@ class TestResolveSubtypeIndex:
         """The index reads the discriminator only, not selected properties."""
         # Same as above — the function doesn't take a properties parameter
         rows = [
-            ("trunk", "r1", 1, True, None, 1, "staff"),
+            ("trunk", "r1", 1, True, None, 1, 0, "staff"),
         ]
         emit_dir = _build_subtyped_emit(tmp_path, "actor", _RECORD_COLS_WITH_TYPE, rows)
         with open_emit(emit_dir) as emit:
@@ -361,7 +366,7 @@ class TestResolveSubtypeIndex:
     ) -> None:
         """Raises ExportError when prop__<kind>_type column is absent from sidecar."""
         rows: list[tuple[Any, ...]] = [
-            ("trunk", "r1", 1, True, None, 1),
+            ("trunk", "r1", 1, True, None, 1, 0),
         ]
         emit_dir = _build_subtyped_emit(
             tmp_path, "actor", _RECORD_COLS_WITHOUT_TYPE, rows
@@ -374,7 +379,7 @@ class TestResolveSubtypeIndex:
         """Raises ExportError when records__<kind> table is absent from sidecar."""
         # Build an emit with "device" kind, then ask for "actor"
         rows: list[tuple[Any, ...]] = [
-            ("trunk", "r1", 1, True, None, 1),
+            ("trunk", "r1", 1, True, None, 1, 0),
         ]
         emit_dir = _build_subtyped_emit(
             tmp_path, "device", _RECORD_COLS_WITHOUT_TYPE, rows

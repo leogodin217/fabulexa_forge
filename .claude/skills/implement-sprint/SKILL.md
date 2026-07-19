@@ -18,8 +18,8 @@ Automated sprint implementation in an isolated worktree with binding quality gat
 Throughout this skill:
 - `<sprint>` — the sprint name
 - `<parent>` — value of `state.yaml:parent_branch` (the branch the worktree forks from and the sprint eventually merges back into)
-- `<worktree>` — `../worktrees/<sprint>` (sibling of the main checkout)
-- `<sprint-branch>` — `sprint/<sprint>` (created in the worktree)
+- `<worktree>` — `../worktrees/<sprint>` (sibling of the main checkout); **this session runs inside it** (cwd == the worktree's repo top)
+- `<sprint-branch>` — `sprint/<sprint>` (created by `/create-sprint` when it forked the worktree)
 
 ## Orchestrator Role
 
@@ -31,7 +31,7 @@ You are a **router**, not a judge. You launch agents, run automated gates, and r
 2. If you disagree with a finding, include your disagreement alongside the finding in the final presentation. The user decides — you do not.
 3. You never evaluate whether code is "intentional," "acceptable," or "a known pattern." Route findings; don't filter them.
 4. **Gates run once.** Each test command in `state.yaml:gates.tests` runs exactly once per phase. Any non-zero exit halts automation. You do NOT retry with variant flags, read source files to diagnose, or launch subagents to debug gate failures. Report and halt.
-5. **Operate only inside the worktree.** Once the worktree exists, every read, write, gate, and commit happens in `<worktree>`. The main checkout is the user's space — never touch its files.
+5. **You are inside the worktree and never leave it.** This session was launched from `<worktree>`, so cwd is the worktree's repo top; every read, write, gate, and commit stays here. The main checkout is the user's space — never reference an absolute path under it. If a tool (e.g. cclsp) returns a main-checkout path, it is wrong — re-resolve it against cwd before reading or editing.
 6. **Within the worktree, only touch sprint-scoped files.** Commit only the files your implementer reported (`git add <paths>`), never `git add -A`. The worktree was forked clean from `<parent>`, so this is paranoia not necessity — but it stays as a binding rule.
 
 ## Prerequisites
@@ -39,103 +39,56 @@ You are a **router**, not a judge. You launch agents, run automated gates, and r
 - Sprint scaffold committed at `docs/sprints/<sprint>/` on `<parent>` (created by `/create-sprint` or `/create-sprint-from-pending`)
 - `state.yaml:parent_branch` is set
 - Contracts in `spec.md` are fully defined
+- The worktree exists and is bootstrapped (`/create-sprint` Step 10)
+- **This session was launched from inside `<worktree>`** (`cd ../worktrees/<sprint> && claude`), so its cclsp/LSP is worktree-scoped
 
 ## Pre-Flight Checks
 
 Run these in order. Do NOT skip or reorder.
 
-### 1. Resolve sprint name
+### 1. Assert this session is inside the sprint worktree
 
-If the user passed `<sprint>` as an argument, use it. Otherwise enumerate `docs/sprints/*/state.yaml` and pick the unique one with at least one `pending` phase. If zero or more than one, halt and ask the user to specify.
+The worktree was created and bootstrapped by `/create-sprint` (Step 10), and this session must have been launched from inside it (`cd ../worktrees/<sprint> && claude`). That launch is what scopes cclsp/LSP, cwd, and git to the worktree — it is the entire safety mechanism. Verify it before doing anything else:
 
-### 2. Read state.yaml
+```bash
+git rev-parse --show-toplevel     # must end with /worktrees/<sprint>
+git branch --show-current         # must equal sprint/<sprint>
+git rev-parse --git-common-dir    # differs from --git-dir → confirms a linked worktree
+```
 
-From the **main checkout** (the worktree doesn't exist yet), read `docs/sprints/<sprint>/state.yaml`:
+If the toplevel is the **main checkout** (not under `worktrees/`), **halt** — do not create anything, do not proceed:
+
+> `/implement-sprint` must run from inside the worktree, or cclsp leaks main-checkout paths and a stray write/commit can land on the parent branch. Run:
+> ```
+> cd ../worktrees/<sprint> && claude
+> ```
+> then re-run `/implement-sprint <sprint>` in that session.
+
+If the worktree does not exist at all, `/create-sprint` did not complete — halt and tell the user to re-run it.
+
+### 2. Resolve sprint name
+
+If the user passed `<sprint>` as an argument, use it. Otherwise derive it from the current branch (`sprint/<sprint>`), falling back to the unique `docs/sprints/*/state.yaml` with at least one `pending` phase. If ambiguous, halt and ask the user to specify.
+
+### 3. Read state.yaml and spec.md
+
+From the worktree (cwd), read `docs/sprints/<sprint>/state.yaml`:
 
 - `sprint` — must equal `<sprint>`
-- `parent_branch` — must be set; this becomes `<parent>`
+- `parent_branch` — must be set; this is `<parent>`, and `<sprint-branch>` must descend from it (sanity-confirms the worktree's lineage)
 - `gates.tests` — list of shell commands
 - `phases.<N>.name` and `phases.<N>.demo` for every phase
 - At least one phase with `status: pending`
 
 If any field is missing, halt — the sprint plan is incomplete and should be re-emitted by `/create-sprint`.
 
-### 3. Read spec.md
+Then read `docs/sprints/<sprint>/spec.md` once, upfront, only to confirm the sprint name in the H1 matches `<sprint>`.
 
-Read `docs/sprints/<sprint>/spec.md` once, upfront. Used only to confirm the sprint name in the H1 matches `<sprint>`.
+User-facing status line:
 
-### 4. Verify parent branch state
+> Inside worktree `<worktree>` on branch `<sprint-branch>` forked from `<parent>`. All phase work runs here.
 
-```bash
-git show-ref --verify --quiet "refs/heads/<parent>"   # parent branch exists
-git rev-parse "<parent>:docs/sprints/<sprint>/spec.md" >/dev/null   # scaffold committed at parent HEAD
-```
-
-If either fails, halt — `/create-sprint` did not complete cleanly.
-
-### 5. Collision checks
-
-```bash
-git show-ref --quiet "refs/heads/<sprint-branch>"        # branch must NOT exist
-test -e "<worktree>"                                      # worktree path must NOT exist
-git worktree list | grep -q "<worktree>"                 # not registered as worktree
-```
-
-Any collision halts automation. The user must clean up the prior attempt themselves (`git worktree remove --force <worktree>`, `git branch -D <sprint-branch>`).
-
-### 6. Create the worktree
-
-```bash
-mkdir -p ../worktrees
-git worktree add "<worktree>" -b "<sprint-branch>" "<parent>"
-```
-
-### 7. Bootstrap the worktree environment
-
-This is a standalone uv project rooted at the repo. Sync the worktree:
-
-```bash
-(cd "<worktree>" && uv sync --all-extras)
-```
-
-`--all-extras` is mandatory: the tests import packages that live behind the
-`[kafka]` and `[mixer]` optional-dependency extras (`confluent_kafka`,
-`fastapi`), and a plain `uv sync` omits them — the first gate run then fails
-on a `ModuleNotFoundError` that is an environment gap, not a sprint-code bug.
-
-The sync must also install the `dev` dependency group: the
-`mypy (strict, src)` pre-commit hook runs `uv run mypy`, and mypy +
-its stub packages live in `dev`. `uv sync` installs `dev` by default here (it
-is a default group), so `uv sync --all-extras` already covers it — but do not
-pass `--no-dev` or otherwise drop the group, or every phase's pre-commit fails
-at the mypy hook with `command not found`-style errors that look like sprint
-bugs.
-
-This installs editable packages into each `.venv`, isolating the sprint's
-test environment from the main checkout. Expect 30–60s on first run.
-
-### 8. Verify the parent baseline passes pre-commit
-
-```bash
-(cd "<worktree>" && pre-commit run --all-files)
-```
-
-The worktree is a clean checkout of `<parent>` HEAD, so this gates the exact baseline the sprint builds on. Run it here, not in the main checkout — `pre-commit run --all-files` scans the working tree on disk, and the main checkout may be on a different branch or carry unrelated uncommitted/untracked files.
-
-If it fails, **halt**. The parent branch `<parent>` does not pass pre-commit cleanly; phase commits could not be trusted to attribute a hook failure to sprint changes, and pre-commit's auto-fixing hooks leave the worktree dirty on failure. Surface the failure and tell the user to fix `<parent>` and remove the worktree before re-running:
-
-```bash
-git worktree remove --force <worktree>
-git branch -D <sprint-branch>
-```
-
-### 9. Switch operating context to the worktree
-
-From this point on, every command runs from `<worktree>`. The user-facing status line:
-
-> Worktree ready at `<worktree>` on branch `<sprint-branch>` forked from `<parent>`. All phase work runs there.
-
-### 10. Subagent execution model
+### 4. Subagent execution model
 
 Every subagent in this skill runs as a **foreground `Agent` call**: the call blocks inline until the subagent finishes and returns its **final message directly** as the tool result. One turn, one cache-read, no transcript.
 
@@ -156,7 +109,7 @@ You (the orchestrator) read ONLY these files:
 
 Everything you need to execute lives in `state.yaml`:
 
-- `parent_branch` — `<parent>` for worktree fork and final merge
+- `parent_branch` — `<parent>` for the lineage check and final merge
 - `gates.tests` — the list of test commands
 - `phases.<N>.demo` — the demo path for phase N
 - `phases.<N>.name` — the phase title for subagent prompts
@@ -202,8 +155,9 @@ Exception: retain the review verdict (APPROVED or list of unresolved findings) f
        |
 +------------------------------------------+
 |  PRE-FLIGHT                              |
-|  Resolve name, read state, verify parent,|
-|  create worktree, uv sync, switch cwd    |
+|  Assert session is inside the worktree,  |
+|  resolve name, read state, check lineage |
+|  (worktree was created by /create-sprint)|
 +------------------------------------------+
        |
 +------------------------------------------+
@@ -736,24 +690,31 @@ Show:
 
 Rebase the sprint branch onto current `<parent>` HEAD (in case `<parent>` advanced during the sprint), delete the sprint dir as the final commit, then fast-forward `<parent>` and clean up.
 
+All of this runs **inside the worktree** — the session never reaches into the main checkout to switch its branch (that would disrupt the user's concurrent work on `<parent>`).
+
 ```bash
-# In the worktree: rebase onto current parent.
-cd <worktree>
-git fetch . <parent>:<parent>     # ensure local <parent> ref is current (no-op if untouched)
+# Rebase onto current parent (we are already in the worktree).
 git rebase <parent>                # halt with conflict report if it fails
 
 # Final commit: remove the sprint dir.
 git rm -r docs/sprints/<sprint>/
 git commit -m "Sprint <sprint> complete"
 
-# In the main checkout: fast-forward <parent>.
-cd <main-checkout>
-git checkout <parent>
-git merge --ff-only <sprint-branch>
-
-# Cleanup.
-git worktree remove <worktree>
-git branch -D <sprint-branch>
+# Fast-forward <parent> by ref, without checking it out anywhere.
+if git push . <sprint-branch>:<parent>; then
+    # Parent ref advanced. If the main checkout sits on <parent>, its index is now
+    # behind its own ref — tell the user to `git reset --hard <parent>` (or `git pull .`)
+    # there when convenient. Then clean up:
+    git worktree remove <worktree>
+    git branch -D <sprint-branch>
+else
+    # Refused: <parent> is checked out in the main checkout. Do NOT remove the
+    # worktree — the user lands it from there. Surface exactly this:
+    #   (in the main checkout)
+    #   git checkout <parent> && git merge --ff-only <sprint-branch>
+    #   git worktree remove <worktree> && git branch -D <sprint-branch>
+    echo "HALT: <parent> is checked out in the main checkout; land it from there (see above)."
+fi
 ```
 
 If `git rebase <parent>` fails on conflicts, halt and surface the conflict. The user resolves in the worktree (`cd <worktree>; git status`), then re-runs ACCEPT.
@@ -806,7 +767,7 @@ All four agents receive a `Working directory: <worktree>` line at the top of the
 
 ## Failure Modes
 
-**Pre-flight collision (worktree or branch already exists):** Halt. User cleans up the prior attempt manually.
+**Pre-flight launch-context failure (session not inside the worktree):** Halt without creating or touching anything. The user relaunches with `cd ../worktrees/<sprint> && claude` and re-runs the skill there. If the worktree doesn't exist, `/create-sprint` (Step 10) didn't complete — re-run it from the main checkout.
 
 **Test gate fails:** Report which test command, what error. User decides: fix in the worktree or abandon. (Pre-commit failures surface as reviewer `REVISIONS NEEDED` and go through the fix cycle.)
 

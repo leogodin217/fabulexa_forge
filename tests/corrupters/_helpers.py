@@ -12,7 +12,9 @@ import random
 from typing import Mapping, Sequence
 
 import pyarrow as pa
+from _support.sidecar_builder import prop_column
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.corrupters.state import WorkingTable
 from fabulexa_forge.reader.sidecar import BranchEntry, ColumnSpec, Sidecar, TableSpec
 
@@ -30,13 +32,56 @@ def column_spec(
     *,
     references: str | None = None,
     history_tracked: bool | None = None,
+    temporal_class: str | None = None,
 ) -> ColumnSpec:
-    """Build one ColumnSpec."""
+    """Build one ColumnSpec.
+
+    Infrastructure columns (fork_path, kind, record_id, sim_time, ...) carry
+    neither history_tracked nor temporal_class -- both stay None. A
+    value-carrying (prop__) column carries both together, because the
+    contract pairs them: a column carries history_tracked iff it carries
+    temporal_class. Routes a given pair through `prop_column` -- the sole
+    validator of the pairing and its 'tracked'/'slice_only' implications --
+    so a defective combination raises here, never silently building a
+    mismatched ColumnSpec.
+
+    Args:
+        name: Column name.
+        duckdb_type: DuckDB type literal.
+        references: The record kind this column's value equality-joins
+            against, when the column is a foreign-key projection.
+        history_tracked: The column's SCD class (True = type-2, False =
+            type-1); None for a non-value-carrying column.
+        temporal_class: The column's point-in-time contract; None for a
+            non-value-carrying column.
+
+    Returns:
+        A ColumnSpec.
+
+    Raises:
+        ValueError: exactly one of history_tracked/temporal_class is given
+            (the pair is broken), or temporal_class 'tracked' with
+            history_tracked False, or 'slice_only' with history_tracked True.
+    """
+    if (history_tracked is None) != (temporal_class is None):
+        raise ValueError(
+            f"column_spec {name!r}: history_tracked and temporal_class must "
+            "be given together"
+        )
+    if history_tracked is not None and temporal_class is not None:
+        prop_column(
+            name,
+            duckdb_type,
+            history_tracked=history_tracked,
+            temporal_class=temporal_class,
+            references=references,
+        )
     return ColumnSpec(
         name=name,
         type=duckdb_type,
         references=references,
         history_tracked=history_tracked,
+        temporal_class=temporal_class,
     )
 
 
@@ -115,7 +160,7 @@ def sidecar(
     """
     return Sidecar(
         raw={},
-        base_format_version=4,
+        base_format_version=SUPPORTED_BASE_FORMAT_VERSION,
         branches=branches,
         tables=tables,
         runtime=None,

@@ -23,9 +23,10 @@ from unittest.mock import patch
 import duckdb
 import pytest
 import yaml
+from _support.sidecar_builder import identity_column as _identity_column
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from exporters.streaming._helpers import _membership_table_spec
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.cli import cmd_stream, main
 from fabulexa_forge.exporters.streaming.types import StreamOutcome
 
@@ -34,13 +35,19 @@ from fabulexa_forge.exporters.streaming.types import StreamOutcome
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    _identity_column("record_index", "BIGINT"),
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
 ]
 
 _HISTORY_COLS: list[dict[str, object]] = [
@@ -77,7 +84,7 @@ def _table_spec(
 
 
 def _build_spanning_emit(tmp_path: Path) -> Path:
-    """Build a minimal single-branch v4 emit with two kinds."""
+    """Build a minimal single-branch emit with two kinds."""
     tmp_path.mkdir(parents=True, exist_ok=True)
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -87,20 +94,20 @@ def _build_spanning_emit(tmp_path: Path) -> Path:
 
     _DAY = 86_400_000_000_000
     actor_rows = [
-        ("trunk", "a001", 1 * _DAY, True, None, 1 * _DAY, "active"),
-        ("trunk", "a002", 2 * _DAY, False, 5 * _DAY, 5 * _DAY, "inactive"),
+        ("trunk", "a001", 1 * _DAY, True, None, 1 * _DAY, 0, "active"),
+        ("trunk", "a002", 2 * _DAY, False, 5 * _DAY, 5 * _DAY, 1, "inactive"),
     ]
     for row in actor_rows:
         conn.execute(
-            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)', list(row)
+            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', list(row)
         )
 
     task_rows = [
-        ("trunk", "t001", 1 * _DAY, True, None, 1 * _DAY, "open"),
+        ("trunk", "t001", 1 * _DAY, True, None, 1 * _DAY, 0, "open"),
     ]
     for row in task_rows:
         conn.execute(
-            'INSERT INTO "records__task" VALUES (?, ?, ?, ?, ?, ?, ?)', list(row)
+            'INSERT INTO "records__task" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', list(row)
         )
 
     history_rows = [
@@ -113,10 +120,9 @@ def _build_spanning_emit(tmp_path: Path) -> Path:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _RECORD_COLS, 2, record_kind="actor"
             ),
@@ -125,8 +131,8 @@ def _build_spanning_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, 4),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -1256,23 +1262,23 @@ class TestKafkaSinkEndToEndFake:
 _NS = 1_000_000_000  # one second in nanoseconds
 
 _WAITERS_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
 ]
 
 _MEMBERS_COLS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
 ]
 
 
 def _build_membership_emit(tmp_path: Path) -> Path:
-    """Build a minimal single-branch v4 emit with two membership tables."""
+    """Build a minimal single-branch emit with two membership tables."""
     emit_dir = tmp_path / "emit"
     emit_dir.mkdir(parents=True, exist_ok=True)
     db_path = emit_dir / "run.duckdb"
@@ -1294,10 +1300,9 @@ def _build_membership_emit(tmp_path: Path) -> Path:
     conn.execute(f'CREATE TABLE "membership__team__members" ({cols_ddl2})')
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        emit_dir,
+        tables=[
             _membership_table_spec(
                 "membership__queue__waiters",
                 _WAITERS_COLS,
@@ -1309,8 +1314,8 @@ def _build_membership_emit(tmp_path: Path) -> Path:
                 "membership__team__members", _MEMBERS_COLS, 0, "team", "members"
             ),
         ],
-    }
-    (emit_dir / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return emit_dir
 
 

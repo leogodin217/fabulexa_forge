@@ -42,3 +42,22 @@ class RunDatabaseError(ReaderError):
 
 class TableNotFoundError(ReaderError):
     """A table name was requested that the sidecar does not declare."""
+
+
+class ColumnNotFoundError(ReaderError):
+    """A named column is not declared on the named table."""
+
+
+class TemporalClassUnavailableError(ReaderError):
+    """A column whose point-in-time class is required has no usable one.
+
+    Raised for a column carrying neither temporal attribute (a structural or
+    identity column — conformant, but it has no temporal semantics to ask about),
+    for a declared history_tracked with no paired temporal_class, and for a
+    declared class outside the three-value enum (both non-conformant, C13). The
+    message distinguishes the cases; the non-conformant ones direct the caller to
+    `fabulexa-forge validate`. Raised rather than inferring a class from
+    history_tracked: that inference is the fiction the contract's
+    `base_format_version 5` bump exists to delete (it introduced the explicit
+    `temporal_class` attribute so a reader never has to guess).
+    """

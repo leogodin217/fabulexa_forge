@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _support.notices import discard_notice_sink
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.loader import load_export_config
@@ -65,7 +66,9 @@ def test_recipe_run_and_assert(
             None,
             None,
         )
-        export_dimensional(emit, config, out_path, "duckdb", anchor)
+        export_dimensional(
+            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+        )
 
     assert_recipe_output(expectation, out_path)
 

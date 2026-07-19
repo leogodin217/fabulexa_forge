@@ -5,9 +5,10 @@ from __future__ import annotations
 import random
 from collections.abc import Sequence
 
-from fabulexa_forge.config.models import Amount, InsertRows, Target
+from fabulexa_forge.config.models import Amount, DeleteRows, InsertRows, Target
 from fabulexa_forge.corrupters.operations._mutations import swap_adjacent
 from fabulexa_forge.corrupters.operations.dangle_reference import DANGLING_ID_PREFIX
+from fabulexa_forge.corrupters.operations.delete_rows import DeleteRowsCorrupter
 from fabulexa_forge.corrupters.operations.insert_rows import InsertRowsCorrupter
 from fabulexa_forge.corrupters.state import CorruptState
 from fabulexa_forge.reader.sidecar import BranchEntry, Sidecar
@@ -24,6 +25,7 @@ from .._helpers import (
 _FORK_PATH = "trunk"
 _SLICE_AT = 100
 _HANDLER = InsertRowsCorrupter()
+_DELETE_HANDLER = DeleteRowsCorrupter()
 
 
 class _FixedRandomValues(random.Random):
@@ -54,10 +56,12 @@ def _patient_spec() -> "object":
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
             column_spec("presentation_id", "VARCHAR"),
             column_spec("prop__age", "BIGINT"),
             column_spec("prop__name", "VARCHAR"),
             column_spec("prop__doctor_id", "VARCHAR", references="doctor"),
+            column_spec("ref_index__doctor_id", "BIGINT"),
         ),
         record_kind="patient",
     )
@@ -70,6 +74,7 @@ def _doctor_spec() -> "object":
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
             column_spec("presentation_id", "VARCHAR"),
             column_spec("prop__name", "VARCHAR"),
             column_spec("prop__specialty", "VARCHAR"),
@@ -118,6 +123,7 @@ def _patient_row(
     age: object = None,
     name: object = None,
     doctor_id: object = None,
+    ref_index_doctor_id: object = None,
 ) -> dict[str, object]:
     return {
         "fork_path": _FORK_PATH,
@@ -126,6 +132,7 @@ def _patient_row(
         "prop__age": age,
         "prop__name": name,
         "prop__doctor_id": doctor_id,
+        "ref_index__doctor_id": ref_index_doctor_id,
     }
 
 
@@ -172,6 +179,14 @@ def _ward_row(
     }
 
 
+def _numbered(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """`rows` with a `record_index` cell assigned by list position (dense,
+    0-based) -- the fixture's stand-in for the contract's creation-order
+    numbering, so `CorruptState.__post_init__` captures a real high-water
+    mark for these records-category tables."""
+    return [dict(row, record_index=i) for i, row in enumerate(rows)]
+
+
 def _state(
     *,
     patients: list[dict[str, object]] | None = None,
@@ -183,8 +198,10 @@ def _state(
     return CorruptState(
         tables={
             "history": working_table(_history_spec(), history_rows or []),
-            "records__patient": working_table(_patient_spec(), patients or []),
-            "records__doctor": working_table(_doctor_spec(), doctors or []),
+            "records__patient": working_table(
+                _patient_spec(), _numbered(patients or [])
+            ),
+            "records__doctor": working_table(_doctor_spec(), _numbered(doctors or [])),
             "membership__patient__ward": working_table(_ward_spec(), ward_rows or []),
         },
         deleted_record_ids=deleted_record_ids or {},
@@ -621,6 +638,116 @@ def test_amount_zero_donor_population_is_a_data_dependent_no_op() -> None:
     assert outcome.units_affected == 0
     assert outcome.defects == ()
     assert state.tables["records__doctor"].data.num_rows == 0
+
+
+# ---------------------------------------------------------------------------
+# record_index minting
+# ---------------------------------------------------------------------------
+
+
+def test_minted_record_index_ascends_above_rows_in_selected_unit_order() -> None:
+    """A fresh table of 3 rows (record_index 0, 1, 2): phantoms mint 3, 4 --
+    in ascending selected-unit order, the donor with the lower physical
+    (canonical-order) position minting first."""
+    state = _state(
+        doctors=[
+            _doctor_row("d1", name="D1"),
+            _doctor_row("d2", name="D2"),
+            _doctor_row("d3", name="D3"),
+        ]
+    )
+    sc = _sidecar()
+    # Canonical order == ascending record_id == d1, d2, d3 (physical rows 0,
+    # 1, 2); forcing the unit draw to [0, 2] selects d1 then d3.
+    outcome = _apply(
+        state,
+        _op("records__doctor", Amount(count=2)),
+        sc,
+        FixedSampleRandom([0, 2], seed=1),
+    )
+    assert outcome.units_affected == 2
+    rows = state.tables["records__doctor"].data.to_pylist()
+    phantom_of_d1 = next(
+        r for r in rows if r["prop__name"] == "D1" and r["record_id"] != "d1"
+    )
+    phantom_of_d3 = next(
+        r for r in rows if r["prop__name"] == "D3" and r["record_id"] != "d3"
+    )
+    assert phantom_of_d1["record_index"] == 3
+    assert phantom_of_d3["record_index"] == 4
+
+
+def test_minted_record_index_never_reuses_a_deleted_suffix_ordinal() -> None:
+    """`delete_rows` removes the suffix rows (record_index 3, 4); a later
+    `insert_rows` on the same table mints strictly above the pre-delete
+    maximum (4), never the tombstoned 3 or 4 -- a current-max implementation
+    would resurrect one of them."""
+    state = _state(
+        doctors=[
+            _doctor_row("d1"),
+            _doctor_row("d2"),
+            _doctor_row("d3"),
+            _doctor_row("d4"),
+            _doctor_row("d5"),
+        ]
+    )
+    sc = _sidecar()
+    for suffix_id in ("d5", "d4"):
+        delete_op = DeleteRows(
+            kind="delete_rows",
+            target=Target(table="records__doctor", where={"record_id": suffix_id}),
+            amount=Amount(count=1),
+        )
+        _DELETE_HANDLER.apply(
+            state, delete_op, "delete#0", random.Random(1), _FORK_PATH, sc
+        )
+    assert state.tables["records__doctor"].data.num_rows == 3
+
+    outcome = _apply(
+        state, _op("records__doctor", Amount(count=1)), sc, random.Random(1)
+    )
+    assert outcome.units_affected == 1
+    minted = [
+        r["record_index"]
+        for r in state.tables["records__doctor"].data.to_pylist()
+        if r["record_id"] not in ("d1", "d2", "d3")
+    ]
+    assert minted == [5]
+
+
+def test_second_insert_rows_operation_continues_above_the_first_phantoms() -> None:
+    """Two `insert_rows` applications against the same working state: the
+    second's mint continues above the first's, the mark advances rather than
+    resetting."""
+    state = _state(doctors=[_doctor_row("d1"), _doctor_row("d2"), _doctor_row("d3")])
+    sc = _sidecar()
+    _apply(state, _op("records__doctor", Amount(count=1)), sc, FixedSampleRandom([0]))
+    first_indices = set(
+        state.tables["records__doctor"].data.column("record_index").to_pylist()
+    )
+    assert first_indices == {0, 1, 2, 3}
+
+    _apply(state, _op("records__doctor", Amount(count=1)), sc, FixedSampleRandom([0]))
+    second_indices = set(
+        state.tables["records__doctor"].data.column("record_index").to_pylist()
+    )
+    assert second_indices == {0, 1, 2, 3, 4}
+
+
+def test_phantom_ref_index_cell_clones_donor_verbatim() -> None:
+    """A phantom's `ref_index__` sibling clones the donor's value verbatim --
+    only `record_id` and `record_index` are freshly assigned."""
+    state = _state(patients=[_patient_row("p1", doctor_id="d1", ref_index_doctor_id=7)])
+    sc = _sidecar()
+    outcome = _apply(
+        state, _op("records__patient", Amount(count=1)), sc, random.Random(1)
+    )
+    assert outcome.units_affected == 1
+    rows = state.tables["records__patient"].data.to_pylist()
+    phantom = next(r for r in rows if r["record_id"] != "p1")
+    assert phantom["prop__doctor_id"] == "d1"
+    assert phantom["ref_index__doctor_id"] == 7
+    assert phantom["record_index"] == 1
 
 
 # ---------------------------------------------------------------------------

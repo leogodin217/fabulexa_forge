@@ -28,6 +28,7 @@ from fabulexa_forge.corrupters.operations._impact import (
     membership_partner_column,
     placement_populations,
     property_name_for_prop_column,
+    records_reference_sibling,
     resolve_c6_anchor,
     resolve_pooled_populations,
     row_category_for_table,
@@ -161,6 +162,44 @@ def resolve_donor_pool(
         if created > minimum_created_sim_time
     }
     return tuple(sorted(donors))
+
+
+def donor_record_index(state: "CorruptState", kind: str, donor_id: str) -> int:
+    """The donor's `record_index`, read from the same operation-start working
+    state `resolve_donor_pool` drew the pool from -- the sibling
+    `ref_index__` cell's co-point value.
+
+    Args:
+        state: The shared working set; no table this operation writes has
+            been written back yet, so this read sees the operation-start
+            state regardless of self-reference.
+        kind: The donor's records kind.
+        donor_id: The donor's `record_id`, as drawn from the donor pool.
+
+    Returns:
+        The donor row's `record_index`.
+
+    Raises:
+        CorruptError: `records__<kind>` is absent from the working set, or
+            carries no row for `donor_id` -- an engine-invariant breach (the
+            donor was drawn from this same table), not a config error.
+    """
+    working = state.tables.get(f"records__{kind}")
+    if working is None:
+        raise CorruptError(
+            f"donor_record_index: working set carries no records__{kind} table"
+        )
+    data = working.data
+    record_ids = data.column("record_id")
+    record_indices = data.column("record_index")
+    for i in range(data.num_rows):
+        if record_ids[i].as_py() == donor_id:
+            value = record_indices[i].as_py()
+            assert isinstance(value, int)
+            return value
+    raise CorruptError(
+        f"donor_record_index: no row for donor {donor_id!r} in records__{kind}"
+    )
 
 
 def _row_sim_time(row: dict[str, object], key: str) -> int:
@@ -379,8 +418,9 @@ class MispointReferenceCorrupter:
         # set, (4, new): the donor pool must be non-empty. Cells enumerated
         # in canonical table -> row -> column order (§ Selection is faithful).
         # eligible_units/eligible_pools are parallel lists, so unit_row_weights
-        # sees the shipped (table_index, row_pos, column) cell-unit shape.
-        eligible_units: list[tuple[int, int, str]] = []
+        # sees the shipped (table_index, row_pos, column) cell-unit shape
+        # (its trailing target_kind element is ignored by that expansion).
+        eligible_units: list[tuple[int, int, str, str]] = []
         eligible_pools: list[tuple[str, ...]] = []
         for table_idx, row_pos, column in cell_units:
             population = populations[table_idx]
@@ -410,7 +450,7 @@ class MispointReferenceCorrupter:
             )
             if not pool:
                 continue
-            eligible_units.append((table_idx, row_pos, column))
+            eligible_units.append((table_idx, row_pos, column, target_kind))
             eligible_pools.append(pool)
 
         if operation.placement is not None:
@@ -426,9 +466,12 @@ class MispointReferenceCorrupter:
         py_columns_by_table: list[dict[str, list[object]]] = [{} for _ in populations]
         mispoints: list[_Mispoint] = []
         for idx in drawn:
-            table_idx, row_pos, column = eligible_units[idx]
+            table_idx, row_pos, column, target_kind = eligible_units[idx]
             pool = eligible_pools[idx]
             population = populations[table_idx]
+            columns_by_name = {
+                col.name: col for col in population.working_table.spec.columns
+            }
             py_columns = py_columns_by_table[table_idx]
             physical_row = population.physical_indices[row_pos]
             # Slot (3): one donor draw per selected unit, ascending
@@ -440,6 +483,15 @@ class MispointReferenceCorrupter:
                     column
                 ).to_pylist()
             py_columns[column][physical_row] = donor
+
+            sibling = records_reference_sibling(column, columns_by_name[column])
+            if sibling is not None:
+                donor_index = donor_record_index(state, target_kind, donor)
+                if sibling not in py_columns:
+                    py_columns[sibling] = population.working_table.data.column(
+                        sibling
+                    ).to_pylist()
+                py_columns[sibling][physical_row] = donor_index
 
             row = row_dict(population.content, row_pos)
             mispoints.append(_Mispoint(table_idx, column, row, donor))

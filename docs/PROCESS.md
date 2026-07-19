@@ -75,6 +75,38 @@ The base-format contract is **external** — vendored, not authored here (CLAUDE
 
 ---
 
+## Adopting a contract version bump
+
+A `base_format_version` bump is adopted in two phases, each its own unit of work:
+
+1. **Compatibility.** Re-vendor `contract/`, bump the gate
+   (`SUPPORTED_BASE_FORMAT_VERSION`), make the fixtures genuinely new-version-shaped,
+   run the suite. *Green is the goal* — it means the new format is additively
+   compatible and forge is not broken. Every red is a guarantee having changed
+   underneath, and each red is a decision to make deliberately, never a test to
+   silence. Phase 1 includes the conformance work the bump obliges: forge judges the
+   format, so it cannot adopt a version whose guarantees it does not check. Phase 1
+   touches the version integer in exactly the sites the hygiene test allowlists —
+   the code literal, the architecture README's status row, and `contract/` itself
+   (re-vendored wholesale). If the bump tempts you to write 'vN' anywhere else,
+   that sentence is delta voice: state the new contract plainly or cite its
+   section. The hygiene test failing on a new literal is the mechanism working.
+2. **Adoption.** Decide, deliberately, which new capability to *use* (a new
+   attribute consulted, a fold redesigned around a new guarantee). Each is its own
+   design and its own sprint.
+
+Three costs attend a re-vendor; only the third deserves thought, and the fixture
+invariants exist so the first two cannot bury it (see
+[`architecture/README.md`](architecture/README.md) § Inputs and fixtures):
+
+| Cost | Contained by |
+|---|---|
+| Version-integer churn | The single version-literal authority; the never-valid sentinel for gate-negative tests |
+| Sidecar-shape churn | The single fixture sidecar writer (`write_emit`, schema-validating) and column constructor (`prop_column`) |
+| **Semantic churn** | Nothing — deliberately. A published ground truth that moves (a recipe's `impact` set, a genre reclassification) is the system reporting that the contract changed meaning, and that alarm stays loud |
+
+---
+
 ## Note conventions
 
 The `note` skill (Obsidian-backed) tracks findings, features, questions, retros, decisions, and research. Conventions:

@@ -28,7 +28,7 @@ reader only and composes the derivations layer's row-state-events fold (`state-c
 membership-events fold (`membership-events`) for its event content.
 
 ```
-emit (run.duckdb + base.json @ v4)
+emit (run.duckdb + base.json @ the supported `base_format_version`)
    │  (reader: Emit + Sidecar; trunk-only — sole branch)
    ▼
 content fold (per source, derivations layer)
@@ -613,6 +613,7 @@ therefore cannot reach an unresolved kind or property. Each rule raises `ExportE
 | `SingleBranch` (reused guard) | the sidecar enumerates exactly one branch | `require_single_branch`'s verbatim message (see [`derivations.md`](derivations.md) § Validation Rules) |
 | `StreamKindResolvable` | each `kinds[].kind` has a `records__<kind>` table | `"stream kind '{kind}' has no records__{kind} table"` (caught from the reader's `TableNotFoundError` and re-raised) |
 | `StreamPropertyResolvable` | (state-changes) each selected property has a `prop__<property>` column on its kind | `"stream kind '{kind}': property '{property}' has no prop__{property} column"` |
+| `StreamPropertySliceOnly` | (state-changes) no `kinds[].properties` entry resolves to a non-exempt `temporal_class: slice_only` column ([`slice-only.md`](slice-only.md)). The after-image is wholly author-named — there is no auto-projection to narrow — so streaming is refuse-only and emits no notices; `membership-events` is outside the population (membership columns carry no class). The reader's `TemporalClassUnavailableError` surfaces through the same funnel | Names the kind, the property, and the class |
 | `MembershipResolvable` | (membership-events) each `memberships[]` pair has a `membership__<owner_kind>__<property>` table | `"stream membership '{owner_kind}.{property}' has no membership__… table"` |
 | `MembershipFieldResolvable` | (membership-events) each selected field resolves to an `elem__<f>` column or a `member__<f>__id` / `member__<f>__kind` pair on its table | `"stream membership '{owner_kind}.{property}': field '{field}' has no elem__/member__ column"` |
 | `DebeziumRequiresConfig` | format `debezium` carries a `debezium` config block (both content types) | `"format 'debezium' requires a 'debezium' config block with a 'source' identity (connector, name, db, schema, version)"` |

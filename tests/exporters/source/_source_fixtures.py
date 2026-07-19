@@ -24,75 +24,99 @@ Scenario:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.incremental.windows import Window
 
 _MS = 1_000_000  # one "tick" — 1 millisecond in sim-time nanoseconds.
 
 _VISIT_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "BIGINT"},
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "presentation_id", "type": "BIGINT"},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
-    {"name": "prop__priority", "type": "BIGINT", "history_tracked": True},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__priority", "BIGINT", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 _SHIFT_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__shift_type", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__shift_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 _LOCATION_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__region", "type": "VARCHAR", "history_tracked": False},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__region", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _ORDER_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {
-        "name": "prop__location_id",
-        "type": "VARCHAR",
-        "history_tracked": False,
-        "references": "location",
-    },
-    {"name": "prop__amount", "type": "DOUBLE", "history_tracked": False},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__location_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="location",
+    ),
+    identity_column("ref_index__location_id", "BIGINT"),
+    prop_column(
+        "prop__amount", "DOUBLE", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _ACTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__actor_type", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _HISTORY_COLUMNS: list[dict[str, object]] = [
@@ -105,8 +129,8 @@ _HISTORY_COLUMNS: list[dict[str, object]] = [
 ]
 
 _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role_name", "type": "VARCHAR"},
@@ -173,16 +197,16 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
     # records__visit: v001 (create only), v002 (create + coincident update),
     # v003 (create + delete, no property change).
     conn.execute(
-        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "v001", 100 * _MS, True, 100 * _MS, 1001, "open", 1],
+        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "v001", 1001, 100 * _MS, True, 100 * _MS, 0, "open", 1],
     )
     conn.execute(
-        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "v002", 100 * _MS, True, 150 * _MS, 1002, "closed", 5],
+        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "v002", 1002, 100 * _MS, True, 150 * _MS, 1, "closed", 5],
     )
     conn.execute(
-        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "v003", 100 * _MS, False, 200 * _MS, 200 * _MS, 1003, "closed", 9],
+        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "v003", 1003, 100 * _MS, False, 200 * _MS, 200 * _MS, 2, "closed", 9],
     )
     # Creation-seed history rows (contract § history: every history_tracked
     # property is seeded at created_sim_time with its creation value).
@@ -211,8 +235,8 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
 
     # records__shift: sh001 — created then deactivated, discriminator retained.
     conn.execute(
-        'INSERT INTO "records__shift" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "sh001", 80 * _MS, False, 130 * _MS, 130 * _MS, "day", "closed"],
+        'INSERT INTO "records__shift" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "sh001", 80 * _MS, False, 130 * _MS, 130 * _MS, 0, "day", "closed"],
     )
     conn.execute(
         'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
@@ -221,28 +245,39 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
 
     # records__location: loc001 active, loc002 deactivated.
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "loc001", 50 * _MS, True, 50 * _MS, "Ward A", "North"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "loc001", 50 * _MS, True, 50 * _MS, 0, "Ward A", "North"],
     )
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "loc002", 50 * _MS, False, 120 * _MS, 120 * _MS, "Ward B", "South"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "loc002",
+            50 * _MS,
+            False,
+            120 * _MS,
+            120 * _MS,
+            1,
+            "Ward B",
+            "South",
+        ],
     )
 
-    # records__order: ord001 references loc001 (id-only, unjoined).
+    # records__order: ord001 references loc001 (id-only, unjoined;
+    # ref_index__location_id = loc001's record_index).
     conn.execute(
-        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "ord001", 60 * _MS, True, 60 * _MS, "loc001", 250.5],
+        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "ord001", 60 * _MS, True, 60 * _MS, 0, "loc001", 0, 250.5],
     )
 
     # records__actor: act001 consultant, act002 nurse.
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "act001", 70 * _MS, True, 70 * _MS, "consultant", "Dr. Lee"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "act001", 70 * _MS, True, 70 * _MS, 0, "consultant", "Dr. Lee"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "act002", 70 * _MS, True, 70 * _MS, "nurse", "Nurse Kim"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "act002", 70 * _MS, True, 70 * _MS, 1, "nurse", "Nurse Kim"],
     )
 
     # membership__visit__team: one closed interval, one still open.
@@ -257,10 +292,26 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
-        "tables": [
+    extra: dict[str, object] = {
+        "record_roles": {
+            "location": "dimension",
+            "order": "fact",
+            "actor": {"consultant": "dimension", "nurse": "fact"},
+        },
+        "enum_domains": {
+            "actor": {"actor_type": ["consultant", "nurse"]},
+            "shift": {"shift_type": ["day", "night"]},
+        },
+    }
+    if with_runtime:
+        extra["runtime"] = {
+            "timezone": "UTC",
+            "start_datetime": "2024-01-01T00:00:00+00:00",
+        }
+
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__visit", "records", _VISIT_COLUMNS, 3, record_kind="visit"
             ),
@@ -290,23 +341,9 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
                 property_name="team",
             ),
         ],
-        "record_roles": {
-            "location": "dimension",
-            "order": "fact",
-            "actor": {"consultant": "dimension", "nurse": "fact"},
-        },
-        "enum_domains": {
-            "actor": {"actor_type": ["consultant", "nurse"]},
-            "shift": {"shift_type": ["day", "night"]},
-        },
-    }
-    if with_runtime:
-        sidecar["runtime"] = {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
-        }
-
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra=extra,
+    )
     return tmp_path
 
 
@@ -357,16 +394,16 @@ def build_windowed_source_test_emit(tmp_path: Path) -> Path:
     # records__visit: w0 'c' (v001), w1 'c' (v002) + 'u' (v001), w2 'd' (v002)
     # + 'c' (v003).
     conn.execute(
-        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "v001", 50 * _MS, True, 120 * _MS, 2001, "closed", 1],
+        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "v001", 2001, 50 * _MS, True, 120 * _MS, 0, "closed", 1],
     )
     conn.execute(
-        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "v002", 150 * _MS, False, 250 * _MS, 250 * _MS, 2002, "open", 3],
+        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "v002", 2002, 150 * _MS, False, 250 * _MS, 250 * _MS, 1, "open", 3],
     )
     conn.execute(
-        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "v003", 220 * _MS, True, 220 * _MS, 2003, "pending", 9],
+        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "v003", 2003, 220 * _MS, True, 220 * _MS, 2, "pending", 9],
     )
     # Creation-seed history rows.
     for record_id, sim_time, status, priority in (
@@ -388,28 +425,39 @@ def build_windowed_source_test_emit(tmp_path: Path) -> Path:
         ["trunk", "visit", "v001", "status", 120 * _MS, "closed"],
     )
 
-    # records__order: one row's last_mutation_sim_time lands in each window.
+    # records__order: one row's last_mutation_sim_time lands in each window;
+    # ref_index__location_id = loc001's record_index (0) throughout.
     conn.execute(
-        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "ord001", 60 * _MS, True, 60 * _MS, "loc001", 100.0],
+        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "ord001", 60 * _MS, True, 60 * _MS, 0, "loc001", 0, 100.0],
     )
     conn.execute(
-        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "ord002", 130 * _MS, True, 130 * _MS, "loc001", 200.0],
+        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "ord002", 130 * _MS, True, 130 * _MS, 1, "loc001", 0, 200.0],
     )
     conn.execute(
-        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "ord003", 240 * _MS, True, 240 * _MS, "loc001", 300.0],
+        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "ord003", 240 * _MS, True, 240 * _MS, 2, "loc001", 0, 300.0],
     )
 
     # records__location: full snapshot every window regardless.
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "loc001", 50 * _MS, True, 50 * _MS, "Ward A", "North"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "loc001", 50 * _MS, True, 50 * _MS, 0, "Ward A", "North"],
     )
     conn.execute(
-        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "loc002", 150 * _MS, False, 220 * _MS, 220 * _MS, "Ward B", "South"],
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "loc002",
+            150 * _MS,
+            False,
+            220 * _MS,
+            220 * _MS,
+            1,
+            "Ward B",
+            "South",
+        ],
     )
 
     # membership__visit__team: m_A join/leave split across w0/w1, m_B closed
@@ -429,10 +477,9 @@ def build_windowed_source_test_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__visit", "records", _VISIT_COLUMNS, 3, record_kind="visit"
             ),
@@ -456,26 +503,31 @@ def build_windowed_source_test_emit(tmp_path: Path) -> Path:
                 property_name="team",
             ),
         ],
-        "record_roles": {"location": "dimension", "order": "fact"},
-        "runtime": {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra={
+            "record_roles": {"location": "dimension", "order": "fact"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path
 
 
 _DAY_NS = 86_400 * 1_000_000_000  # one civil day, in sim-time nanoseconds
 
 _WIDGET_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": True},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 
@@ -501,8 +553,8 @@ def build_day_scale_source_emit(tmp_path: Path) -> Path:
 
     # w001: created day 0 ('c'), name changes day 2 ('u').
     conn.execute(
-        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "w001", 0, True, 2 * _DAY_NS, "alpha2"],
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "w001", 0, True, 2 * _DAY_NS, 0, "alpha2"],
     )
     conn.execute(
         'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
@@ -515,8 +567,8 @@ def build_day_scale_source_emit(tmp_path: Path) -> Path:
 
     # w002: created day 1 ('c').
     conn.execute(
-        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "w002", _DAY_NS, True, _DAY_NS, "beta"],
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "w002", _DAY_NS, True, _DAY_NS, 1, "beta"],
     )
     conn.execute(
         'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
@@ -524,10 +576,9 @@ def build_day_scale_source_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 3 * _DAY_NS}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__widget",
                 "records",
@@ -537,11 +588,109 @@ def build_day_scale_source_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 3),
         ],
-        "record_roles": {},
-        "runtime": {"timezone": "UTC", "start_datetime": "2024-01-01T00:00:00+00:00"},
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 3 * _DAY_NS}],
+        extra={
+            "record_roles": {"widget": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
     return tmp_path
+
+
+_VENUE_TRACKED_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+_VENUE_CONSTANT_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=True, temporal_class="constant"
+    ),
+]
+
+
+def _build_venue_emit(tmp_path: Path, columns: list[dict[str, object]]) -> Path:
+    """Shared body for the venue reclassification fixtures: one dimension-role
+    kind, `venue`, whose sole prop__ column is `columns`' single presentation
+    value, differing only in its declared temporal_class.
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__venue", columns))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__venue" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "ven001", 10 * _MS, True, 10 * _MS, 0, "Main Hall"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "venue", "ven001", "name", 10 * _MS, "Main Hall"],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec("records__venue", "records", columns, 1, record_kind="venue"),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 20 * _MS}],
+        extra={
+            "record_roles": {"venue": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
+def build_presentation_reclassified_source_emit(tmp_path: Path) -> Path:
+    """A dimension-role kind whose sole prop__ column is a `tracked`-class
+    presentation value: the genre trichotomy reclassifies it from reference to
+    change-log genre even though `record_roles` still declares 'dimension' — a
+    name that genuinely changes over time *is* a change log.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    return _build_venue_emit(tmp_path, _VENUE_TRACKED_COLUMNS)
+
+
+def build_presentation_constant_source_emit(tmp_path: Path) -> Path:
+    """The same kind shape as `build_presentation_reclassified_source_emit`,
+    presentation column class `constant`: no reclassification — genre stays
+    'reference' by role, since the class (not the history_tracked bit) decides.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    return _build_venue_emit(tmp_path, _VENUE_CONSTANT_COLUMNS)
 
 
 def build_empty_source_emit(tmp_path: Path) -> Path:
@@ -559,10 +708,9 @@ def build_empty_source_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100 * _MS}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__location",
                 "records",
@@ -572,11 +720,173 @@ def build_empty_source_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
         ],
-        "record_roles": {"location": "dimension"},
-        "runtime": {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100 * _MS}],
+        extra={
+            "record_roles": {"location": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
+    return tmp_path
+
+
+_SLICE_ONLY_PATIENT_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__loyalty_tier",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="slice_only",
+    ),
+]
+
+
+def build_slice_only_source_emit(tmp_path: Path) -> Path:
+    """Build a `mode: source` emit whose sole (changelog-genre) kind carries one
+    non-exempt `temporal_class: slice_only` property alongside a tracked one —
+    the Phase-3 column-projection-only invariance fixture: the fold's c/u/d
+    row set and `seq` assignment are unaffected by whether `prop__loyalty_tier`
+    is included in the projected column set, since an untracked property never
+    drives fold event generation.
+
+    Scenario: p001 created only ('c'); p002 created then its (tracked) status
+    changes ('c' then 'u'). Both carry a `prop__loyalty_tier` value set at
+    creation and never reasserted (the class forbids it changing).
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__patient", _SLICE_ONLY_PATIENT_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "p001", 100 * _MS, True, 100 * _MS, 0, "open", "gold"],
+    )
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "p002", 100 * _MS, True, 150 * _MS, 1, "closed", "silver"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "patient", "p001", "status", 100 * _MS, "open"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "patient", "p002", "status", 100 * _MS, "open"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "patient", "p002", "status", 150 * _MS, "closed"],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__patient",
+                "records",
+                _SLICE_ONLY_PATIENT_COLUMNS,
+                2,
+                record_kind="patient",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 3),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra={
+            "record_roles": {"patient": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
+def slice_only_horizon_window() -> Window:
+    """The single window spanning `build_slice_only_source_emit`'s whole
+    activity — the snapshot render's reconstruction horizon for the Phase-3
+    row-set invariance test."""
+    return Window(index=0, start_ns=0, end_ns=300 * _MS, label="w00000")
+
+
+_SLICE_ONLY_ONLY_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__tier",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="slice_only",
+    ),
+]
+
+
+def build_degenerate_slice_only_source_emit(tmp_path: Path) -> Path:
+    """Build a `mode: source` emit whose sole (reference-genre) kind's every
+    property is a non-exempt `temporal_class: slice_only` column — the
+    Phase-3 degenerate-unit fixture: the unit is never suppressed, still
+    rendering its identity and lifecycle columns with every prop__ column
+    omitted.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__member", _SLICE_ONLY_ONLY_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__member" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "mem001", 10 * _MS, True, 10 * _MS, 0, "bronze"],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__member",
+                "records",
+                _SLICE_ONLY_ONLY_COLUMNS,
+                1,
+                record_kind="member",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 20 * _MS}],
+        extra={
+            "record_roles": {"member": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
     return tmp_path

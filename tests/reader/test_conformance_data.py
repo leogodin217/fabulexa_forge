@@ -6,13 +6,12 @@ In-memory fixtures supplement where the pre-built set lacks a specific variant.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader import open_emit, run_check, validate
 from fabulexa_forge.reader.conformance import to_csv_text
 
@@ -29,24 +28,52 @@ from ._fixtures_build import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+_SIDECAR_TOP_LEVEL_KEYS = frozenset({"base_format_version", "branches", "tables"})
+
 
 def _write_emit(
     dest: Path,
     sidecar: dict[str, object],
     db_setup: dict[str, list[dict[str, object]]] | None = None,
+    *,
+    schema_valid: bool = True,
+    records_shape_valid: bool = True,
 ) -> Path:
     """Write a minimal emit (base.json + run.duckdb) into dest.
+
+    The base.json write is delegated to `_support.sidecar_builder.write_emit` —
+    the sole sidecar authority; this helper decomposes `sidecar` into that
+    function's tables/branches/extra/base_format_version components and keeps
+    only the run.duckdb construction local.
 
     Args:
         dest: Directory to write into.
         sidecar: The base.json dict.
         db_setup: Mapping of {table_name: columns_list} for tables to create.
+        schema_valid: Forwarded to sidecar_builder.write_emit. False for the
+            deliberately schema-invalid negative fixtures.
+        records_shape_valid: Forwarded to sidecar_builder.write_emit. False
+            for negative fixtures whose declared defect is the records
+            shape itself.
 
     Returns:
         dest path.
     """
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    extra = {
+        key: value
+        for key, value in sidecar.items()
+        if key not in _SIDECAR_TOP_LEVEL_KEYS
+    }
+    _write_sidecar(
+        dest,
+        tables=sidecar["tables"],  # type: ignore[arg-type]
+        branches=sidecar.get("branches"),  # type: ignore[arg-type]
+        extra=extra or None,
+        base_format_version=sidecar.get("base_format_version"),  # type: ignore[arg-type]
+        schema_valid=schema_valid,
+        records_shape_valid=records_shape_valid,
+    )
     db_path = dest / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     if db_setup:
@@ -74,7 +101,6 @@ def _minimal_sidecar_with_tables(
     if branches is None:
         branches = [{"fork_path": "trunk", "parent": None, "slice_at": 100}]
     sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": branches,
         "tables": tables,
     }
@@ -179,20 +205,23 @@ def test_c6_skips_non_round_trippable_prop(tmp_path: Path) -> None:
         "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
         ["trunk", "actor", "a001", "data", 10, "sometext"],
     )
-    # records__actor row (10 cols: fork_path, record_id, created_sim_time, active,
-    # deactivated_at(NULL), last_mutation_sim_time, prop__name, prop__status,
-    # prop__doctor_id, prop__actor_type) + prop__data (BLOB)
+    # records__actor row (12 cols: fork_path, record_id, created_sim_time, active,
+    # deactivated_at(NULL), last_mutation_sim_time, record_index, prop__name,
+    # prop__status, prop__doctor_id, ref_index__doctor_id, prop__actor_type) +
+    # prop__data (BLOB)
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "a001",
             10,
             True,
             10,
+            0,
             "Alice",
             "active",
             "d001",
+            0,
             "patient",
             b"\x00\x01",
         ],
@@ -217,7 +246,7 @@ def test_c6_skips_non_round_trippable_prop(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -243,8 +272,8 @@ def test_c6_fails_on_round_trip_mismatch(tmp_path: Path) -> None:
     )
     # records__actor says name is 'Alice' — mismatch
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
-        ["trunk", "a001", 10, True, 10, "Alice", "active", "d001", "patient"],
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, "Alice", "active", "d001", 0, "patient"],
     )
     conn.close()
 
@@ -265,7 +294,7 @@ def test_c6_fails_on_round_trip_mismatch(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -302,8 +331,8 @@ def test_c6_fails_not_raises_on_null_numeric_tracked_cell(tmp_path: Path) -> Non
     )
     # records__actor row with prop__score NULL (trailing literal) — the defect
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL)",
-        ["trunk", "a001", 10, True, 10, "Alice", "active", "d001", "patient"],
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, NULL)",
+        ["trunk", "a001", 10, True, 10, 0, "Alice", "active", "d001", 0, "patient"],
     )
     conn.close()
 
@@ -324,7 +353,7 @@ def test_c6_fails_not_raises_on_null_numeric_tracked_cell(tmp_path: Path) -> Non
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -355,10 +384,10 @@ def test_c6_set_based_isolates_mismatch_across_series(tmp_path: Path) -> None:
         ],
     )
     conn.executemany(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
         [
-            ["trunk", "a001", 10, True, 10, "Alice", "active", "d001", "patient"],
-            ["trunk", "a002", 10, True, 10, "Carol", "active", "d001", "patient"],
+            ["trunk", "a001", 10, True, 10, 0, "Alice", "active", "d001", 0, "patient"],
+            ["trunk", "a002", 10, True, 10, 1, "Carol", "active", "d001", 0, "patient"],
         ],
     )
     conn.close()
@@ -380,7 +409,7 @@ def test_c6_set_based_isolates_mismatch_across_series(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -414,8 +443,8 @@ def test_c6_latest_pre_slice_tiebreak_is_deterministic(tmp_path: Path) -> None:
         ],
     )
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
-        ["trunk", "a001", 10, True, 10, "Zzz", "active", "d001", "patient"],
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, "Zzz", "active", "d001", 0, "patient"],
     )
     conn.close()
 
@@ -436,7 +465,7 @@ def test_c6_latest_pre_slice_tiebreak_is_deterministic(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         first = run_check(emit, "C6")
@@ -473,7 +502,7 @@ def test_c6_skips_when_records_table_absent_from_catalog(tmp_path: Path) -> None
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C6")
@@ -521,11 +550,24 @@ def test_c7_deactivated_at_null_iff_active(tmp_path: Path) -> None:
     conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
     # active=True but deactivated_at is NOT NULL — violation
     # cols: fork_path, record_id, created_sim_time, active, deactivated_at,
-    #       last_mutation_sim_time, prop__name, prop__status, prop__doctor_id,
-    #       prop__actor_type
+    #       last_mutation_sim_time, record_index, prop__name, prop__status,
+    #       prop__doctor_id, ref_index__doctor_id, prop__actor_type
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        ["trunk", "a001", 10, True, 99, 10, "Alice", "active", "d001", "patient"],
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            "trunk",
+            "a001",
+            10,
+            True,
+            99,
+            10,
+            0,
+            "Alice",
+            "active",
+            "d001",
+            0,
+            "patient",
+        ],
     )
     conn.close()
 
@@ -546,7 +588,7 @@ def test_c7_deactivated_at_null_iff_active(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C7")
@@ -594,7 +636,7 @@ def test_c7_membership_member_pair(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C7")
@@ -638,7 +680,7 @@ def test_c8_passes_distinct_fork_paths(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C8")
@@ -673,7 +715,7 @@ def test_c8_fails_extra_fork_path_in_data(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C8")
@@ -714,7 +756,7 @@ def test_c9_passes_when_no_pinned_ids(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -742,7 +784,7 @@ def test_c9_fails_absent_records_table(tmp_path: Path) -> None:
         ]
     )
     sidecar["pinned_ids"] = {"actor": {"alice": "a001"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -770,7 +812,7 @@ def test_c9_reflects_self_contained_via_run_check(tmp_path: Path) -> None:
         ]
     )
     sidecar["pinned_ids"] = {"doctor": {"bob": "d001"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -807,7 +849,7 @@ def test_c9_fails_wrong_count(tmp_path: Path) -> None:
         ]
     )
     sidecar["pinned_ids"] = {"actor": {"alice": "a001"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -851,7 +893,7 @@ def test_c9_skips_when_records_table_missing_key_columns(tmp_path: Path) -> None
         ]
     )
     sidecar["pinned_ids"] = {"actor": {"alice": "a001"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar, records_shape_valid=False)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C9")
@@ -919,7 +961,7 @@ def test_c10_left_sim_time_ge_joined(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -938,14 +980,16 @@ def test_c10_member_reference_resolves(tmp_path: Path) -> None:
     doctor_cols: list[dict[str, object]] = [
         {"name": "fork_path", "type": "VARCHAR"},
         {"name": "record_id", "type": "VARCHAR"},
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        {"name": "record_index", "type": "BIGINT"},
     ]
     conn.execute(_create_table_ddl("records__doctor", doctor_cols))
     conn.execute(
-        "INSERT INTO records__doctor VALUES (?, ?, ?, NULL, ?)",
-        ["trunk", "d001", True, 10],
+        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?)",
+        ["trunk", "d001", 5, True, 10, 0],
     )
     conn.execute(
         _create_table_ddl("membership__actor__appointments", _MEMBERSHIP_COLUMNS)
@@ -985,7 +1029,7 @@ def test_c10_member_reference_resolves(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -1003,9 +1047,11 @@ def test_c10_fails_unresolved_member_reference(tmp_path: Path) -> None:
     doctor_cols: list[dict[str, object]] = [
         {"name": "fork_path", "type": "VARCHAR"},
         {"name": "record_id", "type": "VARCHAR"},
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        {"name": "record_index", "type": "BIGINT"},
     ]
     conn.execute(_create_table_ddl("records__doctor", doctor_cols))
     # records__doctor exists but has no d001 row — dangling reference
@@ -1047,7 +1093,7 @@ def test_c10_fails_unresolved_member_reference(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -1070,14 +1116,16 @@ def test_c10_set_based_isolates_dangling_reference(tmp_path: Path) -> None:
     doctor_cols: list[dict[str, object]] = [
         {"name": "fork_path", "type": "VARCHAR"},
         {"name": "record_id", "type": "VARCHAR"},
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        {"name": "record_index", "type": "BIGINT"},
     ]
     conn.execute(_create_table_ddl("records__doctor", doctor_cols))
     conn.execute(
-        "INSERT INTO records__doctor VALUES (?, ?, ?, NULL, ?)",
-        ["trunk", "d001", True, 10],
+        "INSERT INTO records__doctor VALUES (?, ?, ?, ?, NULL, ?, ?)",
+        ["trunk", "d001", 5, True, 10, 0],
     )
     conn.execute(
         _create_table_ddl("membership__actor__appointments", _MEMBERSHIP_COLUMNS)
@@ -1124,7 +1172,7 @@ def test_c10_set_based_isolates_dangling_reference(tmp_path: Path) -> None:
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -1179,7 +1227,7 @@ def test_c10_skips_kind_column_without_matching_id_column(tmp_path: Path) -> Non
             },
         ]
     )
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C10")
@@ -1189,6 +1237,166 @@ def test_c10_skips_kind_column_without_matching_id_column(tmp_path: Path) -> Non
         "member__doctor__id" in s and "member reference check skipped" in s
         for s in result.skips
     ), f"Expected a half-pair skip naming member__doctor__id, got skips={result.skips}"
+
+
+# ---------------------------------------------------------------------------
+# C11: column SCD class consistency (converse clause)
+# ---------------------------------------------------------------------------
+
+
+def test_c11_converse_fails_on_zero_history_rows(tmp_path: Path) -> None:
+    """C11's converse: prop__name is flagged history_tracked True and
+    records__actor has a row, but history carries zero rows for (actor, name)."""
+    dest = tmp_path / "c11_converse_zero_rows"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
+    _populate_records_actor(conn)
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 0,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": list(_RECORDS_ACTOR_COLUMNS),
+                "rows": 1,
+            },
+        ]
+    )
+    _write_emit(dest, sidecar)
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C11")
+
+    assert not result.passed
+    assert any("converse" in m for m in result.messages)
+
+
+def test_c11_converse_gate_excludes_non_round_trippable_column(
+    tmp_path: Path,
+) -> None:
+    """C11's converse gate: a flagged BLOB column with zero history rows does
+    not fail C11 -- collection-struct properties never appear in history."""
+    blob_col: dict[str, object] = {
+        "name": "prop__data",
+        "type": "BLOB",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    }
+    rec_cols = list(_RECORDS_ACTOR_COLUMNS) + [blob_col]
+
+    dest = tmp_path / "c11_converse_blob_gate"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", rec_cols))
+    # prop__name's own genesis row -- keeps that column conformant so only the
+    # BLOB gate is under test.
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+        ["trunk", "actor", "a001", "name", 10, "Alice"],
+    )
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            "trunk",
+            "a001",
+            10,
+            True,
+            10,
+            0,
+            "Alice",
+            "active",
+            "d001",
+            0,
+            "patient",
+            b"\x00\x01",
+        ],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 1,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": rec_cols,
+                "rows": 1,
+            },
+        ]
+    )
+    _write_emit(dest, sidecar)
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C11")
+
+    assert result.passed, f"C11 should pass (BLOB gated out): {result.messages}"
+
+
+def test_c11_skips_when_no_flagged_column(tmp_path: Path) -> None:
+    """C11 skips entirely when no records-category prop__ column carries
+    history_tracked anywhere in the sidecar (existing behavior retained)."""
+    bare_cols: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        {"name": "record_index", "type": "BIGINT"},
+        {"name": "prop__name", "type": "VARCHAR"},
+    ]
+    dest = tmp_path / "c11_no_flagged_column"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", bare_cols))
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 0,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": bare_cols,
+                "rows": 1,
+            },
+        ]
+    )
+    _write_emit(dest, sidecar)
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C11")
+
+    assert result.passed
+    assert any("predates" in s or "skipped" in s for s in result.skips)
 
 
 # ---------------------------------------------------------------------------
@@ -1288,7 +1496,7 @@ def test_c12_skips_when_record_roles_absent(tmp_path: Path) -> None:
         ]
     )
     # No record_roles key in sidecar
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C12")
@@ -1315,8 +1523,8 @@ def test_c12_skips_actor_subtype_check_when_prop_actor_type_column_absent(
     conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
     conn.execute(_create_table_ddl("records__actor", actor_cols_no_discriminator))
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)",
-        ["trunk", "a001", 10, True, 10, "Alice", "active", "d001"],
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, "Alice", "active", "d001", 0],
     )
     conn.close()
 
@@ -1338,7 +1546,7 @@ def test_c12_skips_actor_subtype_check_when_prop_actor_type_column_absent(
         ]
     )
     sidecar["record_roles"] = {"actor": {"patient": "dimension", "staff": "fact"}}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C12")
@@ -1363,8 +1571,8 @@ def test_c12_passes_when_actor_is_bare_string_kind(tmp_path: Path) -> None:
     conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
     conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
     conn.execute(
-        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
-        ["trunk", "a001", 10, True, 10, "Alice", "active", "d001", "patient"],
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, "Alice", "active", "d001", 0, "patient"],
     )
     conn.close()
 
@@ -1386,7 +1594,7 @@ def test_c12_passes_when_actor_is_bare_string_kind(tmp_path: Path) -> None:
         ]
     )
     sidecar["record_roles"] = {"actor": "dimension"}
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_emit(dest, sidecar)
 
     with open_emit(dest) as emit:
         result = run_check(emit, "C12")
@@ -1396,6 +1604,196 @@ def test_c12_passes_when_actor_is_bare_string_kind(tmp_path: Path) -> None:
     assert not any("actor" in s and "sub-type" in s for s in result.skips), (
         f"Expected no actor sub-type skip for bare-string kind, got skips={result.skips}"
     )
+
+
+# ---------------------------------------------------------------------------
+# C13: temporal-class consistency (semantic / genesis clause)
+# ---------------------------------------------------------------------------
+
+
+def test_c13_semantic_record_id_matters_not_vicarious(tmp_path: Path) -> None:
+    """C13's genesis clause matches on record_id: a rowless record does not pass
+    because a sibling of the same kind shares its created_sim_time."""
+    dest = tmp_path / "c13_record_id_matters"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
+    # Only a001 gets its genesis row; a002 shares created_sim_time=10 but has none.
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+        ["trunk", "actor", "a001", "name", 10, "Alice"],
+    )
+    conn.executemany(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+        [
+            ["trunk", "a001", 10, True, 10, 0, "Alice", "active", "d001", 0, "patient"],
+            ["trunk", "a002", 10, True, 10, 1, "Bob", "active", "d001", 0, "patient"],
+        ],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 1,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": list(_RECORDS_ACTOR_COLUMNS),
+                "rows": 2,
+            },
+        ]
+    )
+    _write_emit(dest, sidecar)
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C13")
+
+    assert not result.passed
+    assert any("a002" in m for m in result.messages)
+    assert not any("a001" in m for m in result.messages)
+
+
+def test_c13_semantic_null_valued_genesis_row_passes(tmp_path: Path) -> None:
+    """A NULL-valued genesis row satisfies C13's semantic clause -- the clause
+    only requires the row to exist, not that its value be non-NULL."""
+    dest = tmp_path / "c13_null_genesis"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, NULL)",
+        ["trunk", "actor", "a001", "name", 10],
+    )
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, "active", "d001", 0, "patient"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 1,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": list(_RECORDS_ACTOR_COLUMNS),
+                "rows": 1,
+            },
+        ]
+    )
+    _write_emit(dest, sidecar)
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C13")
+
+    assert result.passed, (
+        f"C13 should pass on a NULL-valued genesis row: {result.messages}"
+    )
+
+
+def test_c13_skips_when_no_flagged_column(tmp_path: Path) -> None:
+    """C13 skips entirely when no records-category prop__ column carries
+    history_tracked anywhere in the sidecar."""
+    bare_cols: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        {"name": "record_index", "type": "BIGINT"},
+        {"name": "prop__name", "type": "VARCHAR"},
+    ]
+    dest = tmp_path / "c13_no_flagged_column"
+    dest.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(dest / "run.duckdb"))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", bare_cols))
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 0,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": bare_cols,
+                "rows": 1,
+            },
+        ]
+    )
+    _write_emit(dest, sidecar)
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C13")
+
+    assert result.passed
+    assert any("predates" in s or "skipped" in s for s in result.skips)
+
+
+# ---------------------------------------------------------------------------
+# C11/C13 negative fixtures: each fails exactly its named check(s)
+# ---------------------------------------------------------------------------
+
+
+def test_c13_broken_pairing_fails_c13_alone(base_fixtures: dict[str, Path]) -> None:
+    """c13_broken_pairing fails C13's structural clause alone."""
+    with open_emit(base_fixtures["c13_broken_pairing"]) as emit:
+        report = validate(emit)
+    failing = {r.check for r in report.results if not r.passed}
+    assert failing == {"C13"}
+
+
+def test_c13_out_of_enum_class_fails_c1_and_c13(
+    base_fixtures: dict[str, Path],
+) -> None:
+    """c13_out_of_enum_class fails C13's enum clause and necessarily C1."""
+    with open_emit(base_fixtures["c13_out_of_enum_class"]) as emit:
+        report = validate(emit)
+    failing = {r.check for r in report.results if not r.passed}
+    assert failing == {"C1", "C13"}
+
+
+def test_c13_missing_genesis_fails_c13_alone(base_fixtures: dict[str, Path]) -> None:
+    """c13_missing_genesis fails C13's semantic clause alone -- C11's converse
+    still sees rows for the pair."""
+    with open_emit(base_fixtures["c13_missing_genesis"]) as emit:
+        report = validate(emit)
+    failing = {r.check for r in report.results if not r.passed}
+    assert failing == {"C13"}
+
+
+def test_c11_emptied_series_fails_c11_and_c13(base_fixtures: dict[str, Path]) -> None:
+    """c11_emptied_series fails C11's converse and C13's genesis clause together --
+    zero rows implies no genesis row."""
+    with open_emit(base_fixtures["c11_emptied_series"]) as emit:
+        report = validate(emit)
+    failing = {r.check for r in report.results if not r.passed}
+    assert failing == {"C11", "C13"}
 
 
 # ---------------------------------------------------------------------------

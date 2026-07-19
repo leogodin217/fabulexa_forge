@@ -7,12 +7,14 @@ NULL rows, ambiguous). Also verifies FkTargetIsDim and history-grain FK NULL.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
+from _support.notices import discard_notice_sink
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DimensionalConfig,
@@ -22,44 +24,68 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.dimensional.fk import check_fk_slice_only
 from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
 # FK emit fixture helpers
 # ---------------------------------------------------------------------------
 
 _ACTOR_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _JOURNEY_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # references actor
-    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    prop_column(
+        "prop__actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
+    identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
 _DECISION_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # references journey_instance (for multi-hop: decision→journey_instance→actor)
-    {"name": "prop__journey_id", "type": "VARCHAR", "references": "journey_instance"},
+    prop_column(
+        "prop__journey_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="journey_instance",
+    ),
+    identity_column("ref_index__journey_id", "BIGINT"),
 ]
 
 _BINDINGS_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role", "type": "VARCHAR"},
@@ -78,25 +104,57 @@ _HISTORY_COLUMNS = [
 
 # Ambiguous: journey_instance has TWO reference columns pointing to actor
 _JOURNEY_AMBIGUOUS_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__primary_actor_id", "type": "VARCHAR", "references": "actor"},
-    {"name": "prop__secondary_actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__primary_actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
+    identity_column("ref_index__primary_actor_id", "BIGINT"),
+    prop_column(
+        "prop__secondary_actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
+    identity_column("ref_index__secondary_actor_id", "BIGINT"),
 ]
 
 # Decision with two alternative FK columns (one to journey, one to actor directly)
 _DECISION_AMBIGUOUS_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__journey_id", "type": "VARCHAR", "references": "journey_instance"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__journey_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="journey_instance",
+    ),
+    identity_column("ref_index__journey_id", "BIGINT"),
     # direct reference to actor as well — creates two paths decision→actor
-    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    prop_column(
+        "prop__actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
+    identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
 _SUPPORTED_VERSION = "0.1"
@@ -118,8 +176,6 @@ def build_reference_chain_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -134,38 +190,39 @@ def build_reference_chain_emit(tmp_path: Path) -> Path:
         )
     )
 
-    # actor rows
+    # actor rows: record_index 0, 1
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob"],
-    )
-
-    # journey rows: j001 → a001, j002 → a002
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 10, "a001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j002", True, 20, "a002"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", 20, True, 20, 1, "Bob"],
     )
 
-    # decision rows: d001 → j001 (→ a001), d002 → j002 (→ a002), d003 → no journey (NULL)
+    # journey rows: j001 → a001 (ref_index__actor_id=0), j002 → a002 (ref_index__actor_id=1)
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 10, "j001"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 10, True, 10, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 20, "j002"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j002", 20, True, 20, 1, "a002", 1],
+    )
+
+    # decision rows: d001 → j001 (ref_index__journey_id=0), d002 → j002 (ref_index__journey_id=1),
+    # d003 → no journey (NULL, ref_index__journey_id NULL-together)
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, NULL)',
-        ["trunk", "d003", True, 30],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 20, True, 20, 1, "j002", 1],
+    )
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, NULL)',
+        ["trunk", "d003", 30, True, 30, 2],
     )
 
     # history rows for journey_instance.state (for history-grain FK test)
@@ -195,10 +252,9 @@ def build_reference_chain_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec("records__actor", "records", _ACTOR_COLUMNS, 2, "actor"),
             _table_spec(
                 "records__journey_instance",
@@ -220,8 +276,8 @@ def build_reference_chain_emit(tmp_path: Path) -> Path:
                 "bindings",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -234,8 +290,6 @@ def build_ambiguous_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__actor", _ACTOR_COLUMNS))
@@ -243,23 +297,22 @@ def build_ambiguous_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__decision", _DECISION_AMBIGUOUS_COLUMNS))
 
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 5, "a001"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 5, True, 5, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "d001", True, 10, "j001", "a001"],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", 0, "a001", 0],
     )
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec("records__actor", "records", _ACTOR_COLUMNS, 1, "actor"),
             _table_spec(
                 "records__journey_instance",
@@ -276,8 +329,8 @@ def build_ambiguous_emit(tmp_path: Path) -> Path:
                 "decision",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -345,7 +398,9 @@ def test_reference_single_hop(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -372,7 +427,9 @@ def test_reference_multi_hop(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -402,7 +459,7 @@ def test_reference_ambiguous_no_hint_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="ambiguous reference path"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 def test_reference_path_hint_disambiguates(tmp_path: Path) -> None:
@@ -428,7 +485,9 @@ def test_reference_path_hint_disambiguates(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -460,7 +519,7 @@ def test_reference_path_hint_non_references_column_raises(tmp_path: Path) -> Non
             ]
         )
         with pytest.raises(ExportError, match="not a references column"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 def test_reference_no_path_raises(tmp_path: Path) -> None:
@@ -483,7 +542,7 @@ def test_reference_no_path_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="no reference path"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -514,7 +573,9 @@ def test_membership_fk_inferred_table_and_field(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -548,7 +609,9 @@ def test_membership_fk_where_selects_role(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -581,7 +644,9 @@ def test_membership_null_for_different_member_kind(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -611,7 +676,9 @@ def test_membership_on_membership_grain(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_bindings")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -644,7 +711,7 @@ def test_membership_where_not_elem_column_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="membership FK.*unresolvable"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -677,7 +744,7 @@ def test_fk_target_is_dim_raises_for_fact(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="is not a declared dimension"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 def test_fk_target_undeclared_raises(tmp_path: Path) -> None:
@@ -698,7 +765,7 @@ def test_fk_target_undeclared_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="is not a declared dimension"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -729,7 +796,9 @@ def test_history_grain_fk_null_for_unresolvable_rows(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey_states")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -745,8 +814,8 @@ def test_history_grain_fk_null_for_unresolvable_rows(tmp_path: Path) -> None:
 
 # Membership columns where elem__priority is BIGINT
 _TYPED_BINDINGS_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role", "type": "VARCHAR"},
@@ -760,8 +829,6 @@ def build_typed_membership_emit(tmp_path: Path) -> Path:
     """Emit with actor + membership that has a BIGINT elem__ column."""
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -770,20 +837,23 @@ def build_typed_membership_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__decision", _DECISION_COLUMNS))
 
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", 20, True, 20, 1, "Bob"],
+    )
+    # prop__journey_id references journey_instance, which this fixture does not
+    # emit -- a dangling reference, so ref_index__journey_id is the fixture's
+    # dangling sentinel (-1), never verified (see build_refs_dangling precedent).
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", -1],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 10, "j001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 20, "j002"],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 20, True, 20, 1, "j002", -1],
     )
 
     # d001 → a001 (priority=1), d002 → a002 (priority=2)
@@ -797,10 +867,9 @@ def build_typed_membership_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec("records__actor", "records", _ACTOR_COLUMNS, 2, "actor"),
             _table_spec(
                 "records__decision", "records", _DECISION_COLUMNS, 2, "decision"
@@ -814,8 +883,8 @@ def build_typed_membership_emit(tmp_path: Path) -> Path:
                 "bindings",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -844,7 +913,9 @@ def test_membership_fk_where_bigint_elem_column_selects_correctly(
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         # SQL must use CAST form for BIGINT elem__ where
         assert "CAST('1' AS BIGINT)" in fact_spec.sql
@@ -879,7 +950,9 @@ def test_membership_fk_where_varchar_elem_stays_quoted(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         # VARCHAR where must NOT use CAST form
         assert "CAST('consultant'" not in fact_spec.sql
@@ -890,15 +963,21 @@ def test_membership_fk_where_varchar_elem_stays_quoted(tmp_path: Path) -> None:
 # Surrogate-key (target_key: presentation_id) tests — F8
 # ---------------------------------------------------------------------------
 
-# Actor columns with presentation_id for surrogate tests
+# Actor columns with presentation_id for surrogate tests. presentation_id
+# occupies the slot immediately after record_id (base-format.md § C5), shifting
+# the lifecycle prefix, record_index, and prop__ block down by one position.
 _ACTOR_SURROGATE_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR"},
-    {"name": "presentation_id", "type": "VARCHAR"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 
@@ -912,8 +991,6 @@ def build_surrogate_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -924,36 +1001,37 @@ def build_surrogate_emit(tmp_path: Path) -> Path:
 
     # actor rows with presentation_id surrogates
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice", "PAT_001"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", "PAT_001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob", "PAT_002"],
-    )
-
-    # journey rows: j001 → a001, j002 → a002
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 10, "a001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j002", True, 20, "a002"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", "PAT_002", 20, True, 20, 1, "Bob"],
     )
 
-    # decision rows: d001 → j001 (→ a001), d002 → j002 (→ a002), d003 → no journey
+    # journey rows: j001 → a001 (ref_index__actor_id=0), j002 → a002 (ref_index__actor_id=1)
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 10, "j001"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 10, True, 10, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 20, "j002"],
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j002", 20, True, 20, 1, "a002", 1],
+    )
+
+    # decision rows: d001 → j001 (ref_index__journey_id=0), d002 → j002 (ref_index__journey_id=1),
+    # d003 → no journey (NULL, ref_index__journey_id NULL-together)
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, NULL)',
-        ["trunk", "d003", True, 30],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 20, True, 20, 1, "j002", 1],
+    )
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, NULL)',
+        ["trunk", "d003", 30, True, 30, 2],
     )
 
     # membership: d001 → a001 (consultant), d002 → a002 (nurse)
@@ -968,10 +1046,9 @@ def build_surrogate_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _ACTOR_SURROGATE_COLUMNS, 2, "actor"
             ),
@@ -994,8 +1071,8 @@ def build_surrogate_emit(tmp_path: Path) -> Path:
                 "bindings",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -1026,7 +1103,9 @@ def test_reference_single_hop_surrogate(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1061,7 +1140,9 @@ def test_reference_multi_hop_surrogate(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1100,7 +1181,9 @@ def test_membership_on_records_surrogate(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1139,7 +1222,9 @@ def test_membership_on_grain_surrogate(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_bindings")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1172,7 +1257,7 @@ def test_target_key_presentation_id_missing_column_raises(tmp_path: Path) -> Non
             ]
         )
         with pytest.raises(ExportError, match="presentation_id"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -1187,17 +1272,19 @@ def test_target_key_presentation_id_missing_column_raises(tmp_path: Path) -> Non
 # ---------------------------------------------------------------------------
 
 _OWNER_SURROGATE_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "presentation_id", "type": "VARCHAR"},
+    identity_column("record_index", "BIGINT"),
 ]
 
 _HOLDER_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "member__actor__kind", "type": "VARCHAR"},
@@ -1206,29 +1293,49 @@ _HOLDER_COLUMNS = [
 
 # decision columns: references journey_instance + has last_mutation_sim_time
 _PIT_DECISION_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__journey_id", "type": "VARCHAR", "references": "journey_instance"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__journey_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="journey_instance",
+    ),
+    identity_column("ref_index__journey_id", "BIGINT"),
 ]
 
 _PIT_JOURNEY_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
+    identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
 _PIT_ACTOR_COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
 ]
 
 
@@ -1255,8 +1362,6 @@ def build_pit_membership_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -1268,50 +1373,51 @@ def build_pit_membership_emit(tmp_path: Path) -> Path:
 
     # owner rows with presentation_id surrogates
     conn.execute(
-        'INSERT INTO "records__owner" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "o001", True, 100, "OWN_001"],
+        'INSERT INTO "records__owner" VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "o001", "OWN_001", 100, True, 100, 0],
     )
     conn.execute(
-        'INSERT INTO "records__owner" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "o002", True, 100, "OWN_002"],
+        'INSERT INTO "records__owner" VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "o002", "OWN_002", 100, True, 100, 1],
     )
 
     # actor rows
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?)',
-        ["trunk", "a001", True, 100],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "a001", 100, True, 100, 0],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?)',
-        ["trunk", "a002", True, 100],
-    )
-
-    # journey_instance rows: j001 -> a001, j002 -> a002
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j001", True, 100, "a001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "j002", True, 100, "a002"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "a002", 100, True, 100, 1],
     )
 
-    # decision rows (grain)
+    # journey_instance rows: j001 -> a001 (ref_index__actor_id=0), j002 -> a002 (ref_index__actor_id=1)
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 15, "j001"],  # T=15, member=a001
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 100, True, 100, 0, "a001", 0],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 35, "j001"],  # T=35, member=a001, no hold
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j002", 100, True, 100, 1, "a002", 1],
+    )
+
+    # decision rows (grain): all reference journey j001 (record_index 0) or j002
+    # (record_index 1) -> ref_index__journey_id follows accordingly.
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 15, True, 15, 0, "j001", 0],  # T=15, member=a001
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d003", True, 60, "j001"],  # T=60, member=a001, open hold
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 35, True, 35, 1, "j001", 0],  # T=35, member=a001, no hold
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d004", True, 20, "j002"],  # T=20, member=a002
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d003", 60, True, 60, 2, "j001", 0],  # T=60, member=a001, open hold
+    )
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d004", 20, True, 20, 3, "j002", 1],  # T=20, member=a002
     )
 
     # membership__owner__holders: owner holds actor members
@@ -1332,10 +1438,9 @@ def build_pit_membership_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__owner", "records", _OWNER_SURROGATE_COLUMNS, 2, "owner"
             ),
@@ -1359,8 +1464,8 @@ def build_pit_membership_emit(tmp_path: Path) -> Path:
                 "holders",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -1398,7 +1503,9 @@ def test_pit_membership_resolves_holder_covering_t(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1429,7 +1536,9 @@ def test_pit_membership_outside_all_holds_is_null(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1458,7 +1567,9 @@ def test_pit_membership_presentation_id_projected(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1489,7 +1600,9 @@ def test_pit_membership_no_grain_fanout(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1528,7 +1641,7 @@ def test_pit_membership_missing_as_of_column_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="as_of column"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 def test_pit_membership_unresolvable_member_path_raises(tmp_path: Path) -> None:
@@ -1561,7 +1674,7 @@ def test_pit_membership_unresolvable_member_path_raises(tmp_path: Path) -> None:
             ]
         )
         with pytest.raises(ExportError, match="not a references column"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -1595,7 +1708,9 @@ def test_reference_fk_on_membership_grain_walks_from_owner(tmp_path: Path) -> No
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_binding")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1647,7 +1762,9 @@ def test_two_reference_fks_on_one_table_do_not_collide(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1690,7 +1807,9 @@ def test_two_reference_fks_on_membership_grain(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_binding")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1721,8 +1840,12 @@ def test_fk_target_dim_declared_after_fact_resolves(tmp_path: Path) -> None:
         config_fact_first = DimensionalConfig(tables=[fact, dim])
         config_dim_first = DimensionalConfig(tables=[dim, fact])
 
-        specs_fact_first = build_query_specs(emit, config_fact_first, None, None)
-        specs_dim_first = build_query_specs(emit, config_dim_first, None, None)
+        specs_fact_first = build_query_specs(
+            emit, config_fact_first, None, None, notice_sink=discard_notice_sink
+        )
+        specs_dim_first = build_query_specs(
+            emit, config_dim_first, None, None, notice_sink=discard_notice_sink
+        )
 
         fact_spec = next(s for s in specs_fact_first if s.table_name == "fact_journey")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -1754,8 +1877,6 @@ def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
     """
     import duckdb
 
-    from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
 
@@ -1764,20 +1885,23 @@ def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("membership__decision__bindings", _TYPED_BINDINGS_COLUMNS))
 
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a001", True, 10, "Alice", "PAT_001"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", "PAT_001", 10, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "a002", True, 20, "Bob", "PAT_002"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", "PAT_002", 20, True, 20, 1, "Bob"],
+    )
+    # prop__journey_id references journey_instance, which this fixture does not
+    # emit -- a dangling reference, so ref_index__journey_id is the fixture's
+    # dangling sentinel (-1), never verified (see build_refs_dangling precedent).
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 10, True, 10, 0, "j001", -1],
     )
     conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", True, 10, "j001"],
-    )
-    conn.execute(
-        'INSERT INTO "records__decision" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d002", True, 20, "j002"],
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d002", 20, True, 20, 1, "j002", -1],
     )
     # d001 → a001 (priority=1), d002 → a002 (priority=2)
     conn.execute(
@@ -1790,10 +1914,9 @@ def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _ACTOR_SURROGATE_COLUMNS, 2, "actor"
             ),
@@ -1809,8 +1932,8 @@ def build_typed_surrogate_membership_emit(tmp_path: Path) -> Path:
                 "bindings",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -1845,7 +1968,9 @@ def test_membership_fk_surrogate_with_bigint_where_on_records_grain(
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         # BIGINT elem__ where must render as a CAST literal, not a quoted string
         assert "CAST('1' AS BIGINT)" in fact_spec.sql
@@ -1889,7 +2014,9 @@ def test_membership_grain_fk_surrogate_with_bigint_source_where(
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_bindings")
         # The grain where on a BIGINT elem__ column renders as a CAST literal
         assert "CAST('1' AS BIGINT)" in fact_spec.sql
@@ -1933,7 +2060,9 @@ def test_two_membership_fks_on_one_table_do_not_collide(tmp_path: Path) -> None:
                 ),
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
 
@@ -1944,3 +2073,278 @@ def test_two_membership_fks_on_one_table_do_not_collide(tmp_path: Path) -> None:
     assert consultant["d002"] is None
     assert nurse["d002"] == "a002"
     assert nurse["d001"] is None
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused over fk-traversed hops — unit tests on
+# check_fk_slice_only. Consults only the sidecar (never queries run.duckdb),
+# so these skip open_emit/write_emit and parse a bare sidecar dict directly —
+# mirroring tests/exporters/test_slice_only.py's own helper.
+# ---------------------------------------------------------------------------
+
+
+def _bare_sidecar(
+    tables: list[dict[str, object]],
+    enum_domains: dict[str, dict[str, list[str]]] | None = None,
+) -> Sidecar:
+    """Build a minimal Sidecar (no DuckDB) for check_fk_slice_only unit tests."""
+    raw: dict[str, object] = {
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+        "tables": tables,
+    }
+    if enum_domains is not None:
+        raw["enum_domains"] = enum_domains
+    return Sidecar.from_raw(raw)
+
+
+def _records_table(
+    name: str, kind: str, columns: list[dict[str, object]]
+) -> dict[str, object]:
+    """Build one records-category table entry for _bare_sidecar."""
+    return {
+        "name": name,
+        "category": "records",
+        "record_kind": kind,
+        "columns": columns,
+        "rows": 0,
+    }
+
+
+def _reference_hop_sidecar(hop_column: dict[str, object]) -> Sidecar:
+    """Sidecar with journey_instance.<hop_column> -> actor, plus a bare actor table."""
+    return _bare_sidecar(
+        [
+            _records_table(
+                "records__journey_instance",
+                "journey_instance",
+                [identity_column("record_id", "VARCHAR"), hop_column],
+            ),
+            _records_table(
+                "records__actor", "actor", [identity_column("record_id", "VARCHAR")]
+            ),
+        ]
+    )
+
+
+_SLICE_ONLY_HOP_COLUMN = prop_column(
+    "prop__actor_id",
+    "VARCHAR",
+    history_tracked=False,
+    temporal_class="slice_only",
+    references="actor",
+)
+
+
+def test_fk_reference_hop_path_hint_refuses_slice_only() -> None:
+    """fk via:reference with an author-hinted path: a slice_only hop is refused."""
+    sidecar = _reference_hop_sidecar(_SLICE_ONLY_HOP_COLUMN)
+    tbl = _fact(
+        "fact_journey",
+        "records",
+        "journey_instance",
+        [
+            _from_col("record_id", "record_id"),
+            _fk_col("actor_id", "dim_actor", "reference", path=["prop__actor_id"]),
+        ],
+    )
+    col = tbl.columns[1]
+    with pytest.raises(ExportError, match="temporal_class: slice_only"):
+        check_fk_slice_only(
+            col_decl=col,
+            table_decl=tbl,
+            source_grain="records",
+            anchor_kind="journey_instance",
+            target_kind="actor",
+            sidecar=sidecar,
+        )
+
+
+def test_fk_reference_hop_pathfound_refuses_slice_only() -> None:
+    """fk via:reference with pathfind (no path hint): a slice_only hop is refused."""
+    sidecar = _reference_hop_sidecar(_SLICE_ONLY_HOP_COLUMN)
+    tbl = _fact(
+        "fact_journey",
+        "records",
+        "journey_instance",
+        [
+            _from_col("record_id", "record_id"),
+            _fk_col("actor_id", "dim_actor", "reference"),
+        ],
+    )
+    col = tbl.columns[1]
+    with pytest.raises(ExportError, match="temporal_class: slice_only"):
+        check_fk_slice_only(
+            col_decl=col,
+            table_decl=tbl,
+            source_grain="records",
+            anchor_kind="journey_instance",
+            target_kind="actor",
+            sidecar=sidecar,
+        )
+
+
+def test_fk_reference_hop_exempt_discriminator_passes() -> None:
+    """A reference hop landing on the exempt discriminator passes at any class.
+
+    The carve-out is mechanical and identical on every surface: even a hop
+    column shaped as the owning kind's discriminator (prop__<kind>_type) with
+    a non-empty subtype_values is exempt regardless of its declared class.
+    """
+    sidecar = _bare_sidecar(
+        [
+            _records_table(
+                "records__journey_instance",
+                "journey_instance",
+                [
+                    identity_column("record_id", "VARCHAR"),
+                    prop_column(
+                        "prop__journey_instance_type",
+                        "VARCHAR",
+                        history_tracked=False,
+                        temporal_class="slice_only",
+                        references="actor",
+                    ),
+                ],
+            ),
+            _records_table(
+                "records__actor", "actor", [identity_column("record_id", "VARCHAR")]
+            ),
+        ],
+        enum_domains={"journey_instance": {"journey_instance_type": ["a", "b"]}},
+    )
+    tbl = _fact(
+        "fact_journey",
+        "records",
+        "journey_instance",
+        [
+            _from_col("record_id", "record_id"),
+            _fk_col(
+                "actor_id",
+                "dim_actor",
+                "reference",
+                path=["prop__journey_instance_type"],
+            ),
+        ],
+    )
+    col = tbl.columns[1]
+    check_fk_slice_only(
+        col_decl=col,
+        table_decl=tbl,
+        source_grain="records",
+        anchor_kind="journey_instance",
+        target_kind="actor",
+        sidecar=sidecar,
+    )  # must not raise
+
+
+def test_fk_membership_member_path_hop_refuses_slice_only() -> None:
+    """fk via:membership: a slice_only member_path-traversed hop is refused."""
+    sidecar = _bare_sidecar(
+        [
+            _records_table(
+                "records__decision",
+                "decision",
+                [
+                    identity_column("record_id", "VARCHAR"),
+                    prop_column(
+                        "prop__journey_id",
+                        "VARCHAR",
+                        history_tracked=False,
+                        temporal_class="slice_only",
+                        references="journey_instance",
+                    ),
+                ],
+            ),
+            _records_table(
+                "records__journey_instance",
+                "journey_instance",
+                [identity_column("record_id", "VARCHAR")],
+            ),
+        ]
+    )
+    col = ColumnDecl(
+        name="owner_id",
+        fk=FkClause(
+            to="dim_owner",
+            via="membership",
+            property="holders",
+            member_field="actor",
+            as_of="last_mutation_sim_time",
+            member_path=["prop__journey_id"],
+        ),
+    )
+    tbl = _fact(
+        "fact_decision",
+        "records",
+        "decision",
+        [_from_col("record_id", "record_id"), col],
+    )
+    with pytest.raises(ExportError, match="temporal_class: slice_only"):
+        check_fk_slice_only(
+            col_decl=col,
+            table_decl=tbl,
+            source_grain="records",
+            anchor_kind="decision",
+            target_kind="owner",
+            sidecar=sidecar,
+        )
+
+
+def test_fk_membership_as_of_column_refuses_slice_only() -> None:
+    """fk via:membership point-in-time: a slice_only as_of column is refused."""
+    sidecar = _bare_sidecar(
+        [
+            _records_table(
+                "records__decision",
+                "decision",
+                [
+                    identity_column("record_id", "VARCHAR"),
+                    prop_column(
+                        "prop__journey_id",
+                        "VARCHAR",
+                        history_tracked=False,
+                        temporal_class="constant",
+                        references="journey_instance",
+                    ),
+                    prop_column(
+                        "prop__fired_at",
+                        "BIGINT",
+                        history_tracked=False,
+                        temporal_class="slice_only",
+                    ),
+                ],
+            ),
+            _records_table(
+                "records__journey_instance",
+                "journey_instance",
+                [identity_column("record_id", "VARCHAR")],
+            ),
+        ]
+    )
+    col = ColumnDecl(
+        name="owner_id",
+        fk=FkClause(
+            to="dim_owner",
+            via="membership",
+            property="holders",
+            member_field="actor",
+            as_of="prop__fired_at",
+            member_path=["prop__journey_id"],
+        ),
+    )
+    tbl = _fact(
+        "fact_decision",
+        "records",
+        "decision",
+        [_from_col("record_id", "record_id"), col],
+    )
+    with pytest.raises(ExportError, match="temporal_class: slice_only"):
+        check_fk_slice_only(
+            col_decl=col,
+            table_decl=tbl,
+            source_grain="records",
+            anchor_kind="decision",
+            target_kind="owner",
+            sidecar=sidecar,
+        )

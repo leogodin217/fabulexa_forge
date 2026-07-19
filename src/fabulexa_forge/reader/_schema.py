@@ -1,4 +1,4 @@
-"""Vendored v4 base-format JSON Schema loader.
+"""Vendored base-format JSON Schema loader.
 
 Resolves the single canonical file at contract/base-format.schema.json.  The
 file is bundled as package data via a hatch force-include so it resolves
@@ -21,7 +21,7 @@ _cached_schema: Mapping[str, object] | None = None
 
 
 def _load_vendored_schema() -> Mapping[str, object]:
-    """Load the vendored v4 base-format JSON Schema bundled with this package.
+    """Load the vendored base-format JSON Schema bundled with this package.
 
     Resolves contract/base-format.schema.json from package data (post-install)
     or from the vendored contract/ directory (in-tree editable install), so it
@@ -31,7 +31,7 @@ def _load_vendored_schema() -> Mapping[str, object]:
     top-level-field carve-out).
 
     Returns:
-        The parsed JSON Schema mapping for base_format_version 4.
+        The parsed JSON Schema mapping for the supported `base_format_version`.
 
     Raises:
         FileNotFoundError: the vendored schema is missing — an

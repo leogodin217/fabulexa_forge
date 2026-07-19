@@ -6,11 +6,11 @@ In-memory fixtures supplement where the pre-built set lacks a specific variant.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader import (
@@ -23,6 +23,7 @@ from fabulexa_forge.reader import (
 from fabulexa_forge.reader._schema import _load_vendored_schema
 from fabulexa_forge.reader.conformance import (
     _check_c5_table,
+    _check_c13_structural,
 )
 from fabulexa_forge.reader.sidecar import ColumnSpec
 
@@ -36,24 +37,47 @@ from ._fixtures_build import (
 # Helpers
 # ---------------------------------------------------------------------------
 
+_SIDECAR_TOP_LEVEL_KEYS = frozenset({"base_format_version", "branches", "tables"})
+
 
 def _write_emit(
     dest: Path,
     sidecar: dict[str, object],
     db_setup: dict[str, list[dict[str, object]]] | None = None,
+    *,
+    schema_valid: bool = True,
 ) -> Path:
     """Write a minimal emit (base.json + run.duckdb) into dest.
+
+    The base.json write is delegated to `_support.sidecar_builder.write_emit` —
+    the sole sidecar authority; this helper decomposes `sidecar` into that
+    function's tables/branches/extra/base_format_version components and keeps
+    only the run.duckdb construction local.
 
     Args:
         dest: Directory to write into.
         sidecar: The base.json dict.
         db_setup: Mapping of {table_name: columns_list} for tables to create.
+        schema_valid: Forwarded to sidecar_builder.write_emit. False for the
+            deliberately schema-invalid negative fixtures.
 
     Returns:
         dest path.
     """
     dest.mkdir(parents=True, exist_ok=True)
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    extra = {
+        key: value
+        for key, value in sidecar.items()
+        if key not in _SIDECAR_TOP_LEVEL_KEYS
+    }
+    _write_sidecar(
+        dest,
+        tables=sidecar["tables"],  # type: ignore[arg-type]
+        branches=sidecar.get("branches"),  # type: ignore[arg-type]
+        extra=extra or None,
+        base_format_version=sidecar.get("base_format_version"),  # type: ignore[arg-type]
+        schema_valid=schema_valid,
+    )
     db_path = dest / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     if db_setup:
@@ -66,7 +90,7 @@ def _write_emit(
 def _minimal_sidecar(
     tables: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
-    """Build a minimal valid v4 sidecar with only history (sanitised: no firings)."""
+    """Build a minimal valid sidecar with only history (sanitised: no firings)."""
     default_tables: list[dict[str, object]] = [
         {
             "name": "history",
@@ -76,7 +100,6 @@ def _minimal_sidecar(
         },
     ]
     return {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
         "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
         "tables": tables if tables is not None else default_tables,
     }
@@ -154,7 +177,7 @@ class TestConformanceReport:
 
 
 class TestC1:
-    """C1: base.json validates against the vendored v4 JSON Schema."""
+    """C1: base.json validates against the vendored JSON Schema."""
 
     def test_passes_on_spanning(self, base_fixtures: dict[str, Path]) -> None:
         """C1 passes on the spanning fixture."""
@@ -171,6 +194,7 @@ class TestC1:
             tmp_path / "c1_unknown_top",
             sidecar,
             {"history": list(_HISTORY_COLUMNS)},
+            schema_valid=False,
         )
         with open_emit(dest) as emit:
             result = run_check(emit, "C1")
@@ -189,6 +213,7 @@ class TestC1:
             tmp_path / "c1_nested_unknown",
             sidecar,
             {"history": list(_HISTORY_COLUMNS)},
+            schema_valid=False,
         )
         with open_emit(dest) as emit:
             result = run_check(emit, "C1")
@@ -418,6 +443,7 @@ class TestC3:
                 "history": list(_HISTORY_COLUMNS),
                 "records__actor": list(_RECORDS_ACTOR_COLUMNS),
             },
+            schema_valid=False,
         )
         with open_emit(dest) as emit:
             result = run_check(emit, "C3")
@@ -459,6 +485,7 @@ class TestC3:
                 "history": list(_HISTORY_COLUMNS),
                 "membership__actor__appointments": membership_cols,
             },
+            schema_valid=False,
         )
         with open_emit(dest) as emit:
             result = run_check(emit, "C3")
@@ -504,21 +531,35 @@ class TestC5:
             result = run_check(emit, "C5")
         assert result.passed is True
 
-    def test_fails_on_c5_prop_missing(self, base_fixtures: dict[str, Path]) -> None:
-        """C5 fails on c5_prop_missing (prop__name dropped from DuckDB, sidecar mismatch)."""
+    def test_passes_on_c5_prop_missing_despite_catalog_mismatch(
+        self, base_fixtures: dict[str, Path]
+    ) -> None:
+        """C5's removed catalog re-check: c5_prop_missing's sidecar is itself a
+        well-formed records shape, so C5 passes even though the DuckDB catalog is
+        missing prop__name -- C2 is the sole carrier of that mismatch."""
         with open_emit(base_fixtures["c5_prop_missing"]) as emit:
             result = run_check(emit, "C5")
-        assert result.passed is False
+        assert result.passed is True
 
-    def test_fails_on_schema_mismatch(self, base_fixtures: dict[str, Path]) -> None:
-        """C5 fails on schema_mismatch (phantom sidecar column)."""
+    def test_passes_on_schema_mismatch_despite_catalog_mismatch(
+        self, base_fixtures: dict[str, Path]
+    ) -> None:
+        """C5's removed catalog re-check: schema_mismatch's sidecar is itself a
+        well-formed records shape (a phantom trailing prop__ column), so C5 passes
+        even though the DuckDB catalog lacks it -- C2 is the sole carrier."""
         with open_emit(base_fixtures["schema_mismatch"]) as emit:
             result = run_check(emit, "C5")
-        assert result.passed is False
+        assert result.passed is True
 
 
 def _col(name: str, type_: str = "VARCHAR") -> ColumnSpec:
-    return ColumnSpec(name=name, type=type_, references=None, history_tracked=None)
+    return ColumnSpec(
+        name=name,
+        type=type_,
+        references=None,
+        history_tracked=None,
+        temporal_class=None,
+    )
 
 
 # fork_path, record_id
@@ -530,6 +571,9 @@ _TAIL = [
     _col("deactivated_at", "BIGINT"),
     _col("last_mutation_sim_time", "BIGINT"),
 ]
+# record_index sits immediately after the (possibly presentation_id-shifted)
+# lifecycle tail, before the property block.
+_RECORD_INDEX = _col("record_index", "BIGINT")
 
 
 class TestC5PresentationId:
@@ -548,25 +592,32 @@ class TestC5PresentationId:
 
     def test_mechanism_emit_no_presentation_id_passes(self) -> None:
         """A mechanism emit (no presentation_id) still passes — regression guard."""
-        assert self._check(_HEAD + _TAIL + [_col("prop__name")]) == []
+        cols = _HEAD + _TAIL + [_RECORD_INDEX, _col("prop__name")]
+        assert self._check(cols) == []
 
     def test_bigint_presentation_id_at_index_2_passes(self) -> None:
         """A sequential-strategy emit mints a BIGINT presentation_id at index 2."""
         cols = (
-            _HEAD + [_col("presentation_id", "BIGINT")] + _TAIL + [_col("prop__name")]
+            _HEAD
+            + [_col("presentation_id", "BIGINT")]
+            + _TAIL
+            + [_RECORD_INDEX, _col("prop__name")]
         )
         assert self._check(cols) == []
 
     def test_varchar_presentation_id_at_index_2_passes(self) -> None:
         """A prefixed/uuid-strategy emit mints a VARCHAR presentation_id at index 2."""
         cols = (
-            _HEAD + [_col("presentation_id", "VARCHAR")] + _TAIL + [_col("prop__name")]
+            _HEAD
+            + [_col("presentation_id", "VARCHAR")]
+            + _TAIL
+            + [_RECORD_INDEX, _col("prop__name")]
         )
         assert self._check(cols) == []
 
     def test_presentation_id_only_no_props_passes(self) -> None:
         """presentation_id with no scalar properties is a valid minimal projected table."""
-        cols = _HEAD + [_col("presentation_id", "BIGINT")] + _TAIL
+        cols = _HEAD + [_col("presentation_id", "BIGINT")] + _TAIL + [_RECORD_INDEX]
         assert self._check(cols) == []
 
     def test_misplaced_presentation_id_after_active_fails(self) -> None:
@@ -579,13 +630,15 @@ class TestC5PresentationId:
             _col("presentation_id", "BIGINT"),
             _col("deactivated_at", "BIGINT"),
             _col("last_mutation_sim_time", "BIGINT"),
+            _RECORD_INDEX,
             _col("prop__name"),
         ]
         messages = self._check(cols)
         assert any("presentation_id" in m for m in messages)
 
-    def test_presentation_id_in_prop_block_fails(self) -> None:
-        """presentation_id after the lifecycle prefix lands in the prop block and fails."""
+    def test_presentation_id_in_record_index_slot_fails(self) -> None:
+        """presentation_id after the lifecycle prefix occupies the record_index
+        slot; not consumed there, it then fails the property block's role check."""
         cols = _HEAD + _TAIL + [_col("presentation_id", "BIGINT"), _col("prop__name")]
         messages = self._check(cols)
         assert any("presentation_id" in m and "prop__" in m for m in messages)
@@ -595,6 +648,203 @@ class TestC5PresentationId:
         cols = _HEAD + [_col("presentation_id", "BIGINT")]
         messages = self._check(cols)
         assert any("expected at least 7 columns" in m for m in messages)
+
+
+class TestC5DuplicatedRoleColumnInPropertyBlock:
+    """A duplicated lifecycle/identity column inside the property block fails
+    the amended block-shape clause (the column classifies as a role other than
+    'payload'), not the no-role clause."""
+
+    def _check(self, cols: list[ColumnSpec]) -> list[str]:
+        messages: list[str] = []
+        _check_c5_table("records__actor", cols, messages)
+        return messages
+
+    def test_duplicated_lifecycle_column_fails_block_shape_not_no_role(
+        self,
+    ) -> None:
+        """A second `active` column inside the property block fails, naming
+        its classified role rather than 'no records-column taxonomy role'."""
+        cols = _HEAD + _TAIL + [_RECORD_INDEX, _col("active", "BOOLEAN")]
+        messages = self._check(cols)
+        assert any("active" in m and "classifies as 'lifecycle'" in m for m in messages)
+        assert not any("matches no records-column taxonomy role" in m for m in messages)
+
+    def test_duplicated_identity_column_fails_block_shape_not_no_role(
+        self,
+    ) -> None:
+        """A second `record_id` column inside the property block fails, naming
+        its classified role rather than 'no records-column taxonomy role'."""
+        cols = _HEAD + _TAIL + [_RECORD_INDEX, _col("record_id")]
+        messages = self._check(cols)
+        assert any(
+            "record_id" in m and "classifies as 'identity'" in m for m in messages
+        )
+        assert not any("matches no records-column taxonomy role" in m for m in messages)
+
+
+class TestC5NewNegativeFixtures:
+    """The five C5 shape negatives (§ Contracts -- amended
+    _check_c5_table). Each fixture isolates one clause of the positional check
+    to records__actor alone; the DuckDB catalog carries the identical broken
+    shape (write_emit's own records-shape assertion is opted out for these
+    fixtures), so C2 stays silent and C5 fails alone."""
+
+    _EXPECTED_MESSAGE_SUBSTRING: dict[str, str] = {
+        "c5_missing_record_index": "record_index",
+        "c5_misplaced_record_index": "record_index",
+        "c5_prop_without_ref_index": "ref_index__doctor_id",
+        "c5_ref_index_without_reference": "ref_index__actor_type",
+        "c5_ref_index_wrong_type": "ref_index__doctor_id",
+    }
+
+    # C8 always fails on these fixtures independent of the C5 defect: they are
+    # zero-row structural-only fixtures (§ _write_c5_negative), and C8 requires
+    # the branch's fork_path to appear in at least one data row. Every other
+    # pre-existing zero-row structural fixture in this suite (c4_wrong_history_type,
+    # c5_prop_missing, schema_mismatch) shares that same C8 side effect, so it is
+    # excluded here rather than treated as evidence the shape defect leaked
+    # beyond C5.
+    _EXPECTED_UNRELATED_FAILURES = frozenset({"C8"})
+
+    @pytest.mark.parametrize("name", sorted(_EXPECTED_MESSAGE_SUBSTRING))
+    def test_fails_c5_and_only_c5(
+        self, name: str, base_fixtures: dict[str, Path]
+    ) -> None:
+        """Each new C5 negative fails C5 alone; every other check passes."""
+        with open_emit(base_fixtures[name]) as emit:
+            report = validate(emit)
+        results = {r.check: r for r in report.results}
+        assert results["C5"].passed is False
+        for check_id, result in results.items():
+            if check_id == "C5" or check_id in self._EXPECTED_UNRELATED_FAILURES:
+                continue
+            assert result.passed is True, (
+                f"{name}: {check_id} unexpectedly failed: {result.messages}"
+            )
+
+    @pytest.mark.parametrize("name", sorted(_EXPECTED_MESSAGE_SUBSTRING))
+    def test_c5_message_names_the_defective_column(
+        self, name: str, base_fixtures: dict[str, Path]
+    ) -> None:
+        """C5's failure message names the column the defect is about."""
+        expected = self._EXPECTED_MESSAGE_SUBSTRING[name]
+        with open_emit(base_fixtures[name]) as emit:
+            result = run_check(emit, "C5")
+        assert any(expected in m for m in result.messages), result.messages
+
+
+# ---------------------------------------------------------------------------
+# C13 structural clauses (direct, via _check_c13_structural)
+# ---------------------------------------------------------------------------
+
+
+def _c13_messages(col: ColumnSpec) -> list[str]:
+    """Run _check_c13_structural for one column; return its failure messages."""
+    messages: list[str] = []
+    _check_c13_structural("records__actor", col, messages)
+    return messages
+
+
+class TestC13Structural:
+    """_check_c13_structural's four clauses, exercised directly per the design
+    doc: (history_tracked present) == (temporal_class present); a present
+    temporal_class is one of the three declared values; 'tracked' implies
+    history_tracked True; 'slice_only' implies history_tracked False."""
+
+    def test_conformant_tracked_column_passes(self) -> None:
+        """A properly paired 'tracked' column passes all four clauses."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=True,
+            temporal_class="tracked",
+        )
+        assert _c13_messages(col) == []
+
+    def test_conformant_constant_column_passes(self) -> None:
+        """A properly paired 'constant' column passes (no implication applies)."""
+        col = ColumnSpec(
+            name="prop__doctor_id",
+            type="VARCHAR",
+            references=None,
+            history_tracked=False,
+            temporal_class="constant",
+        )
+        assert _c13_messages(col) == []
+
+    def test_conformant_slice_only_column_passes(self) -> None:
+        """A properly paired 'slice_only' column passes all four clauses."""
+        col = ColumnSpec(
+            name="prop__status",
+            type="VARCHAR",
+            references=None,
+            history_tracked=False,
+            temporal_class="slice_only",
+        )
+        assert _c13_messages(col) == []
+
+    def test_history_tracked_present_temporal_class_absent_fails(self) -> None:
+        """Clause 1 (pairing): history_tracked present with no temporal_class fails."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=True,
+            temporal_class=None,
+        )
+        messages = _c13_messages(col)
+        assert any("history_tracked present" in m for m in messages)
+
+    def test_temporal_class_present_history_tracked_absent_fails(self) -> None:
+        """Clause 1 (pairing), other direction: temporal_class with no
+        history_tracked fails."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=None,
+            temporal_class="tracked",
+        )
+        messages = _c13_messages(col)
+        assert any("history_tracked present" in m for m in messages)
+
+    def test_out_of_enum_temporal_class_fails(self) -> None:
+        """Clause 2 (enum): a declared value outside the three-value enum fails."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=True,
+            temporal_class="bogus",
+        )
+        messages = _c13_messages(col)
+        assert any("outside" in m for m in messages)
+
+    def test_tracked_requires_history_tracked_true(self) -> None:
+        """Clause 3: temporal_class='tracked' requires history_tracked=True."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=False,
+            temporal_class="tracked",
+        )
+        messages = _c13_messages(col)
+        assert any("'tracked' requires" in m for m in messages)
+
+    def test_slice_only_requires_history_tracked_false(self) -> None:
+        """Clause 4: temporal_class='slice_only' requires history_tracked=False."""
+        col = ColumnSpec(
+            name="prop__name",
+            type="VARCHAR",
+            references=None,
+            history_tracked=True,
+            temporal_class="slice_only",
+        )
+        messages = _c13_messages(col)
+        assert any("'slice_only' requires" in m for m in messages)
 
 
 # ---------------------------------------------------------------------------
@@ -671,8 +921,8 @@ class TestValidate:
             report = validate(emit)
         assert isinstance(report, ConformanceReport)
 
-    def test_results_in_c1_to_c12_order(self, base_fixtures: dict[str, Path]) -> None:
-        """validate returns results in C1..C12 order."""
+    def test_results_in_c1_to_c13_order(self, base_fixtures: dict[str, Path]) -> None:
+        """validate returns results in C1..C13 order."""
         with open_emit(base_fixtures["spanning"]) as emit:
             report = validate(emit)
         check_ids = [r.check for r in report.results]
@@ -689,6 +939,7 @@ class TestValidate:
             "C10",
             "C11",
             "C12",
+            "C13",
         ]
 
     def test_c4_wrong_history_type_fails_c4_not_c2(
@@ -702,27 +953,29 @@ class TestValidate:
         assert c2.passed is True
         assert c4.passed is False
 
-    def test_schema_mismatch_fails_c2_and_c5(
+    def test_schema_mismatch_fails_c2_only(
         self, base_fixtures: dict[str, Path]
     ) -> None:
-        """schema_mismatch fixture fails C2 and C5."""
+        """schema_mismatch fixture fails C2 alone; C5's removed catalog
+        re-check no longer sees the sidecar/catalog mismatch."""
         with open_emit(base_fixtures["schema_mismatch"]) as emit:
             report = validate(emit)
         c2 = next(r for r in report.results if r.check == "C2")
         c5 = next(r for r in report.results if r.check == "C5")
         assert c2.passed is False
-        assert c5.passed is False
+        assert c5.passed is True
 
-    def test_c5_prop_missing_fails_c2_and_c5(
+    def test_c5_prop_missing_fails_c2_only(
         self, base_fixtures: dict[str, Path]
     ) -> None:
-        """c5_prop_missing fixture fails C2 and C5."""
+        """c5_prop_missing fixture fails C2 alone; C5's removed catalog
+        re-check no longer sees the sidecar/catalog mismatch."""
         with open_emit(base_fixtures["c5_prop_missing"]) as emit:
             report = validate(emit)
         c2 = next(r for r in report.results if r.check == "C2")
         c5 = next(r for r in report.results if r.check == "C5")
         assert c2.passed is False
-        assert c5.passed is False
+        assert c5.passed is True
 
 
 # ---------------------------------------------------------------------------
@@ -758,22 +1011,24 @@ class TestRunCheck:
             result = run_check(emit, "C4")
         assert result.passed is False
 
-    def test_run_check_c5_and_c2_on_c5_prop_missing(
+    def test_run_check_c5_passes_c2_fails_on_c5_prop_missing(
         self, base_fixtures: dict[str, Path]
     ) -> None:
-        """run_check C5 and C2 on c5_prop_missing both fail."""
+        """run_check C2 fails, C5 passes on c5_prop_missing (C5's removed
+        catalog re-check)."""
         with open_emit(base_fixtures["c5_prop_missing"]) as emit:
             c5 = run_check(emit, "C5")
             c2 = run_check(emit, "C2")
-        assert c5.passed is False
+        assert c5.passed is True
         assert c2.passed is False
 
-    def test_run_check_c2_and_c5_on_schema_mismatch(
+    def test_run_check_c2_fails_c5_passes_on_schema_mismatch(
         self, base_fixtures: dict[str, Path]
     ) -> None:
-        """run_check C2 and C5 on schema_mismatch both fail."""
+        """run_check C2 fails, C5 passes on schema_mismatch (C5's removed
+        catalog re-check)."""
         with open_emit(base_fixtures["schema_mismatch"]) as emit:
             c2 = run_check(emit, "C2")
             c5 = run_check(emit, "C5")
         assert c2.passed is False
-        assert c5.passed is False
+        assert c5.passed is True

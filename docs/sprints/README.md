@@ -14,7 +14,7 @@ docs/sprints/<sprint-name>/
   demos/        ← per-phase demo scripts proving each phase works end-to-end
 ```
 
-- `/create-sprint` (or `/create-sprint-from-pending`) scaffolds a new `<sprint-name>/` and commits it on the parent branch.
+- `/create-sprint`  scaffolds a new `<sprint-name>/` and commits it on the parent branch.
 - `/implement-sprint` and `/ship-pending` drive a scaffolded sprint phase-by-phase, updating `state.yaml` and committing demos.
 
 ## Conventions

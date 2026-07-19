@@ -16,6 +16,8 @@ from typing import TYPE_CHECKING, Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column as _identity_column
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.config.models import (
     DebeziumConfig,
@@ -38,7 +40,6 @@ from ._helpers import _ddl, make_anchor
 if TYPE_CHECKING:
     pass
 
-SUPPORTED_VERSION = 4
 _DAY = 86_400_000_000_000  # 1 day in nanoseconds
 
 # ---------------------------------------------------------------------------
@@ -46,34 +47,37 @@ _DAY = 86_400_000_000_000  # 1 day in nanoseconds
 # ---------------------------------------------------------------------------
 
 _RECORD_COLS_ACTOR: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__actor_type", "type": "VARCHAR"},
     {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
 ]
 
 _RECORD_COLS_DEVICE: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
 ]
 
 # Entity columns — bare-role kind carrying a discriminator column
 _RECORD_COLS_ENTITY: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    _identity_column("record_index", "BIGINT"),
     {"name": "prop__entity_type", "type": "VARCHAR"},
     {"name": "prop__label", "type": "VARCHAR", "history_tracked": False},
 ]
@@ -118,7 +122,7 @@ def _build_actor_emit(
     actor_rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]] | None = None,
 ) -> Path:
-    """Build a minimal v4 emit with a sub-typed 'actor' kind.
+    """Build a minimal emit with a sub-typed 'actor' kind.
 
     record_roles maps actor to {customer, vip_customer, staff} sub-types.
     Columns: fork_path, record_id, created_sim_time, active, deactivated_at,
@@ -133,26 +137,18 @@ def _build_actor_emit(
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     ph = ", ".join("?" for _ in _RECORD_COLS_ACTOR)
-    for row in actor_rows:
-        conn.execute(f'INSERT INTO "records__actor" VALUES ({ph})', list(row))
+    for i, row in enumerate(actor_rows):
+        conn.execute(
+            f'INSERT INTO "records__actor" VALUES ({ph})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "record_roles": {
-            "actor": {
-                "customer": "dimension",
-                "vip_customer": "dimension",
-                "staff": "fact",
-            }
-        },
-        "enum_domains": {
-            "actor": {"actor_type": ["customer", "vip_customer", "staff"]}
-        },
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -162,8 +158,20 @@ def _build_actor_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra={
+            "record_roles": {
+                "actor": {
+                    "customer": "dimension",
+                    "vip_customer": "dimension",
+                    "staff": "fact",
+                }
+            },
+            "enum_domains": {
+                "actor": {"actor_type": ["customer", "vip_customer", "staff"]}
+            },
+        },
+    )
     return tmp_path
 
 
@@ -173,7 +181,7 @@ def _build_actor_device_emit(
     device_rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]] | None = None,
 ) -> Path:
-    """Build a v4 emit with sub-typed 'actor' and non-sub-typed 'device'."""
+    """Build a emit with sub-typed 'actor' and non-sub-typed 'device'."""
     if history_rows is None:
         history_rows = []
 
@@ -184,31 +192,26 @@ def _build_actor_device_emit(
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     ph_actor = ", ".join("?" for _ in _RECORD_COLS_ACTOR)
-    for row in actor_rows:
-        conn.execute(f'INSERT INTO "records__actor" VALUES ({ph_actor})', list(row))
+    for i, row in enumerate(actor_rows):
+        conn.execute(
+            f'INSERT INTO "records__actor" VALUES ({ph_actor})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
 
     ph_device = ", ".join("?" for _ in _RECORD_COLS_DEVICE)
-    for row in device_rows:
-        conn.execute(f'INSERT INTO "records__device" VALUES ({ph_device})', list(row))
+    for i, row in enumerate(device_rows):
+        conn.execute(
+            f'INSERT INTO "records__device" VALUES ({ph_device})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
 
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "record_roles": {
-            "actor": {
-                "customer": "dimension",
-                "vip_customer": "dimension",
-                "staff": "fact",
-            }
-        },
-        "enum_domains": {
-            "actor": {"actor_type": ["customer", "vip_customer", "staff"]}
-        },
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -225,8 +228,20 @@ def _build_actor_device_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra={
+            "record_roles": {
+                "actor": {
+                    "customer": "dimension",
+                    "vip_customer": "dimension",
+                    "staff": "fact",
+                }
+            },
+            "enum_domains": {
+                "actor": {"actor_type": ["customer", "vip_customer", "staff"]}
+            },
+        },
+    )
     return tmp_path
 
 
@@ -236,7 +251,7 @@ def _build_nonsubtyped_emit(
     rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]] | None = None,
 ) -> Path:
-    """Build a minimal v4 emit with one non-sub-typed kind, NO record_roles."""
+    """Build a minimal emit with one non-sub-typed kind, NO record_roles."""
     if history_rows is None:
         history_rows = []
 
@@ -246,16 +261,18 @@ def _build_nonsubtyped_emit(
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     ph = ", ".join("?" for _ in _RECORD_COLS_DEVICE)
-    for row in rows:
-        conn.execute(f'INSERT INTO "records__{kind}" VALUES ({ph})', list(row))
+    for i, row in enumerate(rows):
+        conn.execute(
+            f'INSERT INTO "records__{kind}" VALUES ({ph})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 f"records__{kind}",
                 "records",
@@ -265,8 +282,8 @@ def _build_nonsubtyped_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -275,7 +292,7 @@ def _build_entity_emit(
     entity_rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]] | None = None,
 ) -> Path:
-    """Build a v4 emit with a bare-role 'entity' kind carrying enum_domains.
+    """Build a emit with a bare-role 'entity' kind carrying enum_domains.
 
     record_roles maps entity to a bare "dimension" role; enum_domains[entity][entity_type]
     declares three sub-types so subtype_values("entity") returns ("type_a", "type_b", "type_c").
@@ -291,18 +308,18 @@ def _build_entity_emit(
     conn.execute(_ddl("history", _HISTORY_COLS))
 
     ph = ", ".join("?" for _ in _RECORD_COLS_ENTITY)
-    for row in entity_rows:
-        conn.execute(f'INSERT INTO "records__entity" VALUES ({ph})', list(row))
+    for i, row in enumerate(entity_rows):
+        conn.execute(
+            f'INSERT INTO "records__entity" VALUES ({ph})',
+            list(row[:6]) + [i] + list(row[6:]),
+        )
     for row in history_rows:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "record_roles": {"entity": "dimension"},
-        "enum_domains": {"entity": {"entity_type": list(_ENTITY_SUB_TYPES)}},
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity",
                 "records",
@@ -312,8 +329,12 @@ def _build_entity_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra={
+            "record_roles": {"entity": "dimension"},
+            "enum_domains": {"entity": {"entity_type": list(_ENTITY_SUB_TYPES)}},
+        },
+    )
     return tmp_path
 
 
@@ -655,7 +676,12 @@ class TestBusinessRules:
         del raw["record_roles"]
         # Strip enum_domains so actor has empty subtype_values — triggers the real error
         del raw["enum_domains"]
-        sidecar_path.write_text(json.dumps(raw), encoding="utf-8")
+        _write_sidecar(
+            emit_dir,
+            tables=raw["tables"],
+            branches=raw["branches"],
+            base_format_version=raw["base_format_version"],
+        )
 
         config = StreamConfig(
             content="state-changes",
@@ -956,16 +982,16 @@ class TestRegressionNoRoutingBlock:
 # ---------------------------------------------------------------------------
 
 _MEM_QUEUE_WAITERS_COLS: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
 ]
 
 _MEM_TEAM_MEMBERS_COLS: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role", "type": "VARCHAR"},
@@ -995,7 +1021,7 @@ def _build_two_membership_emit(
     waiters_rows: list[tuple[Any, ...]],
     members_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a v4 emit with membership__queue__waiters and membership__team__members.
+    """Build a emit with membership__queue__waiters and membership__team__members.
 
     queue__waiters carries elem__priority; team__members carries elem__role.
     Both tables may have rows or be empty (for declared-but-empty topic testing).
@@ -1019,10 +1045,9 @@ def _build_two_membership_emit(
 
     conn.close()
 
-    sidecar: dict[str, Any] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _membership_table_spec(
                 "membership__queue__waiters",
                 _MEM_QUEUE_WAITERS_COLS,
@@ -1038,8 +1063,8 @@ def _build_two_membership_emit(
                 "members",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 
@@ -1061,8 +1086,8 @@ _WAITER_ROW_OPEN = ("trunk", "w2", 2 * _DAY, None, "low")  # join only
 _MEMBER_ROW = ("trunk", "m1", 1 * _DAY, None, "lead")  # join only
 
 _MEM_QUEUE_TASKS_COLS: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__label", "type": "VARCHAR"},
@@ -1072,7 +1097,7 @@ _TASK_ROW_OPEN = ("trunk", "t1", 1 * _DAY, None, "urgent")  # join only
 
 
 def _build_two_same_owner_membership_emit(tmp_path: Path) -> Path:
-    """Build a v4 emit with membership__queue__waiters and membership__queue__tasks.
+    """Build a emit with membership__queue__waiters and membership__queue__tasks.
 
     Both tables are owned by 'queue'. queue__waiters carries elem__priority;
     queue__tasks carries elem__label. Used for owner_kind template collapse tests.
@@ -1095,10 +1120,9 @@ def _build_two_same_owner_membership_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, Any] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
-        "tables": [
+    _write_sidecar(
+        tmp_path,
+        tables=[
             _membership_table_spec(
                 "membership__queue__waiters",
                 _MEM_QUEUE_WAITERS_COLS,
@@ -1114,8 +1138,8 @@ def _build_two_same_owner_membership_emit(tmp_path: Path) -> Path:
                 "tasks",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 

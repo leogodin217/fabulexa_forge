@@ -184,7 +184,7 @@ def corrupt_emit(
     base_format_version, the config fingerprint via fingerprint_config, and the code
     version), calls build_defect_manifest, and writes defects.json beside run.duckdb
     + base.json via write_defect_manifest. Every corrupt run writes the manifest. The
-    output is a structurally-conformant (C1-C5, C8) v4 base emit that intentionally
+    output is a structurally-conformant (C1-C5, C8) base emit that intentionally
     fails the semantic checks its operations targeted.
 
     out_dir is created if absent; if it already holds a run.duckdb or base.json the

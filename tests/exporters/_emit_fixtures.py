@@ -7,30 +7,51 @@ Scenario:
   - records__consultant: entity sub-type (entity_type='consultant')
   - history: journey_instance.state interval series
   - membership__journey_instance__team_members: with elem__role_name, member__entity__{kind,id}
+
+Every base.json write routes through `_support.sidecar_builder.write_emit`;
+every value-carrying `prop__` column through `prop_column`; every identity
+column (`fork_path`, `record_id`, `record_index`) through `identity_column` —
+the one sidecar authority for fixture-building test code (design doc §
+Fixtures).
 """
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
-
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 # ---------------------------------------------------------------------------
 # Sidecar column definitions
 # ---------------------------------------------------------------------------
 
+# records__entity: no history data ever backs entity_type/name/department in
+# this fixture, so all three prop__ columns are class 'constant' —
+# type-2-eligible values that in fact never change here.
 _ENTITY_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__entity_type", "type": "VARCHAR"},
-    {"name": "prop__name", "type": "VARCHAR"},
-    {"name": "prop__department", "type": "VARCHAR"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__entity_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__department",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
 ]
 
 _HISTORY_COLUMNS: list[dict[str, object]] = [
@@ -43,8 +64,8 @@ _HISTORY_COLUMNS: list[dict[str, object]] = [
 ]
 
 _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role_name", "type": "VARCHAR"},
@@ -116,12 +137,12 @@ def build_test_emit(tmp_path: Path) -> Path:
 
     # Two entity rows: one consultant, one nurse
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "e001", True, 10, "consultant", "Dr. Smith", "surgery"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e001", 10, True, 10, 0, "consultant", "Dr. Smith", "surgery"],
     )
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "e002", True, 20, "nurse", "Nurse Joy", "pediatrics"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e002", 20, True, 20, 1, "nurse", "Nurse Joy", "pediatrics"],
     )
 
     # history: journey_instance.state changes for record j001
@@ -145,10 +166,9 @@ def build_test_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity",
                 "records",
@@ -171,16 +191,17 @@ def build_test_emit(tmp_path: Path) -> Path:
                 property_name="team_members",
             ),
         ],
-        "runtime": {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+            "enum_domains": {
+                "entity": {"entity_type": ["consultant", "nurse", "admin"]},
+            },
         },
-        "enum_domains": {
-            "entity": {"entity_type": ["consultant", "nurse", "admin"]},
-        },
-    }
-
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path
 
 
@@ -198,19 +219,18 @@ def build_two_branch_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__entity", _ENTITY_COLUMNS))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [
-            {"fork_path": "trunk", "parent": None, "slice_at": 0},
-            {"fork_path": "trunk@branch_a", "parent": "trunk", "slice_at": 50},
-        ],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity", "records", _ENTITY_COLUMNS, 0, record_kind="entity"
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[
+            {"fork_path": "trunk", "parent": None, "slice_at": 0},
+            {"fork_path": "trunk@branch_a", "parent": "trunk", "slice_at": 50},
+        ],
+    )
     return tmp_path
 
 
@@ -226,6 +246,13 @@ def build_change_log_emit(tmp_path: Path) -> Path:
         (internal-bookkeeping kind)
       - history table carries an extra provenance column (prov__source)
         that the derivation must not read
+
+    prop__name and prop__status are class 'tracked' — both genuinely change
+    over time in this scenario — so every patient carries the unconditional
+    creation-seed genesis row for both at its created_sim_time (10), NULL where
+    absent at creation: p001.name's existing sim_time=10 row already opens at
+    creation (no addition needed); every other (patient, property) pair gains
+    a new genesis row.
 
     Args:
         tmp_path: Directory to write the emit artifacts into.
@@ -245,13 +272,19 @@ def build_change_log_emit(tmp_path: Path) -> Path:
     ]
 
     patient_columns: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
-        {"name": "prop__name", "type": "VARCHAR"},
-        {"name": "prop__status", "type": "VARCHAR"},
+        identity_column("record_index", "BIGINT"),
+        prop_column(
+            "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+        ),
+        prop_column(
+            "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+        ),
     ]
 
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -262,53 +295,50 @@ def build_change_log_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__patient", patient_columns))
     conn.execute(_create_ddl("history", history_columns_with_prov))
 
+    # Every patient is created at sim_time=10.
     # p001: active record — no D event
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "p001", True, 30, "Alice", "stable"],
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "p001", 10, True, 30, 0, "Alice", "stable"],
     )
     # p002: deactivated at sim_time=50, which also has a property change at 50
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "p002", False, 50, 50, "Bob", "discharged"],
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "p002", 10, False, 50, 50, 1, "Bob", "discharged"],
     )
     # p003: deactivated record with no property-change collision
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "p003", False, 80, 80, "Carol", "inactive"],
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "p003", 10, False, 80, 80, 2, "Carol", "inactive"],
     )
 
-    # history rows for patient kind
-    # p001: name changed at 10 (normal U event)
-    conn.execute(
-        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "patient", "p001", "name", 10, "Alice", "system"],
-    )
-    # p002: status changed at 50 — same instant as deactivation (U before D)
-    conn.execute(
-        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "patient", "p002", "status", 50, "discharged", "system"],
-    )
-    # p001: status is NULL (property set to None — NULL value passthrough)
-    conn.execute(
-        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "patient", "p001", "status", 20, None, "system"],
-    )
-    # audit_event: history-only kind (no records__ table)
-    conn.execute(
-        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "audit_event", "ae001", "action", 15, "login", "audit"],
-    )
-    conn.execute(
-        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "audit_event", "ae002", "action", 35, "logout", "audit"],
-    )
+    history_rows: list[tuple[str, str, str, str, int, str | None, str]] = [
+        # p001: name changed at 10 (normal U event) — already opens at
+        # created_sim_time=10, so this row doubles as p001.name's genesis row.
+        ("trunk", "patient", "p001", "name", 10, "Alice", "system"),
+        # p002: status changed at 50 — same instant as deactivation (U before D)
+        ("trunk", "patient", "p002", "status", 50, "discharged", "system"),
+        # p001: status is NULL (property set to None — NULL value passthrough)
+        ("trunk", "patient", "p001", "status", 20, None, "system"),
+        # audit_event: history-only kind (no records__ table)
+        ("trunk", "audit_event", "ae001", "action", 15, "login", "audit"),
+        ("trunk", "audit_event", "ae002", "action", 35, "logout", "audit"),
+        # Unconditional creation-seed genesis rows (§ history, creation-seed
+        # guarantee): every history_tracked property of every record, seeded
+        # at created_sim_time=10, NULL where absent at creation.
+        ("trunk", "patient", "p001", "status", 10, None, "system"),
+        ("trunk", "patient", "p002", "name", 10, "Bob", "system"),
+        ("trunk", "patient", "p002", "status", 10, None, "system"),
+        ("trunk", "patient", "p003", "name", 10, "Carol", "system"),
+        ("trunk", "patient", "p003", "status", 10, "inactive", "system"),
+    ]
+    for row in history_rows:
+        conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?, ?)', list(row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 200}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__patient",
                 "records",
@@ -320,12 +350,11 @@ def build_change_log_emit(tmp_path: Path) -> Path:
                 "history",
                 "fixed",
                 history_columns_with_prov,
-                5,
+                len(history_rows),
             ),
         ],
-    }
-
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 200}],
+    )
     return tmp_path
 
 
@@ -343,8 +372,8 @@ def build_no_runtime_emit(tmp_path: Path) -> Path:
     conn.execute(_create_ddl("records__entity", _ENTITY_COLUMNS))
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?, ?, ?)',
-        ["trunk", "e001", True, 10, "consultant", "Dr. Smith", "surgery"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e001", 10, True, 10, 0, "consultant", "Dr. Smith", "surgery"],
     )
     conn.execute(
         'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
@@ -352,18 +381,19 @@ def build_no_runtime_emit(tmp_path: Path) -> Path:
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity", "records", _ENTITY_COLUMNS, 1, record_kind="entity"
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
         ],
-        "enum_domains": {
-            "entity": {"entity_type": ["consultant", "nurse"]},
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={
+            "enum_domains": {
+                "entity": {"entity_type": ["consultant", "nurse"]},
+            },
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path

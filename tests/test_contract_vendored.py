@@ -8,6 +8,7 @@ from pathlib import Path
 
 import jsonschema
 import pytest
+from _support.sidecar_builder import identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 
@@ -24,7 +25,7 @@ _MINIMAL_SIDECAR = {
         {
             "name": "history",
             "category": "fixed",
-            "columns": [{"name": "fork_path", "type": "VARCHAR"}],
+            "columns": [identity_column("fork_path", "VARCHAR")],
             "rows": 0,
         }
     ],

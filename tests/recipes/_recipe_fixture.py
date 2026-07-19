@@ -55,12 +55,10 @@ Time constants (nanosecond offsets from the runtime anchor 2024-01-01T00:00:00Z)
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
-
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 # One whole day in nanoseconds (sim_time unit = ns offset from runtime anchor).
 # 1*DAY → 2024-01-02, 2*DAY → 2024-01-03, 3*DAY → 2024-01-04.
@@ -71,71 +69,114 @@ DAY: int = 86_400_000_000_000
 # ---------------------------------------------------------------------------
 
 _PATIENT_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # history-tracked property — SCD-2 source
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
     # non-tracked property — type-1 source
-    {"name": "prop__name", "type": "VARCHAR"},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
     # FK to doctor kind
-    {"name": "prop__doctor_id", "type": "VARCHAR", "references": "doctor"},
+    prop_column(
+        "prop__doctor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="doctor",
+    ),
+    identity_column("ref_index__doctor_id", "BIGINT"),
     # Two references to the SAME kind (staff) — an ambiguous patient→staff
     # pathfind that an fk/lookup must disambiguate with an explicit `path` hint.
-    {"name": "prop__primary_staff_id", "type": "VARCHAR", "references": "staff"},
-    {"name": "prop__backup_staff_id", "type": "VARCHAR", "references": "staff"},
+    prop_column(
+        "prop__primary_staff_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="staff",
+    ),
+    identity_column("ref_index__primary_staff_id", "BIGINT"),
+    prop_column(
+        "prop__backup_staff_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="staff",
+    ),
+    identity_column("ref_index__backup_staff_id", "BIGINT"),
 ]
 
 _DOCTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _STAFF_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
     # Sub-type discriminator — splits the staff kind into per-type dimensions.
-    {"name": "prop__staff_type", "type": "VARCHAR"},
+    # Stays slice_only: the discriminator is exempt from the slice-only policy
+    # (is_exempt_discriminator), so this is the one column deliberately left
+    # unreclassed.
+    prop_column(
+        "prop__staff_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="slice_only",
+    ),
 ]
 
 _ADMISSION_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     # Identity + lifecycle kind with one type-1 property, no history. Its sole
     # purpose is to exercise the streaming lifecycle: an active record yields a
     # create only; a deactivated record yields a create then a delete tombstone.
-    {"name": "prop__ward", "type": "VARCHAR"},
+    prop_column(
+        "prop__ward", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _HISTORY_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
     {"name": "kind", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("record_id", "VARCHAR"),
     {"name": "property", "type": "VARCHAR"},
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
 ]
 
 _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__slot", "type": "VARCHAR"},
@@ -144,20 +185,23 @@ _MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
 ]
 
 _QUEUE_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    {"name": "prop__name", "type": "VARCHAR"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 # Queue waiters: a scalar element field (elem__priority) plus a reference field
 # (member__patient__*). Owner is a queue; member is a patient.
 _WAITERS_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
@@ -224,63 +268,76 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     # p002: created before its first history event (2*DAY); latest history at 2*DAY.
     # prop__primary_staff_id / prop__backup_staff_id both reference staff:
     #   p001 → primary s001, backup s002; p002 → primary s002, backup NULL.
+    # record_index: p001=0, p002=1 (patient); d001=0 (doctor); s001=0, s002=1
+    # (staff) — ref_index__ cells below carry the target's ordinal, NULL
+    # together with the NULL reference cell (p002's backup_staff_id).
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO "records__patient" VALUES '
+        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "p001",
             DAY,
             True,
             3 * DAY,
+            0,
             "discharged",
             "Alice",
             "d001",
+            0,
             "s001",
+            0,
             "s002",
+            1,
         ],
     )
     conn.execute(
-        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO "records__patient" VALUES '
+        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "p002",
             2 * DAY,
             True,
             2 * DAY,
+            1,
             "pending",
             "Bob",
             "d001",
+            0,
             "s002",
+            1,
+            None,
             None,
         ],
     )
 
     # One doctor record
     conn.execute(
-        'INSERT INTO "records__doctor" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "d001", 50, True, 50, "Dr. Carter"],
+        'INSERT INTO "records__doctor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "d001", 50, True, 50, 0, "Dr. Carter"],
     )
 
     # Two staff records with distinct sub-types (the discriminator-split source).
     conn.execute(
-        'INSERT INTO "records__staff" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "s001", 50, True, 50, "Nora Vega", "nurse"],
+        'INSERT INTO "records__staff" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "s001", 50, True, 50, 0, "Nora Vega", "nurse"],
     )
     conn.execute(
-        'INSERT INTO "records__staff" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "s002", 50, True, 50, "Owen Reed", "physician"],
+        'INSERT INTO "records__staff" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "s002", 50, True, 50, 1, "Owen Reed", "physician"],
     )
 
     # Two admission records (identity + lifecycle, no history):
     #   a001 active   — created@1*DAY, never deactivated → stream yields `c` only
     #   a002 closed   — created@1*DAY, deactivated@2*DAY → stream yields `c` then `d`
     conn.execute(
-        'INSERT INTO "records__admission" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", DAY, True, DAY, "north"],
+        'INSERT INTO "records__admission" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", DAY, True, DAY, 0, "north"],
     )
     conn.execute(
-        'INSERT INTO "records__admission" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a002", DAY, False, 2 * DAY, 2 * DAY, "south"],
+        'INSERT INTO "records__admission" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a002", DAY, False, 2 * DAY, 2 * DAY, 1, "south"],
     )
 
     # History rows (point-grain status changes only).
@@ -312,9 +369,10 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     )
 
     # One queue record (owner of the waiters collection), created before any join.
+    # record_index: q001=0 (queue).
     conn.execute(
-        'INSERT INTO "records__queue" VALUES (?, ?, ?, ?, NULL, ?, ?)',
-        ["trunk", "q001", 50, True, 50, "Triage"],
+        'INSERT INTO "records__queue" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "q001", 50, True, 50, 0, "Triage"],
     )
 
     # Queue waiters on owner q001 — the membership-events unpivot source:
@@ -364,86 +422,88 @@ def build_recipe_emit(dest: Path) -> None:
     row_counts = _populate_db(conn)
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
-            _table_spec(
-                "records__patient",
-                "records",
-                _PATIENT_COLUMNS,
-                row_counts["records__patient"],
-                record_kind="patient",
-            ),
-            _table_spec(
-                "records__doctor",
-                "records",
-                _DOCTOR_COLUMNS,
-                row_counts["records__doctor"],
-                record_kind="doctor",
-            ),
-            _table_spec(
-                "records__staff",
-                "records",
-                _STAFF_COLUMNS,
-                row_counts["records__staff"],
-                record_kind="staff",
-            ),
-            _table_spec(
-                "records__admission",
-                "records",
-                _ADMISSION_COLUMNS,
-                row_counts["records__admission"],
-                record_kind="admission",
-            ),
-            _table_spec(
-                "history",
-                "fixed",
-                _HISTORY_COLUMNS,
-                row_counts["history"],
-            ),
-            _table_spec(
-                "membership__patient__visits",
-                "membership",
-                _MEMBERSHIP_COLUMNS,
-                row_counts["membership__patient__visits"],
-                record_kind="patient",
-                property_name="visits",
-            ),
-            _table_spec(
-                "records__queue",
-                "records",
-                _QUEUE_COLUMNS,
-                row_counts["records__queue"],
-                record_kind="queue",
-            ),
-            _table_spec(
-                "membership__queue__waiters",
-                "membership",
-                _WAITERS_COLUMNS,
-                row_counts["membership__queue__waiters"],
-                record_kind="queue",
-                property_name="waiters",
-            ),
-        ],
-        "runtime": {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
-        },
-        "pinned_ids": {
-            "patient": {"alice": "p001"},
-        },
-        "enum_domains": {
-            "patient": {"status": ["active", "discharged", "pending"]},
-            "staff": {"staff_type": ["nurse", "physician"]},
-        },
-        "record_roles": {
-            "patient": "dimension",
-            "doctor": "dimension",
-            "staff": {"nurse": "dimension", "physician": "dimension"},
-            "admission": "fact",
-            "queue": "dimension",
-        },
-    }
+    tables: list[dict[str, object]] = [
+        _table_spec(
+            "records__patient",
+            "records",
+            _PATIENT_COLUMNS,
+            row_counts["records__patient"],
+            record_kind="patient",
+        ),
+        _table_spec(
+            "records__doctor",
+            "records",
+            _DOCTOR_COLUMNS,
+            row_counts["records__doctor"],
+            record_kind="doctor",
+        ),
+        _table_spec(
+            "records__staff",
+            "records",
+            _STAFF_COLUMNS,
+            row_counts["records__staff"],
+            record_kind="staff",
+        ),
+        _table_spec(
+            "records__admission",
+            "records",
+            _ADMISSION_COLUMNS,
+            row_counts["records__admission"],
+            record_kind="admission",
+        ),
+        _table_spec(
+            "history",
+            "fixed",
+            _HISTORY_COLUMNS,
+            row_counts["history"],
+        ),
+        _table_spec(
+            "membership__patient__visits",
+            "membership",
+            _MEMBERSHIP_COLUMNS,
+            row_counts["membership__patient__visits"],
+            record_kind="patient",
+            property_name="visits",
+        ),
+        _table_spec(
+            "records__queue",
+            "records",
+            _QUEUE_COLUMNS,
+            row_counts["records__queue"],
+            record_kind="queue",
+        ),
+        _table_spec(
+            "membership__queue__waiters",
+            "membership",
+            _WAITERS_COLUMNS,
+            row_counts["membership__queue__waiters"],
+            record_kind="queue",
+            property_name="waiters",
+        ),
+    ]
 
-    (dest / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    write_emit(
+        dest,
+        tables=tables,
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+        extra={
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+            "pinned_ids": {
+                "patient": {"alice": "p001"},
+            },
+            "enum_domains": {
+                "patient": {"status": ["active", "discharged", "pending"]},
+                "staff": {"staff_type": ["nurse", "physician"]},
+            },
+            "record_roles": {
+                "patient": "dimension",
+                "doctor": "dimension",
+                "staff": {"nurse": "dimension", "physician": "dimension"},
+                "admission": "fact",
+                "queue": "dimension",
+            },
+        },
+    )

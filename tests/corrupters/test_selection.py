@@ -27,6 +27,13 @@ from fabulexa_forge.corrupters.selection import (
     resolve_target_tables,
 )
 from fabulexa_forge.corrupters.state import WorkingTable
+from fabulexa_forge.corrupters.validate import (
+    _is_drift_eligible,
+    insert_eligible_columns,
+    is_jitter_eligible,
+    is_mutable_column,
+    is_nullable_column,
+)
 from fabulexa_forge.errors import CorruptValidationError
 from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar, TableSpec
 
@@ -715,3 +722,67 @@ def test_derive_row_weights_alignment_matches_canonical_row_order() -> None:
     )
     weights = derive_row_weights(placement, [(wt, content)], random.Random(0))
     assert weights[0] == [1.0, 9.0]
+
+
+# ---------------------------------------------------------------------------
+# Never-selectable identity columns: record_index / ref_index__<name> are
+# excluded by every eligibility predicate a corrupter operation reads
+# through -- stated and negatively tested (they were always excluded by
+# name-family construction; this section pins that down).
+# ---------------------------------------------------------------------------
+
+_IDENTITY_COLUMN_NAMES = ("record_index", "ref_index__doctor_id")
+
+
+def test_family_a_mutability_predicate_excludes_identity_columns() -> None:
+    for name in _IDENTITY_COLUMN_NAMES:
+        assert is_mutable_column(name, "records", None) is False
+
+
+def test_schema_drift_eligibility_excludes_identity_columns() -> None:
+    spec = table_spec(
+        "records__doctor",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
+            column_spec("prop__doctor_id", "VARCHAR", references="doctor"),
+            column_spec("ref_index__doctor_id", "BIGINT"),
+        ),
+        record_kind="doctor",
+    )
+    sc = sidecar((spec,))
+    columns_by_name = {col.name: col for col in spec.columns}
+    for name in _IDENTITY_COLUMN_NAMES:
+        assert _is_drift_eligible(columns_by_name[name], spec, sc) is False
+
+
+def test_nullability_predicate_excludes_identity_columns() -> None:
+    for name in _IDENTITY_COLUMN_NAMES:
+        assert is_nullable_column(name) is False
+
+
+def test_jitter_eligibility_excludes_identity_columns() -> None:
+    for name in _IDENTITY_COLUMN_NAMES:
+        assert is_jitter_eligible(column_spec(name, "BIGINT")) is False
+
+
+def test_insert_rows_resample_eligibility_excludes_identity_columns() -> None:
+    spec = table_spec(
+        "records__doctor",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
+            column_spec("prop__doctor_id", "VARCHAR", references="doctor"),
+            column_spec("ref_index__doctor_id", "BIGINT"),
+            column_spec("prop__name", "VARCHAR"),
+        ),
+        record_kind="doctor",
+    )
+    eligible = insert_eligible_columns(spec)
+    for name in _IDENTITY_COLUMN_NAMES:
+        assert name not in eligible
+    assert "prop__name" in eligible

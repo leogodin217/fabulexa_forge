@@ -13,8 +13,8 @@ This command guides the sprint planning process.
 Every sprint has a kebab-case **name** (e.g. `fork-spec`, `cli-v1`). The name is set during scope approval (Step 2) and is used as:
 
 - The directory: `docs/sprints/<sprint-name>/`
-- The future sprint branch: `sprint/<sprint-name>` (created by `/implement-sprint`)
-- The future worktree: `../worktrees/<sprint-name>` (created by `/implement-sprint`)
+- The sprint branch: `sprint/<sprint-name>` (created here, Step 10)
+- The worktree: `../worktrees/<sprint-name>` (created here, Step 10)
 
 **Validate the name before writing artifacts:**
 
@@ -36,7 +36,7 @@ The sprint commits land on a **parent branch** that is captured at create time. 
 | `main` or `master` | `<sprint-name>-work` | Auto-create the work branch and switch to it before committing the sprint dir. Tell the user. |
 | Anything else | The current branch | No action — sprint will commit there |
 
-Record the choice in `state.yaml:parent_branch`. `/implement-sprint` reads this to fork the worktree from the right base.
+Record the choice in `state.yaml:parent_branch`. Step 10 reads this to fork the worktree from the right base, and `/implement-sprint` reads it to confirm the worktree's lineage.
 
 ## Process
 
@@ -402,16 +402,94 @@ phases:
 
 ### 9. Commit the Sprint Scaffold
 
-Commit `docs/sprints/<sprint-name>/` to the parent branch. The commit must exist before `/implement-sprint` can fork the worktree (the worktree forks from `parent_branch` HEAD, which must already contain the sprint dir).
+Commit `docs/sprints/<sprint-name>/` to the parent branch. The commit must exist before Step 10 forks the worktree (the worktree forks from `parent_branch` HEAD, which must already contain the sprint dir).
+
+First capture the **baseline sha** — the parent HEAD the sprint's code builds on, read *before* this commit so it anchors real code, not the scaffold itself (a commit can never contain its own sha). Record it in `state.yaml` as `baseline_sha`, then commit:
 
 ```bash
+BASELINE_SHA=$(git rev-parse <parent>)        # parent HEAD, pre-scaffold — the code baseline
+# write into state.yaml:  baseline_sha: <BASELINE_SHA>
 git add docs/sprints/<sprint-name>/
 git commit -m "Sprint <sprint-name>: plan"
 ```
 
+`baseline_sha` is the create-time anchor: the worktree forks from the scaffold commit (whose parent is `baseline_sha`), so reproducibility tooling knows exactly what code the sprint was built on.
+
 **Do not push.** The parent branch is local until the user explicitly pushes (typically after sprint ACCEPT).
 
-### 10. Update Status
+### 10. Create and bootstrap the worktree
+
+The scaffold is now committed at `<parent>` HEAD. Fork the worktree from it here, in `/create-sprint`, so `/implement-sprint` can launch *inside* it. This is what scopes the implement session's cclsp/LSP to the worktree instead of the main checkout — a soft `cd` cannot re-root an already-running language server, so the worktree must exist before that session starts.
+
+**Collision checks** — halt on any hit; the user must clean up a prior attempt themselves (`git worktree remove --force ../worktrees/<sprint-name>`, `git branch -D sprint/<sprint-name>`):
+
+```bash
+git show-ref --quiet "refs/heads/sprint/<sprint-name>"        # branch must NOT exist
+test -e "../worktrees/<sprint-name>"                          # worktree path must NOT exist
+git worktree list | grep -q "../worktrees/<sprint-name>"      # not registered as a worktree
+```
+
+**Validate the plan against `<parent>`** — do this *before* creating the worktree, so a mis-pathed plan fails in seconds instead of after a 30–60s sync. These are pure-git lookups against `<parent>` HEAD — no checkout, no venv. For every file in every phase's Files table:
+
+```bash
+git cat-file -e "<parent>:<path>"   # exit 0 = path present at parent HEAD
+```
+
+- **Create** rows must be **absent** (`git cat-file -e` exits non-zero). A path that already exists means the verb is wrong — it's a Modify.
+- **Modify** and **migrate** `files:` rows must be **present** (exit 0). An absent path is a stale or mistyped plan entry.
+- Every `phases.<N>.demo` path must appear as a **Create** row in that phase's Files table.
+
+Any mismatch halts — fix the plan (Step 6) before continuing. Nothing has been created yet, so there is nothing to clean up.
+
+**Create the worktree:**
+
+```bash
+mkdir -p ../worktrees
+git worktree add "../worktrees/<sprint-name>" -b "sprint/<sprint-name>" "<parent>"
+```
+
+**Bootstrap the environment.** This is a standalone uv project rooted at the repo:
+
+```bash
+(cd "../worktrees/<sprint-name>" && uv sync --all-extras)
+```
+
+`--all-extras` is mandatory: the tests import packages that live behind the `[kafka]` and `[mixer]` optional-dependency extras (`confluent_kafka`, `fastapi`), and a plain `uv sync` omits them — the first gate run then fails on a `ModuleNotFoundError` that is an environment gap, not a sprint-code bug. Do not pass `--no-dev`: the `mypy (strict, src)` pre-commit hook runs `uv run mypy`, and mypy + its stub packages live in the default `dev` group. This installs the package editable into the worktree's own `.venv`, isolating the sprint's test environment from the main checkout. Expect 30–60s on first run.
+
+**Gate the parent baseline:**
+
+```bash
+(cd "../worktrees/<sprint-name>" && pre-commit run --all-files)
+```
+
+The worktree is a clean checkout of `<parent>` HEAD, so this gates the exact baseline the sprint builds on. If it fails, **halt** — `<parent>` does not pass pre-commit cleanly; phase commits could not attribute a hook failure to sprint changes, and auto-fixing hooks leave the worktree dirty. Remove the worktree and branch (commands above) and tell the user to fix `<parent>` before re-running.
+
+**Gate the baseline test suites:** run every command in `state.yaml:gates.tests`, in order, from the worktree:
+
+```bash
+cd "../worktrees/<sprint-name>"
+# for each command in gates.tests: run it; halt on the first non-zero exit
+```
+
+This is the same bar the phases are held to, run once on the clean baseline. A red baseline means later mid-sprint failures could be pre-existing parent breakage (drift, flake, env-specific) rather than sprint code — gating here makes every phase failure unambiguously the sprint's. If any gate fails, **halt** with the failing command and tell the user to fix `<parent>` before re-running (remove the worktree and branch first). Cost is a few minutes once per sprint; if a known-green parent makes it redundant, the user may skip with `--skip-baseline-tests`.
+
+### 11. Hand off to the worktree session
+
+cclsp roots at the directory Claude launches from. To get a worktree-scoped LSP — and to make a stray write or commit to the parent branch structurally impossible — `/implement-sprint` must run from a session started *inside* the worktree.
+
+Print this for the user to run in a new terminal:
+
+```bash
+cd ../worktrees/<sprint-name> && claude
+```
+
+then, inside that session:
+
+```
+/implement-sprint <sprint-name>
+```
+
+### 12. Update Status
 
 After sprint completes (post-ACCEPT):
 - Update `docs/CAPABILITIES.md` status markers for touched capabilities
@@ -443,8 +521,11 @@ After sprint completes (post-ACCEPT):
 - [ ] state.yaml has `phases.<N>.name` and `phases.<N>.demo` for every phase
 - [ ] Every `demo` path in state.yaml matches a `Create` row in the phase's Files table
 - [ ] `steps` block present only on mixed-shape or oversized phases (ordinary phases omit it); every `migrate` step defaults to `tactic: fan-out`, with `codemod` reserved for a single uniform transform; `migrate`/`author` `files` are disjoint
-- [ ] No Files table contains an architecture doc path (`architecture/*.md`, `pending/*.md`, `capabilities.md`, `sprints.md`, `README.md`, `CAPABILITIES.md`). Doc migrations ship separately (Step 10)
+- [ ] No Files table contains an architecture doc path (`architecture/*.md`, `pending/*.md`, `capabilities.md`, `sprints.md`, `README.md`, `CAPABILITIES.md`). Doc migrations ship separately (Step 12)
 - [ ] Sprint dir committed to parent branch (Step 9)
+- [ ] `state.yaml` has `baseline_sha` (parent HEAD pre-scaffold, Step 9)
+- [ ] Plan validated against `<parent>`: Create paths absent, Modify/migrate paths present, every demo path is a Create row (Step 10)
+- [ ] Worktree created at `../worktrees/<sprint-name>` on branch `sprint/<sprint-name>`, bootstrapped, and baseline-gated (Step 10)
 
 ## Code Navigation
 

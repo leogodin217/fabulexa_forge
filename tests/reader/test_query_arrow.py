@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _support.sidecar_builder import identity_column, prop_column
 
 from fabulexa_forge.reader.emit import open_emit
 from fabulexa_forge.reader.errors import RunDatabaseError
@@ -34,9 +35,19 @@ def _emit_with_data(tmp_path: Path) -> Path:
                 "category": "records",
                 "record_kind": "thing",
                 "columns": [
-                    {"name": "fork_path", "type": "VARCHAR"},
-                    {"name": "record_id", "type": "VARCHAR"},
-                    {"name": "prop__name", "type": "VARCHAR"},
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    {"name": "created_sim_time", "type": "BIGINT"},
+                    {"name": "active", "type": "BOOLEAN"},
+                    {"name": "deactivated_at", "type": "BIGINT"},
+                    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+                    identity_column("record_index", "BIGINT"),
+                    prop_column(
+                        "prop__name",
+                        "VARCHAR",
+                        history_tracked=False,
+                        temporal_class="constant",
+                    ),
                 ],
                 "rows": 1,
             },
@@ -46,7 +57,11 @@ def _emit_with_data(tmp_path: Path) -> Path:
         "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)",
         "records__thing": (
             "CREATE TABLE records__thing AS "
-            "SELECT 'trunk' AS fork_path, 'id1' AS record_id, 'alpha' AS prop__name"
+            "SELECT 'trunk' AS fork_path, 'id1' AS record_id, "
+            "0 AS created_sim_time, TRUE AS active, "
+            "CAST(NULL AS BIGINT) AS deactivated_at, "
+            "CAST(NULL AS BIGINT) AS last_mutation_sim_time, "
+            "0 AS record_index, 'alpha' AS prop__name"
         ),
     }
     return write_emit(tmp_path, sidecar=sidecar, db_tables=db_tables)

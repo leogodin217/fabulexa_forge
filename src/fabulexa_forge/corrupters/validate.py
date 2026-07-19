@@ -176,9 +176,13 @@ def is_jitter_eligible(col: "ColumnSpec") -> bool:
 
     Returns:
         True iff `col` is a `prop__*` / `elem__*` column, is not a `*_sim_time`
-        lifecycle column, and its DuckDB type is BIGINT or DOUBLE.
+        lifecycle column, is not a records reference `prop__` column (declared
+        ineligible regardless of its DuckDB type -- never a numeric-type
+        coincidence), and its DuckDB type is BIGINT or DOUBLE.
     """
     if col.name.endswith("_sim_time"):
+        return False
+    if col.name.startswith("prop__") and col.references is not None:
         return False
     if not (col.name.startswith("prop__") or col.name.startswith("elem__")):
         return False
@@ -197,9 +201,8 @@ def is_mutable_column(name: str, category: str, references: str | None) -> bool:
     Returns:
         True iff the column is a records `prop__*` with `references` unset, a
         records `presentation_id`, a membership `elem__*`, or the `value`
-        column of a fixed-category table -- at `base_format_version` 4 that is
-        exactly `history.value`, since `history` is the contract's sole
-        fixed-category table.
+        column of a fixed-category table -- that is exactly `history.value`,
+        since `history` is the contract's sole fixed-category table.
     """
     if category == "records":
         if name == "presentation_id":

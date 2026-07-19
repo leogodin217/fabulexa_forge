@@ -6,10 +6,11 @@ and virtual column behavior (lead_sim_time).
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
+from _support.notices import discard_notice_sink
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import (
     _create_ddl,
@@ -17,7 +18,6 @@ from exporters._emit_fixtures import (
     build_no_runtime_emit,
     build_test_emit,
 )
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
@@ -47,11 +47,13 @@ def _from_col(name: str, src: str) -> ColumnDecl:
 # ---------------------------------------------------------------------------
 
 _JOURNEY_INSTANCE_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__state", "type": "VARCHAR"},
 ]
 
@@ -89,14 +91,14 @@ def _build_history_interval_emit(
     conn.execute(_create_ddl("records__journey_instance", _JOURNEY_INSTANCE_COLUMNS))
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
 
-    record_rows = [("trunk", "j001", True, None, 25, "completed")]
+    record_rows = [("trunk", "j001", 5, True, None, 25, 0, "completed")]
     history_rows = [
         ("trunk", "journey_instance", "j001", "state", 5, "waiting"),
         ("trunk", "journey_instance", "j001", "state", 15, "in_progress"),
         ("trunk", "journey_instance", "j001", "state", 25, "completed"),
     ]
     if include_second_record:
-        record_rows.append(("trunk", "j002", True, None, 30, "completed"))
+        record_rows.append(("trunk", "j002", 10, True, None, 30, 1, "completed"))
         history_rows.extend(
             [
                 ("trunk", "journey_instance", "j002", "state", 10, "waiting"),
@@ -106,7 +108,7 @@ def _build_history_interval_emit(
 
     for row in record_rows:
         conn.execute(
-            'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, ?, ?)',
+            'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
             list(row),
         )
     for row in history_rows:
@@ -116,10 +118,9 @@ def _build_history_interval_emit(
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__journey_instance",
                 "records",
@@ -129,12 +130,14 @@ def _build_history_interval_emit(
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, len(history_rows)),
         ],
-        "runtime": {
-            "timezone": "UTC",
-            "start_datetime": "2024-01-01T00:00:00+00:00",
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            }
         },
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    )
     return tmp_path
 
 
@@ -159,7 +162,9 @@ def test_records_grain_all_rows(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         assert len(specs) == 1
         table = emit.query_arrow(specs[0].sql, ())
         assert table.num_rows == 2
@@ -188,7 +193,9 @@ def test_records_grain_filter_selects_discriminator_slice(tmp_path: Path) -> Non
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
         assert table.num_rows == 1
         assert table.column("name")[0].as_py() == "Dr. Smith"
@@ -214,7 +221,9 @@ def test_records_grain_filter_excludes_other_subtypes(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
         assert table.num_rows == 1
 
@@ -247,7 +256,9 @@ def test_history_point_grain_rows_by_kind_and_property(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
         # 3 history rows for journey_instance.state
         assert table.num_rows == 3
@@ -276,7 +287,9 @@ def test_history_point_grain_value_filter(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
         assert table.num_rows == 1
         assert table.column("state_val")[0].as_py() == "completed"
@@ -311,7 +324,9 @@ def test_history_interval_grain_lead_sim_time(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         assert table.num_rows == 3
@@ -346,7 +361,9 @@ def test_history_interval_lead_equals_next_sim_time(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         starts = table.column("sim_start").to_pylist()
@@ -386,7 +403,9 @@ def test_membership_grain_one_row_per_binding(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         assert table.num_rows == 1
@@ -417,7 +436,9 @@ def test_membership_grain_where_predicate(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         assert table.num_rows == 1
@@ -445,7 +466,9 @@ def test_membership_grain_where_no_match(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         assert table.num_rows == 0
@@ -476,7 +499,9 @@ def test_from_projects_record_id_and_props(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         col_names = table.schema.names
@@ -506,7 +531,9 @@ def test_correlation_projects_and_renames(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         assert "journey_id" in table.schema.names
@@ -541,7 +568,9 @@ def test_derived_timestamp_with_runtime_returns_timestamp_type(tmp_path: Path) -
                 )
             ]
         )
-        specs = build_query_specs(emit, config, anchor, None)
+        specs = build_query_specs(
+            emit, config, anchor, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         import pyarrow as pa
@@ -576,7 +605,9 @@ def test_derived_timestamp_without_runtime_returns_raw_int(tmp_path: Path) -> No
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         import pyarrow as pa
@@ -614,7 +645,9 @@ def test_derived_ordinal_deterministic(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         seq_vals = table.column("seq").to_pylist()
@@ -653,7 +686,9 @@ def test_derived_value_map_known_and_unknown(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         codes = table.column("state_code").to_pylist()
@@ -682,7 +717,9 @@ def test_null_col_produces_typed_null_column(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         import pyarrow as pa
@@ -715,8 +752,12 @@ def test_build_query_specs_deterministic_sql(tmp_path: Path) -> None:
         ]
     )
     with open_emit(emit_dir) as emit:
-        specs1 = build_query_specs(emit, config, None, None)
-        specs2 = build_query_specs(emit, config, None, None)
+        specs1 = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+        specs2 = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
         assert specs1[0].sql == specs2[0].sql
 
@@ -737,7 +778,9 @@ def test_query_spec_order_by_ends_in_record_id(tmp_path: Path) -> None:
         ]
     )
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
         sql = specs[0].sql
         # ORDER BY should appear and end with record_id
@@ -775,7 +818,9 @@ def test_history_interval_multi_interval_order_by_record_id_then_version_start(
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         table = emit.query_arrow(specs[0].sql, ())
 
         pairs = list(
@@ -793,17 +838,36 @@ def test_history_interval_multi_interval_order_by_record_id_then_version_start(
 
 # Column definitions for typed-predicate emit
 _TYPED_ENTITY_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
-    {"name": "prop__entity_type", "type": "VARCHAR"},
-    {"name": "prop__score", "type": "BIGINT"},
-    {"name": "prop__active_flag", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {
+        "name": "prop__entity_type",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__score",
+        "type": "BIGINT",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__active_flag",
+        "type": "BOOLEAN",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
 ]
 
 _TYPED_MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__role_name", "type": "VARCHAR"},
@@ -823,13 +887,13 @@ def _build_typed_predicate_emit(tmp_path: Path) -> Path:
 
     # score=100 (BIGINT), active_flag=True (BOOLEAN)
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?)',
-        ["trunk", "e001", True, "consultant", 100, True],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e001", 5, True, 5, 0, "consultant", 100, True],
     )
     # score=200, active_flag=False
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?)',
-        ["trunk", "e002", True, "nurse", 200, False],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e002", 6, True, 6, 1, "nurse", 200, False],
     )
 
     # membership rows: priority=1 for e001 (surgeon), priority=2 for e002 (nurse)
@@ -844,10 +908,9 @@ def _build_typed_predicate_emit(tmp_path: Path) -> Path:
 
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity",
                 "records",
@@ -864,8 +927,8 @@ def _build_typed_predicate_emit(tmp_path: Path) -> Path:
                 property_name="roles",
             ),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -889,7 +952,9 @@ def test_records_filter_bigint_column_selects_correctly(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         # Verify the SQL uses CAST form for the BIGINT filter
         assert "CAST('100' AS BIGINT)" in specs[0].sql
         table = emit.query_arrow(specs[0].sql, ())
@@ -919,7 +984,9 @@ def test_records_filter_boolean_column_selects_correctly(tmp_path: Path) -> None
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         # Verify the SQL uses CAST form for the BOOLEAN filter
         assert "CAST('true' AS BOOLEAN)" in specs[0].sql
         table = emit.query_arrow(specs[0].sql, ())
@@ -952,7 +1019,9 @@ def test_membership_where_bigint_column_selects_correctly(tmp_path: Path) -> Non
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         # Verify typed literal in membership where
         assert "CAST('1' AS BIGINT)" in specs[0].sql
         table = emit.query_arrow(specs[0].sql, ())
@@ -982,7 +1051,9 @@ def test_varchar_filter_predicate_stays_quoted(tmp_path: Path) -> None:
                 )
             ]
         )
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         # VARCHAR filter must NOT use CAST form
         assert "CAST('consultant'" not in specs[0].sql
         assert "'consultant'" in specs[0].sql

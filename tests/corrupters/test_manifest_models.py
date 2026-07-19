@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.corrupters.manifest import (
     DefectCounts,
     DefectManifest,
@@ -226,7 +227,9 @@ def _manifest_defect(**overrides: object) -> ManifestDefect:
 def _base_manifest_kwargs(**overrides: object) -> dict[str, object]:
     kwargs: dict[str, object] = {
         "defect_manifest_version": 1,
-        "source": DefectSource(sidecar_sha256="a" * 64, base_format_version=4),
+        "source": DefectSource(
+            sidecar_sha256="a" * 64, base_format_version=SUPPORTED_BASE_FORMAT_VERSION
+        ),
         "config_fingerprint": "b" * 64,
         "code_version": "0.0.1",
         "counts": DefectCounts(by_class={"missing_value": 1}, by_impact={"C6": 1}),

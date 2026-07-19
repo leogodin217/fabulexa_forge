@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import heapq
 from datetime import timedelta, timezone
-from typing import TYPE_CHECKING, Iterator, cast
+from typing import TYPE_CHECKING, Iterator, Sequence, cast
 
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.derivations.membership_events import (
@@ -23,6 +23,7 @@ from fabulexa_forge.derivations.row_state_events import (
     resolve_stream_columns,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.exporters.streaming.routing import (
     enumerate_topics,
     membership_route_attributes,
@@ -291,9 +292,10 @@ def _validate_kinds(
     """Run the up-front business-rule validation pass.
 
     Checks: single-branch guard, then for each kind that records__<kind>
-    resolves in the sidecar (StreamKindResolvable) and each selected property
-    that its prop__<p> column resolves (StreamPropertyResolvable). Then runs
-    the routing business rules.
+    resolves in the sidecar (StreamKindResolvable), each selected property
+    that its prop__<p> column resolves (StreamPropertyResolvable), and each
+    selected property does not resolve to a non-exempt slice_only column
+    (StreamPropertySliceOnly). Then runs the routing business rules.
 
     Args:
         emit: The open emit (reader + connection).
@@ -306,7 +308,9 @@ def _validate_kinds(
     Raises:
         ExportError: The single-branch guard fails, a kind has no
             records__<kind> table, a property has no prop__<property> column,
+            a selected property resolves to a non-exempt slice_only column,
             or a routing business rule fails.
+        TemporalClassUnavailableError: Propagated from the slice_only check.
     """
     # SingleBranch guard — raises ExportError with verbatim message
     fork_path = require_single_branch(emit.sidecar)
@@ -334,10 +338,44 @@ def _validate_kinds(
                     f" has no prop__{prop} column"
                 )
 
+        # StreamPropertySliceOnly
+        _check_stream_properties_slice_only(emit.sidecar, kind, kind_sel.properties)
+
     # Routing business rules
     _validate_routing_rules(emit, config, routing, emit.sidecar)
 
     return fork_path
+
+
+def _check_stream_properties_slice_only(
+    sidecar: "Sidecar",
+    kind: str,
+    properties: Sequence[str],
+) -> None:
+    """Enforce StreamPropertySliceOnly over one kind's selected properties.
+
+    No kinds[].properties entry may resolve to a non-exempt slice_only
+    prop__<p> column of records__<kind>. Hooked in _validate_kinds' per-kind
+    loop immediately after the existing property-resolvability check (column
+    existence already established). Refuse-only; emits nothing.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The record kind owning the selected properties.
+        properties: The selected property names (bare, prop__ stripped).
+
+    Raises:
+        ExportError: A selected property resolves to a non-exempt slice_only
+            column. Message names the kind, the property, and the class.
+        TemporalClassUnavailableError: Propagated.
+    """
+    for prop in properties:
+        column_name = f"prop__{prop}"
+        if is_non_exempt_slice_only(sidecar, kind, column_name):
+            raise ExportError(
+                f"stream kind '{kind}': property '{prop}' is temporal_class:"
+                " slice_only; it cannot ride the state-changes after-image"
+            )
 
 
 def _build_merge_key(
@@ -847,8 +885,10 @@ def iter_stream_events(
     Raises:
         ExportError: The validation pass failed — more than one branch (single-branch
             guard), an unresolvable kind or membership table, an unresolvable
-            property or field, or a routing business rule. Raised at call time,
+            property or field, a state-changes property selecting a non-exempt
+            slice_only column, or a routing business rule. Raised at call time,
             before the first next().
+        TemporalClassUnavailableError: Propagated from the slice_only check.
     """
     routing = config.routing if config.routing is not None else _default_routing()
 

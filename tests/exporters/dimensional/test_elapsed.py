@@ -16,6 +16,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
@@ -38,11 +39,12 @@ from fabulexa_forge.reader.sidecar import Sidecar
 
 _TABLE = "records__tick_decision"
 _COLUMNS = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
     {"name": "prop__journey_instance", "type": "VARCHAR"},
     {"name": "prop__decision_type", "type": "VARCHAR"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
 ]
 
 
@@ -84,6 +86,7 @@ def _build_db(tmp_path: Path, rows: list[tuple]) -> Path:
     """Create a DuckDB with tick_decision rows and return its path.
 
     Each row tuple: (fork_path, record_id, journey_instance, decision_type, sim_time)
+    record_index is minted here, populated 0..rows-1 in insertion order.
     """
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -91,11 +94,14 @@ def _build_db(tmp_path: Path, rows: list[tuple]) -> Path:
         f'CREATE TABLE "{_TABLE}" ('
         '"fork_path" VARCHAR, "record_id" VARCHAR,'
         '"prop__journey_instance" VARCHAR, "prop__decision_type" VARCHAR,'
-        '"last_mutation_sim_time" BIGINT'
+        '"last_mutation_sim_time" BIGINT, "record_index" BIGINT'
         ")"
     )
-    for row in rows:
-        conn.execute(f'INSERT INTO "{_TABLE}" VALUES (?, ?, ?, ?, ?)', list(row))
+    for record_index, row in enumerate(rows):
+        conn.execute(
+            f'INSERT INTO "{_TABLE}" VALUES (?, ?, ?, ?, ?, ?)',
+            [*row, record_index],
+        )
     conn.close()
     return db_path
 

@@ -6,12 +6,13 @@ Materialized against minimal in-process emits via the reader.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import Any
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column as _identity_column
+from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.derivations.membership_events import (
     EVENT_CLASS_JOIN,
@@ -24,7 +25,6 @@ from fabulexa_forge.errors import ExportError
 from fabulexa_forge.reader.emit import open_emit
 from fabulexa_forge.reader.errors import TableNotFoundError
 
-SUPPORTED_VERSION = 4
 FORK_PATH = "trunk"
 
 
@@ -33,8 +33,8 @@ FORK_PATH = "trunk"
 # ---------------------------------------------------------------------------
 
 _MEM_COLS_SCALAR: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "elem__priority", "type": "VARCHAR"},
@@ -42,8 +42,8 @@ _MEM_COLS_SCALAR: list[dict[str, Any]] = [
 ]
 
 _MEM_COLS_REFERENCE: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "member__ref__kind", "type": "VARCHAR"},
@@ -52,8 +52,8 @@ _MEM_COLS_REFERENCE: list[dict[str, Any]] = [
 
 # Table with both scalar and reference fields in mixed declaration order
 _MEM_COLS_MIXED: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
     {"name": "member__ref__kind", "type": "VARCHAR"},
@@ -62,8 +62,8 @@ _MEM_COLS_MIXED: list[dict[str, Any]] = [
 ]
 
 _MEM_COLS_EMPTY: list[dict[str, Any]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    _identity_column("fork_path", "VARCHAR"),
+    _identity_column("record_id", "VARCHAR"),
     {"name": "joined_sim_time", "type": "BIGINT"},
     {"name": "left_sim_time", "type": "BIGINT"},
 ]
@@ -109,7 +109,7 @@ def _build_emit(
     extra_tables: list[dict[str, Any]] | None = None,
     extra_db_ops: list[tuple[str, list[Any]]] | None = None,
 ) -> Path:
-    """Build a minimal v4 emit with one membership table."""
+    """Build a minimal emit with one membership table."""
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     table_name = f"membership__{owner_kind}__{property_name}"
@@ -141,12 +141,11 @@ def _build_emit(
     if extra_tables:
         tables.extend(extra_tables)
 
-    sidecar: dict[str, Any] = {
-        "base_format_version": SUPPORTED_VERSION,
-        "branches": [{"fork_path": FORK_PATH, "parent": None, "slice_at": 9999}],
-        "tables": tables,
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    _write_sidecar(
+        tmp_path,
+        tables=tables,
+        branches=[{"fork_path": FORK_PATH, "parent": None, "slice_at": 9999}],
+    )
     return tmp_path
 
 

@@ -56,14 +56,19 @@ def _patient_spec() -> object:
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
             column_spec("last_mutation_sim_time", "BIGINT"),
-            column_spec("prop__name", "VARCHAR", history_tracked=True),
+            column_spec(
+                "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
+            ),
             column_spec(
                 "prop__doctor_id",
                 "VARCHAR",
                 references="doctor",
                 history_tracked=True,
+                temporal_class="tracked",
             ),
+            column_spec("ref_index__doctor_id", "BIGINT"),
             column_spec("prop__untracked_doctor_id", "VARCHAR", references="doctor"),
+            column_spec("ref_index__untracked_doctor_id", "BIGINT"),
         ),
         record_kind="patient",
     )
@@ -76,6 +81,7 @@ def _doctor_spec() -> object:
         (
             column_spec("fork_path", "VARCHAR"),
             column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
             column_spec("created_sim_time", "BIGINT"),
         ),
         record_kind="doctor",
@@ -123,7 +129,10 @@ def _sidecar(*, slice_at: int = _SLICE_AT) -> Sidecar:
 def _doctors(ids: Sequence[str]) -> object:
     return working_table(
         _doctor_spec(),
-        [{"fork_path": _FORK_PATH, "record_id": d} for d in ids],
+        [
+            {"fork_path": _FORK_PATH, "record_id": d, "record_index": i}
+            for i, d in enumerate(ids)
+        ],
     )
 
 
@@ -134,8 +143,13 @@ def _doctors_with_created(entries: Sequence[tuple[str, int]]) -> object:
     return working_table(
         _doctor_spec(),
         [
-            {"fork_path": _FORK_PATH, "record_id": d, "created_sim_time": created}
-            for d, created in entries
+            {
+                "fork_path": _FORK_PATH,
+                "record_id": d,
+                "record_index": i,
+                "created_sim_time": created,
+            }
+            for i, (d, created) in enumerate(entries)
         ],
     )
 
@@ -629,6 +643,77 @@ def test_rewritten_id_resolves_in_working_target_table() -> None:
     )
     assert rewritten in donor_ids
     assert outcome.units_affected == 1
+
+
+# ---------------------------------------------------------------------------
+# Pair-scoped reference writes: a records reference prop__ cell's
+# mispoint co-points its ref_index__ sibling to the donor's record_index
+# ---------------------------------------------------------------------------
+
+
+def test_records_reference_prop_cell_copoints_ref_index_sibling() -> None:
+    """Pool excludes the current id ('d1'), leaving the sole donor 'd2' --
+    a deterministic draw regardless of seed."""
+    state = _patient_state("d1", history_rows=[], doctors=_doctors(["d1", "d2"]))
+    outcome = _apply(state, "records__patient", ["prop__doctor_id"], count=1)
+    assert outcome.units_affected == 1
+    mutated = state.tables["records__patient"].data
+    assert mutated.column("prop__doctor_id").to_pylist() == ["d2"]
+    assert mutated.column("ref_index__doctor_id").to_pylist() == [1]
+
+
+def test_constrained_records_reference_copoints_ref_index_sibling() -> None:
+    patients = working_table(
+        _patient_spec(),
+        [
+            {
+                "fork_path": _FORK_PATH,
+                "record_id": "p1",
+                "last_mutation_sim_time": 10,
+                "prop__name": "Alice",
+                "prop__doctor_id": "d1",
+                "prop__untracked_doctor_id": "d1",
+            }
+        ],
+    )
+    state = CorruptState(
+        tables={
+            "records__patient": patients,
+            "records__doctor": _doctors_with_created([("d1", 0), ("d2", 20)]),
+            "history": working_table(_history_spec(), []),
+        }
+    )
+    op = MispointReference(
+        kind="mispoint_reference",
+        target=Target(table="records__patient", columns=["prop__doctor_id"]),
+        amount=Amount(count=1),
+        constraint="created_after_reference",
+    )
+    outcome = _HANDLER.apply(
+        state, op, "rule#0", random.Random(1), _FORK_PATH, _sidecar()
+    )
+    assert outcome.units_affected == 1
+    mutated = state.tables["records__patient"].data
+    assert mutated.column("prop__doctor_id").to_pylist() == ["d2"]
+    assert mutated.column("ref_index__doctor_id").to_pylist() == [1]
+
+
+def test_membership_member_id_mispoint_has_no_sibling_write() -> None:
+    """No `ref_index__` analog on membership reference pairs -- the write
+    stays scoped to the id column, exactly as today."""
+    membership = working_table(_membership_spec(), [_membership_row("p1", id_="d1")])
+    state = CorruptState(
+        tables={
+            "membership__patient__visits": membership,
+            "records__doctor": _doctors(["d1", "d2"]),
+        }
+    )
+    outcome = _apply(
+        state, "membership__patient__visits", ["member__doctor__id"], count=1
+    )
+    assert outcome.units_affected == 1
+    mutated = state.tables["membership__patient__visits"].data
+    assert mutated.column("member__doctor__id").to_pylist() == ["d2"]
 
 
 def test_two_selected_cells_may_draw_the_same_donor_not_shrunk_by_sibling() -> None:

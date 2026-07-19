@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from _support.sidecar_builder import identity_column as _identity_column
 
 from fabulexa_forge.derivations.row_state_events import (
     EVENT_CLASS_CREATE,
@@ -66,8 +67,8 @@ class TestCreateEvents:
         emit_dir = _build_emit(
             tmp_path,
             record_rows=[
-                ("trunk", "r1", 10, True, None, 10, "a", "5"),
-                ("trunk", "r2", 20, True, None, 20, "b", "3"),
+                ("trunk", "r1", 10, True, None, 10, 0, "a", "5"),
+                ("trunk", "r2", 20, True, None, 20, 1, "b", "3"),
             ],
             history_rows=[("trunk", "item", "r1", "status", 10, "a")],
         )
@@ -81,7 +82,7 @@ class TestCreateEvents:
         """The 'c' event time equals the record's created_sim_time."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 42, True, None, 42, "a", "5")],
+            record_rows=[("trunk", "r1", 42, True, None, 42, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset())
@@ -95,7 +96,7 @@ class TestCreateEvents:
         """A record with no history rows still gets a 'c' event."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, None, "1")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, None, "1")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset())
@@ -108,7 +109,7 @@ class TestCreateEvents:
         """The 'c' after-image for a type-2 prop uses history at or before created_sim_time."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 20, "a", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 20, 0, "a", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "seed_value"),
                 ("trunk", "item", "r1", "status", 20, "update_value"),
@@ -124,7 +125,7 @@ class TestCreateEvents:
         """No 'u' event is spawned at created_sim_time; only 'c' appears there."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 20, "a", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 20, 0, "a", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "seed_value"),
                 ("trunk", "item", "r1", "status", 20, "update_value"),
@@ -149,7 +150,7 @@ class TestUpdateEvents:
         """Each distinct history sim_time after creation yields one 'u' event."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 30, "c", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 30, 0, "c", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "a"),
                 ("trunk", "item", "r1", "status", 20, "b"),
@@ -166,7 +167,7 @@ class TestUpdateEvents:
         """Type-2 prop value is the most-recent history row at or before event_sim_time."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 30, "c", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 30, 0, "c", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "alpha"),
                 ("trunk", "item", "r1", "status", 20, "beta"),
@@ -184,7 +185,7 @@ class TestUpdateEvents:
         # created_sim_time=5 but first history at 10 => create event has NULL prop__status
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 5, True, None, 10, "a", "5")],
+            record_rows=[("trunk", "r1", 5, True, None, 10, 0, "a", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "first"),
             ],
@@ -198,7 +199,7 @@ class TestUpdateEvents:
         """Type-1 (current-value) prop is carried at the record's current value on every event."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 20, "a", "42")],
+            record_rows=[("trunk", "r1", 10, True, None, 20, 0, "a", "42")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "a"),
                 ("trunk", "item", "r1", "status", 20, "b"),
@@ -215,7 +216,7 @@ class TestUpdateEvents:
         """With properties=frozenset(), no prop__ columns are in the output."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset())
@@ -235,7 +236,7 @@ class TestDeleteEvents:
         """A deactivated record emits a 'd' event at deactivated_at."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, False, 50, 50, "a", "5")],
+            record_rows=[("trunk", "r1", 10, False, 50, 50, 0, "a", "5")],
             history_rows=[("trunk", "item", "r1", "status", 10, "a")],
         )
         rows = _run(emit_dir, "item", frozenset({"status"}))
@@ -247,7 +248,7 @@ class TestDeleteEvents:
         """An active record (deactivated_at NULL) emits no 'd' event."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "5")],
             history_rows=[("trunk", "item", "r1", "status", 10, "a")],
         )
         rows = _run(emit_dir, "item", frozenset({"status"}))
@@ -258,7 +259,7 @@ class TestDeleteEvents:
         """The 'd' event's after-image columns are all NULL."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, False, 50, 50, "a", "5")],
+            record_rows=[("trunk", "r1", 10, False, 50, 50, 0, "a", "5")],
             history_rows=[("trunk", "item", "r1", "status", 10, "a")],
         )
         rows = _run(emit_dir, "item", frozenset({"status"}))
@@ -271,7 +272,7 @@ class TestDeleteEvents:
         """A 'u' at the same sim_time as 'd' orders before 'd' (event_class 1 < 2)."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, False, 50, 50, "b", "5")],
+            record_rows=[("trunk", "r1", 10, False, 50, 50, 0, "b", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "a"),
                 ("trunk", "item", "r1", "status", 50, "b"),
@@ -297,7 +298,7 @@ class TestFullLifecycle:
         """A record with history emits c, u*, d in correct order."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, False, 40, 40, "c", "5")],
+            record_rows=[("trunk", "r1", 10, False, 40, 40, 0, "c", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "a"),
                 ("trunk", "item", "r1", "status", 20, "b"),
@@ -328,8 +329,8 @@ class TestOrdering:
         emit_dir = _build_emit(
             tmp_path,
             record_rows=[
-                ("trunk", "r1", 10, True, None, 10, "a", "1"),
-                ("trunk", "r2", 10, True, None, 10, "b", "2"),
+                ("trunk", "r1", 10, True, None, 10, 0, "a", "1"),
+                ("trunk", "r2", 10, True, None, 10, 1, "b", "2"),
             ],
             history_rows=[],
         )
@@ -357,7 +358,7 @@ class TestOpRecode:
         """event_class=0 recodes to op='c'."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset())
@@ -368,7 +369,7 @@ class TestOpRecode:
         """event_class=1 recodes to op='u'."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 20, "b", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 20, 0, "b", "5")],
             history_rows=[
                 ("trunk", "item", "r1", "status", 10, "a"),
                 ("trunk", "item", "r1", "status", 20, "b"),
@@ -382,7 +383,7 @@ class TestOpRecode:
         """event_class=2 recodes to op='d'."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, False, 50, 50, "a", "5")],
+            record_rows=[("trunk", "r1", 10, False, 50, 50, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset())
@@ -402,7 +403,7 @@ class TestPresentationId:
         """A kind carrying presentation_id has it in the output after record_id."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 99, 10, True, None, 10, "a")],
+            record_rows=[("trunk", "r1", 99, 10, True, None, 10, 0, "a")],
             history_rows=[],
             record_cols=_RECORD_COLS_WITH_PID,
         )
@@ -416,7 +417,7 @@ class TestPresentationId:
         """A kind without presentation_id has no presentation_id column."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "5")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset())
@@ -427,7 +428,7 @@ class TestPresentationId:
         """BIGINT presentation_id is cast to VARCHAR in the output."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 12345, 10, True, None, 10, "a")],
+            record_rows=[("trunk", "r1", 12345, 10, True, None, 10, 0, "a")],
             history_rows=[],
             record_cols=_RECORD_COLS_WITH_PID,
         )
@@ -440,7 +441,7 @@ class TestPresentationId:
         """presentation_id is NULL on a 'd' event."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 99, 10, False, 50, 50, "a")],
+            record_rows=[("trunk", "r1", 99, 10, False, 50, 50, 0, "a")],
             history_rows=[],
             record_cols=_RECORD_COLS_WITH_PID,
         )
@@ -468,7 +469,7 @@ class TestCombinedDeleteNulling:
         # deactivated_at, last_mutation_sim_time, prop__alpha, prop__beta, prop__gamma
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 77, 10, False, 50, 30, "a2", "b0", "g1")],
+            record_rows=[("trunk", "r1", 77, 10, False, 50, 30, 0, "a2", "b0", "g1")],
             history_rows=[
                 ("trunk", "widget", "r1", "alpha", 10, "a1"),
                 ("trunk", "widget", "r1", "alpha", 30, "a2"),
@@ -536,7 +537,7 @@ class TestColumnList:
         # _RECORD_COLS has prop__status before prop__score
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "5")],
             history_rows=[("trunk", "item", "r1", "status", 10, "a")],
         )
         # Both props selected; status is tracked, score is not
@@ -548,7 +549,7 @@ class TestColumnList:
         """A prop with history_tracked=False is treated as current-value (type-1)."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "99")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "99")],
             history_rows=[],
         )
         rows = _run(emit_dir, "item", frozenset({"score"}))
@@ -561,17 +562,18 @@ class TestColumnList:
         """A prop with history_tracked=None (absent) is treated as current-value (type-1)."""
         # Build custom cols with None history_tracked
         cols_none_tracked: list[dict[str, object]] = [
-            {"name": "fork_path", "type": "VARCHAR"},
-            {"name": "record_id", "type": "VARCHAR"},
+            _identity_column("fork_path", "VARCHAR"),
+            _identity_column("record_id", "VARCHAR"),
             {"name": "created_sim_time", "type": "BIGINT"},
             {"name": "active", "type": "BOOLEAN"},
             {"name": "deactivated_at", "type": "BIGINT"},
             {"name": "last_mutation_sim_time", "type": "BIGINT"},
+            _identity_column("record_index", "BIGINT"),
             {"name": "prop__value", "type": "VARCHAR"},  # no history_tracked key
         ]
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "static_val")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "static_val")],
             history_rows=[],
             record_cols=cols_none_tracked,
         )
@@ -606,7 +608,7 @@ class TestErrors:
         """A selected property missing from the kind raises ExportError."""
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a", "5")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "5")],
             history_rows=[],
         )
         with open_emit(emit_dir) as emit:
@@ -714,7 +716,7 @@ class TestInterleavedPropAfterImageOrder:
         # Interleaved: alpha(tracked), beta(current), gamma(tracked)
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 10, True, None, 10, "a1", "b1", "g1")],
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a1", "b1", "g1")],
             history_rows=[
                 ("trunk", "widget", "r1", "alpha", 10, "a1"),
                 ("trunk", "widget", "r1", "gamma", 10, "g1"),
@@ -775,7 +777,7 @@ class TestDeepSingleRecordHistory:
         ]
         emit_dir = _build_emit(
             tmp_path,
-            record_rows=[("trunk", "r1", 1, True, None, n, str(n), "5")],
+            record_rows=[("trunk", "r1", 1, True, None, n, 0, str(n), "5")],
             history_rows=history_rows,
         )
         rows = _run(emit_dir, "item", frozenset({"status"}))
@@ -800,7 +802,7 @@ class TestDeepSingleRecordHistory:
         emit_dir = _build_emit(
             tmp_path,
             # Deactivated at t=21 (odd) — no history row there; as-of is value at 20.
-            record_rows=[("trunk", "r1", 2, False, 21, 20, "20", "5")],
+            record_rows=[("trunk", "r1", 2, False, 21, 20, 0, "20", "5")],
             history_rows=history_rows,
         )
         rows = _run(emit_dir, "item", frozenset({"status"}))

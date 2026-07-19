@@ -209,6 +209,13 @@ class SourceRenameUnresolved(ExportError):
     name a source column of that unit."""
 
 
+class SourceRenameSliceOnly(ExportError):
+    """A `source.rename` entry's `columns` key names a policy-omitted
+    `temporal_class: slice_only` column — the column carries no value to
+    deliver under this rename, so the rename is unsatisfiable rather than
+    silently ignored."""
+
+
 class SourceNameCollision(ExportError):
     """Two resolved output tables share a name, or two columns of one resolved
     output table share a name, after presentation defaults and `source.rename`
@@ -227,3 +234,15 @@ class SourceSnapshotRequiresWindows(ExportError):
     """`change_delivery='snapshot'` was combined with a full (non-windowed) export; a
     full-export snapshot degenerates to current-state-at-slice-end, which the mode
     refuses."""
+
+
+class SourceUnclassifiedColumn(ExportError):
+    """
+    A records-category column matched no records-column taxonomy role during
+    source export planning.
+
+    Raised at plan/validation time, before any output is written. Names the
+    table and column. The exporter-side counterpart of C5's recorded failure: a
+    contract column family forge does not know is an error, never a silent
+    pass-through.
+    """

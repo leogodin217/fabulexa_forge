@@ -26,3 +26,8 @@ qa/
 
 # data bundles (Should be added to release)
 docs/examples/*/bundle/
+
+# published example emits: the binary ships via release artifacts, never git
+# (finding: ship-real-producer-datasets-outside-git); the small text sidecar
+# and atlas are committed beside it
+docs/examples/*/published/run.duckdb

@@ -11,14 +11,14 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
+from _support.notices import discard_notice_sink
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
@@ -40,21 +40,35 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 _ENTITY_COLUMNS_WITH_FLAGS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    identity_column("record_index", "BIGINT"),
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
 ]
 
 _ENTITY_COLUMNS_NO_FLAGS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
     {"name": "prop__name", "type": "VARCHAR"},
     {"name": "prop__status", "type": "VARCHAR"},
 ]
@@ -93,38 +107,44 @@ def _build_records_emit(tmp_path: Path) -> Path:
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     entity_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-        {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN", "history_tracked": False},
         {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
         {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
-        {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
+        identity_column("record_index", "BIGINT"),
+        {
+            "name": "prop__name",
+            "type": "VARCHAR",
+            "history_tracked": False,
+            "temporal_class": "constant",
+        },
     ]
     conn.execute(_create_ddl("records__entity", entity_cols))
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "e001", True, 10, "Alice"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "e001", 0, True, 10, 0, "Alice"],
     )
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "e002", True, 20, "Bob"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "e002", 0, True, 20, 1, "Bob"],
     )
     conn.execute(
-        'INSERT INTO "records__entity" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "e003", True, 30, "Carol"],
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "e003", 0, True, 30, 2, "Carol"],
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity", "records", entity_cols, 3, record_kind="entity"
             )
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -142,15 +162,18 @@ def _build_history_point_emit(tmp_path: Path) -> Path:
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     entity_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
     ]
     conn.execute(_create_ddl("records__journey", entity_cols))
     conn.execute(
-        'INSERT INTO "records__journey" VALUES (?, ?, ?, ?)',
-        ["trunk", "j001", True, 30],
+        'INSERT INTO "records__journey" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "j001", 0, True, 30, 0],
     )
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     for sim_time in [5, 15, 25]:
@@ -160,17 +183,16 @@ def _build_history_point_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__journey", "records", entity_cols, 1, record_kind="journey"
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 3),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -189,8 +211,8 @@ def _build_scd2_with_valid_to_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__actor", _ENTITY_COLUMNS_WITH_FLAGS))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a001", True, None, 30, "Alice", "discharged"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a001", 0, True, None, 30, 0, "Alice", "discharged"],
     )
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     for sim_time, state in [
@@ -204,10 +226,9 @@ def _build_scd2_with_valid_to_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -217,8 +238,8 @@ def _build_scd2_with_valid_to_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 3),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -237,8 +258,8 @@ def _build_scd2_no_valid_to_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__actor", _ENTITY_COLUMNS_WITH_FLAGS))
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?)',
-        ["trunk", "a001", True, None, 20, "Alice", "treatment"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a001", 0, True, None, 20, 0, "Alice", "treatment"],
     )
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     for sim_time, state in [(10, "admitted"), (20, "treatment")]:
@@ -248,10 +269,9 @@ def _build_scd2_no_valid_to_emit(tmp_path: Path) -> Path:
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -261,8 +281,8 @@ def _build_scd2_no_valid_to_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 2),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -281,34 +301,38 @@ def _build_ordinal_emit(tmp_path: Path) -> Path:
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
     entity_cols: list[dict[str, object]] = [
-        {"name": "fork_path", "type": "VARCHAR"},
-        {"name": "record_id", "type": "VARCHAR"},
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
         {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
         {"name": "prop__name", "type": "VARCHAR"},
     ]
     conn.execute(_create_ddl("records__entity", entity_cols))
-    for rid, sim_t, name in [
-        ("e001", 10, "Alice"),
-        ("e002", 10, "Bob"),
-        ("e003", 20, "Carol"),
-    ]:
+    for idx, (rid, sim_t, name) in enumerate(
+        [
+            ("e001", 10, "Alice"),
+            ("e002", 10, "Bob"),
+            ("e003", 20, "Carol"),
+        ]
+    ):
         conn.execute(
-            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?)',
-            ["trunk", rid, True, sim_t, name],
+            'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+            ["trunk", rid, 0, True, sim_t, idx, name],
         )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__entity", "records", entity_cols, 3, record_kind="entity"
             )
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+    )
     return tmp_path
 
 
@@ -430,7 +454,9 @@ def test_full_export_all_specs_create_no_views(tmp_path: Path) -> None:
     emit_dir = _build_records_emit(tmp_path)
     config = _make_records_fact_config()
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
     assert len(specs) == 1
     spec = specs[0]
@@ -444,7 +470,9 @@ def test_full_export_scd2_no_views(tmp_path: Path) -> None:
     emit_dir = _build_scd2_with_valid_to_emit(tmp_path)
     config = _make_scd2_with_valid_to_config()
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
     assert len(specs) == 1
     spec = specs[0]
@@ -466,7 +494,9 @@ def test_records_fact_windowed_filters_half_open(tmp_path: Path) -> None:
     # window [10, 25): should include e001 (t=10) and e002 (t=20), exclude e003 (t=30)
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         assert len(specs) == 1
         spec = specs[0]
         assert spec.write_mode == "append"
@@ -486,7 +516,9 @@ def test_records_fact_row_exactly_on_end_ns_lands_in_next_window(
     # window [10, 20): e001 (t=10) included; e002 (t=20) excluded (on boundary)
     window = _make_window(start_ns=10, end_ns=20)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     ids = result.column("id").to_pylist()
@@ -500,7 +532,9 @@ def test_records_fact_row_exactly_on_end_ns_in_next_window(tmp_path: Path) -> No
     # next window [20, 30): includes e002 (t=20), excludes e003 (t=30)
     window = _make_window(start_ns=20, end_ns=30)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     ids = result.column("id").to_pylist()
@@ -545,7 +579,9 @@ def test_records_fact_windowed_timestamp_key_filters_half_open(tmp_path: Path) -
     # window [10, 25): includes e001 (t=10) and e002 (t=20), excludes e003 (t=30)
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         assert len(specs) == 1
         assert specs[0].write_mode == "append"
         result = emit.query_arrow(specs[0].sql, ())
@@ -571,8 +607,12 @@ def test_records_fact_windowed_timestamp_key_predicate_uses_raw_ns(
     window = _make_window(start_ns=10, end_ns=25)
 
     with open_emit(emit_dir) as emit:
-        full_specs = build_query_specs(emit, config, None, None)
-        windowed_specs = build_query_specs(emit, config, None, window)
+        full_specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+        windowed_specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
 
         sql = windowed_specs[0].sql
         # The inner SELECT projects the raw ns source under the key column name
@@ -624,7 +664,9 @@ def test_history_point_windowed_filters_on_sim_time(tmp_path: Path) -> None:
     # window [5, 20): includes sim_time=5 and sim_time=15, excludes sim_time=25
     window = _make_window(start_ns=5, end_ns=20)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         assert specs[0].write_mode == "append"
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -643,7 +685,9 @@ def test_type1_dim_windowed_is_replace_full_snapshot(tmp_path: Path) -> None:
     config = _make_type1_dim_config()
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         assert len(specs) == 1
         spec = specs[0]
         assert spec.write_mode == "replace"
@@ -661,8 +705,12 @@ def test_type1_dim_sql_identical_across_windows(tmp_path: Path) -> None:
     window_a = _make_window(start_ns=0, end_ns=15, index=0)
     window_b = _make_window(start_ns=15, end_ns=30, index=1)
     with open_emit(emit_dir) as emit:
-        specs_a = build_query_specs(emit, config, None, window_a)
-        specs_b = build_query_specs(emit, config, None, window_b)
+        specs_a = build_query_specs(
+            emit, config, None, window_a, notice_sink=discard_notice_sink
+        )
+        specs_b = build_query_specs(
+            emit, config, None, window_b, notice_sink=discard_notice_sink
+        )
 
     assert specs_a[0].sql == specs_b[0].sql
 
@@ -678,7 +726,9 @@ def test_scd2_with_valid_to_windowed_spec_name_is_rows(tmp_path: Path) -> None:
     config = _make_scd2_with_valid_to_config()
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
 
     assert len(specs) == 1
     spec = specs[0]
@@ -692,7 +742,9 @@ def test_scd2_with_valid_to_windowed_view_name_is_author_name(tmp_path: Path) ->
     config = _make_scd2_with_valid_to_config()
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
 
     spec = specs[0]
     assert spec.view_name == "dim_actor"
@@ -705,7 +757,9 @@ def test_scd2_with_valid_to_rows_excludes_valid_to_column(tmp_path: Path) -> Non
     config = _make_scd2_with_valid_to_config()
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     col_names = result.schema.names
@@ -722,7 +776,9 @@ def test_scd2_with_valid_to_rows_predicate_on_change_point(tmp_path: Path) -> No
     # window [10, 25): includes changes at sim_time=10 and sim_time=20; excludes 30
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     assert result.num_rows == 2
@@ -736,7 +792,9 @@ def test_scd2_with_valid_to_view_sql_contains_lead_valid_from(tmp_path: Path) ->
     config = _make_scd2_with_valid_to_config()
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
 
     spec = specs[0]
     assert spec.view_sql is not None
@@ -753,7 +811,9 @@ def test_scd2_view_sql_identity_columns_exclude_scd_window_cols(tmp_path: Path) 
     config = _make_scd2_with_valid_to_config()
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
 
     view_sql = specs[0].view_sql
     assert view_sql is not None
@@ -778,7 +838,9 @@ def test_scd2_no_valid_to_windowed_plain_name_no_view(tmp_path: Path) -> None:
     config = _make_scd2_no_valid_to_config()
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
 
     assert len(specs) == 1
     spec = specs[0]
@@ -794,7 +856,9 @@ def test_scd2_no_valid_to_windowed_has_valid_from_ns(tmp_path: Path) -> None:
     config = _make_scd2_no_valid_to_config()
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     col_names = result.schema.names
@@ -813,8 +877,12 @@ def test_windowed_values_equal_full_export_records_fact(tmp_path: Path) -> None:
     window = _make_window(start_ns=10, end_ns=25)
 
     with open_emit(emit_dir) as emit:
-        full_specs = build_query_specs(emit, config, None, None)
-        windowed_specs = build_query_specs(emit, config, None, window)
+        full_specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+        windowed_specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
 
         full_rows = emit.query_arrow(full_specs[0].sql, ()).to_pydict()
         windowed_rows = emit.query_arrow(windowed_specs[0].sql, ()).to_pydict()
@@ -863,8 +931,12 @@ def test_windowed_ordinal_matches_full_export_ordinal(tmp_path: Path) -> None:
     window = _make_window(start_ns=10, end_ns=15)
 
     with open_emit(emit_dir) as emit:
-        full_specs = build_query_specs(emit, config, None, None)
-        windowed_specs = build_query_specs(emit, config, None, window)
+        full_specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+        windowed_specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
 
         full_rows = emit.query_arrow(full_specs[0].sql, ()).to_pydict()
         windowed_rows = emit.query_arrow(windowed_specs[0].sql, ()).to_pydict()
@@ -914,7 +986,9 @@ def test_ordinal_amendment_timestamp_sibling_uses_raw_ns(tmp_path: Path) -> None
         ]
     )
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
 
     sql = specs[0].sql
     # The ordinal amendment: ORDER BY must reference the raw ns source, not admitted_at
@@ -958,7 +1032,9 @@ def test_ordinal_amendment_same_microsecond_orders_by_true_event_order(
         ]
     )
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     rows = result.to_pydict()
@@ -986,7 +1062,9 @@ def test_scd2_with_valid_to_two_versions_same_microsecond_order_deterministic(
     # Include all versions
     window = _make_window(start_ns=10, end_ns=35)
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     # Result must be ordered by record_id, then version_start (via __valid_from_ns)

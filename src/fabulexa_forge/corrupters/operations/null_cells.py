@@ -24,6 +24,7 @@ from fabulexa_forge.corrupters.operations._impact import (
     membership_partner_column,
     placement_populations,
     property_name_for_prop_column,
+    records_reference_sibling,
     resolve_pooled_populations,
     row_category_for_table,
     unit_row_weights,
@@ -192,6 +193,14 @@ class NullCellsCorrupter:
                     column
                 ).to_pylist()
             py_columns[column][physical_row] = None
+
+            sibling = records_reference_sibling(column, columns_by_name[column])
+            if sibling is not None:
+                if sibling not in py_columns:
+                    py_columns[sibling] = population.working_table.data.column(
+                        sibling
+                    ).to_pylist()
+                py_columns[sibling][physical_row] = None
 
         write_back_pooled_columns(state, populations, py_columns_by_table)
 

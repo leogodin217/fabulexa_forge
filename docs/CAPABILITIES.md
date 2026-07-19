@@ -40,7 +40,7 @@ streaming exporter (`fabulexa-forge stream` — `state-changes` `c`/`u`/`d` CDC 
 ## Overview
 
 ```
-base-layer emit (run.duckdb + base.json @ base_format_version 4)
+base-layer emit (run.duckdb + base.json @ the supported `base_format_version`)
         │
         ▼
    reader  ──▶ exporters  (base → different shape)
@@ -64,10 +64,17 @@ See [`architecture/reader.md`](architecture/reader.md) and
 - ✓ **Sidecar parse + version-gate** — typed view of `base.json`; refuse any
   `base_format_version` the vendored contract does not define (no auto-upgrade).
 - ✓ **Typed accessors** — tables, columns, branches, `runtime` anchor, `pinned_ids`,
-  `enum_domains`, per-column `references` — all read from the sidecar, never hard-coded.
-- ✓ **Conformance C1–C12** — reimplemented independently of the producer (`fabulexa-forge
+  `enum_domains`, per-column `references`, and the per-column temporal pair
+  (`history_tracked` + the `Sidecar.temporal_class` narrowing accessor — verbatim
+  carry, never inferred) — all read from the sidecar, never hard-coded.
+- ✓ **Conformance C1–C13** — reimplemented independently of the producer (`fabulexa-forge
   validate <emit_dir>`). The producer's reference conformance checker is a reference to
   read, never a dependency.
+- ✓ **Records-column taxonomy** — `records_column_role` classifies every
+  records-category column by name family (`identity` / `presentation` / `lifecycle` /
+  `payload`, or loudly *no role*); the one classifier conformance C5, the source
+  planner, and dimensional `init` read through. `ref_index_sibling` owns the
+  `prop__<name>` ↔ `ref_index__<name>` pairing rule.
 - ✓ **Record-role registry accessor** — `Sidecar.record_roles()` exposes the optional
   `record_roles` registry as a typed `RecordRoles` view (or `None` when absent),
   resolving each kind's warehouse role (`dimension` / `fact`) — `actor` per sub-type,
@@ -88,15 +95,15 @@ Each mode reads the same emit and writes a different target shape.
 - ✓ **dimensional** *(Stage 2)* — star schema. `records__<kind>` → `dim_*` (SCD-2 wide
   via `LEAD`, or Type-1 sub-type split); `history` point/interval and membership-binding
   grains → `fact_*`; typed `prop__` columns read directly (no JSON expansion); FK
-  labeled-edge pathfind (reference + membership); type-1 `lookup` record-attribute
-  enrichment (slice-value projection, gated to `history_tracked: false`).
+  labeled-edge pathfind (reference + membership); `lookup` record-attribute
+  enrichment (slice-value projection, gated to `temporal_class: constant`).
   Declarative, domain-agnostic config; CSV + DuckDB output. See
   [`architecture/dimensional.md`](architecture/dimensional.md). *Teaches: data
   warehousing, BI, star-schema design.*
 - ✓ **source** *(Stage 3)* — operational OLTP tables: every table classified into a
   change-log, reference, transaction, or junction genre from `record_roles` ×
-  `history_tracked`, with no author declaration. A tracked kind (any
-  `history_tracked` property) exports as a wide CDC table composing the
+  `temporal_class`, with no author declaration. A tracked kind (any
+  class-`tracked` property) exports as a wide CDC table composing the
   row-state-events fold — the same derivation streaming replays, landed as a table
   instead of a stream; an untracked kind exports as a reference (dimension role) or
   transaction (fact role) table, FKs not joined; a kind whose role varies by
@@ -168,6 +175,15 @@ Each mode reads the same emit and writes a different target shape.
   sidecar `runtime` anchor. CLI-wins precedence per knob; DST and ambiguous-origin
   rules fail fast. Cross-mode (one anchor per invocation); the dimensional renderer
   consumes it today. See [`architecture/anchor.md`](architecture/anchor.md).
+- ✓ **`slice_only` export policy** — export-wide: no output value, row membership,
+  linkage, or ordering derives from a `slice_only` column's value. Author-named reads
+  refused always-on (dimensional + streaming); auto-projected surfaces omit with a
+  notice (source renders, `init` proposals); `lookup` regated to
+  `temporal_class: constant`; one mechanical carve-out for the sub-typed
+  discriminator. See [`architecture/slice-only.md`](architecture/slice-only.md).
+- ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
+  through a required caller-supplied sink; CLI renders one line per notice to stderr,
+  off stdout. See [`architecture/notices.md`](architecture/notices.md).
 - ○ **Dry-run / combine** — preview without writing; compose multiple emits.
 
 ### Queue-state and point-in-time export *(Stage 5)*
@@ -193,8 +209,9 @@ these are out of reach until the contract restores multi-branch / provenance:
 
 ## Corrupters *(Stage 4)*
 
-Read base, write base. Break **semantic** conformance (C6/C7/C9–C12) while preserving
-**structural** conformance (C1–C5, C8); output stays base-shaped so any exporter can run
+Read base, write base. Break **semantic** conformance (C6/C7/C9–C12, and C13's genesis
+clause as an unlabeled side effect) while preserving **structural** conformance (C1–C5,
+C8, C13's structural clauses); output stays base-shaped so any exporter can run
 downstream of a corrupter. A `CorruptConfig` YAML envelope (sibling of `ExportConfig` /
 `StreamConfig`) declares a seed and an ordered list of operations over a shared
 selector/distribution/placement grammar; every run also writes `defects.json`, a
@@ -257,7 +274,7 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
 
 ## CLI
 
-- ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C12 against an emit.
+- ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C13 against an emit.
 - ✓ `fabulexa-forge export` *(Stage 2)* — run an export config against an emit,
   dispatching on `config.mode` to the dimensional or source engine; `--fmt csv|duckdb`
   selects delivery; `--next` / `--from` / `--to` drive incremental window-at-a-time

@@ -1,6 +1,6 @@
 """Conformance gate for the shared recipe fixture.
 
-Asserts that the fixture emit passes every conformance check C1–C12 so that
+Asserts that the fixture emit passes every conformance check C1–C13 so that
 recipe tests always run against a base layer that meets the contract.
 
 Exporters are specified to receive conformant emits; only corrupters are
@@ -20,7 +20,7 @@ from fabulexa_forge.reader.emit import open_emit
 def test_recipe_fixture_passes_all_conformance_checks(
     recipe_emit_dir: Path,
 ) -> None:
-    """The shared recipe fixture emit passes C1–C12 with no failures."""
+    """The shared recipe fixture emit passes C1–C13 with no failures."""
     with open_emit(recipe_emit_dir) as emit:
         report = validate(emit)
 

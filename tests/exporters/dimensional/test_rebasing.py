@@ -14,12 +14,13 @@ Covers:
 
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import duckdb
+from _support.notices import discard_notice_sink
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from exporters._emit_fixtures import (
     _create_ddl,
@@ -27,7 +28,6 @@ from exporters._emit_fixtures import (
     build_no_runtime_emit,
     build_test_emit,
 )
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
@@ -56,12 +56,16 @@ if TYPE_CHECKING:
 _UTC_ORIGIN = datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc)
 
 _ACTOR_SCD2_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
-    {"name": "active", "type": "BOOLEAN", "history_tracked": False},
-    {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
-    {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 _SCD2_HISTORY_COLUMNS: list[dict[str, object]] = [
@@ -95,8 +99,8 @@ def build_scd2_emit(tmp_path: Path, runtime_block: dict[str, str] | None) -> Pat
     conn.execute(_create_ddl("history", _SCD2_HISTORY_COLUMNS))
 
     conn.execute(
-        'INSERT INTO "records__actor" VALUES (?, ?, ?, NULL, ?, ?)',
-        ["trunk", "a001", True, 50_000_000_000, "active"],
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", 0, True, 50_000_000_000, 0, "active"],
     )
     conn.execute(
         'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
@@ -108,23 +112,24 @@ def build_scd2_emit(tmp_path: Path, runtime_block: dict[str, str] | None) -> Pat
     )
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [
-            {"fork_path": "trunk", "parent": None, "slice_at": 100_000_000_000}
-        ],
-        "tables": [
+    extra: dict[str, object] = {"enum_domains": {"actor": {}}}
+    if runtime_block is not None:
+        extra["runtime"] = runtime_block
+
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor", "records", _ACTOR_SCD2_COLUMNS, 1, record_kind="actor"
             ),
             _table_spec("history", "fixed", _SCD2_HISTORY_COLUMNS, 2),
         ],
-        "enum_domains": {"actor": {}},
-    }
-    if runtime_block is not None:
-        sidecar["runtime"] = runtime_block
-
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100_000_000_000}],
+        extra=extra,
+        # enum_domains.actor is deliberately {} (no domain values declared for
+        # this fixture) — the vendored schema requires a non-empty object here.
+        schema_valid=False,
+    )
     return tmp_path
 
 
@@ -212,7 +217,9 @@ def test_utc_identity_anchor_same_values(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         sidecar_runtime = emit.sidecar.runtime()
         anchor = resolve_effective_anchor(sidecar_runtime, None, None, None)
-        export_dimensional(emit, config, out_path, "duckdb", anchor)
+        export_dimensional(
+            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+        )
 
     timestamps = _query_timestamps(out_path, "dim_entity", "ts")
     assert len(timestamps) == 2
@@ -249,7 +256,9 @@ def test_dst_zone_renders_correct_offset(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         sidecar_runtime = emit.sidecar.runtime()
         anchor = resolve_effective_anchor(sidecar_runtime, None, None, None)
-        export_dimensional(emit, config, out_path, "duckdb", anchor)
+        export_dimensional(
+            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+        )
 
     valid_froms = _query_timestamps(out_path, "dim_actor", "valid_from")
     # sim_time=10_000_000_000 ns = 10s after origin = 2024-06-01T12:00:10 UTC
@@ -282,7 +291,14 @@ def test_rebase_origin_shift_moves_all_timestamps(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         sidecar_runtime = emit.sidecar.runtime()
         anchor_original = resolve_effective_anchor(sidecar_runtime, None, None, None)
-        export_dimensional(emit, config, out_original, "duckdb", anchor_original)
+        export_dimensional(
+            emit,
+            config,
+            out_original,
+            "duckdb",
+            anchor_original,
+            notice_sink=discard_notice_sink,
+        )
 
     # Rebased: 7 days later (still UTC)
     later_base = datetime(2024, 1, 8, 0, 0, 0)  # naive, 7 days later
@@ -291,7 +307,14 @@ def test_rebase_origin_shift_moves_all_timestamps(tmp_path: Path) -> None:
         anchor_rebased = resolve_effective_anchor(
             sidecar_runtime, None, later_base, "UTC"
         )
-        export_dimensional(emit, config, out_rebased, "duckdb", anchor_rebased)
+        export_dimensional(
+            emit,
+            config,
+            out_rebased,
+            "duckdb",
+            anchor_rebased,
+            notice_sink=discard_notice_sink,
+        )
 
     ts_original = _query_timestamps(out_original, "dim_entity", "ts")
     ts_rebased = _query_timestamps(out_rebased, "dim_entity", "ts")
@@ -360,7 +383,9 @@ def test_rezone_same_instant_different_wall_clock(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         sidecar_runtime = emit.sidecar.runtime()
         anchor_utc = resolve_effective_anchor(sidecar_runtime, None, None, None)
-        export_dimensional(emit, config, out_utc, "duckdb", anchor_utc)
+        export_dimensional(
+            emit, config, out_utc, "duckdb", anchor_utc, notice_sink=discard_notice_sink
+        )
 
     # Re-zone to America/New_York (no base_date override)
     with open_emit(emit_dir) as emit:
@@ -368,7 +393,9 @@ def test_rezone_same_instant_different_wall_clock(tmp_path: Path) -> None:
         anchor_ny = resolve_effective_anchor(
             sidecar_runtime, None, None, "America/New_York"
         )
-        export_dimensional(emit, config, out_ny, "duckdb", anchor_ny)
+        export_dimensional(
+            emit, config, out_ny, "duckdb", anchor_ny, notice_sink=discard_notice_sink
+        )
 
     ts_utc = _query_timestamps(out_utc, "dim_entity", "ts")
     ts_ny = _query_timestamps(out_ny, "dim_entity", "ts")
@@ -416,7 +443,14 @@ def test_scd_window_rebases_same_as_timestamp(tmp_path: Path) -> None:
     with open_emit(emit_identity) as emit:
         sidecar_runtime = emit.sidecar.runtime()
         anchor = resolve_effective_anchor(sidecar_runtime, None, None, None)
-        export_dimensional(emit, config, out_identity, "duckdb", anchor)
+        export_dimensional(
+            emit,
+            config,
+            out_identity,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+        )
 
     # Rebased 30 days later
     later_base = datetime(2024, 1, 31, 0, 0, 0)
@@ -425,7 +459,14 @@ def test_scd_window_rebases_same_as_timestamp(tmp_path: Path) -> None:
         anchor_rebased = resolve_effective_anchor(
             sidecar_runtime, None, later_base, "UTC"
         )
-        export_dimensional(emit, config, out_rebased, "duckdb", anchor_rebased)
+        export_dimensional(
+            emit,
+            config,
+            out_rebased,
+            "duckdb",
+            anchor_rebased,
+            notice_sink=discard_notice_sink,
+        )
 
     vf_identity = _query_timestamps(out_identity, "dim_actor", "valid_from")
     vf_rebased = _query_timestamps(out_rebased, "dim_actor", "valid_from")
@@ -514,7 +555,9 @@ def test_no_anchor_yields_raw_integers(tmp_path: Path) -> None:
         sidecar_runtime = emit.sidecar.runtime()
         anchor = resolve_effective_anchor(sidecar_runtime, None, None, None)
         assert anchor is None  # no runtime, no rebase → no anchor
-        export_dimensional(emit, config, out_path, "duckdb", anchor)
+        export_dimensional(
+            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+        )
 
     conn = duckdb.connect(str(out_path), read_only=True)
     rows = conn.execute('SELECT "ts" FROM "dim_entity"').fetchall()

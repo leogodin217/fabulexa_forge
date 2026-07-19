@@ -12,14 +12,14 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
+from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
@@ -45,20 +45,37 @@ from fabulexa_forge.reader.emit import open_emit
 # ---------------------------------------------------------------------------
 
 _ACTOR_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR", "history_tracked": False},
-    {"name": "record_id", "type": "VARCHAR", "history_tracked": False},
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT", "history_tracked": False},
     {"name": "active", "type": "BOOLEAN", "history_tracked": False},
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
-    {"name": "prop__actor_type", "type": "VARCHAR", "history_tracked": False},
+    identity_column("record_index", "BIGINT"),
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
+    {
+        "name": "prop__actor_type",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
 ]
 
 _HISTORY_COLUMNS: list[dict[str, object]] = [
-    {"name": "fork_path", "type": "VARCHAR"},
+    identity_column("fork_path", "VARCHAR"),
     {"name": "kind", "type": "VARCHAR"},
-    {"name": "record_id", "type": "VARCHAR"},
+    identity_column("record_id", "VARCHAR"),
     {"name": "property", "type": "VARCHAR"},
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
@@ -71,12 +88,13 @@ def _build_split_emit(tmp_path: Path) -> Path:
     conn = duckdb.connect(str(db_path))
     conn.execute(_create_ddl("records__actor", _ACTOR_COLUMNS))
     actor_rows: list[tuple[object, ...]] = [
-        ("trunk", "a001", True, None, 20, "Alice", "discharged", "patient"),
-        ("trunk", "s001", True, None, 15, "Sam", "active", "staff"),
+        ("trunk", "a001", 5, True, None, 20, 0, "Alice", "discharged", "patient"),
+        ("trunk", "s001", 5, True, None, 15, 1, "Sam", "active", "staff"),
     ]
     for row in actor_rows:
         conn.execute(
-            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', list(row)
+            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            list(row),
         )
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
     history_rows: list[tuple[object, ...]] = [
@@ -88,10 +106,9 @@ def _build_split_emit(tmp_path: Path) -> Path:
         conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(hist_row))
     conn.close()
 
-    sidecar: dict[str, object] = {
-        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
-        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        "tables": [
+    write_emit(
+        tmp_path,
+        tables=[
             _table_spec(
                 "records__actor",
                 "records",
@@ -101,8 +118,8 @@ def _build_split_emit(tmp_path: Path) -> Path:
             ),
             _table_spec("history", "fixed", _HISTORY_COLUMNS, len(history_rows)),
         ],
-    }
-    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
     return tmp_path
 
 
@@ -140,7 +157,9 @@ def test_scd2_full_export_honors_source_filter(tmp_path: Path) -> None:
         tables=[_make_scd2_decl({"prop__actor_type": "patient"})]
     )
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     rows = result.to_pydict()
@@ -156,7 +175,9 @@ def test_scd2_full_export_without_filter_keeps_all_subtypes(tmp_path: Path) -> N
     emit_dir = _build_split_emit(tmp_path)
     config = DimensionalConfig(tables=[_make_scd2_decl(None)])
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, None)
+        specs = build_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     rows = result.to_pydict()
@@ -172,7 +193,9 @@ def test_scd2_windowed_rows_honor_source_filter(tmp_path: Path) -> None:
     )
     window = Window(index=0, start_ns=0, end_ns=100, label="w0")
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         assert specs[0].table_name == "dim_patient__rows"
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -288,7 +311,7 @@ def test_scd2_unsupported_mode_rejected_via_build_query_specs(tmp_path: Path) ->
     )
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="not supported on an scd: type2 table"):
-            build_query_specs(emit, config, None, None)
+            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +339,9 @@ def test_windowed_records_fact_missing_window_key_raises(tmp_path: Path) -> None
     window = Window(index=0, start_ns=0, end_ns=100, label="w0")
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="window key 'last_mutation_sim_time'"):
-            build_query_specs(emit, config, None, window)
+            build_query_specs(
+                emit, config, None, window, notice_sink=discard_notice_sink
+            )
 
 
 def test_windowed_history_point_fact_missing_window_key_raises(
@@ -343,7 +368,9 @@ def test_windowed_history_point_fact_missing_window_key_raises(
     window = Window(index=0, start_ns=0, end_ns=100, label="w0")
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="window key 'sim_time'"):
-            build_query_specs(emit, config, None, window)
+            build_query_specs(
+                emit, config, None, window, notice_sink=discard_notice_sink
+            )
 
 
 def test_windowed_records_fact_with_window_key_passes(tmp_path: Path) -> None:
@@ -365,7 +392,9 @@ def test_windowed_records_fact_with_window_key_passes(tmp_path: Path) -> None:
     )
     window = Window(index=0, start_ns=0, end_ns=18, label="w0")
     with open_emit(emit_dir) as emit:
-        specs = build_query_specs(emit, config, None, window)
+        specs = build_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
         result = emit.query_arrow(specs[0].sql, ())
 
     # Window [0, 18): only s001 (last_mutation_sim_time=15) lands in it.
