@@ -1,0 +1,94 @@
+#!/usr/bin/env bash
+# Launch and drive claude_fabulexa sessions in detached tmux panes, so a
+# remote-controlled session can start worktree-bound runs (/implement-sprint)
+# without a local terminal. Mirrors the claude_fabulexa alias:
+#   claude --dangerously-skip-permissions --system-prompt-file .claude/fabulexa-system-prompt.md
+set -euo pipefail
+
+usage() {
+    cat >&2 <<'EOF'
+usage: remote-claude <command> [args]
+
+  launch <target> [prompt...]   start claude in a detached tmux session
+  peek   <target> [lines]       show the session's screen (default: visible pane)
+  send   <target> <text...>     type text into the session and press Enter
+  ls                            list remote-claude tmux sessions
+  kill   <target>               kill the session
+
+<target> is a sprint name (runs in ../worktrees/<name>) or 'main'
+(runs in the main checkout). Session name is claude-<target>.
+EOF
+    exit 1
+}
+
+[ $# -ge 1 ] || usage
+cmd="$1"
+shift
+
+script_dir="$(cd "$(dirname "$0")" && pwd)"
+common_git_dir="$(git -C "$script_dir" rev-parse --path-format=absolute --git-common-dir)"
+main_top="$(dirname "$common_git_dir")"
+
+resolve() {
+    target="$1"
+    session="claude-$target"
+    if [ "$target" = "main" ]; then
+        dir="$main_top"
+    else
+        dir="$main_top/../worktrees/$target"
+        if [ ! -d "$dir" ]; then
+            echo "error: worktree not found: $dir (run /create-sprint first)" >&2
+            exit 1
+        fi
+        dir="$(cd "$dir" && pwd)"
+    fi
+}
+
+case "$cmd" in
+launch)
+    [ $# -ge 1 ] || usage
+    resolve "$1"
+    shift
+    if tmux has-session -t "=$session" 2>/dev/null; then
+        echo "error: session $session already exists (peek it, or kill it first)" >&2
+        exit 1
+    fi
+    claude_bin="$(command -v claude)"
+    tmux new-session -d -s "$session" -c "$dir" -x 200 -y 50 \
+        "$claude_bin" --dangerously-skip-permissions \
+        --system-prompt-file .claude/fabulexa-system-prompt.md "$@"
+    tmux set-window-option -t "$session" remain-on-exit on
+    echo "launched $session in $dir"
+    echo "  peek: tools/remote-claude peek ${session#claude-}"
+    echo "  send: tools/remote-claude send ${session#claude-} <text>"
+    ;;
+peek)
+    [ $# -ge 1 ] || usage
+    resolve "$1"
+    if [ $# -ge 2 ]; then
+        tmux capture-pane -pt "$session" -S "-$2"
+    else
+        tmux capture-pane -pt "$session"
+    fi
+    ;;
+send)
+    [ $# -ge 2 ] || usage
+    resolve "$1"
+    shift
+    tmux send-keys -t "$session" -l -- "$*"
+    sleep 0.5
+    tmux send-keys -t "$session" Enter
+    ;;
+ls)
+    tmux list-sessions -F '#{session_name}: #{session_path}' 2>/dev/null \
+        | grep '^claude-' || echo "no remote-claude sessions"
+    ;;
+kill)
+    [ $# -ge 1 ] || usage
+    resolve "$1"
+    tmux kill-session -t "=$session"
+    ;;
+*)
+    usage
+    ;;
+esac

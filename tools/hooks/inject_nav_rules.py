@@ -56,7 +56,12 @@ NAV_RULES = (
     "through Bash. The shell is not an exemption. Genuine text search (a regex "
     "metacharacter, a quoted multi-word string, or a non-.py target) passes.\n"
     "A cclsp timeout right after the server starts means the index is warming — "
-    "retry once; it is not broken."
+    "retry once; it is not broken.\n"
+    "cclsp indexes from the session's launch directory. If a result points at a "
+    "path OUTSIDE your working directory (e.g. the main checkout while you work in "
+    "a worktree), that path is stale/wrong — re-resolve it against your working "
+    "directory before you Read or Edit, and never edit a file outside the worktree "
+    "you were given."
 )
 
 

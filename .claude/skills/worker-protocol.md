@@ -35,6 +35,12 @@ Call-hierarchy, hover, and implementation take a `line:character` — get it fro
 non-symbol text only (concepts, strings, YAML, regex). A timeout just after the
 server (re)starts means the index is warming — retry once; it is not broken.
 
+cclsp indexes from the directory the session launched in. If you are working in a
+worktree but a result points at a path **outside your cwd** (e.g. the main
+checkout while you're in `../worktrees/<sprint>`), that path is stale/wrong —
+re-resolve it against cwd before you Read or Edit. Never edit a file outside the
+worktree you were told to work in.
+
 The shell is not an exemption: `grep`/`rg` run through Bash counts as grep. A
 PreToolUse hook (`tools/hooks/grep_guard.py`) hard-blocks symbol-shaped grep/rg
 over `.py` files — bare identifiers (or `|`-alternations of them) and `def`/`class`
