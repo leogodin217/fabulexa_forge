@@ -42,6 +42,10 @@
     "record_roles": {
       "$ref": "#/$defs/record_roles",
       "description": "Record-role taxonomy keyed by kind. Present when the emit contains at least one records-category table. The 'actor' entry is an object mapping each declared actor sub-type to its warehouse role ('dimension' or 'fact'); every other kind maps to a single role string. Keys sorted lexicographically. Omitted entirely when absent."
+    },
+    "sub_type_columns": {
+      "$ref": "#/$defs/sub_type_columns",
+      "description": "Per-sub-type declared-column partition for author-declared (schemas:) kinds. Present only when at least one partitioned kind's records table survives in this emit; omitted entirely otherwise."
     }
   },
   "$defs": {
@@ -138,6 +142,24 @@
             }
           }
         ]
+      }
+    },
+    "sub_type_columns": {
+      "type": "object",
+      "description": "Nested {<kind>: {<sub_type>: [<column-name>, ...]}}. Keys at both levels sorted lexicographically. Per sub-type, the list of materialized column names (prop__<name>, plus ref_index__<name> for reference-typed properties) declared by that sub-type, in the kind's union column order. May be an empty array for a sub-type whose declared properties are all collection-struct (the key is kept, never dropped).",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "object",
+        "description": "Per-sub-type column-name list map for one kind.",
+        "minProperties": 1,
+        "additionalProperties": {
+          "type": "array",
+          "description": "Materialized column names declared for this sub-type, in the kind's union column order.",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       }
     },
     "table": {

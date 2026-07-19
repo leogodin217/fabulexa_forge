@@ -4,7 +4,7 @@ The on-disk shape of one **base-layer emit** — a standalone, self-describing d
 
 **Purpose.** Define the contract precisely enough that any producer or consumer — in any language, in any repo — can implement this format without depending on any package other than DuckDB itself.
 
-**Status.** Reference producer is the Fabulexa publishing step. The conformance procedure (C1–C13) is verified by the producer's own conformance suite and by a standalone reference checker, `check_published_conformance.py`, shipped in the producer's repository (not alongside this document).
+**Status.** Reference producer is the Fabulexa publishing step. The conformance procedure (C1–C14) is verified by the producer's own conformance suite and by a standalone reference checker, `check_published_conformance.py`, shipped in the producer's repository (not alongside this document).
 
 **Audience.** Producers (today: the Fabulexa base writer; tomorrow: any base-layer producer, in any repo or language), consumers (future exporters, corrupters, analyst tooling, third-party tools).
 
@@ -113,7 +113,7 @@ Where P is the count of *scalar* declared properties for kind *K* and R is the c
 
 **`record_index` is dense: no gaps.** For a given `(fork_path, kind)`, `record_index` values exactly cover `0 .. tables[].rows - 1` for that kind's `records__<kind>` table — every integer in range is assigned to exactly one row, none skipped, none repeated. A consumer MAY allocate an array of length `rows` and index it directly by `record_index`.
 
-**`ref_index__<name>` carries no `references` annotation of its own** — the sibling `prop__<name>` column's sidecar `references` field is authoritative for the target kind. A consumer resolves the join as `ref_index__<name>` = `records__<references>.record_index`, where `<references>` is read off that sibling `prop__<name>` column's entry — exactly as `prop__<name>` itself joins against `records__<references>.record_id`. Pair agreement (`ref_index__<name>` and its sibling `prop__<name>` are NULL together and resolve to the same target row) and resolution of `ref_index__<name>` values against `records__<references>.record_index` are producer-guaranteed by construction and not verified by C1–C13 — the same trust class as `prop__<name>` referential integrity against `records__<references>.record_id`.
+**`ref_index__<name>` carries no `references` annotation of its own** — the sibling `prop__<name>` column's sidecar `references` field is authoritative for the target kind. A consumer resolves the join as `ref_index__<name>` = `records__<references>.record_index`, where `<references>` is read off that sibling `prop__<name>` column's entry — exactly as `prop__<name>` itself joins against `records__<references>.record_id`. Pair agreement (`ref_index__<name>` and its sibling `prop__<name>` are NULL together and resolve to the same target row) and resolution of `ref_index__<name>` values against `records__<references>.record_index` are producer-guaranteed by construction and not verified by the conformance procedure — the same trust class as `prop__<name>` referential integrity against `records__<references>.record_id`.
 
 **`created_sim_time` is the record's immutable creation time.** Position 3 carries the `sim_time` at which the record was created and is set exactly once. It is unaffected by every later content event — a property write and a deactivation both leave it unchanged — and is non-NULL on every row, including write-once fact records (`history_tracked: false`). Consumers MAY use it to bound a record's lifetime from below.
 
@@ -292,6 +292,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `pinned_ids` | object | optional | Pin identity surface, nested `{<kind>: {<label>: <id-string>}}`. Present only when the run had pinned actors; omitted entirely otherwise. Each `<id-string>` is the id portion of the minted record id, equality-joinable against `records__<kind>.record_id`. See § Pin identity surface. |
 | `enum_domains` | object | optional | Closed-domain registry, nested `{<kind>: {<property>: [<option>, ...]}}`. Present only when the scenario declared at least one closed-domain string property (`status` / `category` typed property or a synthesized sub-type discriminator); omitted entirely otherwise. Keys at both nesting levels are sorted lexicographically; option lists preserve declaration order. The authoritative list of allowed values for each closed-domain string property. See § Closed-domain registry. |
 | `record_roles` | object | optional | Warehouse-role registry, nested by kind. The `actor` entry is an object `{<sub_type>: role}`; every other records-category kind maps to a single role string (`"dimension"` or `"fact"`). Present when the emit carries ≥ 1 records kind; keys sorted lexicographically at every level. See § Record roles. |
+| `sub_type_columns` | object | optional | Sub-type column partition, nested `{<kind>: {<sub_type>: [<column-name>, ...]}}` — per sub-typed kind, the value columns each declared sub-type declares. Present when the producing run carries the partition and ≥ 1 sub-typed kind has a records table in the emit; omitted entirely otherwise. Keys sorted lexicographically at both levels. The NULL-disambiguation surface for sub-typed records tables. See § Sub-type column partition. |
 | `tables` | array | yes | Tables present in `run.duckdb`, in the same order as DuckDB's catalog. |
 | `tables[].name` | string | yes | DuckDB table name. |
 | `tables[].category` | enum | yes | `"fixed"`, `"records"`, or `"membership"`. |
@@ -430,6 +431,70 @@ Adding `record_roles` is a version-compatible extension at
 `base_format_version: 6`: it is an optional top-level field a reader that does
 not recognize it ignores (unknown top-level fields MAY warn but MUST NOT fail).
 A generic exporter branches on `record_roles` with no hard-coded kind→role map.
+
+### Sub-type column partition
+
+`sub_type_columns` attributes each value column of a sub-typed kind's
+`records__<kind>` table to the sub-type(s) that declare the underlying
+property. The table materializes the **union** of all sub-types' columns, so a
+NULL cell is ambiguous on its own — structurally inapplicable to the row's
+sub-type, or applicable but unrecorded? The partition makes the distinction
+readable from the sidecar alone.
+
+The block is a nested object `{<kind>: {<sub_type>: [<column-name>, ...]}}`.
+Per sub-type, each declared property contributes:
+
+| Declared property | Contributed column names |
+|---|---|
+| Scalar (non-reference, no element schema) | `prop__<name>` |
+| Reference-typed | `prop__<name>`, `ref_index__<name>` |
+| Collection-struct (element schema) | none — materialized as a membership table, not a column |
+
+A presentation-property column is attributed to its declaring sub-type. Each
+per-sub-type list is ordered by the table's column order (`ref_index__<name>`
+immediately after its own `prop__<name>`) — a sub-type's list reads as a
+filtered view of the table's column sequence. Keys at both nesting levels are
+sorted lexicographically, matching `enum_domains` and `record_roles`.
+Properties declared by every sub-type appear in every sub-type's list; the
+lists are not disjoint.
+
+Presence and coverage:
+
+| Condition | Result |
+|---|---|
+| Producing run carries no partition | Block omitted entirely |
+| ≥ 1 sub-typed kind has a records table in the emit | Block present; one entry per sub-typed kind present as a records table |
+| Sub-typed kind with no records at the emit's slice (no table) | Kind absent from the block — mirroring `record_roles`' present-kinds behavior |
+| Per-kind sub-type keys | Every declared sub-type, never narrowed to those with surviving rows — slice-stable, like `record_roles`' actor object |
+| Sub-type whose declared properties are all collection-struct | Key present with an empty list `[]` — the partition names the sub-type; no value column is attributable to it |
+| Non-sub-typed kinds | Never appear |
+
+The block is **declared applicability — intent, not observation** (the same
+stance as `enum_domains`). The producing scenario's rules may legally write a
+union property to any row, so a non-NULL cell can appear outside the row's
+partition. The reading rule is therefore stated in terms of the declaration:
+
+| Cell state, for a row routed to sub-type *s* | Reading |
+|---|---|
+| NULL, column ∉ `sub_type_columns[K][s]` | **Structurally inapplicable.** The sub-type does not declare the property |
+| NULL, column ∈ `sub_type_columns[K][s]` | **Value-absent.** Applicable but unrecorded (optional property, or written NULL) |
+| Non-NULL, column ∈ `sub_type_columns[K][s]` | Ordinary value |
+| Non-NULL, column ∉ `sub_type_columns[K][s]` | Authoring incoherence surfaced honestly — the scenario wrote outside its own declared partition. Consumers MAY flag it; conformance does not reject it |
+
+**Discriminator carve-out.** `prop__<K>_type` is a value column by the column
+taxonomy — it carries `history_tracked` / `temporal_class` — but belongs to
+**no** sub-type's list: it is kind-wide and synthesized, declared by no
+sub-type. Every equality between "union of sub-type lists" and the table's
+value-column set excludes exactly this one column. C14 references this
+carve-out.
+
+The partition is fixed at run initialization and persisted with the run, so
+every emit derived from the same persisted run carries the same per-kind entry
+across `slice_at` choices. Adding `sub_type_columns` is a version-compatible
+extension at `base_format_version: 6`: an optional top-level field a reader
+that does not recognize it ignores (unknown top-level fields MAY warn but MUST
+NOT fail). Consumers gate on presence and fall back to union-schema behavior
+when absent.
 
 ### Column temporal semantics (`history_tracked`, `temporal_class`)
 
@@ -734,7 +799,40 @@ The structural clauses enforce the attribute pairing (§ Column temporal semanti
 
 C13 reads only `records__<kind>`, `history`, and the sidecar, so it applies **in full to every emit** — nothing in it is narrowed. Collection-struct properties emit membership tables rather than history rows and stay outside C13's input set (mirroring C6 and C11).
 
-A reference Python conformance check, `check_published_conformance.py`, ships in the producer's repository and implements C1–C13 against any `(emit_dir,)` argument. It checks exactly the format described by this document. Implementations in other languages that pass C1–C13 are equally conformant.
+### C14. Sub-type column partition consistency
+
+```
+if base.json[sub_type_columns] is absent:
+    skip                      # producer predates the field (additive)
+require: enum_domains is present         # absence is a failure, not a skip
+let partitioned_kinds = { t.record_kind for t in tables
+                          if t.category == "records"
+                          and "<t.record_kind>_type" in enum_domains[t.record_kind] }
+require: keys(sub_type_columns) == partitioned_kinds
+for each kind K in sub_type_columns:
+    require: keys(sub_type_columns[K]) == set(enum_domains[K]["<K>_type"])
+    let V = columns of records__K carrying the temporal pair, minus prop__<K>_type
+    let X = { ref_index__<n> : prop__<n> in V carries a sidecar references field }
+    require: union of sub_type_columns[K]'s lists == V ∪ X
+    for each sub-type s, each reference-typed property n:
+        require: (ref_index__<n> in sub_type_columns[K][s])
+                 iff (prop__<n> in sub_type_columns[K][s])
+```
+
+Union equality subsumes existence (a listed column that is not a real column
+fails it) and completeness (a real value column attributed to no sub-type also
+fails it). The discriminator entry `enum_domains[K]["<K>_type"]` is what
+defines the sub-typed-kind set, so a `sub_type_columns` block without
+`enum_domains` is a C14 failure, not a skip — unlike the additive-field skip,
+which fires only when `sub_type_columns` itself is absent.
+
+Presentation-property columns carry the temporal pair and appear in their
+declaring sub-type's list, so the same union equality holds on every emit with
+no special case. Non-reference `prop__` columns and presentation columns have
+no `ref_index__` companion and are outside the pair-integrity rule. C14 is
+classed with the semantic checks (C6, C7, C9–C13).
+
+A reference Python conformance check, `check_published_conformance.py`, ships in the producer's repository and implements C1–C14 against any `(emit_dir,)` argument. It checks exactly the format described by this document. Implementations in other languages that pass C1–C14 are equally conformant.
 
 ---
 
