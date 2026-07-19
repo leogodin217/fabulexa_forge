@@ -57,7 +57,12 @@ _ACTOR_COLUMNS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
     _identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
 ]
 
 
@@ -584,7 +589,12 @@ _INCR_RECORDS_COLUMNS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
     _identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
 ]
 
 _INCR_PERIOD_NS = 100
@@ -1135,7 +1145,12 @@ _SOURCE_LOCATION_COLUMNS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
     _identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
 ]
 
 

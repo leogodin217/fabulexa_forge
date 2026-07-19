@@ -8,6 +8,10 @@ Builds JOIN SQL fragments for two edge types:
                       project member__<member_field>__id whose kind = dim's
                       source kind.
 
+`check_fk_slice_only` enforces SliceOnlyColumnRefused over the traversed hop
+chain (and, for point-in-time membership FKs, the as_of column) — called from
+validate_table immediately after build_fk_expr.
+
 All functions are module-level for independent testability.
 """
 
@@ -17,7 +21,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fabulexa_forge.config.models import ColumnDecl, DimensionalConfig, TableDecl
-    from fabulexa_forge.reader.sidecar import Sidecar
+    from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar
 
 from fabulexa_forge.derivations.reference_resolution import (
     _collect_reference_columns,
@@ -28,6 +32,10 @@ from fabulexa_forge.derivations.reference_resolution import (
     get_fork_path_from_sidecar,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.slice_only import (
+    is_non_exempt_slice_only,
+    slice_only_refusal_message,
+)
 from fabulexa_forge.reader.errors import TableNotFoundError
 
 # ---------------------------------------------------------------------------
@@ -688,3 +696,138 @@ def build_fk_expr(
         target_kind=target_kind,
         sidecar=sidecar,
     )
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused over fk-traversed hops
+# ---------------------------------------------------------------------------
+
+
+def _resolve_reference_hops_for_slice_check(
+    path_hint: "list[str] | None",
+    anchor_kind: str,
+    target_kind: str,
+    sidecar: "Sidecar",
+    context_label: str,
+) -> "list[ColumnSpec]":
+    """Re-resolve a via:reference hop chain for the slice-only check.
+
+    Mirrors build_reference_fk_expr's resolution (path hint or unique
+    pathfind). Called only after build_fk_expr has already resolved and
+    built the same fk column's SQL successfully, so resolution here is
+    assumed to succeed too — no error branches.
+
+    Args:
+        path_hint: The fk's author-hinted path, or None for pathfind.
+        anchor_kind: The anchor grain's record kind.
+        target_kind: The dim's source kind.
+        sidecar: The open emit's sidecar.
+        context_label: Human-readable label for _path_hint_to_cols.
+
+    Returns:
+        The resolved hop chain.
+    """
+    if path_hint is not None:
+        return _path_hint_to_cols(path_hint, anchor_kind, sidecar, context_label)
+    ref_map = _collect_reference_columns(sidecar)
+    paths = _find_all_reference_paths(anchor_kind, target_kind, ref_map)
+    return paths[0]
+
+
+def _check_hop_chain_slice_only(
+    hops: "list[ColumnSpec]",
+    start_kind: str,
+    table_decl: "TableDecl",
+    col_decl: "ColumnDecl",
+    sidecar: "Sidecar",
+) -> None:
+    """Refuse SliceOnlyColumnRefused over a traversed reference-hop chain.
+
+    Each hop column lives on the current kind's records table; the kind
+    advances to the hop's target kind via ColumnSpec.references.
+
+    Args:
+        hops: The resolved hop chain (each a ColumnSpec on its owning kind's
+            records table).
+        start_kind: The kind owning the first hop column.
+        table_decl: The output table declaration (for error messages).
+        col_decl: The fk column declaration (for error messages).
+        sidecar: The open emit's sidecar.
+
+    Raises:
+        ExportError: A traversed hop is non-exempt slice_only.
+        TemporalClassUnavailableError: Propagated.
+    """
+    current_kind = start_kind
+    for hop_col in hops:
+        if is_non_exempt_slice_only(sidecar, current_kind, hop_col.name):
+            raise ExportError(
+                slice_only_refusal_message(
+                    table_decl.name,
+                    col_decl.name,
+                    "fk hop column",
+                    current_kind,
+                    hop_col.name,
+                )
+            )
+        hop_kind = hop_col.references
+        assert hop_kind is not None
+        current_kind = hop_kind
+
+
+def check_fk_slice_only(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    source_grain: str,
+    anchor_kind: str,
+    target_kind: str,
+    sidecar: "Sidecar",
+) -> None:
+    """Enforce SliceOnlyColumnRefused over an fk column's traversed hops.
+
+    via: reference — the resolved hop chain (path hint or unique pathfind,
+    the same helpers build_reference_fk_expr uses), each hop's kind advanced
+    via ColumnSpec.references. via: membership with as_of — the member_path
+    hop chain plus the as_of column on records__<anchor_kind>. Plain
+    membership fk consults no classed column (member/element columns are
+    classless): no-op. Called from validate_table immediately after
+    build_fk_expr, so path-resolution failures keep their existing messages.
+
+    Args:
+        col_decl: The FK column declaration.
+        table_decl: The output table declaration (for error messages).
+        source_grain: The table's grain type.
+        anchor_kind: The record kind of the grain's anchor row.
+        target_kind: The dim's source kind.
+        sidecar: The open emit's sidecar.
+
+    Raises:
+        ExportError: A traversed hop or the as_of column is non-exempt
+            slice_only.
+        TemporalClassUnavailableError: Propagated.
+    """
+    assert col_decl.fk is not None
+    fk = col_decl.fk
+    context_label = f"{table_decl.name}.{col_decl.name}"
+
+    if fk.via == "reference":
+        hops = _resolve_reference_hops_for_slice_check(
+            fk.path, anchor_kind, target_kind, sidecar, context_label
+        )
+        _check_hop_chain_slice_only(hops, anchor_kind, table_decl, col_decl, sidecar)
+        return
+
+    # via == "membership"
+    if fk.as_of is None:
+        return
+
+    assert fk.member_path is not None
+    hops = _path_hint_to_cols(fk.member_path, anchor_kind, sidecar, context_label)
+    _check_hop_chain_slice_only(hops, anchor_kind, table_decl, col_decl, sidecar)
+
+    if is_non_exempt_slice_only(sidecar, anchor_kind, fk.as_of):
+        raise ExportError(
+            slice_only_refusal_message(
+                table_decl.name, col_decl.name, "as_of column", anchor_kind, fk.as_of
+            )
+        )

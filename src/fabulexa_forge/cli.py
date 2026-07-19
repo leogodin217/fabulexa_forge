@@ -302,10 +302,11 @@ def cmd_init(emit_dir: Path, out_path: Path | None) -> int:
         Process exit code.
     """
     from fabulexa_forge.exporters.dimensional.init import generate_init_config
+    from fabulexa_forge.exporters.notices import render_notice_stderr
 
     try:
         with open_emit(emit_dir) as emit:
-            candidate = generate_init_config(emit)
+            candidate = generate_init_config(emit, render_notice_stderr)
     except (ReaderError, ExporterError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

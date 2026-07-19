@@ -44,8 +44,18 @@ _ENTITY_COLUMNS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
 ]
 
 _HISTORY_COLUMNS: list[dict[str, object]] = [

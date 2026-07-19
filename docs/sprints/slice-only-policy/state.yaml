@@ -2,7 +2,7 @@ sprint: slice-only-policy
 parent_branch: revender_for_point_in_time
 baseline_sha: 15bee787145391c0ddd724f36d7e5119fdd07420
 started: 2026-07-19
-current_phase: 2
+current_phase: 3
 capabilities:
   - exporters-shared: [notice-channel, slice-only-exemption-predicate]
   - dimensional: [slice-only-refusal, lookup-constant-regate, discriminator-notice, init-skip]
@@ -43,7 +43,7 @@ phases:
           - "tests/exporters/test_notices.py"
           - "tests/recipes/_recipe_fixture.py"
   2:
-    status: pending
+    status: complete
     name: "Dimensional refusal, lookup regate, init skip"
     demo: "docs/sprints/slice-only-policy/demos/phase_2_dimensional_refusal.py"
     steps:

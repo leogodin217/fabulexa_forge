@@ -39,8 +39,18 @@ _RECORDS_COLUMNS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__entity_type", "type": "VARCHAR", "history_tracked": False},
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__entity_type",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
 ]
 
 _PERIOD_NS = 100  # small period for incremental drip tests

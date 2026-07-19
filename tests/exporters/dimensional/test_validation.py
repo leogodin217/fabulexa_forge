@@ -11,12 +11,15 @@ from unittest.mock import MagicMock
 
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
+from _support.sidecar_builder import identity_column, prop_column
 
 from exporters._emit_fixtures import build_test_emit
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
     DimensionalConfig,
+    ElapsedSpec,
     OrdinalSpec,
     SourceDecl,
     TableDecl,
@@ -30,11 +33,14 @@ from fabulexa_forge.exporters.dimensional.validation import (
     check_ordinal_refs_siblings,
     check_projection_column_exists,
     check_scd2_needs_history,
+    check_slice_only_column_reads,
+    check_slice_only_filter_keys,
     check_source_table_exists,
     check_timestamp_source_available,
     validate_table,
 )
 from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.sidecar import Sidecar
 
 
 def _make_table_decl(
@@ -444,3 +450,380 @@ def test_validate_table_passes(tmp_path: Path) -> None:
         config = DimensionalConfig(tables=[tbl])
         src_name = validate_table(tbl, config, emit.sidecar, None, discard_notice_sink)
     assert src_name == "records__entity"
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused — shared fixtures
+#
+# check_slice_only_filter_keys / check_slice_only_column_reads / validate_table
+# consult only the sidecar, never run.duckdb, so these tests skip
+# build_test_emit/open_emit and parse a bare sidecar dict directly — mirroring
+# tests/exporters/test_slice_only.py's own helper.
+# ---------------------------------------------------------------------------
+
+
+def _bare_sidecar(
+    tables: list[dict[str, object]],
+    enum_domains: dict[str, dict[str, list[str]]] | None = None,
+) -> Sidecar:
+    """Build a minimal Sidecar (no DuckDB) for the slice_only-check unit tests."""
+    raw: dict[str, object] = {
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+        "tables": tables,
+    }
+    if enum_domains is not None:
+        raw["enum_domains"] = enum_domains
+    return Sidecar.from_raw(raw)
+
+
+_SLICE_ONLY_ACTOR_COLUMNS: list[dict[str, object]] = [
+    identity_column("record_id", "VARCHAR"),
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    prop_column(
+        "prop__tier", "VARCHAR", history_tracked=False, temporal_class="slice_only"
+    ),
+]
+
+
+def _slice_only_actor_sidecar(
+    extra_columns: list[dict[str, object]] | None = None,
+    enum_domains: dict[str, dict[str, list[str]]] | None = None,
+) -> Sidecar:
+    """Sidecar with one records__actor table carrying a slice_only prop__tier."""
+    columns = list(_SLICE_ONLY_ACTOR_COLUMNS)
+    if extra_columns:
+        columns.extend(extra_columns)
+    return _bare_sidecar(
+        [
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": columns,
+                "rows": 0,
+            }
+        ],
+        enum_domains=enum_domains,
+    )
+
+
+def _assert_slice_only_message(message: str) -> None:
+    """Assert a SliceOnlyColumnRefused message names the base column, class,
+    and slice-fact contract clause (design doc § Error-message shapes)."""
+    assert "records__actor.prop__tier" in message
+    assert "temporal_class: slice_only" in message
+    assert "known only at the emit's slice" in message
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused — from / correlation / value_map.from
+# ---------------------------------------------------------------------------
+
+
+def test_from_refuses_slice_only() -> None:
+    """from: reading a non-exempt slice_only column raises SliceOnlyColumnRefused."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(name="tier", **{"from": "prop__tier"})
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+def test_correlation_refuses_slice_only() -> None:
+    """correlation: reading a non-exempt slice_only column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(name="tier", correlation="prop__tier")
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+def test_value_map_from_refuses_slice_only() -> None:
+    """derived.value_map.from: reading a non-exempt slice_only column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(
+        name="tier",
+        derived=DerivedSpec(value_map={"from": "prop__tier", "map": {"gold": 1}}),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused — derived: timestamp
+# ---------------------------------------------------------------------------
+
+
+def test_derived_timestamp_source_refuses_slice_only() -> None:
+    """derived.timestamp.source: reading a non-exempt slice_only column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(
+        name="tier_ts",
+        derived=DerivedSpec(timestamp=TimestampSpec(source="prop__tier")),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier_ts"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused — derived: elapsed
+# ---------------------------------------------------------------------------
+
+
+def _elapsed_col(
+    correlate_on: str = "last_mutation_sim_time",
+    start_source: str = "last_mutation_sim_time",
+    end_source: str = "last_mutation_sim_time",
+    other_where: dict[str, str] | None = None,
+) -> ColumnDecl:
+    """Build a wait_minutes ColumnDecl with elapsed spec, harmless defaults."""
+    return ColumnDecl(
+        name="wait",
+        derived=DerivedSpec(
+            elapsed=ElapsedSpec(
+                correlate_on=correlate_on,
+                other_where=other_where or {},
+                start_source=start_source,
+                end_source=end_source,
+                unit="minutes",
+            )
+        ),
+    )
+
+
+def test_derived_elapsed_correlate_on_refuses_slice_only() -> None:
+    """derived.elapsed.correlate_on: a non-exempt slice_only column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = _elapsed_col(correlate_on="prop__tier")
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["wait"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+def test_derived_elapsed_start_source_refuses_slice_only() -> None:
+    """derived.elapsed.start_source: a non-exempt slice_only column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = _elapsed_col(start_source="prop__tier")
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["wait"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+def test_derived_elapsed_end_source_refuses_slice_only() -> None:
+    """derived.elapsed.end_source: a non-exempt slice_only column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = _elapsed_col(end_source="prop__tier")
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["wait"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+def test_derived_elapsed_other_where_key_refuses_slice_only() -> None:
+    """derived.elapsed.other_where key: a non-exempt slice_only column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = _elapsed_col(other_where={"prop__tier": "gold"})
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["wait"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused — records filter key
+# ---------------------------------------------------------------------------
+
+
+def test_filter_key_refuses_slice_only() -> None:
+    """A records filter key resolving to a non-exempt slice_only column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    tbl = _make_table_decl(
+        kind="actor",
+        source_kwargs={"filter": {"prop__tier": "gold"}},
+    )
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_filter_keys(tbl.source, tbl, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+# ---------------------------------------------------------------------------
+# Discriminator carve-out — exempt at any class, non-sub-typed kind refused
+# ---------------------------------------------------------------------------
+
+
+def test_exempt_discriminator_projectable_via_from() -> None:
+    """The exempt discriminator projects via `from` at any class, incl. slice_only."""
+    sidecar = _slice_only_actor_sidecar(
+        extra_columns=[
+            prop_column(
+                "prop__actor_type",
+                "VARCHAR",
+                history_tracked=False,
+                temporal_class="slice_only",
+            )
+        ],
+        enum_domains={"actor": {"actor_type": ["consultant", "nurse"]}},
+    )
+    col = ColumnDecl(name="actor_type", **{"from": "prop__actor_type"})
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["actor_type"])
+    check_slice_only_column_reads(
+        col, tbl, tbl.source, "records__actor", sidecar
+    )  # must not raise
+
+
+def test_exempt_discriminator_filterable() -> None:
+    """The exempt discriminator is filterable at any class, incl. slice_only —
+    init's classification pre-fill relies on filtering on it."""
+    sidecar = _slice_only_actor_sidecar(
+        extra_columns=[
+            prop_column(
+                "prop__actor_type",
+                "VARCHAR",
+                history_tracked=False,
+                temporal_class="slice_only",
+            )
+        ],
+        enum_domains={"actor": {"actor_type": ["consultant", "nurse"]}},
+    )
+    tbl = _make_table_decl(
+        kind="actor",
+        source_kwargs={"filter": {"prop__actor_type": "consultant"}},
+    )
+    check_slice_only_filter_keys(
+        tbl.source, tbl, "records__actor", sidecar
+    )  # must not raise
+
+
+def test_non_subtyped_kinds_discriminator_refused() -> None:
+    """A non-sub-typed kind's prop__<kind>_type marked slice_only is refused
+    like any other column — the carve-out requires subtype_values non-empty."""
+    sidecar = _slice_only_actor_sidecar(
+        extra_columns=[
+            prop_column(
+                "prop__actor_type",
+                "VARCHAR",
+                history_tracked=False,
+                temporal_class="slice_only",
+            )
+        ]
+    )  # no enum_domains -> subtype_values(actor) is empty
+    col = ColumnDecl(name="actor_type", **{"from": "prop__actor_type"})
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["actor_type"])
+    with pytest.raises(ExportError, match="temporal_class: slice_only"):
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+
+
+# ---------------------------------------------------------------------------
+# Population scoping — membership/history grain surfaces are classless
+# ---------------------------------------------------------------------------
+
+
+def _membership_and_history_sidecar() -> Sidecar:
+    """Sidecar carrying a slice_only records__actor plus a membership table and
+    a history table, so membership/history grain surfaces can be exercised
+    against a kind whose records columns are (outside their population) all
+    slice_only."""
+    membership_table = {
+        "name": "membership__actor__team",
+        "category": "membership",
+        "record_kind": "actor",
+        "property": "team",
+        "columns": [
+            identity_column("record_id", "VARCHAR"),
+            {"name": "joined_sim_time", "type": "BIGINT"},
+            {"name": "left_sim_time", "type": "BIGINT"},
+            {"name": "elem__role", "type": "VARCHAR"},
+            {"name": "member__actor__kind", "type": "VARCHAR"},
+            {"name": "member__actor__id", "type": "VARCHAR"},
+        ],
+        "rows": 0,
+    }
+    history_table = {
+        "name": "history",
+        "category": "fixed",
+        "columns": [
+            {"name": "kind", "type": "VARCHAR"},
+            {"name": "record_id", "type": "VARCHAR"},
+            {"name": "property", "type": "VARCHAR"},
+            {"name": "sim_time", "type": "BIGINT"},
+            {"name": "value", "type": "VARCHAR"},
+        ],
+        "rows": 0,
+    }
+    actor_table = {
+        "name": "records__actor",
+        "category": "records",
+        "record_kind": "actor",
+        "columns": _SLICE_ONLY_ACTOR_COLUMNS,
+        "rows": 0,
+    }
+    return _bare_sidecar([actor_table, membership_table, history_table])
+
+
+def test_membership_source_scoping_untouched_by_slice_only_records() -> None:
+    """A membership grain's source.where / member surface columns validate
+    untouched against a kind whose records columns are slice_only — grain
+    surface columns are classless, outside the population."""
+    sidecar = _membership_and_history_sidecar()
+    col = ColumnDecl(name="role", **{"from": "elem__role"})
+    tbl = TableDecl(
+        name="fact_team",
+        role="fact",
+        key=["record_id"],
+        source=SourceDecl(
+            grain="membership",
+            kind="actor",
+            property="team",
+            where={"elem__role": "surgeon"},
+        ),
+        columns=[ColumnDecl(name="record_id", **{"from": "record_id"}), col],
+    )
+    config = DimensionalConfig(tables=[tbl])
+    validate_table(tbl, config, sidecar, None, discard_notice_sink)  # must not raise
+
+
+def test_history_grain_scoping_untouched_by_slice_only_records() -> None:
+    """A history grain's source.property / value scoping validates untouched
+    against a kind whose records columns are slice_only — grain surface
+    columns are classless, outside the population."""
+    sidecar = _membership_and_history_sidecar()
+    tbl = TableDecl(
+        name="fact_state",
+        role="fact",
+        key=["record_id"],
+        source=SourceDecl(
+            grain="history_point", kind="actor", property="status", value="active"
+        ),
+        columns=[
+            ColumnDecl(name="record_id", **{"from": "record_id"}),
+            ColumnDecl(name="value", **{"from": "value"}),
+        ],
+    )
+    config = DimensionalConfig(tables=[tbl])
+    validate_table(tbl, config, sidecar, None, discard_notice_sink)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused fires on a full (window=None) compile — always-on
+# ---------------------------------------------------------------------------
+
+
+def test_validate_table_refuses_slice_only_on_full_compile() -> None:
+    """SliceOnlyColumnRefused fires on a full (window=None) validate_table
+    compile — the check is always-on, not incremental-only."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(name="tier", **{"from": "prop__tier"})
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier"])
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(ExportError) as exc_info:
+        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+    _assert_slice_only_message(str(exc_info.value))

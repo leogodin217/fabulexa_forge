@@ -42,8 +42,18 @@ _ACTOR_COLUMNS = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
 ]
 
 _JOURNEY_COLUMNS = [
@@ -54,7 +64,13 @@ _JOURNEY_COLUMNS = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    {
+        "name": "prop__actor_id",
+        "type": "VARCHAR",
+        "references": "actor",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
     identity_column("ref_index__actor_id", "BIGINT"),
 ]
 

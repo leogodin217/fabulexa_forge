@@ -47,8 +47,18 @@ _ENTITY_COLUMNS_WITH_FLAGS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
     {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    {
+        "name": "prop__name",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": True,
+        "temporal_class": "tracked",
+    },
 ]
 
 _ENTITY_COLUMNS_NO_FLAGS: list[dict[str, object]] = [
@@ -104,7 +114,12 @@ def _build_records_emit(tmp_path: Path) -> Path:
         {"name": "deactivated_at", "type": "BIGINT", "history_tracked": False},
         {"name": "last_mutation_sim_time", "type": "BIGINT", "history_tracked": False},
         identity_column("record_index", "BIGINT"),
-        {"name": "prop__name", "type": "VARCHAR", "history_tracked": False},
+        {
+            "name": "prop__name",
+            "type": "VARCHAR",
+            "history_tracked": False,
+            "temporal_class": "constant",
+        },
     ]
     conn.execute(_create_ddl("records__entity", entity_cols))
     conn.execute(

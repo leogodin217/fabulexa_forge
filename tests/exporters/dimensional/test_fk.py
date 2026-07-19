@@ -11,9 +11,10 @@ from pathlib import Path
 
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, write_emit
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DimensionalConfig,
@@ -23,7 +24,9 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.dimensional.fk import check_fk_slice_only
 from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
 # FK emit fixture helpers
@@ -37,7 +40,9 @@ _ACTOR_COLUMNS = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR"},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 _JOURNEY_COLUMNS = [
@@ -49,7 +54,13 @@ _JOURNEY_COLUMNS = [
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
     # references actor
-    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    prop_column(
+        "prop__actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
     identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
@@ -62,7 +73,13 @@ _DECISION_COLUMNS = [
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
     # references journey_instance (for multi-hop: decision→journey_instance→actor)
-    {"name": "prop__journey_id", "type": "VARCHAR", "references": "journey_instance"},
+    prop_column(
+        "prop__journey_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="journey_instance",
+    ),
     identity_column("ref_index__journey_id", "BIGINT"),
 ]
 
@@ -94,9 +111,21 @@ _JOURNEY_AMBIGUOUS_COLUMNS = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__primary_actor_id", "type": "VARCHAR", "references": "actor"},
+    prop_column(
+        "prop__primary_actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
     identity_column("ref_index__primary_actor_id", "BIGINT"),
-    {"name": "prop__secondary_actor_id", "type": "VARCHAR", "references": "actor"},
+    prop_column(
+        "prop__secondary_actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
     identity_column("ref_index__secondary_actor_id", "BIGINT"),
 ]
 
@@ -109,10 +138,22 @@ _DECISION_AMBIGUOUS_COLUMNS = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__journey_id", "type": "VARCHAR", "references": "journey_instance"},
+    prop_column(
+        "prop__journey_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="journey_instance",
+    ),
     identity_column("ref_index__journey_id", "BIGINT"),
     # direct reference to actor as well — creates two paths decision→actor
-    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    prop_column(
+        "prop__actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
     identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
@@ -934,7 +975,9 @@ _ACTOR_SURROGATE_COLUMNS = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__name", "type": "VARCHAR"},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
 ]
 
 
@@ -1257,7 +1300,13 @@ _PIT_DECISION_COLUMNS = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__journey_id", "type": "VARCHAR", "references": "journey_instance"},
+    prop_column(
+        "prop__journey_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="journey_instance",
+    ),
     identity_column("ref_index__journey_id", "BIGINT"),
 ]
 
@@ -1269,7 +1318,13 @@ _PIT_JOURNEY_COLUMNS = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    prop_column(
+        "prop__actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
     identity_column("ref_index__actor_id", "BIGINT"),
 ]
 
@@ -2018,3 +2073,278 @@ def test_two_membership_fks_on_one_table_do_not_collide(tmp_path: Path) -> None:
     assert consultant["d002"] is None
     assert nurse["d002"] == "a002"
     assert nurse["d001"] is None
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused over fk-traversed hops — unit tests on
+# check_fk_slice_only. Consults only the sidecar (never queries run.duckdb),
+# so these skip open_emit/write_emit and parse a bare sidecar dict directly —
+# mirroring tests/exporters/test_slice_only.py's own helper.
+# ---------------------------------------------------------------------------
+
+
+def _bare_sidecar(
+    tables: list[dict[str, object]],
+    enum_domains: dict[str, dict[str, list[str]]] | None = None,
+) -> Sidecar:
+    """Build a minimal Sidecar (no DuckDB) for check_fk_slice_only unit tests."""
+    raw: dict[str, object] = {
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+        "tables": tables,
+    }
+    if enum_domains is not None:
+        raw["enum_domains"] = enum_domains
+    return Sidecar.from_raw(raw)
+
+
+def _records_table(
+    name: str, kind: str, columns: list[dict[str, object]]
+) -> dict[str, object]:
+    """Build one records-category table entry for _bare_sidecar."""
+    return {
+        "name": name,
+        "category": "records",
+        "record_kind": kind,
+        "columns": columns,
+        "rows": 0,
+    }
+
+
+def _reference_hop_sidecar(hop_column: dict[str, object]) -> Sidecar:
+    """Sidecar with journey_instance.<hop_column> -> actor, plus a bare actor table."""
+    return _bare_sidecar(
+        [
+            _records_table(
+                "records__journey_instance",
+                "journey_instance",
+                [identity_column("record_id", "VARCHAR"), hop_column],
+            ),
+            _records_table(
+                "records__actor", "actor", [identity_column("record_id", "VARCHAR")]
+            ),
+        ]
+    )
+
+
+_SLICE_ONLY_HOP_COLUMN = prop_column(
+    "prop__actor_id",
+    "VARCHAR",
+    history_tracked=False,
+    temporal_class="slice_only",
+    references="actor",
+)
+
+
+def test_fk_reference_hop_path_hint_refuses_slice_only() -> None:
+    """fk via:reference with an author-hinted path: a slice_only hop is refused."""
+    sidecar = _reference_hop_sidecar(_SLICE_ONLY_HOP_COLUMN)
+    tbl = _fact(
+        "fact_journey",
+        "records",
+        "journey_instance",
+        [
+            _from_col("record_id", "record_id"),
+            _fk_col("actor_id", "dim_actor", "reference", path=["prop__actor_id"]),
+        ],
+    )
+    col = tbl.columns[1]
+    with pytest.raises(ExportError, match="temporal_class: slice_only"):
+        check_fk_slice_only(
+            col_decl=col,
+            table_decl=tbl,
+            source_grain="records",
+            anchor_kind="journey_instance",
+            target_kind="actor",
+            sidecar=sidecar,
+        )
+
+
+def test_fk_reference_hop_pathfound_refuses_slice_only() -> None:
+    """fk via:reference with pathfind (no path hint): a slice_only hop is refused."""
+    sidecar = _reference_hop_sidecar(_SLICE_ONLY_HOP_COLUMN)
+    tbl = _fact(
+        "fact_journey",
+        "records",
+        "journey_instance",
+        [
+            _from_col("record_id", "record_id"),
+            _fk_col("actor_id", "dim_actor", "reference"),
+        ],
+    )
+    col = tbl.columns[1]
+    with pytest.raises(ExportError, match="temporal_class: slice_only"):
+        check_fk_slice_only(
+            col_decl=col,
+            table_decl=tbl,
+            source_grain="records",
+            anchor_kind="journey_instance",
+            target_kind="actor",
+            sidecar=sidecar,
+        )
+
+
+def test_fk_reference_hop_exempt_discriminator_passes() -> None:
+    """A reference hop landing on the exempt discriminator passes at any class.
+
+    The carve-out is mechanical and identical on every surface: even a hop
+    column shaped as the owning kind's discriminator (prop__<kind>_type) with
+    a non-empty subtype_values is exempt regardless of its declared class.
+    """
+    sidecar = _bare_sidecar(
+        [
+            _records_table(
+                "records__journey_instance",
+                "journey_instance",
+                [
+                    identity_column("record_id", "VARCHAR"),
+                    prop_column(
+                        "prop__journey_instance_type",
+                        "VARCHAR",
+                        history_tracked=False,
+                        temporal_class="slice_only",
+                        references="actor",
+                    ),
+                ],
+            ),
+            _records_table(
+                "records__actor", "actor", [identity_column("record_id", "VARCHAR")]
+            ),
+        ],
+        enum_domains={"journey_instance": {"journey_instance_type": ["a", "b"]}},
+    )
+    tbl = _fact(
+        "fact_journey",
+        "records",
+        "journey_instance",
+        [
+            _from_col("record_id", "record_id"),
+            _fk_col(
+                "actor_id",
+                "dim_actor",
+                "reference",
+                path=["prop__journey_instance_type"],
+            ),
+        ],
+    )
+    col = tbl.columns[1]
+    check_fk_slice_only(
+        col_decl=col,
+        table_decl=tbl,
+        source_grain="records",
+        anchor_kind="journey_instance",
+        target_kind="actor",
+        sidecar=sidecar,
+    )  # must not raise
+
+
+def test_fk_membership_member_path_hop_refuses_slice_only() -> None:
+    """fk via:membership: a slice_only member_path-traversed hop is refused."""
+    sidecar = _bare_sidecar(
+        [
+            _records_table(
+                "records__decision",
+                "decision",
+                [
+                    identity_column("record_id", "VARCHAR"),
+                    prop_column(
+                        "prop__journey_id",
+                        "VARCHAR",
+                        history_tracked=False,
+                        temporal_class="slice_only",
+                        references="journey_instance",
+                    ),
+                ],
+            ),
+            _records_table(
+                "records__journey_instance",
+                "journey_instance",
+                [identity_column("record_id", "VARCHAR")],
+            ),
+        ]
+    )
+    col = ColumnDecl(
+        name="owner_id",
+        fk=FkClause(
+            to="dim_owner",
+            via="membership",
+            property="holders",
+            member_field="actor",
+            as_of="last_mutation_sim_time",
+            member_path=["prop__journey_id"],
+        ),
+    )
+    tbl = _fact(
+        "fact_decision",
+        "records",
+        "decision",
+        [_from_col("record_id", "record_id"), col],
+    )
+    with pytest.raises(ExportError, match="temporal_class: slice_only"):
+        check_fk_slice_only(
+            col_decl=col,
+            table_decl=tbl,
+            source_grain="records",
+            anchor_kind="decision",
+            target_kind="owner",
+            sidecar=sidecar,
+        )
+
+
+def test_fk_membership_as_of_column_refuses_slice_only() -> None:
+    """fk via:membership point-in-time: a slice_only as_of column is refused."""
+    sidecar = _bare_sidecar(
+        [
+            _records_table(
+                "records__decision",
+                "decision",
+                [
+                    identity_column("record_id", "VARCHAR"),
+                    prop_column(
+                        "prop__journey_id",
+                        "VARCHAR",
+                        history_tracked=False,
+                        temporal_class="constant",
+                        references="journey_instance",
+                    ),
+                    prop_column(
+                        "prop__fired_at",
+                        "BIGINT",
+                        history_tracked=False,
+                        temporal_class="slice_only",
+                    ),
+                ],
+            ),
+            _records_table(
+                "records__journey_instance",
+                "journey_instance",
+                [identity_column("record_id", "VARCHAR")],
+            ),
+        ]
+    )
+    col = ColumnDecl(
+        name="owner_id",
+        fk=FkClause(
+            to="dim_owner",
+            via="membership",
+            property="holders",
+            member_field="actor",
+            as_of="prop__fired_at",
+            member_path=["prop__journey_id"],
+        ),
+    )
+    tbl = _fact(
+        "fact_decision",
+        "records",
+        "decision",
+        [_from_col("record_id", "record_id"), col],
+    )
+    with pytest.raises(ExportError, match="temporal_class: slice_only"):
+        check_fk_slice_only(
+            col_decl=col,
+            table_decl=tbl,
+            source_grain="records",
+            anchor_kind="decision",
+            target_kind="owner",
+            sidecar=sidecar,
+        )

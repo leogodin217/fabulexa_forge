@@ -25,6 +25,7 @@ from fabulexa_forge.derivations.reference_resolution import (
     get_fork_path_from_sidecar,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.slice_only import is_exempt_discriminator
 
 
 def build_lookup_expr(
@@ -153,6 +154,44 @@ def _resolve_lookup_hops(
     return paths[0]
 
 
+def _check_lookup_column_constant(
+    sidecar: "Sidecar",
+    kind: str,
+    column_name: str,
+    role_label: str,
+    table_decl: "TableDecl",
+    col_decl: "ColumnDecl",
+) -> None:
+    """Refuse LookupColumnSafety's class clause for one consulted column.
+
+    The exempt discriminator passes at any class (a classification read, per
+    the carve-out) — no class read. Every other consulted column must be
+    temporal_class: constant.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The records-category kind owning the column.
+        column_name: The column name (prop__ prefix included).
+        role_label: "terminal property" or "traversed hop column" (the error
+            message's role phrase).
+        table_decl: The output table declaration (for error messages).
+        col_decl: The lookup column declaration (for error messages).
+
+    Raises:
+        ExportError: The column's temporal_class is not constant.
+        TemporalClassUnavailableError: Propagated.
+    """
+    if is_exempt_discriminator(sidecar, kind, column_name):
+        return
+    cls = sidecar.temporal_class(f"records__{kind}", column_name)
+    if cls != "constant":
+        raise ExportError(
+            f"lookup column '{table_decl.name}.{col_decl.name}':"
+            f" {role_label} '{column_name}' on kind '{kind}'"
+            f" is temporal_class: {cls}; only constant columns are allowed"
+        )
+
+
 def check_lookup_temporal_safety(
     col_decl: "ColumnDecl",
     table_decl: "TableDecl",
@@ -160,13 +199,17 @@ def check_lookup_temporal_safety(
     source_grain: str,
     sidecar: "Sidecar",
 ) -> None:
-    """Business rule: a lookup reads only type-1 columns and resolves cleanly.
+    """Business rule: a lookup reads only temporally constant columns and resolves
+    cleanly.
 
     Resolves the terminal kind and the reference path, then verifies: (0) the table is
     not `scd: type2` (the SCD-2 wide builder does not project lookup columns); (1) the
     grain is not `records` for a zero-hop self lookup; (2) the terminal records table
-    and its prop__<property> column exist; (3) the emit carries history_tracked; (4) the
-    terminal property and every traversed hop column are history_tracked: false.
+    and its prop__<property> column exist; (3) the terminal property and every
+    traversed hop column resolve through Sidecar.temporal_class and are
+    temporal_class: constant — the exempt discriminator passes at any class, per
+    consulted column, no terminal-vs-hop special case (this deliberately admits a
+    `tracked` discriminator terminal the old history_tracked keying refused).
 
     Args:
         col_decl: The column declaration (lookup mode set).
@@ -178,9 +221,11 @@ def check_lookup_temporal_safety(
     Raises:
         ExportError: the table is `scd: type2`; a zero-hop self lookup on a `records`
             grain (redundant with `from`); the terminal records table or
-            prop__<property> is absent; the emit lacks the history_tracked flag; the
-            reference path is unresolvable or ambiguous; or the terminal property or any
-            traversed hop column is history_tracked: true (type-2).
+            prop__<property> is absent; the reference path is unresolvable or
+            ambiguous; or the terminal property or any traversed hop column is
+            non-exempt and not temporal_class: constant.
+        TemporalClassUnavailableError: Propagated — a consulted column's temporal
+            pair is unavailable (non-conformant emit).
     """
     assert col_decl.lookup is not None
     lookup = col_decl.lookup
@@ -220,15 +265,7 @@ def check_lookup_temporal_safety(
             f" property '{property_col}' not found on '{terminal_table}'"
         )
 
-    # (3) Emit must carry history_tracked
-    if not sidecar.history_tracked_available():
-        raise ExportError(
-            f"lookup column '{table_decl.name}.{col_decl.name}':"
-            " emit does not carry the history_tracked flag;"
-            " re-emit with a version that produces history_tracked"
-        )
-
-    # (4) Resolve path and check each hop + terminal for history_tracked: false
+    # (3) Resolve path and check each hop + terminal for temporal_class: constant
     context_label = f"{table_decl.name}.{col_decl.name}"
     hops = _resolve_lookup_hops(
         anchor_kind=anchor_kind,
@@ -238,24 +275,25 @@ def check_lookup_temporal_safety(
         context_label=context_label,
     )
 
-    # Check each traversed hop column for history_tracked
     current_kind = anchor_kind
     for hop_col in hops:
-        if hop_col.history_tracked is True:
-            raise ExportError(
-                f"lookup column '{table_decl.name}.{col_decl.name}':"
-                f" traversed hop column '{hop_col.name}' on kind '{current_kind}'"
-                " is history_tracked: true (type-2); only type-1 columns are allowed"
-            )
+        _check_lookup_column_constant(
+            sidecar,
+            current_kind,
+            hop_col.name,
+            "traversed hop column",
+            table_decl,
+            col_decl,
+        )
         hop_kind = hop_col.references
         assert hop_kind is not None
         current_kind = hop_kind
 
-    # Check terminal property for history_tracked
-    terminal_col = terminal_col_map[property_col]
-    if terminal_col.history_tracked is True:
-        raise ExportError(
-            f"lookup column '{table_decl.name}.{col_decl.name}':"
-            f" terminal property '{property_col}' on kind '{terminal_kind}'"
-            " is history_tracked: true (type-2); only type-1 properties are allowed"
-        )
+    _check_lookup_column_constant(
+        sidecar,
+        terminal_kind,
+        property_col,
+        "terminal property",
+        table_decl,
+        col_decl,
+    )

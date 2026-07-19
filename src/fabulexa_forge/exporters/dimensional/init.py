@@ -15,12 +15,16 @@ import io
 from typing import TYPE_CHECKING, Callable
 
 from fabulexa_forge.errors import InitRequiresRecordRoles
+from fabulexa_forge.exporters.notices import Notice
+from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.reader.records_columns import records_column_role
 from fabulexa_forge.reader.relations import distinct_prop_values
 from fabulexa_forge.reader.sidecar import TableSpec
 
 if TYPE_CHECKING:
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit
+    from fabulexa_forge.reader.sidecar import Sidecar
 
 
 # Registry role token -> config role token
@@ -165,16 +169,25 @@ def _write_dim_scd2_stub(
     kind: str,
     name: str,
     all_tables: tuple[TableSpec, ...],
-    filter_line: str | None = None,
+    sidecar: "Sidecar",
+    notice_sink: "NoticeSink",
+    filter_line: str | None,
 ) -> None:
     """Write a SCD-2 dim table stub block.
+
+    Skips non-exempt temporal_class: slice_only columns from the column
+    proposal loop (via is_non_exempt_slice_only), emitting one
+    'slice-only-column-omitted' notice per skip naming kind and column, in
+    sidecar column order. The exempt discriminator remains proposable.
 
     Args:
         w: Line-writing callable.
         kind: The record kind name.
         name: The proposed output table name.
         all_tables: All sidecar TableSpec objects.
-        filter_line: Optional filter YAML line to include in source, or None.
+        sidecar: The open emit's sidecar.
+        notice_sink: Receiver for skip notices.
+        filter_line: Filter YAML line to include in source, or None for no filter.
     """
     tracked_cols = _get_tracked_columns(kind, all_tables)
     all_cols = _get_records_columns(kind, all_tables)
@@ -191,6 +204,17 @@ def _write_dim_scd2_stub(
     w("        - {name: id, from: record_id}")
     for col in all_cols:
         if records_column_role(col) not in ("payload", "presentation"):
+            continue
+        if is_non_exempt_slice_only(sidecar, kind, col):
+            notice_sink(
+                Notice(
+                    code="slice-only-column-omitted",
+                    message=(
+                        f"kind '{kind}': column '{col}' is temporal_class:"
+                        " slice_only; omitted from the SCD-2 stub's column proposal"
+                    ),
+                )
+            )
             continue
         short = col.replace("prop__", "")
         if col in tracked_cols:
@@ -276,7 +300,7 @@ def _write_fact_stub(
     w("")
 
 
-def _build_candidate_yaml(emit: "Emit") -> str:
+def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     """Build a commented candidate YAML config from the sidecar.
 
     Reads record_roles for role (authoritative), the sidecar tables for
@@ -286,6 +310,8 @@ def _build_candidate_yaml(emit: "Emit") -> str:
     Args:
         emit: The open emit. Its sidecar must carry record_roles (checked by
             generate_init_config before this is called).
+        notice_sink: Receiver for slice-only-column-omitted skip notices
+            (threaded to the SCD-2 stub writer).
 
     Returns:
         A YAML string with candidate config and inline comments.
@@ -327,7 +353,9 @@ def _build_candidate_yaml(emit: "Emit") -> str:
                 w(f"    # --- {config_role}: {kind} sub-type '{sub_type}' ---")
                 if config_role == "dim":
                     if has_tracked:
-                        _write_dim_scd2_stub(w, kind, name, all_tables, filter_line)
+                        _write_dim_scd2_stub(
+                            w, kind, name, all_tables, sidecar, notice_sink, filter_line
+                        )
                     else:
                         _write_dim_type1_stub(w, kind, name, filter_line)
                 else:
@@ -345,7 +373,9 @@ def _build_candidate_yaml(emit: "Emit") -> str:
                         f"    # --- SCD-2 dim: {kind}"
                         " (history_tracked columns detected) ---"
                     )
-                    _write_dim_scd2_stub(w, kind, f"dim_{kind}", all_tables)
+                    _write_dim_scd2_stub(
+                        w, kind, f"dim_{kind}", all_tables, sidecar, notice_sink, None
+                    )
                 else:
                     w(f"    # --- Type-1 dim: {kind} ---")
                     _write_dim_type1_stub(w, kind, f"dim_{kind}")
@@ -390,13 +420,18 @@ def _build_candidate_yaml(emit: "Emit") -> str:
     return buf.getvalue()
 
 
-def generate_init_config(emit: "Emit") -> str:
+def generate_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     """Generate a commented candidate dimensional export config from an emit.
 
     Reads `record_roles` for warehouse role (authoritative), the sidecar tables
     for grain/column shape, `history_tracked` for SCD class, and the reader's
     DISTINCT introspection for fact-discriminator fan-out values. Role is never
     inferred from reference topology, and `enum_domains` is not consulted.
+
+    New behavior: slice_only columns are skipped from column proposals
+    (joining identity and lifecycle columns as never-proposed), one
+    'slice-only-column-omitted' Notice per skip; the exempt discriminator
+    remains proposable and drives filter pre-fill unchanged.
 
     A bare-string kind resolves its role from `record_roles[kind]`. The
     object-valued kind (today only `actor`) splits per declared sub-type from
@@ -414,6 +449,7 @@ def generate_init_config(emit: "Emit") -> str:
 
     Args:
         emit: The open emit. Its sidecar must carry `record_roles`.
+        notice_sink: Receiver for proposal notices.
 
     Returns:
         A YAML string: a commented candidate `mode: dimensional` config. One
@@ -425,10 +461,12 @@ def generate_init_config(emit: "Emit") -> str:
 
     Raises:
         InitRequiresRecordRoles: The sidecar omits `record_roles`.
+        TemporalClassUnavailableError: A consulted column's temporal pair is
+            unavailable (non-conformant emit).
     """
     if emit.sidecar.record_roles() is None:
         raise InitRequiresRecordRoles(
             "The sidecar omits `record_roles`; `init` cannot propose roles without"
             " the registry. Re-emit with a producer that includes `record_roles`."
         )
-    return _build_candidate_yaml(emit)
+    return _build_candidate_yaml(emit, notice_sink)

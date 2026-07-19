@@ -845,9 +845,24 @@ _TYPED_ENTITY_COLUMNS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__entity_type", "type": "VARCHAR"},
-    {"name": "prop__score", "type": "BIGINT"},
-    {"name": "prop__active_flag", "type": "BOOLEAN"},
+    {
+        "name": "prop__entity_type",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__score",
+        "type": "BIGINT",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+    {
+        "name": "prop__active_flag",
+        "type": "BOOLEAN",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
 ]
 
 _TYPED_MEMBERSHIP_COLUMNS: list[dict[str, object]] = [

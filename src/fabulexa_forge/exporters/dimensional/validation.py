@@ -5,7 +5,8 @@ SourceTableExists, KeyColumnsDeclared, ProjectionColumnExists,
 OrdinalRefsSiblings, TimestampSourceAvailable, DiscriminatorValueObserved,
 ExcludedKindNotSourced, ExcludedTableNotSourced, FkTargetIsDim,
 ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
-Scd2ColumnModeSupported.
+Scd2ColumnModeSupported, SliceOnlyColumnRefused (filter keys, column
+reads, and fk hops — always-on, full export included).
 
 The SingleBranch rule is enforced by derivations.require_single_branch (the
 stage-wide guard); dimensional calls it but does not own it.
@@ -48,6 +49,10 @@ from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.reserved_names import (
     is_reserved_column_name,
     is_reserved_table_name,
+)
+from fabulexa_forge.exporters.slice_only import (
+    is_non_exempt_slice_only,
+    slice_only_refusal_message,
 )
 from fabulexa_forge.reader.errors import TableNotFoundError
 
@@ -415,6 +420,114 @@ def check_discriminator_value_observed(
                         f"discriminator value '{value}' not observed for"
                         f" '{source.kind}.{prop}'; table will be empty"
                     ),
+                )
+            )
+
+
+def check_slice_only_filter_keys(
+    source: "SourceDecl",
+    table_decl: "TableDecl",
+    source_table_name: str,
+    sidecar: "Sidecar",
+) -> None:
+    """Enforce SliceOnlyColumnRefused over records `filter` keys.
+
+    Row membership derives from the value, so a non-exempt slice_only filter
+    key is refused. No-op unless grain is records with a filter. The exempt
+    discriminator passes — filter on prop__<kind>_type is the classification
+    read (init's pre-fill relies on it).
+
+    Args:
+        source: The grain source binding.
+        table_decl: The output table declaration (for error messages).
+        source_table_name: The resolved DuckDB source table name (unused;
+            kept for the check's sibling signature symmetry).
+        sidecar: The open emit's sidecar.
+
+    Raises:
+        ExportError: A filter key resolves to a non-exempt slice_only column.
+        TemporalClassUnavailableError: Propagated.
+    """
+    if source.grain != "records" or not source.filter:
+        return
+    for filter_key in source.filter:
+        if is_non_exempt_slice_only(sidecar, source.kind, filter_key):
+            raise ExportError(
+                slice_only_refusal_message(
+                    table_decl.name, filter_key, "filter key", source.kind, filter_key
+                )
+            )
+
+
+def _collect_value_read_sources(col_decl: "ColumnDecl") -> list[str]:
+    """Collect every source-column name a column declaration's value derives from.
+
+    Covers from, correlation, resolved value_map.from, derived: timestamp
+    source, and derived: elapsed correlate_on/start_source/end_source/
+    other_where keys — the exhaustive SliceOnlyColumnRefused value-read
+    surface (lookup and fk hops are checked separately).
+
+    Args:
+        col_decl: The column declaration.
+
+    Returns:
+        Every referenced source-column name, in declaration order.
+    """
+    refs: list[str] = []
+    if col_decl.from_ is not None:
+        refs.append(col_decl.from_)
+    if col_decl.correlation is not None:
+        refs.append(col_decl.correlation)
+    if col_decl.derived is not None:
+        derived = col_decl.derived
+        if derived.value_map is not None:
+            refs.append(derived.value_map.from_)
+        if derived.timestamp is not None:
+            refs.append(derived.timestamp.source)
+        if derived.elapsed is not None:
+            refs.append(derived.elapsed.correlate_on)
+            refs.append(derived.elapsed.start_source)
+            refs.append(derived.elapsed.end_source)
+            refs.extend(derived.elapsed.other_where.keys())
+    return refs
+
+
+def check_slice_only_column_reads(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    source: "SourceDecl",
+    source_table_name: str,
+    sidecar: "Sidecar",
+) -> None:
+    """Enforce SliceOnlyColumnRefused over one column's own value-reads.
+
+    Covers from, correlation, resolved value_map.from, derived: timestamp
+    source, derived: elapsed correlate_on/start_source/end_source/other_where
+    keys. Only prop__-named references on the kind's records table are in the
+    population (the predicate scopes); membership/history grain surface
+    columns are classless and pass untouched. lookup is
+    check_lookup_temporal_safety's; fk hops are check_fk_slice_only's.
+    Always-on — runs in full and windowed exports alike.
+
+    Args:
+        col_decl: The column declaration being validated.
+        table_decl: The output table declaration (for error messages).
+        source: The grain source binding (source.kind owns the column).
+        source_table_name: The resolved DuckDB source table name (unused;
+            kept for the check's sibling signature symmetry).
+        sidecar: The open emit's sidecar.
+
+    Raises:
+        ExportError: A read resolves to a non-exempt slice_only column;
+            message names output table.column, base table.column, the
+            class, and the slice-only contract fact.
+        TemporalClassUnavailableError: Propagated.
+    """
+    for ref in _collect_value_read_sources(col_decl):
+        if is_non_exempt_slice_only(sidecar, source.kind, ref):
+            raise ExportError(
+                slice_only_refusal_message(
+                    table_decl.name, col_decl.name, "column", source.kind, ref
                 )
             )
 
@@ -1032,7 +1145,8 @@ def validate_table(
     KeyColumnsDeclared, ProjectionColumnExists, OrdinalRefsSiblings,
     TimestampSourceAvailable, DiscriminatorValueObserved, FkTargetIsDim,
     ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
-    Scd2ColumnModeSupported, LookupColumnSafety.
+    Scd2ColumnModeSupported, LookupColumnSafety, SliceOnlyColumnRefused
+    (filter keys, column reads, fk hops — always-on, full export included).
 
     When window is not None, also runs the ten incremental gates:
     IncrementalGrainUnsupported, IncrementalElapsedUnsupported,
@@ -1054,9 +1168,12 @@ def validate_table(
 
     Raises:
         ExportError: Any business rule fails.
+        TemporalClassUnavailableError: A consulted column's temporal pair is
+            unavailable (non-conformant emit).
     """
     from fabulexa_forge.exporters.dimensional.fk import (
         build_fk_expr,
+        check_fk_slice_only,
         check_fk_target_is_dim,
     )
     from fabulexa_forge.exporters.dimensional.lookup import (
@@ -1071,6 +1188,7 @@ def validate_table(
     check_excluded_table_not_sourced(table_decl, source_table_name, config)
     check_key_columns_declared(table_decl)
     check_discriminator_value_observed(source, sidecar, notice_sink)
+    check_slice_only_filter_keys(source, table_decl, source_table_name, sidecar)
 
     if table_decl.scd == "type2":
         check_scd2_needs_history(table_decl, source_table_name, sidecar)
@@ -1103,11 +1221,22 @@ def validate_table(
         check_ordinal_refs_siblings(col_decl, table_decl)
         check_timestamp_source_available(col_decl, table_decl, source, surface)
         check_elapsed_columns_exist(col_decl, table_decl, source_table_name, sidecar)
+        check_slice_only_column_reads(
+            col_decl, table_decl, source, source_table_name, sidecar
+        )
 
         if col_decl.fk is not None:
             target_table_decl = check_fk_target_is_dim(col_decl, table_decl, config)
             target_kind = target_table_decl.source.kind
             build_fk_expr(
+                col_decl=col_decl,
+                table_decl=table_decl,
+                source_grain=source.grain,
+                anchor_kind=source.kind,
+                target_kind=target_kind,
+                sidecar=sidecar,
+            )
+            check_fk_slice_only(
                 col_decl=col_decl,
                 table_decl=table_decl,
                 source_grain=source.grain,
