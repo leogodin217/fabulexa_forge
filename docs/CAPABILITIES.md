@@ -95,8 +95,8 @@ Each mode reads the same emit and writes a different target shape.
 - ✓ **dimensional** *(Stage 2)* — star schema. `records__<kind>` → `dim_*` (SCD-2 wide
   via `LEAD`, or Type-1 sub-type split); `history` point/interval and membership-binding
   grains → `fact_*`; typed `prop__` columns read directly (no JSON expansion); FK
-  labeled-edge pathfind (reference + membership); type-1 `lookup` record-attribute
-  enrichment (slice-value projection, gated to `history_tracked: false`).
+  labeled-edge pathfind (reference + membership); `lookup` record-attribute
+  enrichment (slice-value projection, gated to `temporal_class: constant`).
   Declarative, domain-agnostic config; CSV + DuckDB output. See
   [`architecture/dimensional.md`](architecture/dimensional.md). *Teaches: data
   warehousing, BI, star-schema design.*
@@ -175,6 +175,15 @@ Each mode reads the same emit and writes a different target shape.
   sidecar `runtime` anchor. CLI-wins precedence per knob; DST and ambiguous-origin
   rules fail fast. Cross-mode (one anchor per invocation); the dimensional renderer
   consumes it today. See [`architecture/anchor.md`](architecture/anchor.md).
+- ✓ **`slice_only` export policy** — export-wide: no output value, row membership,
+  linkage, or ordering derives from a `slice_only` column's value. Author-named reads
+  refused always-on (dimensional + streaming); auto-projected surfaces omit with a
+  notice (source renders, `init` proposals); `lookup` regated to
+  `temporal_class: constant`; one mechanical carve-out for the sub-typed
+  discriminator. See [`architecture/slice-only.md`](architecture/slice-only.md).
+- ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
+  through a required caller-supplied sink; CLI renders one line per notice to stderr,
+  off stdout. See [`architecture/notices.md`](architecture/notices.md).
 - ○ **Dry-run / combine** — preview without writing; compose multiple emits.
 
 ### Queue-state and point-in-time export *(Stage 5)*

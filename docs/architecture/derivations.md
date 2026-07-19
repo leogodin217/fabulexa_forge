@@ -519,7 +519,11 @@ filter on; it raises `ExportError` on zero or more than one branch.
   that value is exact at every T; for a `slice_only` column it is a slice value
   stamped at horizons the emit cannot speak to. The class makes the difference
   visible ([`bundle.md`](bundle.md) § Column temporal classes); the folds do not
-  consult it, and a policy that refuses or omits such a column is mode-side.
+  consult it, and the policy that refuses or omits such a column is mode-side —
+  the export-wide `slice_only` posture ([`slice-only.md`](slice-only.md)), whose
+  column-projection-only invariance rests on exactly this class-agnosticism:
+  narrowing a fold's input property set removes after-image columns only, never
+  event rows.
 
 ## Related
 

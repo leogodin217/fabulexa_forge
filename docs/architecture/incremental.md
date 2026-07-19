@@ -89,6 +89,20 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
 
 ## Semantics
 
+### Notice threading
+
+`export_window` and `export_incremental_next` take the same required
+`notice_sink` as the full-export entry points and thread it to the mode's
+compile ([`notices.md`](notices.md)). Every driver invocation compiles exactly
+once — an explicit `--from`/`--to` range is a single range-window, and a
+`--next` drip derives one window — so the sink threads through with no
+forwarding or dedup logic; a `--next` drip re-emits its compile's notices each
+invocation. The window-gated rules themselves never consult `temporal_class`:
+`slice_only` reads are refused always-on before any gate runs
+([`slice-only.md`](slice-only.md)), so every `history_tracked: false` column
+that survives to a window gate is either `constant` or the exempt
+discriminator — whose admission is the carve-out working as intended.
+
 ### Two regimes, one window sequence
 
 A run drips in exactly one of two regimes, selected by the cadence block against

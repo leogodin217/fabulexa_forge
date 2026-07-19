@@ -214,9 +214,11 @@ record at `created_sim_time` (creation values folded in); one `u` per distinct l
 change `sim_time` of the tracked properties (coincident property changes coalesce
 into one after-image row); a `d` at `deactivated_at` when deactivated, with every
 payload and `presentation_id` column `NULL` (canonical after-only delete — typed
-NULLs after the cast). Untracked (`history_tracked: false`) columns ride the
-after-image at their **current** records-table value on every event — the fold's
-declared temporal-honesty exception, inherited and documented, not worked around.
+NULLs after the cast). Untracked columns ride the after-image at their **current**
+records-table value on every event — and the `slice_only` omission (below) narrows
+the riders to exactly `constant` columns plus the exempt discriminator: values the
+contract declares valid at every T, so the fold's temporal-honesty exception is
+honest.
 
 Consumers derive current state (`MAX(changed_at)` per `id`), SCD-2
 (`LEAD(changed_at)`), and deletion state (`op = 'd'`) themselves — the teaching
@@ -254,6 +256,28 @@ read of the interval rows, no derivation:
 | `left_sim_time` | `left_at` | wallclock `TIMESTAMP`; `NULL` while the membership is open at the slice boundary — faithful, never fabricated |
 | `elem__<f>` | `<f>` | verbatim, native type |
 | `member__<f>__kind` / `member__<f>__id` | `<f>_kind` / `<f>_id` | verbatim |
+
+### The `slice_only` omission
+
+Every records-genre render — change-log after-image, reference, transaction, and
+snapshot — narrows its payload set to `tracked` + `constant` columns plus the
+exempt sub-typed discriminator, per the export-wide policy
+([`slice-only.md`](slice-only.md)): source chooses its own projections, so a
+non-exempt `slice_only` column is **omitted** rather than refused, with one
+`slice-only-column-omitted` [notice](notices.md) per omitted column per export
+unit, in plan order. The collision check and rename resolution run over the
+narrowed set; a `rename` columns key naming an omitted column raises
+`SourceRenameSliceOnly` (§ Validation Rules) — the rename is unsatisfiable, an
+error rather than a silent ignore.
+
+Omission is column-projection-only: row sets, ordering, and incremental window
+membership are identical with or without it. The degenerate case follows the same
+rule — a unit whose every property is non-exempt `slice_only` still renders, rows
+intact, carrying its classless columns and the exempt discriminator when present.
+The junction render is untouched (membership columns carry no class), the genre
+predicate never consults a `slice_only` column (classification outcomes are
+independent of the policy), and `exclude` has no interplay (it cannot name a
+column).
 
 ### Operational presentation defaults
 
@@ -493,6 +517,9 @@ delivery. The `genre` label stays `changelog` — it selects the render — whil
    than silently degrading to current-state-at-slice-end.
 8. **Determinism.** Same emit + export config + code version → identical output
    (CLAUDE.md § Key Invariants).
+9. **`slice_only` omission is column-projection-only.** Row sets, ordering, and
+   window membership are invariant under the policy; omission never suppresses an
+   export unit ([`slice-only.md`](slice-only.md)).
 
 ## Validation Rules
 
@@ -530,6 +557,7 @@ funnel.
 | `SourceAnchorRequired` | An `EffectiveAnchor` resolved for the invocation | `"source export renders wallclock timestamps and requires a resolved anchor: the emit declares no runtime block; supply rebase.base_date/timezone or --base-date/--timezone"` |
 | `SourceExcludeUnresolved` | Every `exclude.kinds` / `exclude.tables` entry resolves in the sidecar | `"exclude entry '{entry}' matches nothing in this emit"` |
 | `SourceRenameUnresolved` | Every rename entry's `table` (+ `sub_type` iff the kind splits, and only then) resolves, and every `columns` key names a source column of that table | `"rename entry '{table}': {detail}"` |
+| `SourceRenameSliceOnly` | No `rename` columns key names a non-exempt `slice_only` source column — the column is policy-omitted (§ The `slice_only` omission), so the rename is unsatisfiable | Names the rename entry, the column, and the omission reason |
 | `SourceNameCollision` | All output table names are unique; within each table all output column names are unique | `"output name collision: {names}; resolve via source.rename"` |
 | `SourceSnapshotRequiresWindows` | `change_delivery: snapshot` runs only under `--next` or `--from`/`--to` | `"change_delivery: snapshot requires an incremental invocation; a full export snapshot is current state at slice end"` |
 | Reserved-name check (`exporters/reserved_names.py`, raised as `ExportError`) | No resolved output table name collides with the bookkeeping names or reserved suffixes — checked at plan build over all output names, so a full export and a later `--next` on the same target agree | — |
