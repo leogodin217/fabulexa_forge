@@ -455,7 +455,12 @@ def test_full_export_all_specs_create_no_views(tmp_path: Path) -> None:
     config = _make_records_fact_config()
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     assert len(specs) == 1
@@ -471,7 +476,12 @@ def test_full_export_scd2_no_views(tmp_path: Path) -> None:
     config = _make_scd2_with_valid_to_config()
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     assert len(specs) == 1
@@ -495,7 +505,12 @@ def test_records_fact_windowed_filters_half_open(tmp_path: Path) -> None:
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         assert len(specs) == 1
         spec = specs[0]
@@ -517,7 +532,12 @@ def test_records_fact_row_exactly_on_end_ns_lands_in_next_window(
     window = _make_window(start_ns=10, end_ns=20)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -533,7 +553,12 @@ def test_records_fact_row_exactly_on_end_ns_in_next_window(tmp_path: Path) -> No
     window = _make_window(start_ns=20, end_ns=30)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -580,7 +605,12 @@ def test_records_fact_windowed_timestamp_key_filters_half_open(tmp_path: Path) -
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         assert len(specs) == 1
         assert specs[0].write_mode == "append"
@@ -608,10 +638,20 @@ def test_records_fact_windowed_timestamp_key_predicate_uses_raw_ns(
 
     with open_emit(emit_dir) as emit:
         full_specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         windowed_specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
         sql = windowed_specs[0].sql
@@ -665,7 +705,12 @@ def test_history_point_windowed_filters_on_sim_time(tmp_path: Path) -> None:
     window = _make_window(start_ns=5, end_ns=20)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         assert specs[0].write_mode == "append"
         result = emit.query_arrow(specs[0].sql, ())
@@ -686,7 +731,12 @@ def test_type1_dim_windowed_is_replace_full_snapshot(tmp_path: Path) -> None:
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         assert len(specs) == 1
         spec = specs[0]
@@ -706,10 +756,20 @@ def test_type1_dim_sql_identical_across_windows(tmp_path: Path) -> None:
     window_b = _make_window(start_ns=15, end_ns=30, index=1)
     with open_emit(emit_dir) as emit:
         specs_a = build_query_specs(
-            emit, config, None, window_a, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window_a,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         specs_b = build_query_specs(
-            emit, config, None, window_b, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window_b,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     assert specs_a[0].sql == specs_b[0].sql
@@ -727,7 +787,12 @@ def test_scd2_with_valid_to_windowed_spec_name_is_rows(tmp_path: Path) -> None:
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     assert len(specs) == 1
@@ -743,7 +808,12 @@ def test_scd2_with_valid_to_windowed_view_name_is_author_name(tmp_path: Path) ->
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     spec = specs[0]
@@ -758,7 +828,12 @@ def test_scd2_with_valid_to_rows_excludes_valid_to_column(tmp_path: Path) -> Non
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -777,7 +852,12 @@ def test_scd2_with_valid_to_rows_predicate_on_change_point(tmp_path: Path) -> No
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -793,7 +873,12 @@ def test_scd2_with_valid_to_view_sql_contains_lead_valid_from(tmp_path: Path) ->
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     spec = specs[0]
@@ -812,7 +897,12 @@ def test_scd2_view_sql_identity_columns_exclude_scd_window_cols(tmp_path: Path) 
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     view_sql = specs[0].view_sql
@@ -839,7 +929,12 @@ def test_scd2_no_valid_to_windowed_plain_name_no_view(tmp_path: Path) -> None:
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     assert len(specs) == 1
@@ -857,7 +952,12 @@ def test_scd2_no_valid_to_windowed_has_valid_from_ns(tmp_path: Path) -> None:
     window = _make_window(start_ns=10, end_ns=25)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -878,10 +978,20 @@ def test_windowed_values_equal_full_export_records_fact(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         full_specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         windowed_specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
         full_rows = emit.query_arrow(full_specs[0].sql, ()).to_pydict()
@@ -932,10 +1042,20 @@ def test_windowed_ordinal_matches_full_export_ordinal(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         full_specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         windowed_specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
         full_rows = emit.query_arrow(full_specs[0].sql, ()).to_pydict()
@@ -987,7 +1107,12 @@ def test_ordinal_amendment_timestamp_sibling_uses_raw_ns(tmp_path: Path) -> None
     )
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     sql = specs[0].sql
@@ -1033,7 +1158,12 @@ def test_ordinal_amendment_same_microsecond_orders_by_true_event_order(
     )
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -1063,7 +1193,12 @@ def test_scd2_with_valid_to_two_versions_same_microsecond_order_deterministic(
     window = _make_window(start_ns=10, end_ns=35)
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 

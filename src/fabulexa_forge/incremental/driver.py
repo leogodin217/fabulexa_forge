@@ -182,12 +182,16 @@ def export_window(
     if config.mode == "source":
         from fabulexa_forge.exporters.source.engine import build_source_query_specs
 
-        specs = build_source_query_specs(emit, config, anchor, window, notice_sink)
+        specs = build_source_query_specs(
+            emit, config, anchor, window, notice_sink, base_relations=None
+        )
     else:
         from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 
         assert config.dimensional is not None
-        specs = build_query_specs(emit, config.dimensional, anchor, window, notice_sink)
+        specs = build_query_specs(
+            emit, config.dimensional, anchor, window, notice_sink, base_relations=None
+        )
 
     if fmt == "duckdb":
         return write_duckdb_window(emit, specs, out, window, fingerprint)

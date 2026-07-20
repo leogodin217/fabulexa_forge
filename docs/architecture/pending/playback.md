@@ -1775,10 +1775,12 @@ below the mode (the folds and the reader stay untouched, as declared).
 Name binding is contract, never an engine default — three rules:
 
 - **A replacing relation's self-read binds physical.** Each replacing
-  SELECT reads the base table it presents; inside its own CTE that read
-  binds to the physical table (standard non-recursive `WITH` scoping — a
-  CTE's own name is not in scope in its body). The implementation pins this
-  binding with a test, so an engine upgrade cannot silently rebind it.
+  SELECT reads the base table it presents. DuckDB's binder treats a bare
+  unqualified self-read as a circular reference to the enclosing CTE (an
+  error), not outward resolution to the physical table — so the replacing
+  SELECT schema-qualifies its self-read (`main.<table>`) to reach the
+  physical table. The implementation pins this binding with a test, so an
+  engine upgrade cannot silently rebind it.
 - **A replacing relation's cross-reads are binding-insensitive by
   construction.** A replacing SELECT's read of a *different* base table
   carries truncated-world semantics (§ One consistent truncated world). It

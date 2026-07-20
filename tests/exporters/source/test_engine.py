@@ -62,7 +62,12 @@ def test_build_source_query_specs_anchor_required(tmp_path: Path) -> None:
         assert anchor is None
         with pytest.raises(SourceAnchorRequired):
             build_source_query_specs(
-                emit, config, anchor, None, notice_sink=discard_notice_sink
+                emit,
+                config,
+                anchor,
+                None,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
             )
 
 
@@ -89,7 +94,12 @@ def test_build_source_query_specs_full_export_write_mode(tmp_path: Path) -> None
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         specs = build_source_query_specs(
-            emit, config, anchor, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     assert specs
@@ -193,7 +203,12 @@ def test_build_source_query_specs_windowed_write_mode_per_genre(tmp_path: Path) 
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         specs = build_source_query_specs(
-            emit, config, anchor, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            anchor,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     write_mode_by_table = {spec.table_name: spec.write_mode for spec in specs}
@@ -230,6 +245,7 @@ def test_build_source_query_specs_snapshot_full_export_raises(tmp_path: Path) ->
                 anchor,
                 None,
                 notice_sink=discard_notice_sink,
+                base_relations=None,
             )
 
 
@@ -266,6 +282,7 @@ def test_build_source_query_specs_windowed_snapshot_write_mode_and_render(
             anchor,
             window,
             notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
         by_table = {spec.table_name: spec for spec in specs}

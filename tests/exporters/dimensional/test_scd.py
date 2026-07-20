@@ -177,7 +177,12 @@ def test_n_versions_from_n_change_points(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     assert len(specs) == 1
@@ -207,7 +212,12 @@ def test_valid_from_to_windowing(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -238,7 +248,12 @@ def test_tracked_column_takes_per_version_value(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -264,7 +279,12 @@ def test_static_column_constant_across_versions(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -295,7 +315,12 @@ def test_flag_authoritative_tracked_but_unchanged_single_version(
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -326,7 +351,12 @@ def test_projection_introduced_column_never_tracked(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -354,7 +384,12 @@ def test_total_order_by_record_id_valid_from(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     sql = specs[0].sql
@@ -375,10 +410,20 @@ def test_build_twice_yields_identical_sql(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs1 = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         specs2 = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     assert specs1[0].sql == specs2[0].sql
@@ -537,7 +582,12 @@ def test_multiple_records_multiple_versions(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -677,7 +727,12 @@ def test_build_scd2_sql_flag_path_uses_cast_for_bigint(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     sql = specs[0].sql
@@ -702,7 +757,12 @@ def test_scd2_bigint_column_execution_succeeds(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -753,7 +813,12 @@ def test_scd2_sql_embeds_versioned_intervals_derivation(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         config = _make_config(_make_scd2_table_decl())
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     sql = specs[0].sql

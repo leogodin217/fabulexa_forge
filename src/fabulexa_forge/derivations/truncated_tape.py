@@ -50,7 +50,12 @@ def build_truncated_history_sql(
     """The history table truncated at T.
 
     Rows with sim_time <= at_sim_time, filtered to fork_path; column shape
-    verbatim (history is a fixed table).
+    verbatim (history is a fixed table). The self-read is schema-qualified
+    (`main."history"`) — under the base_relations shadow wrap this SELECT is
+    itself a CTE named `"history"`, and DuckDB's binder treats a bare
+    unqualified self-read as a circular CTE reference; the schema
+    qualification is what makes the self-read bind physical (base_relations.
+    shadow_base_relations, tier-2 state's compile indirection).
 
     Args:
         fork_path: The sole branch, from require_single_branch.
@@ -65,7 +70,7 @@ def build_truncated_history_sql(
     """
     fp_lit = _sql_literal(fork_path)
     return (
-        'SELECT * FROM "history"'
+        'SELECT * FROM main."history"'
         f' WHERE "fork_path" = {fp_lit} AND "sim_time" <= {at_sim_time}'
     )
 
@@ -82,6 +87,10 @@ def build_truncated_membership_sql(
     Intervals with joined_sim_time <= at_sim_time, filtered to fork_path;
     left_sim_time masked NULL when > at_sim_time (an interval still open at
     T, exactly as a slice-at-T emit renders it); every other column verbatim.
+    The self-read is schema-qualified (`main."<table_name>"`) — see
+    build_truncated_history_sql for why (binds physical under the
+    base_relations shadow wrap; unqualified would be a circular CTE
+    reference).
 
     Args:
         sidecar: The open emit's sidecar.
@@ -113,7 +122,7 @@ def build_truncated_membership_sql(
     select_sql = ", ".join(select_parts)
 
     return (
-        f'SELECT {select_sql} FROM "{table_name}"'
+        f'SELECT {select_sql} FROM main."{table_name}"'
         f' WHERE "fork_path" = {fp_lit} AND "joined_sim_time" <= {at_sim_time}'
     )
 
@@ -300,7 +309,10 @@ def build_truncated_records_sql(
     target kind's truncated spine (the one-consistent-truncated-world rule):
     NULL beside a NULL reference, and NULL beside a verbatim non-NULL
     reference that resolves to no truncated spine row (dangling, mispointed,
-    or naming a record created after T).
+    or naming a record created after T). The self-read is schema-qualified
+    (`main."records__<kind>"`) — see build_truncated_history_sql for why
+    (binds physical under the base_relations shadow wrap; unqualified would
+    be a circular CTE reference).
 
     Args:
         sidecar: The open emit's sidecar.
@@ -381,7 +393,7 @@ def build_truncated_records_sql(
 
     return (
         f"SELECT {select_sql}"
-        f' FROM "{table_name}" AS "_rec"'
+        f' FROM main."{table_name}" AS "_rec"'
         f"{joins_sql}"
         f' WHERE "_rec"."fork_path" = {fp_lit}'
         f' AND "_rec"."created_sim_time" <= {at_sim_time}'

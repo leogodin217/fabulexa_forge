@@ -21,6 +21,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -33,6 +34,7 @@ if TYPE_CHECKING:
 
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import SourceAnchorRequired, SourceSnapshotRequiresWindows
+from fabulexa_forge.exporters.base_relations import apply_base_relations
 from fabulexa_forge.exporters.query_spec import QuerySpec, write_query_specs
 from fabulexa_forge.exporters.source.plan import build_source_plan
 from fabulexa_forge.exporters.source.renders import (
@@ -125,6 +127,7 @@ def build_source_query_specs(
     anchor: "EffectiveAnchor | None",
     window: "Window | None",
     notice_sink: "NoticeSink",
+    base_relations: "Mapping[str, str] | None",
 ) -> list[QuerySpec]:
     """
     Compile the source plan to writer-ready QuerySpecs, optionally windowed.
@@ -153,6 +156,9 @@ def build_source_query_specs(
         anchor: The resolved effective anchor. Required.
         window: The window to filter to, or None for the full export.
         notice_sink: Receiver for plan notices (slice-only-column-omitted).
+        base_relations: Physical base-table name -> replacing relation SELECT.
+            See `build_query_specs`' docstring — same contract, threaded
+            identically.
 
     Returns:
         One QuerySpec per output table, in deterministic order.
@@ -182,8 +188,11 @@ def build_source_query_specs(
     return [
         QuerySpec(
             table_name=table_spec.name,
-            sql=_render_sql_for_spec(
-                sidecar, fork_path, table_spec, anchor, window, change_delivery
+            sql=apply_base_relations(
+                _render_sql_for_spec(
+                    sidecar, fork_path, table_spec, anchor, window, change_delivery
+                ),
+                base_relations,
             ),
             write_mode=_write_mode_for_genre(table_spec.genre, window, change_delivery),
             view_name=None,
@@ -234,5 +243,7 @@ def export_source(
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """
-    specs = build_source_query_specs(emit, config, anchor, None, notice_sink)
+    specs = build_source_query_specs(
+        emit, config, anchor, None, notice_sink, base_relations=None
+    )
     return write_query_specs(emit, specs, out, fmt)

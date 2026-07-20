@@ -196,7 +196,9 @@ def test_discriminator_unobserved_emits_one_notice_no_warning(tmp_path: Path) ->
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         with open_emit(emit_dir) as emit:
-            build_query_specs(emit, config.dimensional, None, None, sink)
+            build_query_specs(
+                emit, config.dimensional, None, None, sink, base_relations=None
+            )
 
     assert len(sink.notices) == 1
     notice = sink.notices[0]
@@ -212,7 +214,9 @@ def test_discriminator_observed_emits_zero_notices(tmp_path: Path) -> None:
     sink = RecordingNoticeSink()
 
     with open_emit(emit_dir) as emit:
-        build_query_specs(emit, config.dimensional, None, None, sink)
+        build_query_specs(
+            emit, config.dimensional, None, None, sink, base_relations=None
+        )
 
     assert sink.notices == []
 
@@ -226,8 +230,12 @@ def test_build_query_specs_notice_sequence_deterministic(tmp_path: Path) -> None
     first_sink = RecordingNoticeSink()
     second_sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
-        build_query_specs(emit, config.dimensional, None, None, first_sink)
-        build_query_specs(emit, config.dimensional, None, None, second_sink)
+        build_query_specs(
+            emit, config.dimensional, None, None, first_sink, base_relations=None
+        )
+        build_query_specs(
+            emit, config.dimensional, None, None, second_sink, base_relations=None
+        )
 
     assert first_sink.notices == second_sink.notices
     assert len(first_sink.notices) == 1

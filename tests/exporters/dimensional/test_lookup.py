@@ -683,7 +683,12 @@ def test_history_interval_zero_hop_lookup_execution(tmp_path: Path) -> None:
             ]
         )
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         spec = next(s for s in specs if s.table_name == "fact_actor_status")
 
@@ -751,10 +756,20 @@ def test_history_interval_zero_hop_lookup_row_count_matches_baseline(
             ]
         )
         specs_lookup = build_query_specs(
-            emit, config_lookup, None, None, notice_sink=discard_notice_sink
+            emit,
+            config_lookup,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         specs_baseline = build_query_specs(
-            emit, config_baseline, None, None, notice_sink=discard_notice_sink
+            emit,
+            config_baseline,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
         spec_l = next(s for s in specs_lookup if s.table_name == "fact_actor_status")
@@ -1420,7 +1435,14 @@ def test_build_query_specs_raises_for_tracked_lookup_fact(tmp_path: Path) -> Non
             ]
         )
         with pytest.raises(ExportError):
-            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
+            build_query_specs(
+                emit,
+                config,
+                None,
+                None,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
+            )
 
 
 def _build_mixed_fk_lookup_emit(tmp_path: Path) -> Path:
@@ -1547,7 +1569,12 @@ def test_mixed_fk_and_two_lookups_share_hop_chain_no_collision(
             ]
         )
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey")
 
@@ -1584,10 +1611,20 @@ def test_build_query_specs_deterministic_sql_lookup(tmp_path: Path) -> None:
             ]
         )
         specs1 = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         specs2 = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     sql1 = next(s.sql for s in specs1 if s.table_name == "fact_actor_status")

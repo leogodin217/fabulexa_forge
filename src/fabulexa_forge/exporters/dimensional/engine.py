@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -25,6 +26,7 @@ if TYPE_CHECKING:
 
 from fabulexa_forge.config.models import DimensionalConfig
 from fabulexa_forge.derivations import require_single_branch
+from fabulexa_forge.exporters.base_relations import apply_base_relations
 from fabulexa_forge.exporters.dimensional.grains import build_grain_sql
 from fabulexa_forge.exporters.dimensional.validation import validate_table
 from fabulexa_forge.exporters.query_spec import QuerySpec, write_query_specs
@@ -38,6 +40,7 @@ def build_query_specs(
     anchor: "EffectiveAnchor | None",
     window: "Window | None",
     notice_sink: "NoticeSink",
+    base_relations: "Mapping[str, str] | None",
 ) -> list[QuerySpec]:
     """Compile table declarations; optionally windowed.
 
@@ -66,6 +69,14 @@ def build_query_specs(
         anchor: The resolved EffectiveAnchor, or None for raw sim_time.
         window: The window to filter to, or None for the full export.
         notice_sink: Receiver for plan notices.
+        base_relations: Physical base-table name -> replacing relation (a complete
+            SELECT). When given, every base-table read in the compiled plan
+            resolves through the mapping via one name-shadowing CTE per mapped
+            name wrapped around each compiled query (never a textual prefix — a
+            compiled query may already open with its own WITH); unmapped names
+            fall back to the physical table. None compiles byte-identically to
+            the pre-parameter surface; the full-export and windowed callers pass
+            None explicitly.
 
     Returns:
         One QuerySpec per declared table, in declaration order.
@@ -92,6 +103,7 @@ def build_query_specs(
         sql, write_mode, view_name, view_sql = build_grain_sql(
             table_decl, source_table_name, sidecar, anchor, fork_path, config, window
         )
+        sql = apply_base_relations(sql, base_relations)
         # For SCD-2 dims with valid_to under a window, view_name = author name
         # and the physical table is <name>__rows.
         if view_name is not None:
@@ -150,5 +162,7 @@ def export_dimensional(
         TemporalClassUnavailableError: Non-conformant temporal pair.
     """
     assert config.dimensional is not None
-    specs = build_query_specs(emit, config.dimensional, anchor, None, notice_sink)
+    specs = build_query_specs(
+        emit, config.dimensional, anchor, None, notice_sink, base_relations=None
+    )
     return write_query_specs(emit, specs, out, fmt)

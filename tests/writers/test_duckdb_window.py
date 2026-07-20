@@ -275,7 +275,12 @@ def test_fresh_file_creates_tables_and_meta(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, _fact_dim_config(), None, window, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
@@ -294,7 +299,12 @@ def test_fresh_file_export_windows_row_written(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, _fact_dim_config(), None, window, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
@@ -315,7 +325,12 @@ def test_fresh_file_views_installed(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, _scd2_config(), None, window, notice_sink=discard_notice_sink
+            emit,
+            _scd2_config(),
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
@@ -337,11 +352,21 @@ def test_second_window_facts_append(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs0 = build_query_specs(
-            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w0,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
-            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w1,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -358,11 +383,21 @@ def test_second_window_export_windows_gains_row(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs0 = build_query_specs(
-            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w0,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
-            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w1,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -379,11 +414,21 @@ def test_second_window_scd2_rows_append(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs0 = build_query_specs(
-            emit, _scd2_config(), None, w0, notice_sink=discard_notice_sink
+            emit,
+            _scd2_config(),
+            None,
+            w0,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result0 = write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
-            emit, _scd2_config(), None, w1, notice_sink=discard_notice_sink
+            emit,
+            _scd2_config(),
+            None,
+            w1,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -404,11 +449,21 @@ def test_second_window_scd2_view_latest_version_null_valid_to(tmp_path: Path) ->
 
     with open_emit(emit_dir) as emit:
         specs0 = build_query_specs(
-            emit, _scd2_config(), None, w0, notice_sink=discard_notice_sink
+            emit,
+            _scd2_config(),
+            None,
+            w0,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
-            emit, _scd2_config(), None, w1, notice_sink=discard_notice_sink
+            emit,
+            _scd2_config(),
+            None,
+            w1,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -433,7 +488,12 @@ def test_atomicity_bad_sql_rolls_back(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w0,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs, out_path, w0, fingerprint="fp")
 
@@ -470,7 +530,12 @@ def test_connect_failure_raises_export_runtime_error(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w0,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         with pytest.raises(ExportRuntimeError, match="failed to open warehouse DuckDB"):
             write_duckdb_window(emit, specs, bad_path, w0, fingerprint="fp")
@@ -491,7 +556,12 @@ def test_range_path_no_meta_no_windows(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, _fact_dim_config(), None, window, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
@@ -508,7 +578,12 @@ def test_range_path_author_tables_present(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, _scd2_config(), None, window, notice_sink=discard_notice_sink
+            emit,
+            _scd2_config(),
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
@@ -532,11 +607,21 @@ def test_empty_window_still_logs_window_row(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs0 = build_query_specs(
-            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w0,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
-            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w1,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -560,11 +645,21 @@ def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         specs0 = build_query_specs(
-            emit, _fact_dim_config(), None, w0, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w0,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
-            emit, _fact_dim_config(), None, w1, notice_sink=discard_notice_sink
+            emit,
+            _fact_dim_config(),
+            None,
+            w1,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 

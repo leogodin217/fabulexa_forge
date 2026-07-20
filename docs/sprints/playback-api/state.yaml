@@ -2,7 +2,7 @@ sprint: playback-api
 parent_branch: create_playback
 baseline_sha: 1023b8dc8aed8ccb26dc0815009f2f6a1d09dba6
 started: 2026-07-19
-current_phase: 8
+current_phase: 9
 capabilities:
   - playback: [tier-1-primitive, tier-2-shaped]
   - derivations: [membership-state-at, state-at-end, truncated-tape]
@@ -40,7 +40,7 @@ phases:
     name: "tier-1 snapshot, seek, consistency algebra"
     demo: "docs/sprints/playback-api/demos/phase_7_snapshot_seek.py"
   8:
-    status: pending
+    status: complete
     name: "compile indirection (base_relations)"
     demo: "docs/sprints/playback-api/demos/phase_8_base_relations.py"
     steps:
