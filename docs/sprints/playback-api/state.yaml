@@ -2,7 +2,7 @@ sprint: playback-api
 parent_branch: create_playback
 baseline_sha: 1023b8dc8aed8ccb26dc0815009f2f6a1d09dba6
 started: 2026-07-19
-current_phase: 4
+current_phase: 5
 capabilities:
   - playback: [tier-1-primitive, tier-2-shaped]
   - derivations: [membership-state-at, state-at-end, truncated-tape]
@@ -24,7 +24,7 @@ phases:
     name: "truncated tape: history, membership, sidecar view"
     demo: "docs/sprints/playback-api/demos/phase_3_truncated_tape.py"
   4:
-    status: pending
+    status: complete
     name: "truncated records builder"
     demo: "docs/sprints/playback-api/demos/phase_4_truncated_records.py"
   5:

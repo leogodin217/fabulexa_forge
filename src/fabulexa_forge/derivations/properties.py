@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar
 
+from fabulexa_forge._sql import _sql_literal
 from fabulexa_forge.errors import ExportError
 
 
@@ -113,3 +114,69 @@ def has_presentation_id(sidecar: "Sidecar", kind: str) -> bool:
     table_name = f"records__{kind}"
     cols = sidecar.columns(table_name)  # raises TableNotFoundError if absent
     return any(col.name == "presentation_id" for col in cols)
+
+
+def build_history_asof_join(
+    fork_path: str,
+    kind: str,
+    prop: str,
+    alias: str,
+    bound_ns: int | None,
+    *,
+    inclusive: bool,
+) -> tuple[str, str]:
+    """Build a LEFT JOIN resolving one property's most-recent as-of history value.
+
+    The as-of lookup is a windowed rank over each record's history rows for
+    (kind, prop), taking the most-recent one — a plain LEFT JOIN, not an ASOF
+    JOIN (ASOF matches a per-row correlated time; there is none here). With
+    bound_ns given, only rows at-or-before (inclusive=True) or strictly before
+    (inclusive=False) the bound are ranked. With bound_ns None every history
+    row is ranked — "most recent" is unbounded (the tape's end); inclusive is
+    then unused.
+
+    Shared by state_at.py's build_state_at_sql / build_state_at_end_sql
+    (exclusive horizon, unbounded end) and truncated_tape.py's
+    build_truncated_records_sql (inclusive T) — the identical windowed-rank
+    pattern, parameterized by the bound's inclusivity, so it never drifts
+    between the two point-in-time reconstructions.
+
+    Args:
+        fork_path: The sole branch fork_path.
+        kind: The record kind.
+        prop: The tracked property name (without prop__ prefix).
+        alias: The subquery's SQL alias; must be unique within the enclosing
+            SELECT's FROM clause.
+        bound_ns: The reconstruction bound in sim-time ns, or None for no
+            bound (every history row ranked).
+        inclusive: Whether a row at exactly bound_ns is ranked (True) or
+            excluded (False). Ignored when bound_ns is None.
+
+    Returns:
+        A 2-tuple (join_sql, value_expr): the LEFT JOIN clause (leading
+        space, bound to alias) and the VARCHAR value expression to select
+        for this property's as-of value.
+    """
+    fp_lit = _sql_literal(fork_path)
+    kind_lit = _sql_literal(kind)
+    prop_lit = _sql_literal(prop)
+    if bound_ns is None:
+        bound_predicate = ""
+    else:
+        op = "<=" if inclusive else "<"
+        bound_predicate = f' AND "sim_time" {op} {bound_ns}'
+    join_sql = (
+        f" LEFT JOIN ("
+        f'SELECT "record_id", "value" FROM ('
+        f'SELECT "record_id", "value",'
+        f" ROW_NUMBER() OVER ("
+        f'PARTITION BY "record_id" ORDER BY "sim_time" DESC'
+        f') AS "_rn"'
+        f' FROM "history"'
+        f' WHERE "fork_path" = {fp_lit} AND "kind" = {kind_lit}'
+        f' AND "property" = {prop_lit}{bound_predicate}'
+        f') AS "_ranked" WHERE "_rn" = 1'
+        f') AS "{alias}" ON "{alias}"."record_id" = "_rec"."record_id"'
+    )
+    value_expr = f'CAST("{alias}"."value" AS VARCHAR)'
+    return join_sql, value_expr

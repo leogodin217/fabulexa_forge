@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 
 from fabulexa_forge._sql import _sql_literal
 from fabulexa_forge.derivations.properties import (
+    build_history_asof_join,
     has_presentation_id,
     partition_properties,
 )
@@ -50,12 +51,9 @@ def _build_tracked_prop_join(
 ) -> tuple[str, str]:
     """Build the LEFT JOIN resolving a tracked prop's most-recent as-of value.
 
-    The as-of lookup is a windowed rank over each record's history rows, taking the
-    most-recent one — a plain LEFT JOIN, not an ASOF JOIN (ASOF matches a per-row
-    correlated time; there is none here). With horizon_ns given, the horizon is a
-    single constant shared by every record and only rows strictly before it are
-    ranked. With horizon_ns None (the tape's end), every history row is ranked —
-    "most recent" is unbounded.
+    Thin wrapper over the shared `build_history_asof_join` (properties.py):
+    an exclusive horizon (only rows strictly before horizon_ns are ranked),
+    or no bound at all — the tape's end — when horizon_ns is None.
 
     Args:
         fork_path: The sole branch fork_path.
@@ -69,28 +67,9 @@ def _build_tracked_prop_join(
         bound to a per-property alias) and the VARCHAR value expression to select
         for this property's as-of value.
     """
-    alias = f"_h_{prop}"
-    fp_lit = _sql_literal(fork_path)
-    kind_lit = _sql_literal(kind)
-    prop_lit = _sql_literal(prop)
-    horizon_predicate = (
-        f' AND "sim_time" < {horizon_ns}' if horizon_ns is not None else ""
+    return build_history_asof_join(
+        fork_path, kind, prop, f"_h_{prop}", horizon_ns, inclusive=False
     )
-    join_sql = (
-        f" LEFT JOIN ("
-        f'SELECT "record_id", "value" FROM ('
-        f'SELECT "record_id", "value",'
-        f" ROW_NUMBER() OVER ("
-        f'PARTITION BY "record_id" ORDER BY "sim_time" DESC'
-        f') AS "_rn"'
-        f' FROM "history"'
-        f' WHERE "fork_path" = {fp_lit} AND "kind" = {kind_lit}'
-        f' AND "property" = {prop_lit}{horizon_predicate}'
-        f') AS "_ranked" WHERE "_rn" = 1'
-        f') AS "{alias}" ON "{alias}"."record_id" = "_rec"."record_id"'
-    )
-    value_expr = f'CAST("{alias}"."value" AS VARCHAR)'
-    return join_sql, value_expr
 
 
 def _resolve_kind_columns(
