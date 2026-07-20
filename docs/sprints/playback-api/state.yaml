@@ -2,7 +2,7 @@ sprint: playback-api
 parent_branch: create_playback
 baseline_sha: 1023b8dc8aed8ccb26dc0815009f2f6a1d09dba6
 started: 2026-07-19
-current_phase: 5
+current_phase: 6
 capabilities:
   - playback: [tier-1-primitive, tier-2-shaped]
   - derivations: [membership-state-at, state-at-end, truncated-tape]
@@ -28,7 +28,7 @@ phases:
     name: "truncated records builder"
     demo: "docs/sprints/playback-api/demos/phase_4_truncated_records.py"
   5:
-    status: pending
+    status: complete
     name: "tier-1 selection surface"
     demo: "docs/sprints/playback-api/demos/phase_5_selection.py"
   6:
