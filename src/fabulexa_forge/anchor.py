@@ -8,7 +8,7 @@ its own.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -216,6 +216,35 @@ def resolve_effective_anchor(
     zone = _resolve_zone(winning_tz_str)
     start_instant = _localize(winning_base_date, zone)
     return EffectiveAnchor(start_instant=start_instant, timezone=zone)
+
+
+def render_ts(event_sim_time: int, anchor: EffectiveAnchor | None) -> str | int:
+    """Render one event's wallclock timestamp from the effective anchor.
+
+    Adds the elapsed sim_time (nanoseconds) in the absolute UTC frame, then
+    projects into the anchor's timezone. Never uses wall-clock arithmetic on
+    the zone-aware start_instant (that mis-adds across DST boundaries). The
+    ns offset is truncated to whole microseconds before projection (Python
+    datetime precision) — the shipped precision rule every Python-side `ts` /
+    `_ts` rendering inherits verbatim, so one instant renders byte-identically
+    everywhere this function is the renderer.
+
+    Args:
+        event_sim_time: The event sim_time in nanoseconds.
+        anchor: The resolved EffectiveAnchor, or None for raw-ns output.
+
+    Returns:
+        An offset-bearing ISO-8601 string when the anchor resolves, else the
+        raw event_sim_time integer.
+    """
+    if anchor is None:
+        return event_sim_time
+
+    utc_origin = anchor.start_instant.astimezone(timezone.utc)
+    elapsed_us = event_sim_time // 1000
+    instant_utc = utc_origin + timedelta(microseconds=elapsed_us)
+    instant_local = instant_utc.astimezone(anchor.timezone)
+    return instant_local.isoformat()
 
 
 def render_anchor_timestamp_expr(
