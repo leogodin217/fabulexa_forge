@@ -806,3 +806,25 @@ def test_validate_table_refuses_slice_only_on_full_compile() -> None:
     with pytest.raises(ExportError) as exc_info:
         validate_table(tbl, config, sidecar, None, discard_notice_sink)
     _assert_slice_only_message(str(exc_info.value))
+
+
+# ---------------------------------------------------------------------------
+# ReservedPresentationName fires on a full (window=None) compile — always-on
+# (the presentation-name posture, Phase 9)
+# ---------------------------------------------------------------------------
+
+
+def test_validate_table_refuses_last_mutation_sim_time_on_full_compile(
+    tmp_path: Path,
+) -> None:
+    """An author-named output column last_mutation_sim_time raises at
+    load-time naming the fix, on a full (window=None) compile — the
+    presentation-name posture is always-on, not incremental-only."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        id_col = ColumnDecl(name="id", **{"from": "record_id"})
+        bad_col = ColumnDecl(name="last_mutation_sim_time", **{"from": "record_id"})
+        tbl = _make_table_decl(columns=[id_col, bad_col], key=["id"])
+        config = DimensionalConfig(tables=[tbl])
+        with pytest.raises(ExportError, match="last_mutation_sim_time"):
+            validate_table(tbl, config, emit.sidecar, None, discard_notice_sink)

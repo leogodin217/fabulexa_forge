@@ -1430,11 +1430,11 @@ def test_cmd_export_source_mode_snapshot_next_drip_grows(
     )
 
 
-def test_cmd_export_source_mode_snapshot_full_export_refused(
+def test_cmd_export_source_mode_snapshot_full_export_reconstructs(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A full (non-windowed) export with `change_delivery: snapshot` exits 1 with
-    the SourceSnapshotRequiresWindows message."""
+    """A full (non-windowed) export with `change_delivery: snapshot` succeeds,
+    reconstructing at the tape's end (Phase 9) instead of refusing."""
     emit_dir = build_source_emit(tmp_path / "emit")
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
@@ -1444,10 +1444,8 @@ def test_cmd_export_source_mode_snapshot_full_export_refused(
     out_dir.mkdir()
 
     exit_code = cmd_export(emit_dir, config_path, out_dir, "csv")
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "ERROR" in captured.err
-    assert "requires an incremental invocation" in captured.err
+    assert exit_code == 0
+    assert (out_dir / "location.csv").exists()
 
 
 def test_cmd_export_source_mode_change_delivery_mid_drip_fingerprint_mismatch(

@@ -7,8 +7,9 @@ fmt-selected writer via the shared `write_query_specs`. Optionally windowed
 (Unit 2): every spec is tagged its genre's write_mode. Under
 `change_delivery: snapshot` (Unit 3), a change-log-genre spec routes to
 `build_snapshot_render_sql` instead of the CDC render and is tagged
-`write_mode='replace'`; a full (non-windowed) export under `snapshot` raises
-`SourceSnapshotRequiresWindows`.
+`write_mode='replace'` when windowed, or `write_mode='create'` for a full
+(non-windowed) export — which reconstructs at the tape's end (§ Shaped
+state, "One mode semantic, redefined") rather than refusing.
 
 Layer-direction invariant: imports the reader, derivations.guard, the source
 plan/renders modules, config.models and anchor (TYPE_CHECKING only where
@@ -33,7 +34,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge.derivations.guard import require_single_branch
-from fabulexa_forge.errors import SourceAnchorRequired, SourceSnapshotRequiresWindows
+from fabulexa_forge.errors import SourceAnchorRequired
 from fabulexa_forge.exporters.base_relations import apply_base_relations
 from fabulexa_forge.exporters.query_spec import QuerySpec, write_query_specs
 from fabulexa_forge.exporters.source.plan import build_source_plan
@@ -46,11 +47,6 @@ _ANCHOR_REQUIRED_MESSAGE = (
     "source export renders wallclock timestamps and requires a resolved anchor:"
     " the emit declares no runtime block; supply rebase.base_date/timezone or"
     " --base-date/--timezone"
-)
-
-_SNAPSHOT_REQUIRES_WINDOWS_MESSAGE = (
-    "change_delivery: snapshot requires an incremental invocation; a full export"
-    " snapshot is current state at slice end"
 )
 
 #: Windowed write_mode per genre (§ Incremental composition). Full export
@@ -99,9 +95,9 @@ def _render_sql_for_spec(
     """Dispatch one output table to its render, honoring snapshot delivery.
 
     A change-log-genre spec under `snapshot` delivery routes to
-    `build_snapshot_render_sql` (window is guaranteed non-None here — the
-    caller raises `SourceSnapshotRequiresWindows` first); every other spec
-    routes to the genre dispatch in `renders.build_render_sql`.
+    `build_snapshot_render_sql`, which reconstructs at `window.end_ns` when
+    windowed or at the tape's end when window is None (a full export); every
+    other spec routes to the genre dispatch in `renders.build_render_sql`.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -116,7 +112,6 @@ def _render_sql_for_spec(
         The table's complete, ordered SELECT.
     """
     if table_spec.genre == "changelog" and change_delivery == "snapshot":
-        assert window is not None, "snapshot delivery requires a window (guarded)"
         return build_snapshot_render_sql(sidecar, fork_path, table_spec, anchor, window)
     return build_render_sql(sidecar, fork_path, table_spec, anchor, window)
 
@@ -146,9 +141,10 @@ def build_source_query_specs(
     snapshot (replace), junction extract-on-change with left_at
     horizon-masked (append). No source genre uses views. Under
     `change_delivery: snapshot`, a change-log-genre spec instead renders the
-    state-at derivation at `window.end_ns` and is tagged write_mode='replace'
-    (a full snapshot per window); window=None then raises
-    `SourceSnapshotRequiresWindows` rather than degrading to current-state.
+    state-at derivation: at `window.end_ns` when windowed (write_mode='replace',
+    a full snapshot per window), or at the tape's end when window=None (a full
+    export, write_mode='create') — "the tape's end" realized structurally, no
+    horizon ever computed (§ Shaped state, "One mode semantic, redefined").
 
     Args:
         emit: The open emit.
@@ -165,8 +161,6 @@ def build_source_query_specs(
 
     Raises:
         SourceAnchorRequired: anchor is None.
-        SourceSnapshotRequiresWindows: `config.source.change_delivery ==
-            'snapshot'` and window is None.
         ExportError: The single-branch guard or a source business rule fails
             (the SourceTableSpec resolution errors — § build_source_plan).
         TemporalClassUnavailableError: A consulted column's temporal pair is
@@ -182,8 +176,6 @@ def build_source_query_specs(
     change_delivery = (
         config.source.change_delivery if config.source is not None else "changelog"
     )
-    if change_delivery == "snapshot" and window is None:
-        raise SourceSnapshotRequiresWindows(_SNAPSHOT_REQUIRES_WINDOWS_MESSAGE)
 
     return [
         QuerySpec(
@@ -235,9 +227,6 @@ def export_source(
 
     Raises:
         SourceAnchorRequired: anchor is None.
-        SourceSnapshotRequiresWindows: `config.source.change_delivery ==
-            'snapshot'` — a full export always calls the compile with
-            window=None, which the mode refuses.
         ExportError: The single-branch guard or a source business rule fails.
         ExportRuntimeError: A writer fails.
         TemporalClassUnavailableError: A consulted column's temporal pair is

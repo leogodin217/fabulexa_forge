@@ -230,12 +230,6 @@ class SourceAnchorRequired(ExportError):
     `rebase`/CLI override supplied one."""
 
 
-class SourceSnapshotRequiresWindows(ExportError):
-    """`change_delivery='snapshot'` was combined with a full (non-windowed) export; a
-    full-export snapshot degenerates to current-state-at-slice-end, which the mode
-    refuses."""
-
-
 class SourceUnclassifiedColumn(ExportError):
     """
     A records-category column matched no records-column taxonomy role during

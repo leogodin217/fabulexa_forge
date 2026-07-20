@@ -2,7 +2,7 @@ sprint: playback-api
 parent_branch: create_playback
 baseline_sha: 1023b8dc8aed8ccb26dc0815009f2f6a1d09dba6
 started: 2026-07-19
-current_phase: 9
+current_phase: 10
 capabilities:
   - playback: [tier-1-primitive, tier-2-shaped]
   - derivations: [membership-state-at, state-at-end, truncated-tape]
@@ -61,7 +61,7 @@ phases:
           - "tests/recipes/test_source_recipes.py"
           - "tests/writers/test_duckdb_window.py"
   9:
-    status: pending
+    status: complete
     name: "the two declared mode changes"
     demo: "docs/sprints/playback-api/demos/phase_9_declared_changes.py"
   10:

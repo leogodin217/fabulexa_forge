@@ -6,7 +6,8 @@ OrdinalRefsSiblings, TimestampSourceAvailable, DiscriminatorValueObserved,
 ExcludedKindNotSourced, ExcludedTableNotSourced, FkTargetIsDim,
 ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
 Scd2ColumnModeSupported, SliceOnlyColumnRefused (filter keys, column
-reads, and fk hops — always-on, full export included).
+reads, and fk hops), ReservedPresentationName (last_mutation_sim_time —
+always-on, full export included).
 
 The SingleBranch rule is enforced by derivations.require_single_branch (the
 stage-wide guard); dimensional calls it but does not own it.
@@ -47,6 +48,7 @@ from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.reserved_names import (
+    RESERVED_PRESENTATION_COLUMN_NAME,
     is_reserved_column_name,
     is_reserved_table_name,
 )
@@ -709,6 +711,33 @@ def check_incremental_grain_supported(table_decl: "TableDecl") -> None:
         )
 
 
+def check_reserved_presentation_name(table_decl: "TableDecl") -> None:
+    """Enforce the presentation-name posture: no output column named
+    last_mutation_sim_time.
+
+    Always-on, full export included — unlike IncrementalReservedName's
+    `__valid_from_ns` / table-name checks below, which apply under
+    incremental export only. `last_mutation_sim_time` is a sim-internal
+    bookkeeping column: every value channel that reads it (the `from:` /
+    `correlation:` / `derived: timestamp` sources, `ordinal.order_by`) stays
+    untouched — only delivering it under its own output name is refused.
+
+    Args:
+        table_decl: The output table declaration.
+
+    Raises:
+        ExportError: A column resolves to output name last_mutation_sim_time.
+    """
+    for col_decl in table_decl.columns:
+        if col_decl.name == RESERVED_PRESENTATION_COLUMN_NAME:
+            raise ExportError(
+                f"table '{table_decl.name}': column '{col_decl.name}' names the"
+                " reserved last_mutation_sim_time column — it is sim-internal"
+                " bookkeeping; deliver its value under a presentation name (a"
+                " `from:` source) instead"
+            )
+
+
 def check_incremental_reserved_names(table_decl: "TableDecl") -> None:
     """Enforce IncrementalReservedName: no reserved table or column names.
 
@@ -1146,7 +1175,8 @@ def validate_table(
     TimestampSourceAvailable, DiscriminatorValueObserved, FkTargetIsDim,
     ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
     Scd2ColumnModeSupported, LookupColumnSafety, SliceOnlyColumnRefused
-    (filter keys, column reads, fk hops — always-on, full export included).
+    (filter keys, column reads, fk hops), ReservedPresentationName
+    (last_mutation_sim_time — always-on, full export included).
 
     When window is not None, also runs the ten incremental gates:
     IncrementalGrainUnsupported, IncrementalElapsedUnsupported,
@@ -1189,6 +1219,7 @@ def validate_table(
     check_key_columns_declared(table_decl)
     check_discriminator_value_observed(source, sidecar, notice_sink)
     check_slice_only_filter_keys(source, table_decl, source_table_name, sidecar)
+    check_reserved_presentation_name(table_decl)
 
     if table_decl.scd == "type2":
         check_scd2_needs_history(table_decl, source_table_name, sidecar)

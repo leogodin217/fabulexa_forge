@@ -11,7 +11,9 @@ window membership: change-log by `event_sim_time`, transaction by
 junction extract-on-change with `left_at` horizon-masking. Also covers
 `build_snapshot_render_sql` (change_delivery: snapshot, Unit 3): composing
 `build_state_at_sql` at `window.end_ns`, omitting `updated_at`, and
-horizon-rendering `active`/`deactivated_at`.
+horizon-rendering `active`/`deactivated_at` — and, horizon-less (Phase 9,
+`window=None`), composing `build_state_at_end_sql` to reconstruct at the
+tape's end instead of refusing.
 """
 
 from __future__ import annotations
@@ -30,7 +32,10 @@ from fabulexa_forge.anchor import (
 )
 from fabulexa_forge.config.models import SourceConfig
 from fabulexa_forge.derivations.guard import require_single_branch
-from fabulexa_forge.derivations.state_at import build_state_at_sql
+from fabulexa_forge.derivations.state_at import (
+    build_state_at_end_sql,
+    build_state_at_sql,
+)
 from fabulexa_forge.exporters.source.plan import SourceTableSpec, build_source_plan
 from fabulexa_forge.exporters.source.renders import (
     build_changelog_render_sql,
@@ -54,12 +59,19 @@ from ._source_fixtures import (
 @contextmanager
 def _spanning_emit(
     tmp_path: Path,
+    config: "SourceConfig | None" = None,
 ) -> Iterator[tuple[Emit, tuple[SourceTableSpec, ...], str, EffectiveAnchor]]:
-    """Open the spanning fixture emit and resolve its plan, fork_path, and anchor."""
+    """Open the spanning fixture emit and resolve its plan, fork_path, and anchor.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+        config: The source config to resolve the plan under, or None for the
+            bare-mode defaults (change_delivery='changelog').
+    """
     emit_dir = build_source_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         fork_path = require_single_branch(emit.sidecar)
-        specs = build_source_plan(emit.sidecar, None, notice_sink=discard_notice_sink)
+        specs = build_source_plan(emit.sidecar, config, notice_sink=discard_notice_sink)
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         yield emit, specs, fork_path, anchor
@@ -532,6 +544,51 @@ def test_snapshot_render_horizon_renders_active_deactivated_at(tmp_path: Path) -
     # ...but at or before w2's horizon.
     assert rows_w2["v002"]["active"] is False
     assert "2024-01-01" in str(rows_w2["v002"]["deactivated_at"])
+
+
+# ---------------------------------------------------------------------------
+# Horizon-less snapshot delivery (Phase 9): reconstruct at the tape's end
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_render_window_none_composes_build_state_at_end_sql(
+    tmp_path: Path,
+) -> None:
+    """window=None composes build_state_at_end_sql — no horizon parameter, no
+    horizon predicate."""
+    with _spanning_emit(tmp_path, _SNAPSHOT_CONFIG) as (emit, specs, fork_path, anchor):
+        spec = _spec_for(specs, "records__visit")
+        sql = build_snapshot_render_sql(emit.sidecar, fork_path, spec, anchor, None)
+        properties = frozenset(
+            src[len("prop__") :] for src, _ in spec.columns if src.startswith("prop__")
+        )
+        expected_state_at_end = build_state_at_end_sql(
+            emit.sidecar, fork_path, "visit", properties
+        )
+    assert expected_state_at_end in sql
+
+
+def test_snapshot_render_window_none_deactivated_after_last_history_event(
+    tmp_path: Path,
+) -> None:
+    """A record deactivated after its last history event (v003) renders
+    inactive end-of-tape — the lifecycle-instant case a history-only horizon
+    would get wrong; a still-active record's tracked value is its latest
+    recorded history value, constant its current records value."""
+    with _spanning_emit(tmp_path, _SNAPSHOT_CONFIG) as (emit, specs, fork_path, anchor):
+        spec = _spec_for(specs, "records__visit")
+        rows = {
+            r["id"]: r
+            for r in _mapped_rows(
+                emit,
+                spec,
+                build_snapshot_render_sql(emit.sidecar, fork_path, spec, anchor, None),
+            )
+        }
+    assert rows["v003"]["active"] is False
+    assert rows["v003"]["deactivated_at"] is not None
+    assert rows["v002"]["active"] is True
+    assert rows["v002"]["status"] == "closed"  # latest recorded history value
 
 
 # ---------------------------------------------------------------------------
