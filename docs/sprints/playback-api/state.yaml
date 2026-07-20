@@ -2,7 +2,7 @@ sprint: playback-api
 parent_branch: create_playback
 baseline_sha: 1023b8dc8aed8ccb26dc0815009f2f6a1d09dba6
 started: 2026-07-19
-current_phase: 2
+current_phase: 3
 capabilities:
   - playback: [tier-1-primitive, tier-2-shaped]
   - derivations: [membership-state-at, state-at-end, truncated-tape]
@@ -16,7 +16,7 @@ phases:
     name: "membership-state-at derivation"
     demo: "docs/sprints/playback-api/demos/phase_1_membership_state_at.py"
   2:
-    status: pending
+    status: complete
     name: "end-of-tape state entry point"
     demo: "docs/sprints/playback-api/demos/phase_2_state_at_end.py"
   3:
