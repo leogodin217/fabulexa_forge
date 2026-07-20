@@ -1,8 +1,8 @@
 """The playback head: `open_playback` and the `Playback` class.
 
 Binds an open emit and a validated atom selection into a pull-only,
-deterministic tape head. Phase 6 delivers `events`; later phases add
-`snapshot` and `seek` to the same class.
+deterministic tape head. `events` (Phase 6) and `snapshot` / `seek` (Phase 7)
+compose the same (emit, resolved selection, anchor, fork_path) binding.
 
 Layer-direction invariant: imports the reader, the derivations single-branch
 guard, `fabulexa_forge.playback.*`, and stdlib. Never imports exporters.* or
@@ -17,6 +17,7 @@ from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.playback.events import PlaybackEvent, iter_playback_events
 from fabulexa_forge.playback.selection import resolve_selection
+from fabulexa_forge.playback.snapshot import PlaybackPosition, PlaybackSnapshot
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -52,6 +53,19 @@ def _validate_event_bounds(
             f"start_sim_time ({start_sim_time}) must be <= end_sim_time"
             f" ({end_sim_time})"
         )
+
+
+def _validate_at_sim_time(at_sim_time: int) -> None:
+    """AskBoundsValid: reject a negative snapshot/seek position.
+
+    Args:
+        at_sim_time: The caller's inclusive position T.
+
+    Raises:
+        PlaybackError: at_sim_time < 0.
+    """
+    if at_sim_time < 0:
+        raise PlaybackError(f"at_sim_time must be >= 0, got {at_sim_time}")
 
 
 class Playback:
@@ -99,6 +113,51 @@ class Playback:
             self._fork_path,
             start_sim_time,
             end_sim_time,
+        )
+
+    def snapshot(self, at_sim_time: int) -> PlaybackSnapshot:
+        """Point-in-time state at inclusive position T.
+
+        Reflects every in-scope event with event_sim_time <= at_sim_time and
+        nothing after: record state per selected kind (state-at fold, horizon
+        at_sim_time + 1) and membership containment per selected membership
+        table (membership-state-at fold, same horizon), each restricted to
+        the selection's populations and instances.
+
+        Args:
+            at_sim_time: The inclusive position T (ns); >= 0.
+
+        Returns:
+            A lazy PlaybackSnapshot; tables materialize on first access.
+
+        Raises:
+            PlaybackError: at_sim_time < 0.
+        """
+        _validate_at_sim_time(at_sim_time)
+        return PlaybackSnapshot(
+            self._emit, self._resolved, self._anchor, self._fork_path, at_sim_time
+        )
+
+    def seek(self, at_sim_time: int) -> PlaybackPosition:
+        """Position the head at T: state as of T plus the stream after T.
+
+        Pure composition, contract-guaranteed consistent: the position's
+        snapshot is snapshot(at_sim_time) and its events are
+        events(at_sim_time + 1, None), so replaying the events over the
+        snapshot reproduces any later snapshot (the consistency algebra).
+
+        Args:
+            at_sim_time: The inclusive position T (ns); >= 0.
+
+        Returns:
+            A PlaybackPosition; both halves are lazy.
+
+        Raises:
+            PlaybackError: at_sim_time < 0.
+        """
+        _validate_at_sim_time(at_sim_time)
+        return PlaybackPosition(
+            self._emit, self._resolved, self._anchor, self._fork_path, at_sim_time
         )
 
 
