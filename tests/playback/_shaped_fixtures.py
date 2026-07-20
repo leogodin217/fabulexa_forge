@@ -5,8 +5,13 @@ One emit exercises every class/genre `tables()` must classify:
       a records-grain type-1 dim in a dimensional shape.
   - records__shipment: untracked, role 'fact' -> source genre 'transaction';
       a records-grain fact in a dimensional shape.
-  - records__widget: tracked (prop__status) -> source genre 'changelog'.
-  - membership__widget__parts: -> source genre 'junction'; a membership-grain
+  - records__widget: tracked (prop__status), 2 history points (sim_time 0,
+      10) -> source genre 'changelog'; also a history_point fact and an
+      SCD-2 dim in a dimensional shape.
+  - membership__widget__parts: 2 rows — one still-open interval
+      (joined_sim_time=5, no leave) and one closed interval
+      (joined_sim_time=2, left_sim_time=8) exercising extract-on-change
+      left_at horizon-masking -> source genre 'junction'; a membership-grain
       table in a dimensional shape (the windowed-grain rule's rejection case).
 
 Every base.json write routes through `_support.sidecar_builder.write_emit`;
@@ -23,8 +28,10 @@ from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from fabulexa_forge.config.models import (
     ColumnDecl,
+    DerivedSpec,
     DimensionalConfig,
     ExportConfig,
+    SourceConfig,
     SourceDecl,
     TableDecl,
 )
@@ -165,6 +172,10 @@ def build_shaped_test_emit(tmp_path: "Path") -> "Path":
         'INSERT INTO "membership__widget__parts" VALUES (?, ?, ?, NULL, ?)',
         [FORK_PATH, "w1", 5, "bolt"],
     )
+    conn.execute(
+        'INSERT INTO "membership__widget__parts" VALUES (?, ?, ?, ?, ?)',
+        [FORK_PATH, "w1", 2, 8, "nut"],
+    )
     conn.close()
 
     write_emit(
@@ -188,7 +199,7 @@ def build_shaped_test_emit(tmp_path: "Path") -> "Path":
                 "membership__widget__parts",
                 "membership",
                 _WIDGET_PARTS_COLUMNS,
-                1,
+                2,
                 record_kind="widget",
                 property_name="parts",
             ),
@@ -234,6 +245,7 @@ def dimensional_shape_config() -> ExportConfig:
                     columns=[
                         _from_col("id", "record_id"),
                         _from_col("amount", "prop__amount"),
+                        _from_col("mutated_at", "last_mutation_sim_time"),
                     ],
                 ),
                 TableDecl(
@@ -261,3 +273,78 @@ def source_shape_config() -> ExportConfig:
     (changelog -> append), widget_parts (junction -> append).
     """
     return ExportConfig(mode="source")
+
+
+def source_snapshot_delivery_shape_config() -> ExportConfig:
+    """The source shape with `change_delivery: snapshot` — the widget
+    changelog table reconstructs a full-table state-at snapshot per window
+    instead of appending event rows."""
+    return ExportConfig(mode="source", source=SourceConfig(change_delivery="snapshot"))
+
+
+def windowable_dimensional_shape_config() -> ExportConfig:
+    """A dimensional shape carrying every windowable class, no windowed-grain
+    rejection: dim_gadget (type-1, snapshot), fact_shipment (records fact,
+    append), fact_widget_status (history_point fact, append), and
+    dim_widget_status (SCD-2, append)."""
+    return ExportConfig(
+        mode="dimensional",
+        dimensional=DimensionalConfig(
+            tables=[
+                TableDecl(
+                    name="dim_gadget",
+                    role="dim",
+                    scd="type1",
+                    source=SourceDecl(grain="records", kind="gadget"),
+                    key=["id"],
+                    columns=[
+                        _from_col("id", "record_id"),
+                        _from_col("name", "prop__name"),
+                    ],
+                ),
+                TableDecl(
+                    name="fact_shipment",
+                    role="fact",
+                    source=SourceDecl(grain="records", kind="shipment"),
+                    key=["id"],
+                    columns=[
+                        _from_col("id", "record_id"),
+                        _from_col("amount", "prop__amount"),
+                        _from_col("mutated_at", "last_mutation_sim_time"),
+                    ],
+                ),
+                TableDecl(
+                    name="fact_widget_status",
+                    role="fact",
+                    source=SourceDecl(
+                        grain="history_point", kind="widget", property="status"
+                    ),
+                    key=["record_id", "sim_time"],
+                    columns=[
+                        _from_col("record_id", "record_id"),
+                        _from_col("sim_time", "sim_time"),
+                        _from_col("status", "value"),
+                    ],
+                ),
+                TableDecl(
+                    name="dim_widget_status",
+                    role="dim",
+                    scd="type2",
+                    source=SourceDecl(grain="records", kind="widget"),
+                    key=["id", "valid_from"],
+                    columns=[
+                        _from_col("id", "record_id"),
+                        _from_col("status", "prop__status"),
+                        ColumnDecl(
+                            name="valid_from",
+                            derived=DerivedSpec(scd_window="valid_from"),
+                        ),
+                        ColumnDecl(
+                            name="valid_to",
+                            derived=DerivedSpec(scd_window="valid_to"),
+                        ),
+                    ],
+                ),
+            ]
+        ),
+    )

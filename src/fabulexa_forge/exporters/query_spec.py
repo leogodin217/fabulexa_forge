@@ -35,6 +35,25 @@ class QuerySpec:
     view_sql: str | None
 
 
+def query_spec_output_name(spec: QuerySpec) -> str:
+    """The spec's author-facing output-table name.
+
+    An SCD-2 dim windowed with a `valid_to` column compiles to a physical
+    `<name>__rows` spec plus a companion view named the author's declared
+    table name (`view_name`); every other spec carries no view, so its
+    `table_name` already is the author name. Shared by the incremental
+    driver's CSV writer and tier-2 `ShapedPlayback.window()` so the two
+    surfaces name a windowed SCD-2 dim's output identically.
+
+    Args:
+        spec: A compiled QuerySpec.
+
+    Returns:
+        `spec.view_name` when present, else `spec.table_name`.
+    """
+    return spec.view_name if spec.view_name is not None else spec.table_name
+
+
 def write_query_specs(
     emit: "Emit",
     specs: list[QuerySpec],

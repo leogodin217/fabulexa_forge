@@ -26,6 +26,7 @@ from fabulexa_forge.errors import (
     IncrementalFingerprintMismatch,
     IncrementalRangeTargetExists,
 )
+from fabulexa_forge.exporters.query_spec import query_spec_output_name
 from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
     Cursor,
@@ -274,8 +275,7 @@ def _write_csv_specs(
 
     row_counts: dict[str, int] = {}
     for spec in specs:
-        # SCD-2 __rows specs carry view_name = author's table name
-        author_name = spec.view_name if spec.view_name is not None else spec.table_name
+        author_name = query_spec_output_name(spec)
         rows = write_csv(emit, author_name, spec.sql, target_dir)
         row_counts[author_name] = rows
     return row_counts
