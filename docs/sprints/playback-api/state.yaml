@@ -1,0 +1,78 @@
+sprint: playback-api
+parent_branch: create_playback
+baseline_sha: 1023b8dc8aed8ccb26dc0815009f2f6a1d09dba6
+started: 2026-07-19
+current_phase: 1
+capabilities:
+  - playback: [tier-1-primitive, tier-2-shaped]
+  - derivations: [membership-state-at, state-at-end, truncated-tape]
+  - exporters: [base-relations-indirection, lmst-reserved-name, endless-snapshot-delivery]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "membership-state-at derivation"
+    demo: "docs/sprints/playback-api/demos/phase_1_membership_state_at.py"
+  2:
+    status: pending
+    name: "end-of-tape state entry point"
+    demo: "docs/sprints/playback-api/demos/phase_2_state_at_end.py"
+  3:
+    status: pending
+    name: "truncated tape: history, membership, sidecar view"
+    demo: "docs/sprints/playback-api/demos/phase_3_truncated_tape.py"
+  4:
+    status: pending
+    name: "truncated records builder"
+    demo: "docs/sprints/playback-api/demos/phase_4_truncated_records.py"
+  5:
+    status: pending
+    name: "tier-1 selection surface"
+    demo: "docs/sprints/playback-api/demos/phase_5_selection.py"
+  6:
+    status: pending
+    name: "tier-1 events"
+    demo: "docs/sprints/playback-api/demos/phase_6_events.py"
+  7:
+    status: pending
+    name: "tier-1 snapshot, seek, consistency algebra"
+    demo: "docs/sprints/playback-api/demos/phase_7_snapshot_seek.py"
+  8:
+    status: pending
+    name: "compile indirection (base_relations)"
+    demo: "docs/sprints/playback-api/demos/phase_8_base_relations.py"
+    steps:
+      - kind: source
+        summary: "Add required base_relations param to both pure compile surfaces; shadow_base_relations CTE wrap; production callers (engines, incremental driver) pass None; binding-rule pin tests + demo"
+      - kind: migrate
+        tactic: fan-out
+        change: "build_query_specs / build_source_query_specs gain a required base_relations parameter — every direct call site adds base_relations=None"
+        files:
+          - "tests/exporters/test_notices.py"
+          - "tests/exporters/dimensional/test_fk.py"
+          - "tests/exporters/dimensional/test_grains.py"
+          - "tests/exporters/dimensional/test_lookup.py"
+          - "tests/exporters/dimensional/test_scd.py"
+          - "tests/exporters/dimensional/test_scd2_source_filter.py"
+          - "tests/exporters/dimensional/test_windowed.py"
+          - "tests/exporters/source/test_engine.py"
+          - "tests/recipes/test_source_recipes.py"
+          - "tests/writers/test_duckdb_window.py"
+  9:
+    status: pending
+    name: "the two declared mode changes"
+    demo: "docs/sprints/playback-api/demos/phase_9_declared_changes.py"
+  10:
+    status: pending
+    name: "tier-2 open and tables"
+    demo: "docs/sprints/playback-api/demos/phase_10_shaped_open.py"
+  11:
+    status: pending
+    name: "tier-2 window"
+    demo: "docs/sprints/playback-api/demos/phase_11_shaped_window.py"
+  12:
+    status: pending
+    name: "tier-2 state and the bridging theorem"
+    demo: "docs/sprints/playback-api/demos/phase_12_shaped_state.py"
