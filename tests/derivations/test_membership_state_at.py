@@ -123,7 +123,12 @@ def _run_state_at_sql(
 ) -> list[tuple[Any, ...]]:
     with open_emit(emit_dir) as emit:
         sql = build_membership_state_at_sql(
-            emit.sidecar, FORK_PATH, owner_kind, property_name, fields, horizon_ns
+            emit.sidecar,
+            FORK_PATH,
+            owner_kind,
+            property_name,
+            tuple(fields),
+            horizon_ns,
         )
         return emit.query(sql, ())
 
@@ -278,7 +283,7 @@ class TestBuildMembershipStateAtSql:
         with open_emit(emit_dir) as emit:
             with pytest.raises(TableNotFoundError):
                 build_membership_state_at_sql(
-                    emit.sidecar, FORK_PATH, "queue", "no_table", [], 100
+                    emit.sidecar, FORK_PATH, "queue", "no_table", (), 100
                 )
 
     def test_raises_export_error_on_unknown_field(self, tmp_path: Path) -> None:
@@ -291,6 +296,6 @@ class TestBuildMembershipStateAtSql:
                     FORK_PATH,
                     "queue",
                     "waiters",
-                    ["no_such_field"],
+                    ("no_such_field",),
                     100,
                 )

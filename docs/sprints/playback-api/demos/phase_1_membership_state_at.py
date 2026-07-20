@@ -87,7 +87,7 @@ def _print_containment(emit_dir: Path, horizon_ns: int) -> list[tuple[object, ..
     """Materialize and print the containment rows at one horizon."""
     with open_emit(emit_dir) as emit:
         sql = build_membership_state_at_sql(
-            emit.sidecar, _FORK_PATH, "queue", "waiters", ["priority"], horizon_ns
+            emit.sidecar, _FORK_PATH, "queue", "waiters", ("priority",), horizon_ns
         )
         rows = emit.query(sql, ())
     print(f"--- horizon_ns={horizon_ns} ---")

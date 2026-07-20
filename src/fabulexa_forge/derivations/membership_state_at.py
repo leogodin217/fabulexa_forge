@@ -11,7 +11,7 @@ stdlib. Never imports exporters.* or config.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -33,7 +33,7 @@ def build_membership_state_at_sql(
     fork_path: str,
     owner_kind: str,
     property_name: str,
-    fields: Sequence[str],
+    fields: tuple[str, ...],
     horizon_ns: int,
 ) -> str:
     """Build the canonical membership containment SELECT at one horizon.
