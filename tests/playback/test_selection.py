@@ -455,10 +455,16 @@ def _imported_module_names(file_path: Path) -> set[str]:
 
 
 def test_playback_package_imports_no_exporters_or_config() -> None:
+    """Tier 1 (every module but `shaped.py`) imports no `exporters.*` / `config`
+    name. `shaped.py` (tier 2) is the seam's one deliberate crossing — it wraps
+    the exporters' own compile surfaces rather than reimplementing their
+    business rules (design doc § Shaped playback (tier 2))."""
     package_dir = (
         Path(__file__).resolve().parents[2] / "src" / "fabulexa_forge" / "playback"
     )
     for py_file in package_dir.glob("*.py"):
+        if py_file.name == "shaped.py":
+            continue
         for module_name in _imported_module_names(py_file):
             assert "exporters" not in module_name, f"{py_file}: imports {module_name}"
             assert not module_name.endswith(".config") and module_name != "config", (
