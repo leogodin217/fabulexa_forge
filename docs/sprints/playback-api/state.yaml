@@ -73,6 +73,6 @@ phases:
     name: "tier-2 window"
     demo: "docs/sprints/playback-api/demos/phase_11_shaped_window.py"
   12:
-    status: pending
+    status: complete
     name: "tier-2 state and the bridging theorem"
     demo: "docs/sprints/playback-api/demos/phase_12_shaped_state.py"

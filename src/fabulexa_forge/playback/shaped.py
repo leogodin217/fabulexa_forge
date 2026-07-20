@@ -11,15 +11,23 @@ compile verbatim — the same `build_query_specs` / `build_source_query_specs`
 call the driver's `export_window` makes, executed against the head's emit
 connection instead of written to a file — so window content and the windowed
 business rules (ask-scoped, validated on the first `window()` call) are the
-shipped ones, never reimplemented. `.state()` (Phase 12) lands later.
+shipped ones, never reimplemented. `ShapedPlayback.state()` runs the same
+mode's full-export compile (window=None) against the truncated tape: the
+compile indirection's `base_relations` mapping (one entry per sidecar base
+table, built from the derivations-owned truncated-tape builders) plus the
+truncated sidecar view (a second `Emit` composed over the head's own open
+connection), so every faithful builder enumerates exactly the columns the
+truncated relations carry and the mode never sees a horizon — the bridging
+theorem's realization.
 
 Layer-direction invariant: unlike the rest of `fabulexa_forge.playback`, this
 module is the seam's one crossing into `exporters.*` / `config` — tier 2 wraps
 the exporters' own compile surfaces rather than reimplementing their business
-rules. Imports the reader, the derivations single-branch guard, `config.models`,
-`exporters.notices`, the dimensional validation/engine modules, the source
-plan/engine modules, `exporters.query_spec`, `incremental.windows`,
-`fabulexa_forge.errors`, `fabulexa_forge.playback.errors`, and stdlib.
+rules. Imports the reader, `derivations.guard`, `derivations.truncated_tape`,
+`config.models`, `exporters.notices`, the dimensional validation/engine
+modules, the source plan/engine modules, `exporters.query_spec`,
+`incremental.windows`, `fabulexa_forge.errors`, `fabulexa_forge.playback.errors`,
+and stdlib.
 """
 
 from __future__ import annotations
@@ -28,6 +36,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 from fabulexa_forge.derivations.guard import require_single_branch
+from fabulexa_forge.derivations.truncated_tape import (
+    build_truncated_history_sql,
+    build_truncated_membership_sql,
+    build_truncated_records_sql,
+    build_truncated_sidecar,
+)
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.validation import (
@@ -39,6 +53,7 @@ from fabulexa_forge.exporters.source.engine import build_source_query_specs
 from fabulexa_forge.exporters.source.plan import build_source_plan
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.playback.errors import PlaybackError
+from fabulexa_forge.reader.emit import Emit
 
 if TYPE_CHECKING:
     import pyarrow as pa
@@ -48,7 +63,6 @@ if TYPE_CHECKING:
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.query_spec import QuerySpec
     from fabulexa_forge.exporters.source.plan import SourceTableSpec
-    from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
 
 _SOURCE_ANCHOR_REQUIRED_MSG = (
@@ -60,6 +74,10 @@ _SOURCE_ANCHOR_REQUIRED_MSG = (
 _WINDOW_BOUNDS_INVALID_MSG = (
     "invalid window bounds: start_sim_time={start} must be >= 0 and"
     " end_sim_time={end} must be >= start_sim_time"
+)
+
+_STATE_TIME_INVALID_MSG = (
+    "invalid state position: at_sim_time={at_sim_time} must be >= 0"
 )
 
 
@@ -222,6 +240,123 @@ def _compile_window_specs(
     )
 
 
+def _truncated_base_relations(
+    sidecar: "Sidecar",
+    fork_path: str,
+    at_sim_time: int,
+) -> dict[str, str]:
+    """Build state()'s base_relations mapping: one entry per sidecar base table.
+
+    Every base table the sidecar declares — history, every records__<kind>,
+    every membership__<K>__<p> — maps to its truncated-at-T replacement, never
+    just the shape's declared sources: an fk hop or lookup read that targets a
+    kind outside the shape must still resolve truncated (§ The compile
+    indirection), so an unmapped fallback to a physical base table is
+    unreachable under state().
+
+    Args:
+        sidecar: The open emit's physical sidecar (the builders' own
+            truncation logic — is_non_exempt_slice_only, temporal_class —
+            reads the full declared column list).
+        fork_path: The sole branch, from require_single_branch.
+        at_sim_time: The inclusive truncation position T (ns); >= 0.
+
+    Returns:
+        Physical base-table name -> replacing relation SELECT, one entry per
+        table sidecar.tables() declares.
+    """
+    mapping: dict[str, str] = {}
+    for table in sidecar.tables():
+        if table.category == "fixed":
+            mapping[table.name] = build_truncated_history_sql(fork_path, at_sim_time)
+        elif table.category == "records":
+            assert table.record_kind is not None  # C1: schema-required for records
+            mapping[table.name] = build_truncated_records_sql(
+                sidecar, fork_path, table.record_kind, at_sim_time
+            )
+        else:  # "membership"
+            assert table.record_kind is not None  # C1: schema-required
+            assert table.property is not None  # C1: schema-required
+            mapping[table.name] = build_truncated_membership_sql(
+                sidecar, fork_path, table.record_kind, table.property, at_sim_time
+            )
+    return mapping
+
+
+def _truncated_emit_view(emit: "Emit", truncated_sidecar: "Sidecar") -> "Emit":
+    """Compose the truncated emit view over the caller's own open connection.
+
+    The reader's public composition (`Emit(sidecar=..., emit_dir=..., conn=...)`,
+    § Shaped state) — reuses `emit`'s already-open DuckDB connection rather
+    than opening a second one to the same run.duckdb, so the view shares the
+    caller's connection and the seam never closes it: the returned Emit is
+    read from, never `.close()`d, and `emit` stays fully usable after state()
+    returns.
+
+    Args:
+        emit: The physical emit whose connection this view shares.
+        truncated_sidecar: `build_truncated_sidecar(emit.sidecar)`.
+
+    Returns:
+        An Emit presenting truncated_sidecar over emit's open connection.
+    """
+    return Emit(sidecar=truncated_sidecar, emit_dir=emit.emit_dir, conn=emit._conn)
+
+
+def _compile_state_specs(
+    truncated_emit: "Emit",
+    config: "ExportConfig",
+    anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
+    base_relations: dict[str, str],
+) -> "list[QuerySpec]":
+    """Dispatch a shape's state(T) compile to its mode's full-export engine.
+
+    The mode's full-export compile (window=None — write_mode='create' on
+    every spec, the full-export tag both modes already emit) against the
+    truncated emit view, with base_relations mapping every sidecar base table
+    to its truncated-at-T replacement (§ The compile indirection) — the mode
+    never sees a horizon. A state-only shape never runs the windowed business
+    rules: window=None skips check_incremental_grain_supported / the
+    incremental-* refusals entirely.
+
+    Args:
+        truncated_emit: The truncated emit view (§ Shaped state).
+        config: The target shape.
+        anchor: The resolved effective anchor, or None.
+        notice_sink: Receiver for plan notices.
+        base_relations: Physical base-table name -> replacing relation SELECT,
+            one entry per sidecar base table.
+
+    Returns:
+        One QuerySpec per declared output table, in the mode's deterministic
+        compile order.
+
+    Raises:
+        ExportError: A config business rule fails for the shape.
+        TemporalClassUnavailableError: A consulted column's temporal pair is
+            unavailable (non-conformant emit).
+    """
+    if config.mode == "source":
+        return build_source_query_specs(
+            truncated_emit,
+            config,
+            anchor,
+            None,
+            notice_sink,
+            base_relations=base_relations,
+        )
+    assert config.dimensional is not None
+    return build_query_specs(
+        truncated_emit,
+        config.dimensional,
+        anchor,
+        None,
+        notice_sink,
+        base_relations=base_relations,
+    )
+
+
 def _open_dimensional(
     config: "DimensionalConfig",
     sidecar: "Sidecar",
@@ -376,6 +511,53 @@ class ShapedPlayback:
             ShapedTable(
                 name=query_spec_output_name(spec),
                 delivery=_delivery_for_write_mode(spec.write_mode),
+                table=self._emit.query_arrow(spec.sql, ()),
+            )
+            for spec in specs
+        )
+
+    def state(self, at_sim_time: int) -> tuple[ShapedTable, ...]:
+        """The shape's tables as if the emit's slice ended at T (inclusive).
+
+        The mode's full-export compile over the truncated tape (§ Shaped
+        state); delivery is 'snapshot' on every table. state(T_slice) is
+        value-identical to the shape's full export (the bridging theorem).
+
+        Args:
+            at_sim_time: The inclusive position T (ns); >= 0.
+
+        Returns:
+            One ShapedTable per declared output table, in tables() order.
+
+        Raises:
+            PlaybackError: at_sim_time < 0. No slice_only gate exists
+                here: a plan projecting or value-reading a slice_only
+                column cannot open (the modes' always-on refusal at
+                open_shaped_playback — the slice_only precondition), so
+                every openable plan binds against the truncated tape.
+                last_mutation_sim_time reads bind against the recorded
+                trail the view presents, honest at T.
+        """
+        if at_sim_time < 0:
+            raise PlaybackError(_STATE_TIME_INVALID_MSG.format(at_sim_time=at_sim_time))
+
+        sidecar = self._emit.sidecar
+        fork_path = require_single_branch(sidecar)
+        base_relations = _truncated_base_relations(sidecar, fork_path, at_sim_time)
+        truncated_emit = _truncated_emit_view(
+            self._emit, build_truncated_sidecar(sidecar)
+        )
+        specs = _compile_state_specs(
+            truncated_emit,
+            self._config,
+            self._anchor,
+            self._notice_sink,
+            base_relations,
+        )
+        return tuple(
+            ShapedTable(
+                name=query_spec_output_name(spec),
+                delivery="snapshot",
                 table=self._emit.query_arrow(spec.sql, ()),
             )
             for spec in specs
