@@ -25,6 +25,8 @@ Public surface:
     EVENT_CLASS_LEAVE         — event_class value for leave events (1)
     resolve_membership_columns — membership after-image column order resolver
     build_membership_events_sql — membership join/leave event stream SQL builder
+    MEMBERSHIP_STATE_AT_COLUMNS — canonical membership-state-at column prefix
+    build_membership_state_at_sql — membership containment-at-horizon SQL builder
 """
 
 from fabulexa_forge.derivations.guard import require_single_branch
@@ -34,6 +36,10 @@ from fabulexa_forge.derivations.membership_events import (
     MEMBERSHIP_EVENT_COLUMNS,
     build_membership_events_sql,
     resolve_membership_columns,
+)
+from fabulexa_forge.derivations.membership_state_at import (
+    MEMBERSHIP_STATE_AT_COLUMNS,
+    build_membership_state_at_sql,
 )
 from fabulexa_forge.derivations.reference_resolution import (
     REFERENCE_RESOLUTION_COLUMNS,
@@ -69,4 +75,6 @@ __all__ = [
     "EVENT_CLASS_LEAVE",
     "resolve_membership_columns",
     "build_membership_events_sql",
+    "MEMBERSHIP_STATE_AT_COLUMNS",
+    "build_membership_state_at_sql",
 ]

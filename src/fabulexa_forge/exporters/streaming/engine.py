@@ -8,19 +8,22 @@ derivations, config, reader, anchor, and errors — never writers or CLI.
 from __future__ import annotations
 
 import heapq
-from datetime import timedelta, timezone
 from typing import TYPE_CHECKING, Iterator, Sequence, cast
 
+from fabulexa_forge.anchor import render_ts
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.derivations.membership_events import (
-    MEMBERSHIP_EVENT_COLUMNS,
     build_membership_events_sql,
     resolve_membership_columns,
 )
+from fabulexa_forge.derivations.membership_events import (
+    fold_row_column_names as membership_fold_row_column_names,
+)
 from fabulexa_forge.derivations.row_state_events import (
-    ROW_STATE_EVENT_COLUMNS,
     build_row_state_events_sql,
-    resolve_stream_columns,
+)
+from fabulexa_forge.derivations.row_state_events import (
+    fold_row_column_names as record_fold_row_column_names,
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
@@ -36,11 +39,7 @@ from fabulexa_forge.reader.errors import TableNotFoundError
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import (
-        MembershipSelection,
-        RoutingConfig,
-        StreamConfig,
-    )
+    from fabulexa_forge.config.models import RoutingConfig, StreamConfig
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -63,31 +62,6 @@ def _default_routing() -> "RoutingConfig":
     from fabulexa_forge.config.models import RoutingConfig
 
     return RoutingConfig()
-
-
-def _render_ts(event_sim_time: int, anchor: "EffectiveAnchor | None") -> str | int:
-    """Render the event timestamp from the effective anchor.
-
-    Adds the elapsed sim_time (nanoseconds) in the absolute UTC frame, then
-    projects into the anchor's timezone. Never uses wall-clock arithmetic on
-    the zone-aware start_instant (that mis-adds across DST boundaries).
-
-    Args:
-        event_sim_time: The event sim_time in nanoseconds.
-        anchor: The resolved EffectiveAnchor, or None for raw-ns output.
-
-    Returns:
-        An offset-bearing ISO-8601 string when the anchor resolves, else the
-        raw event_sim_time integer.
-    """
-    if anchor is None:
-        return event_sim_time
-
-    utc_origin = anchor.start_instant.astimezone(timezone.utc)
-    elapsed_us = event_sim_time // 1000
-    instant_utc = utc_origin + timedelta(microseconds=elapsed_us)
-    instant_local = instant_utc.astimezone(anchor.timezone)
-    return instant_local.isoformat()
 
 
 def _validate_group_members_resolve(
@@ -421,30 +395,6 @@ def _rows_to_keyed(
     ]
 
 
-def _fold_col_names(
-    emit: "Emit",
-    kind: str,
-    properties: frozenset[str],
-) -> list[str]:
-    """Return the fold output column names for a kind in canonical order.
-
-    The fold-row column list is ROW_STATE_EVENT_COLUMNS + resolve_stream_columns[1:].
-    The after-image portion (everything after the 4-col fixed prefix) matches the
-    resolve_stream_columns order exactly.
-
-    Args:
-        emit: The open emit.
-        kind: The record kind.
-        properties: Selected property names (bare).
-
-    Returns:
-        Ordered list of column names for the fold output row.
-    """
-    after_image = resolve_stream_columns(emit.sidecar, kind, properties)
-    # after_image[0] == 'record_id', which is already in ROW_STATE_EVENT_COLUMNS[0]
-    return list(ROW_STATE_EVENT_COLUMNS) + after_image[1:]
-
-
 def _build_after_image(
     row: tuple[object, ...],
     col_names: list[str],
@@ -630,31 +580,6 @@ def _build_all_selected_attributes(
     return all_attrs
 
 
-def _membership_col_names(
-    ms: "MembershipSelection",
-    emit: "Emit",
-) -> list[str]:
-    """Return the membership fold output column names for one membership selection.
-
-    The fold-row column list is MEMBERSHIP_EVENT_COLUMNS followed by payload columns
-    from resolve_membership_columns[1:].
-    The after-image portion (everything after the 4-col fixed prefix) matches the
-    resolve_membership_columns order exactly.
-
-    Args:
-        ms: The membership selection.
-        emit: The open emit.
-
-    Returns:
-        Ordered list of column names for the membership fold output row.
-    """
-    payload_cols = resolve_membership_columns(
-        emit.sidecar, ms.owner_kind, ms.property, ms.fields
-    )
-    # payload_cols[0] == 'record_id', already in MEMBERSHIP_EVENT_COLUMNS[0]
-    return list(MEMBERSHIP_EVENT_COLUMNS) + list(payload_cols[1:])
-
-
 def _build_membership_after_image(
     row: tuple[object, ...],
     col_names: list[str],
@@ -717,7 +642,9 @@ def _iter_membership_events_inner(
         keyed = _rows_to_keyed(rows, source_identity)
         mem_rows.append(keyed)
 
-        col_names_by_source[source_identity] = _membership_col_names(ms, emit)
+        col_names_by_source[source_identity] = membership_fold_row_column_names(
+            emit.sidecar, ms.owner_kind, ms.property, ms.fields
+        )
 
     # k-way merge under the canonical key
     # (event_sim_time, event_class, source_identity, record_id)
@@ -731,7 +658,7 @@ def _iter_membership_events_inner(
 
         col_names = col_names_by_source[source_identity]
         after = _build_membership_after_image(row, col_names)
-        ts = _render_ts(event_sim_time, anchor)
+        ts = render_ts(event_sim_time, anchor)
 
         # Derive owner_kind and property from source_identity
         owner_kind, property_name = source_identity.split("__", 1)
@@ -806,7 +733,9 @@ def _iter_events_inner(
     for kind_sel in config.kinds:
         kind = kind_sel.kind
         properties = frozenset(kind_sel.properties)
-        col_names_by_kind[kind] = _fold_col_names(emit, kind, properties)
+        col_names_by_kind[kind] = record_fold_row_column_names(
+            emit.sidecar, kind, properties
+        )
 
     # k-way merge under the canonical key
     # (event_sim_time, event_class, source_identity=kind, record_id)
@@ -829,7 +758,7 @@ def _iter_events_inner(
             presentation_id = str(raw_pid) if raw_pid is not None else None
 
         after = _build_after_image(row, col_names, op)
-        ts = _render_ts(event_sim_time, anchor)
+        ts = render_ts(event_sim_time, anchor)
 
         # Layer A: derive route attributes
         sub_type: str | None = None

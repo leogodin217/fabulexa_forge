@@ -26,6 +26,7 @@ from fabulexa_forge.errors import (
     IncrementalFingerprintMismatch,
     IncrementalRangeTargetExists,
 )
+from fabulexa_forge.exporters.query_spec import query_spec_output_name
 from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
     Cursor,
@@ -182,12 +183,16 @@ def export_window(
     if config.mode == "source":
         from fabulexa_forge.exporters.source.engine import build_source_query_specs
 
-        specs = build_source_query_specs(emit, config, anchor, window, notice_sink)
+        specs = build_source_query_specs(
+            emit, config, anchor, window, notice_sink, base_relations=None
+        )
     else:
         from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 
         assert config.dimensional is not None
-        specs = build_query_specs(emit, config.dimensional, anchor, window, notice_sink)
+        specs = build_query_specs(
+            emit, config.dimensional, anchor, window, notice_sink, base_relations=None
+        )
 
     if fmt == "duckdb":
         return write_duckdb_window(emit, specs, out, window, fingerprint)
@@ -270,8 +275,7 @@ def _write_csv_specs(
 
     row_counts: dict[str, int] = {}
     for spec in specs:
-        # SCD-2 __rows specs carry view_name = author's table name
-        author_name = spec.view_name if spec.view_name is not None else spec.table_name
+        author_name = query_spec_output_name(spec)
         rows = write_csv(emit, author_name, spec.sql, target_dir)
         row_counts[author_name] = rows
     return row_counts

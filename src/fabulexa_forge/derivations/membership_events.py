@@ -102,6 +102,43 @@ def resolve_membership_columns(
     return tuple(result)
 
 
+def fold_row_column_names(
+    sidecar: "Sidecar",
+    owner_kind: str,
+    property_name: str,
+    fields: Sequence[str],
+) -> list[str]:
+    """The membership-events fold's row column names, in emission order.
+
+    MEMBERSHIP_EVENT_COLUMNS (the four fixed prefix columns) followed by
+    resolve_membership_columns' payload columns after its leading
+    'record_id' (already covered by the prefix) — the single column-name
+    list matching build_membership_events_sql's SELECT order. Shared by
+    every caller that must destructure a fold row by name (the streaming
+    engine, the playback seam).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        owner_kind: The membership table's owner kind.
+        property_name: The membership property name.
+        fields: The selected element-schema field names (bare).
+
+    Returns:
+        Ordered column names: 'record_id', 'event_sim_time', 'event_class',
+        'op', then one or two payload columns per selected field in
+        element-schema declaration order.
+
+    Raises:
+        TableNotFoundError: membership__<owner_kind>__<property_name> is absent.
+        ExportError: A selected field resolves to no elem__/member__ column.
+    """
+    payload_cols = resolve_membership_columns(
+        sidecar, owner_kind, property_name, fields
+    )
+    # payload_cols[0] == 'record_id', already in MEMBERSHIP_EVENT_COLUMNS[0]
+    return list(MEMBERSHIP_EVENT_COLUMNS) + list(payload_cols[1:])
+
+
 def build_membership_events_sql(
     sidecar: "Sidecar",
     fork_path: str,

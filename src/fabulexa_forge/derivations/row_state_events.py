@@ -95,6 +95,39 @@ def resolve_stream_columns(
     return names
 
 
+def fold_row_column_names(
+    sidecar: "Sidecar",
+    kind: str,
+    properties: frozenset[str],
+) -> list[str]:
+    """The row-state-events fold's row column names, in emission order.
+
+    ROW_STATE_EVENT_COLUMNS (the four fixed prefix columns) followed by
+    resolve_stream_columns' after-image columns after its leading
+    'record_id' (already covered by the prefix) — the single column-name
+    list matching build_row_state_events_sql's SELECT order. Shared by every
+    caller that must destructure a fold row by name (the streaming engine,
+    the playback seam).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The record kind.
+        properties: The selected property names (bare), of either class.
+
+    Returns:
+        Ordered column names: 'record_id', 'event_sim_time', 'event_class',
+        'op', then 'presentation_id' (when the kind carries one), then one
+        'prop__<p>' per selected property in sidecar declaration order.
+
+    Raises:
+        TableNotFoundError: The kind has no records__<kind> table.
+        ExportError: A selected property has no prop__<property> column.
+    """
+    after_image = resolve_stream_columns(sidecar, kind, properties)
+    # after_image[0] == 'record_id', which is already in ROW_STATE_EVENT_COLUMNS[0]
+    return list(ROW_STATE_EVENT_COLUMNS) + after_image[1:]
+
+
 def _build_prop_asof_join(
     fork_path: str,
     kind: str,

@@ -23,12 +23,12 @@ if TYPE_CHECKING:
 def _render_ts_str(event_sim_time: int, anchor: Any) -> str:
     """Render an event_sim_time to an offset-bearing ISO-8601 string.
 
-    Delegates to the engine's _render_ts; the anchor is always non-None on a
-    mixer run, so the return value is always a str.
+    Delegates to the shared anchor renderer; the anchor is always non-None on
+    a mixer run, so the return value is always a str.
     """
-    from fabulexa_forge.exporters.streaming.engine import _render_ts
+    from fabulexa_forge.anchor import render_ts
 
-    result = _render_ts(event_sim_time, anchor)
+    result = render_ts(event_sim_time, anchor)
     return str(result)
 
 
@@ -163,7 +163,7 @@ def derive_meters(state: "MixerRunState") -> "MetersOut":
     Pure with respect to its inputs (reads state.monotonic() and the mutable
     frontier / buffers); unit-testable with a fabricated FrontierState, buffers,
     and fake monotonic. Renders frontier_sim_time / delivery_edge_sim_time through
-    _render_ts(.., anchor) (anchor non-None on a mixer run, so both cast to str);
+    _render_ts_str(.., anchor) (anchor non-None on a mixer run, so both cast to str);
     delivery_lag_ms is the nanosecond frontier - delivery_edge gap floored to ms
     (// 1_000_000); backlog is buffer depth; wall_elapsed_ms from
     play_origin_monotonic. Topics emitted in ControlState.topics order. See design

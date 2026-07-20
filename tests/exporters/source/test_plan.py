@@ -813,6 +813,26 @@ def test_rename_unresolved_columns_key_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reserved output names: the presentation-name posture (Phase 9)
+# ---------------------------------------------------------------------------
+
+
+def test_rename_target_last_mutation_sim_time_raises() -> None:
+    """A rename entry naming a column's output last_mutation_sim_time raises —
+    the presentation-name posture, load-time, naming the fix."""
+    config = SourceConfig(
+        rename=[
+            RenameEntry(
+                table="records__location",
+                columns={"record_id": "last_mutation_sim_time"},
+            )
+        ]
+    )
+    with pytest.raises(ExportError, match="last_mutation_sim_time"):
+        build_source_plan(_spanning_sidecar(), config, notice_sink=discard_notice_sink)
+
+
+# ---------------------------------------------------------------------------
 # Collision checks
 # ---------------------------------------------------------------------------
 

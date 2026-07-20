@@ -158,7 +158,12 @@ def test_scd2_full_export_honors_source_filter(tmp_path: Path) -> None:
     )
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -176,7 +181,12 @@ def test_scd2_full_export_without_filter_keeps_all_subtypes(tmp_path: Path) -> N
     config = DimensionalConfig(tables=[_make_scd2_decl(None)])
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -194,7 +204,12 @@ def test_scd2_windowed_rows_honor_source_filter(tmp_path: Path) -> None:
     window = Window(index=0, start_ns=0, end_ns=100, label="w0")
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         assert specs[0].table_name == "dim_patient__rows"
         result = emit.query_arrow(specs[0].sql, ())
@@ -311,7 +326,14 @@ def test_scd2_unsupported_mode_rejected_via_build_query_specs(tmp_path: Path) ->
     )
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="not supported on an scd: type2 table"):
-            build_query_specs(emit, config, None, None, notice_sink=discard_notice_sink)
+            build_query_specs(
+                emit,
+                config,
+                None,
+                None,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -340,7 +362,12 @@ def test_windowed_records_fact_missing_window_key_raises(tmp_path: Path) -> None
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="window key 'last_mutation_sim_time'"):
             build_query_specs(
-                emit, config, None, window, notice_sink=discard_notice_sink
+                emit,
+                config,
+                None,
+                window,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
             )
 
 
@@ -369,7 +396,12 @@ def test_windowed_history_point_fact_missing_window_key_raises(
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="window key 'sim_time'"):
             build_query_specs(
-                emit, config, None, window, notice_sink=discard_notice_sink
+                emit,
+                config,
+                None,
+                window,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
             )
 
 
@@ -393,7 +425,12 @@ def test_windowed_records_fact_with_window_key_passes(tmp_path: Path) -> None:
     window = Window(index=0, start_ns=0, end_ns=18, label="w0")
     with open_emit(emit_dir) as emit:
         specs = build_query_specs(
-            emit, config, None, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            None,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 

@@ -2,8 +2,9 @@
 
 Full-export cases (`window=None`) pass every spec write_mode='create'. Windowed
 cases (Unit 2) confirm per-genre write_mode tagging: change-log/transaction
-append, reference replace, junction append. Snapshot-delivery cases (Unit 3)
-confirm SourceSnapshotRequiresWindows on a full (non-windowed) export and
+append, reference replace, junction append. Snapshot-delivery cases (Phase 9)
+confirm a full (non-windowed) export reconstructs at the tape's end
+(`build_state_at_end_sql`, write_mode='create') instead of refusing, and
 write_mode='replace' + build_snapshot_render_sql routing for a windowed
 changelog-genre spec.
 """
@@ -20,7 +21,7 @@ from _support.notices import discard_notice_sink
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import ExportConfig, SourceConfig
 from fabulexa_forge.derivations.guard import require_single_branch
-from fabulexa_forge.errors import SourceAnchorRequired, SourceSnapshotRequiresWindows
+from fabulexa_forge.errors import SourceAnchorRequired
 from fabulexa_forge.exporters.query_spec import QuerySpec
 from fabulexa_forge.exporters.source.engine import (
     build_source_query_specs,
@@ -62,7 +63,12 @@ def test_build_source_query_specs_anchor_required(tmp_path: Path) -> None:
         assert anchor is None
         with pytest.raises(SourceAnchorRequired):
             build_source_query_specs(
-                emit, config, anchor, None, notice_sink=discard_notice_sink
+                emit,
+                config,
+                anchor,
+                None,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
             )
 
 
@@ -89,7 +95,12 @@ def test_build_source_query_specs_full_export_write_mode(tmp_path: Path) -> None
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         specs = build_source_query_specs(
-            emit, config, anchor, None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     assert specs
@@ -193,7 +204,12 @@ def test_build_source_query_specs_windowed_write_mode_per_genre(tmp_path: Path) 
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         specs = build_source_query_specs(
-            emit, config, anchor, window, notice_sink=discard_notice_sink
+            emit,
+            config,
+            anchor,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
     write_mode_by_table = {spec.table_name: spec.write_mode for spec in specs}
@@ -209,7 +225,7 @@ def test_build_source_query_specs_windowed_write_mode_per_genre(tmp_path: Path) 
 
 
 # ---------------------------------------------------------------------------
-# Snapshot delivery (change_delivery: snapshot, Unit 3)
+# Snapshot delivery (change_delivery: snapshot, Unit 3 + Phase 9)
 # ---------------------------------------------------------------------------
 
 _SNAPSHOT_SOURCE_CONFIG = ExportConfig(
@@ -217,37 +233,71 @@ _SNAPSHOT_SOURCE_CONFIG = ExportConfig(
 )
 
 
-def test_build_source_query_specs_snapshot_full_export_raises(tmp_path: Path) -> None:
-    """change_delivery: snapshot with window=None raises
-    SourceSnapshotRequiresWindows."""
+def test_build_source_query_specs_snapshot_full_export_reconstructs_at_tape_end(
+    tmp_path: Path,
+) -> None:
+    """change_delivery: snapshot with window=None reconstructs at the tape's
+    end instead of raising: write_mode='create', sql composes
+    build_state_at_end_sql via build_snapshot_render_sql(window=None)."""
     emit_dir = build_source_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        with pytest.raises(SourceSnapshotRequiresWindows):
-            build_source_query_specs(
-                emit,
-                _SNAPSHOT_SOURCE_CONFIG,
-                anchor,
-                None,
-                notice_sink=discard_notice_sink,
-            )
+        specs = build_source_query_specs(
+            emit,
+            _SNAPSHOT_SOURCE_CONFIG,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        by_table = {spec.table_name: spec for spec in specs}
+        assert by_table["visit"].write_mode == "create"
+
+        fork_path = require_single_branch(emit.sidecar)
+        table_specs = build_source_plan(
+            emit.sidecar,
+            _SNAPSHOT_SOURCE_CONFIG.source,
+            notice_sink=discard_notice_sink,
+        )
+        visit_spec = next(s for s in table_specs if s.source_table == "records__visit")
+        expected_sql = build_snapshot_render_sql(
+            emit.sidecar, fork_path, visit_spec, anchor, None
+        )
+    assert by_table["visit"].sql == expected_sql
 
 
-def test_export_source_snapshot_full_export_raises(tmp_path: Path) -> None:
-    """export_source under change_delivery: snapshot always raises
-    SourceSnapshotRequiresWindows (a full export never carries a window)."""
+def test_export_source_snapshot_full_export_reconstructs_end_of_run_state(
+    tmp_path: Path,
+) -> None:
+    """export_source under change_delivery: snapshot, full export: one row per
+    record (not per event), end-of-run state; v003 (deactivated after its
+    last history event) renders inactive — the lifecycle-instant case a
+    history-only horizon would get wrong."""
     emit_dir = build_source_test_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        with pytest.raises(SourceSnapshotRequiresWindows):
-            export_source(
-                emit,
-                _SNAPSHOT_SOURCE_CONFIG,
-                tmp_path / "out.duckdb",
-                "duckdb",
-                anchor,
-                notice_sink=discard_notice_sink,
-            )
+        row_counts = export_source(
+            emit,
+            _SNAPSHOT_SOURCE_CONFIG,
+            out_path,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+        )
+
+    assert row_counts["visit"] == 3  # one row per record, not one per event
+
+    out_conn = duckdb.connect(str(out_path), read_only=True)
+    try:
+        row = out_conn.execute(
+            'SELECT active, status FROM "visit" WHERE id = ?', ["v003"]
+        ).fetchone()
+    finally:
+        out_conn.close()
+    assert row is not None
+    assert row[0] is False
+    assert row[1] == "closed"
 
 
 def test_build_source_query_specs_windowed_snapshot_write_mode_and_render(
@@ -266,6 +316,7 @@ def test_build_source_query_specs_windowed_snapshot_write_mode_and_render(
             anchor,
             window,
             notice_sink=discard_notice_sink,
+            base_relations=None,
         )
 
         by_table = {spec.table_name: spec for spec in specs}

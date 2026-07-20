@@ -46,6 +46,7 @@ from fabulexa_forge.errors import (
 )
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.reserved_names import (
+    RESERVED_PRESENTATION_COLUMN_NAME,
     is_reserved_column_name,
     is_reserved_table_name,
 )
@@ -858,15 +859,19 @@ def _check_collisions(specs: tuple[SourceTableSpec, ...]) -> None:
 
 def _check_reserved_names(specs: tuple[SourceTableSpec, ...]) -> None:
     """Enforce the reserved-name rule: no output name collides with cross-mode
-    incremental bookkeeping names/suffixes, checked at plan build so a full
-    export and a later incremental drip on the same target agree.
+    incremental bookkeeping names/suffixes, checked at plan build (always-on,
+    full export included) so a full export and a later incremental drip on
+    the same target agree; nor with the presentation-name posture
+    (`last_mutation_sim_time` — a sim-internal column read freely, delivered
+    under its own output name never).
 
     Args:
         specs: The resolved output table specs.
 
     Raises:
         ExportError: A table name is `_export_meta` / `_export_windows` or ends
-            in `__rows`, or a column is named `__valid_from_ns`.
+            in `__rows`; a column is named `__valid_from_ns`; or a column is
+            named `last_mutation_sim_time`.
     """
     for spec in specs:
         if is_reserved_table_name(spec.name):
@@ -874,6 +879,13 @@ def _check_reserved_names(specs: tuple[SourceTableSpec, ...]) -> None:
                 f"table '{spec.name}': name is reserved under incremental export"
             )
         for _, out in spec.columns:
+            if out == RESERVED_PRESENTATION_COLUMN_NAME:
+                raise ExportError(
+                    f"table '{spec.name}': column '{out}' names the reserved"
+                    " last_mutation_sim_time column — it is sim-internal"
+                    " bookkeeping; deliver its value via the updated_at"
+                    " presentation default or a different source.rename target"
+                )
             if is_reserved_column_name(out):
                 raise ExportError(
                     f"table '{spec.name}': column '{out}' is reserved under"
@@ -930,7 +942,9 @@ def build_source_plan(
             output table share a name, after defaults and renames.
         ExportError: A resolved output table name collides with the cross-mode
             bookkeeping names or reserved suffixes (checked at plan build so a
-            full export and a later incremental drip on the same target agree).
+            full export and a later incremental drip on the same target
+            agree), or a resolved output column is named
+            `last_mutation_sim_time` (the presentation-name posture).
         SourceUnclassifiedColumn: A records-category column matches no
             records-column taxonomy role.
         TemporalClassUnavailableError: A consulted column's temporal pair is

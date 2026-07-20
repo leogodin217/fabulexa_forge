@@ -12,7 +12,10 @@ every render carries its genre's total `ORDER BY` over raw sim-time keys and
 identity — never a rendered timestamp (§ Ordering and determinism).
 `build_snapshot_render_sql` composes the state-at derivation instead, for a
 change-log kind delivered under `change_delivery: snapshot`; the engine
-dispatches to it, not `build_render_sql`.
+dispatches to it, not `build_render_sql`. Windowed, it reconstructs at
+`window.end_ns` (`build_state_at_sql`); horizon-less (a full export), it
+reconstructs at the tape's end (`build_state_at_end_sql`) — "the tape's end"
+realized structurally, no horizon ever computed.
 
 Layer-direction invariant: imports the reader, the derivations layer (the
 row-state-events fold and the state-at derivation), fabulexa_forge.anchor,
@@ -33,7 +36,10 @@ if TYPE_CHECKING:
 
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
 from fabulexa_forge.derivations.row_state_events import build_row_state_events_sql
-from fabulexa_forge.derivations.state_at import build_state_at_sql
+from fabulexa_forge.derivations.state_at import (
+    build_state_at_end_sql,
+    build_state_at_sql,
+)
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX
 from fabulexa_forge.reader.relations import (
     build_membership_relation_sql,
@@ -374,18 +380,20 @@ def build_snapshot_render_sql(
     fork_path: str,
     spec: "SourceTableSpec",
     anchor: "EffectiveAnchor",
-    window: "Window",
+    window: "Window | None",
 ) -> str:
-    """Build the snapshot render: the state-at derivation at `window.end_ns`.
+    """Build the snapshot render: the state-at derivation, windowed or at the
+    tape's end.
 
-    Composes `build_state_at_sql` at `horizon = window.end_ns` for a change-log
-    kind delivered under `change_delivery: snapshot` — a full-table
-    reconstruction of every record's as-of state at this window's exclusive
-    end, growing window over window (`write_mode='replace'`; the engine's
-    concern). Two documented deviations from the CDC render: no `updated_at`
-    (there is no per-event timestamp to render), and `active` /
-    `deactivated_at` are the fold's own horizon-rendered columns rather than
-    values read verbatim off the source relation.
+    Composes `build_state_at_sql` at `horizon = window.end_ns` when windowed,
+    or `build_state_at_end_sql` (no horizon) for a full export — for a
+    change-log kind delivered under `change_delivery: snapshot`, a full-table
+    reconstruction of every record's as-of state (growing window over window
+    when windowed; `write_mode` is the engine's concern in either case). Two
+    documented deviations from the CDC render: no `updated_at` (there is no
+    per-event timestamp to render), and `active` / `deactivated_at` are the
+    derivation's own rendered columns rather than values read verbatim off the
+    source relation.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -393,11 +401,12 @@ def build_snapshot_render_sql(
         spec: The resolved change-log output table (snapshot column shape —
             `build_source_plan` under `change_delivery: snapshot`).
         anchor: The resolved effective anchor.
-        window: The window whose exclusive end is the reconstruction horizon.
+        window: The window whose exclusive end is the reconstruction horizon,
+            or None to reconstruct at the tape's end (a full export).
 
     Returns:
         A complete SELECT, ordered by `(created_sim_time, record_id)` — the
-        fold's own order (raw, never a rendered timestamp).
+        derivation's own order (raw, never a rendered timestamp).
     """
     kind = spec.source_table[len("records__") :]
     properties = frozenset(
@@ -405,8 +414,11 @@ def build_snapshot_render_sql(
         for src, _ in spec.columns
         if src.startswith(_PROP_PREFIX)
     )
-    horizon_ns = window.end_ns
-    state_at_sql = build_state_at_sql(sidecar, fork_path, kind, properties, horizon_ns)
+    state_at_sql = (
+        build_state_at_sql(sidecar, fork_path, kind, properties, window.end_ns)
+        if window is not None
+        else build_state_at_end_sql(sidecar, fork_path, kind, properties)
+    )
     col_types = _column_types(sidecar, spec.source_table)
 
     select_parts: list[str] = []
