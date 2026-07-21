@@ -178,8 +178,9 @@ def _base_sidecar(
     tables: list[dict[str, object]],
     record_roles: dict[str, object] | None,
     enum_domains: dict[str, dict[str, list[str]]] | None = None,
+    sub_type_columns: dict[str, dict[str, list[str]]] | None = None,
 ) -> dict[str, object]:
-    """Build a minimal sidecar dict with optional record_roles and enum_domains."""
+    """Build a minimal sidecar dict with optional record_roles/enum_domains/partition."""
     result: dict[str, object] = {
         "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 200}],
         "tables": tables,
@@ -188,6 +189,8 @@ def _base_sidecar(
         result["record_roles"] = record_roles
     if enum_domains is not None:
         result["enum_domains"] = enum_domains
+    if sub_type_columns is not None:
+        result["sub_type_columns"] = sub_type_columns
     return result
 
 
@@ -398,6 +401,51 @@ def build_object_valued_actor_emit(
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
             },
             enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+        ),
+    )
+    return tmp_path
+
+
+def build_actor_emit_with_sub_type_columns(tmp_path: Path) -> Path:
+    """Object-valued actor emit carrying a `sub_type_columns` partition.
+
+    driver owns `prop__name` only; bus owns `prop__status` only; ride (fact)
+    owns nothing. The union of the lists is {prop__name, prop__status} — exactly
+    the value columns minus the discriminator (C14-consistent). Exercises
+    per-sub-type column pruning in the generated stubs.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__actor", _ACTOR_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "a1", 10, True, 10, 0, "driver", "Alice", "active"],
+    )
+    conn.close()
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[
+                _table_spec(
+                    "records__actor",
+                    "records",
+                    _ACTOR_COLUMNS,
+                    1,
+                    record_kind="actor",
+                ),
+            ],
+            record_roles={
+                "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
+            },
+            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            sub_type_columns={
+                "actor": {
+                    "driver": ["prop__name"],
+                    "ride": [],
+                    "bus": ["prop__status"],
+                }
+            },
         ),
     )
     return tmp_path
@@ -769,6 +817,65 @@ def test_object_valued_kind_unobserved_subtype_yields_stub(tmp_path: Path) -> No
     content = out_path.read_text(encoding="utf-8")
     # bus is declared but has no rows in the table; stub still proposed
     assert "dim_actor_bus" in content
+
+
+# ---------------------------------------------------------------------------
+# Tests: sub_type_columns partition prunes per-sub-type stub columns
+# ---------------------------------------------------------------------------
+
+
+def _actor_stub_block(content: str, name: str) -> str:
+    """The generated YAML for one table stub, from its `- name:` line to the
+    start of the next stub / comment header (for scoped per-sub-type asserts)."""
+    marker = f"- name: {name}\n"
+    start = content.index(marker)
+    rest = content[start + len(marker) :]
+    # Next stub begins at the next "    - name:" or "    # ---" header.
+    ends = [rest.index(m) for m in ("    - name:", "    # ---") if m in rest]
+    return rest[: min(ends)] if ends else rest
+
+
+def test_sub_type_columns_prunes_driver_to_owned_column(tmp_path: Path) -> None:
+    """With a partition, dim_actor_driver proposes its owned prop__name and NOT
+    prop__status, which belongs to a different sub-type."""
+    emit_dir = build_actor_emit_with_sub_type_columns(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    driver = _actor_stub_block(out_path.read_text(encoding="utf-8"), "dim_actor_driver")
+    assert "from: prop__name" in driver
+    assert "from: prop__status" not in driver
+
+
+def test_sub_type_columns_prunes_bus_to_owned_column(tmp_path: Path) -> None:
+    """With a partition, dim_actor_bus proposes its owned prop__status and NOT
+    prop__name."""
+    emit_dir = build_actor_emit_with_sub_type_columns(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    bus = _actor_stub_block(out_path.read_text(encoding="utf-8"), "dim_actor_bus")
+    assert "from: prop__status" in bus
+    assert "from: prop__name" not in bus
+
+
+def test_sub_type_columns_discriminator_survives_pruning(tmp_path: Path) -> None:
+    """The kind-wide discriminator is never pruned — it belongs to no sub-type's
+    list yet stays proposable in every per-sub-type stub (contract carve-out)."""
+    emit_dir = build_actor_emit_with_sub_type_columns(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    driver = _actor_stub_block(out_path.read_text(encoding="utf-8"), "dim_actor_driver")
+    assert "from: prop__actor_type" in driver
+
+
+def test_no_partition_keeps_full_union_columns(tmp_path: Path) -> None:
+    """Fallback: without sub_type_columns, every sub-type stub proposes the whole
+    union — driver lists both prop__name and prop__status (no pruning)."""
+    emit_dir = build_object_valued_actor_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    driver = _actor_stub_block(out_path.read_text(encoding="utf-8"), "dim_actor_driver")
+    assert "from: prop__name" in driver
+    assert "from: prop__status" in driver
 
 
 # ---------------------------------------------------------------------------

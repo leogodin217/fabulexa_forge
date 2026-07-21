@@ -160,7 +160,7 @@ The contract pins four guarantees a consumer may lean on:
 - **Trust class.** Pair agreement (`ref_index__<name>` and its sibling
   `prop__<name>` NULL together and resolving to the same target row) and
   resolution of `ref_index__<name>` values against the target's `record_index`
-  are producer-guaranteed **by construction and not verified by C1–C13** — the
+  are producer-guaranteed **by construction and not verified by C1–C14** — the
   same trust class as `prop__` referential integrity.
 
 A records reference is thus **one edge with two encodings**: id-space
@@ -196,9 +196,9 @@ semantic ones deliberately. This is the list of what "them" means:
 | Trunk row-identity | Rows recorded before a fork point are identical across sibling branches. |
 | Complete history | Every state row is reachable from simulated events in `history`; nothing was fabricated mid-process. |
 
-**Conformance is narrower than the guarantee set.** C1–C13 verifies structure
+**Conformance is narrower than the guarantee set.** C1–C14 verifies structure
 and a semantic subset; a defect such as a dangling records-property reference
-passes C1–C13 by design (see
+passes C1–C14 by design (see
 [`conformance.md`](conformance.md) § Boundaries). The guarantees above hold by
 construction in the emit, not because `fabulexa-forge validate` proves them. Design consequence: an exporter may *lean on* these properties
 (e.g. skip dangling-reference handling) but must not claim to have *verified*
@@ -332,6 +332,6 @@ column into an output.
 |---|---|
 | [`../../contract/base-format.md`](../../contract/base-format.md) + `.schema.json` | The normative emit shape this doc deliberately does not restate |
 | [`reader.md`](reader.md) | The one read path; typed sidecar accessors incl. `record_roles` |
-| [`conformance.md`](conformance.md) | C1–C13 and its boundaries (what validate does *not* prove) |
+| [`conformance.md`](conformance.md) | C1–C14 and its boundaries (what validate does *not* prove) |
 | [`anchor.md`](anchor.md) | Effective-anchor resolution; time rebasing |
 | [`../CLAUDE.md`](../CLAUDE.md) | Boundary, principles, vocabulary |

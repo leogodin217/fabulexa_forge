@@ -18,6 +18,7 @@ from fabulexa_forge.reader.sidecar import (
     RecordRoles,
     RuntimeAnchor,
     Sidecar,
+    SubTypeColumns,
 )
 
 # ---------------------------------------------------------------------------
@@ -974,3 +975,104 @@ def test_subtype_values_absent_enum_domains_returns_empty(kind: str) -> None:
     """A sidecar with no enum_domains block returns () for any kind."""
     sidecar = Sidecar.from_raw(_minimal_raw())
     assert sidecar.subtype_values(kind) == ()
+
+
+# ---------------------------------------------------------------------------
+# Sidecar.sub_type_columns() accessor + SubTypeColumns view
+# ---------------------------------------------------------------------------
+
+
+def _sub_type_columns_raw() -> dict[str, object]:
+    """A sub_type_columns block: one sub-typed kind (actor), three sub-types.
+
+    'staff' owns two value columns (one of them a reference, so its
+    ref_index sibling is listed too); 'trip' owns one; 'visit' owns none
+    (all-collection-struct sub-type -> empty list, key retained).
+    """
+    return {
+        "actor": {
+            "staff": ["prop__doctor", "ref_index__doctor", "prop__salary"],
+            "trip": ["prop__distance"],
+            "visit": [],
+        },
+    }
+
+
+def _sidecar_with_sub_type_columns() -> Sidecar:
+    """Build a Sidecar carrying a sub_type_columns block."""
+    return Sidecar.from_raw(_minimal_raw(sub_type_columns=_sub_type_columns_raw()))
+
+
+def test_sub_type_columns_absent_returns_none() -> None:
+    """sub_type_columns() is None when the sidecar omits the block."""
+    sidecar = Sidecar.from_raw(_minimal_raw())
+    assert sidecar.sub_type_columns() is None
+
+
+def test_sub_type_columns_non_dict_value_returns_none() -> None:
+    """A non-dict sub_type_columns parses cleanly; accessor returns None."""
+    sidecar = Sidecar.from_raw(_minimal_raw(sub_type_columns="not-a-dict"))
+    assert sidecar.sub_type_columns() is None
+
+
+def test_sub_type_columns_present_returns_instance() -> None:
+    """sub_type_columns() returns a SubTypeColumns view when the block is present."""
+    assert isinstance(
+        _sidecar_with_sub_type_columns().sub_type_columns(), SubTypeColumns
+    )
+
+
+def test_sub_type_columns_kinds_returns_partitioned_kinds() -> None:
+    """kinds() returns the sub-typed kinds carried by the partition, as a tuple."""
+    stc = _sidecar_with_sub_type_columns().sub_type_columns()
+    assert stc is not None
+    assert stc.kinds() == ("actor",)
+
+
+def test_sub_type_columns_sub_types_returns_declared_sub_types() -> None:
+    """sub_types(kind) returns every declared sub-type, empty-list ones included."""
+    stc = _sidecar_with_sub_type_columns().sub_type_columns()
+    assert stc is not None
+    assert stc.sub_types("actor") == ("staff", "trip", "visit")
+
+
+def test_sub_type_columns_columns_for_returns_owned_columns() -> None:
+    """columns_for returns a sub-type's owned columns in declared order."""
+    stc = _sidecar_with_sub_type_columns().sub_type_columns()
+    assert stc is not None
+    assert stc.columns_for("actor", "staff") == (
+        "prop__doctor",
+        "ref_index__doctor",
+        "prop__salary",
+    )
+
+
+def test_sub_type_columns_columns_for_empty_list_is_preserved() -> None:
+    """An all-collection-struct sub-type keeps its key with an empty tuple."""
+    stc = _sidecar_with_sub_type_columns().sub_type_columns()
+    assert stc is not None
+    assert stc.columns_for("actor", "visit") == ()
+
+
+def test_sub_type_columns_unknown_kind_raises_keyerror() -> None:
+    """columns_for on an unregistered kind raises KeyError."""
+    stc = _sidecar_with_sub_type_columns().sub_type_columns()
+    assert stc is not None
+    with pytest.raises(KeyError):
+        stc.columns_for("no_such_kind", "staff")
+
+
+def test_sub_type_columns_unknown_sub_type_raises_keyerror() -> None:
+    """columns_for on an undeclared sub-type raises KeyError."""
+    stc = _sidecar_with_sub_type_columns().sub_type_columns()
+    assert stc is not None
+    with pytest.raises(KeyError):
+        stc.columns_for("actor", "no_such_sub_type")
+
+
+def test_sub_type_columns_present_but_empty_partition_is_not_none() -> None:
+    """A present-but-empty block yields a view (not None), so absence stays distinct."""
+    sidecar = Sidecar.from_raw(_minimal_raw(sub_type_columns={}))
+    stc = sidecar.sub_type_columns()
+    assert isinstance(stc, SubTypeColumns)
+    assert stc.kinds() == ()

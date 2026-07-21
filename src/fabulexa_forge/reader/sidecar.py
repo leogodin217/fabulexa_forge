@@ -410,6 +410,97 @@ def _parse_record_roles(raw: object) -> RecordRoles | None:
     return RecordRoles(_registry=registry)
 
 
+@dataclass(frozen=True)
+class SubTypeColumns:
+    """Typed view of the sidecar `sub_type_columns` partition.
+
+    Wraps the per-sub-type declared-column partition from `base.json`: a nested
+    `{kind: {sub_type: (column-name, ...)}}` naming, for each sub-typed records
+    kind, the value columns (`prop__<name>`, plus `ref_index__<name>` for
+    reference-typed properties) each declared sub-type owns. It is the
+    NULL-disambiguation surface — a NULL in a column the row's sub-type does not
+    own is *structurally inapplicable*, not merely unrecorded. Declared
+    applicability (intent, not observation), like `enum_domains`; slice-stable.
+    The kind-wide discriminator `prop__<kind>_type` belongs to no sub-type's
+    list (contract carve-out). Built from the sidecar; never re-exported from a
+    producer type.
+    """
+
+    _partition: Mapping[str, Mapping[str, tuple[str, ...]]]
+
+    def kinds(self) -> tuple[str, ...]:
+        """The sub-typed kinds carried by the partition.
+
+        Returns:
+            Kind names in sidecar order — which the contract guarantees is
+            lexicographic. Trusts that order rather than re-sorting (faithful
+            read).
+        """
+        return tuple(self._partition.keys())
+
+    def sub_types(self, kind: str) -> tuple[str, ...]:
+        """The declared sub-types of a kind.
+
+        Args:
+            kind: A sub-typed records-category kind name.
+
+        Returns:
+            Sub-type names in sidecar order — every declared sub-type, never
+            narrowed to those with surviving rows (slice-stable).
+
+        Raises:
+            KeyError: `kind` is not in the partition.
+        """
+        return tuple(self._partition[kind].keys())
+
+    def columns_for(self, kind: str, sub_type: str) -> tuple[str, ...]:
+        """The value columns sub-type `sub_type` of `kind` declares.
+
+        Args:
+            kind: A sub-typed records-category kind name.
+            sub_type: A declared sub-type of `kind`.
+
+        Returns:
+            Column names in the kind's union column order (`ref_index__<name>`
+            immediately after its own `prop__<name>`). May be empty for a
+            sub-type whose declared properties are all collection-struct — the
+            key is kept, never dropped.
+
+        Raises:
+            KeyError: `kind` is not in the partition, or `sub_type` is not a
+                declared sub-type of `kind`.
+        """
+        return self._partition[kind][sub_type]
+
+
+def _parse_sub_type_columns(raw: object) -> SubTypeColumns | None:
+    """Parse the optional sub_type_columns block from the sidecar.
+
+    Args:
+        raw: The raw sub_type_columns value from the sidecar (may be
+            absent/None).
+
+    Returns:
+        A SubTypeColumns when the key is present and is a dict; None when the
+        key is absent or not a mapping. Absence (None) is deliberately
+        distinguishable from a present-but-empty per-sub-type list: a consumer
+        falls back to union-schema behaviour on None, not on an empty list.
+        Lenient parse — structural diagnosis is C1/C14's job.
+    """
+    if not isinstance(raw, dict):
+        return None
+    partition: dict[str, Mapping[str, tuple[str, ...]]] = {}
+    for kind, sub_map in raw.items():
+        if not isinstance(sub_map, dict):
+            continue
+        inner: dict[str, tuple[str, ...]] = {}
+        for sub_type, cols in sub_map.items():
+            if isinstance(cols, list):
+                inner[sub_type] = tuple(c for c in cols if isinstance(c, str))
+        partition[kind] = inner
+    return SubTypeColumns(_partition=partition)
+
+
 class Sidecar:
     """Typed, read-only view of a base-layer emit's base.json.
 
@@ -426,6 +517,7 @@ class Sidecar:
         pinned_ids: Mapping[str, Mapping[str, str]],
         enum_domains: Mapping[str, Mapping[str, tuple[str, ...]]],
         record_roles: RecordRoles | None,
+        sub_type_columns: SubTypeColumns | None,
     ) -> None:
         self._raw = raw
         self._base_format_version = base_format_version
@@ -435,6 +527,7 @@ class Sidecar:
         self._pinned_ids = pinned_ids
         self._enum_domains = enum_domains
         self._record_roles = record_roles
+        self._sub_type_columns = sub_type_columns
 
     @classmethod
     def from_raw(cls, raw: Mapping[str, object]) -> "Sidecar":
@@ -507,6 +600,7 @@ class Sidecar:
         pinned_ids = _parse_pinned_ids(raw.get("pinned_ids"))
         enum_domains = _parse_enum_domains(raw.get("enum_domains"))
         record_roles = _parse_record_roles(raw.get("record_roles"))
+        sub_type_columns = _parse_sub_type_columns(raw.get("sub_type_columns"))
 
         return cls(
             raw=raw,
@@ -517,6 +611,7 @@ class Sidecar:
             pinned_ids=pinned_ids,
             enum_domains=enum_domains,
             record_roles=record_roles,
+            sub_type_columns=sub_type_columns,
         )
 
     @property
@@ -685,6 +780,21 @@ class Sidecar:
             unknown", not an error — C12 skips on absence.
         """
         return self._record_roles
+
+    def sub_type_columns(self) -> SubTypeColumns | None:
+        """The typed sub-type column partition, or None when the sidecar omits it.
+
+        Read-only declared-applicability metadata overlaid on the already-
+        discovered records tables; it does not participate in table/column
+        discovery. Absence (an emit predating the field, or a run carrying no
+        partition) is "partition unknown", not an error — a consumer falls back
+        to union-schema behaviour, treating every union column as applicable.
+
+        Returns:
+            A SubTypeColumns view when `base.json` carries `sub_type_columns`;
+            None when the field is absent.
+        """
+        return self._sub_type_columns
 
     def subtype_values(self, kind: str) -> tuple[str, ...]:
         """The declared `<kind>_type` sub-type discriminator values for a kind.

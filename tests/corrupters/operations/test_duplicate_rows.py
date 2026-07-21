@@ -668,6 +668,7 @@ def _conflict_sidecar(
         pinned_ids=pinned_ids or {},
         enum_domains={},
         record_roles=record_roles,
+        sub_type_columns=None,
     )
 
 

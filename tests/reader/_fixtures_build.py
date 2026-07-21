@@ -1049,7 +1049,7 @@ def build_refs_dangling(dest: Path) -> None:
 
     A records__actor row has a prop__doctor_id that does not exist in any
     records__doctor table (its ref_index__doctor_id sibling is likewise
-    dangling -- pair resolution is producer-guaranteed, not C1-C13-verified).
+    dangling -- pair resolution is producer-guaranteed, not C1-C14-verified).
     This is a dangling records-prop reference, which is outside C1–C12 (C10
     resolves only membership references; C11 checks the history_tracked flag,
     not prop reference integrity). validate passes. The tracked prop__name

@@ -167,6 +167,7 @@ def sidecar(
         pinned_ids=pinned_ids or {},
         enum_domains=enum_domains or {},
         record_roles=None,
+        sub_type_columns=None,
     )
 
 
