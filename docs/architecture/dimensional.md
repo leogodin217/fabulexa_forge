@@ -43,7 +43,7 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
 |---|---|
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The two-tier config grammar (`ExportConfig`, `DimensionalConfig`, `TableDecl`, `SourceDecl`, `ColumnDecl`, `FkClause`, `DerivedSpec`, …) and its parse-time validators |
 | [`config/loader.py`](../../src/fabulexa_forge/config/loader.py) | `load_export_config` — YAML → validated `ExportConfig` |
-| [`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py) | `build_query_specs`, `export_dimensional`, `QuerySpec` — the compile + dispatch entry points. `build_query_specs` takes an optional `window`, and `QuerySpec` carries `write_mode` / `view_name` / `view_sql`, for the windowed compile path ([`incremental.md`](incremental.md)) |
+| [`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py) | `build_query_specs`, `export_dimensional`, `QuerySpec` — the compile + dispatch entry points. `build_query_specs` takes an optional `window` and a required `base_relations: Mapping[str, str] \| None` (the full-export and windowed callers pass `None`; the playback seam's tier-2 `state` passes a truncated-relation mapping — [`playback.md`](playback.md) § The compile indirection), and `QuerySpec` carries `write_mode` / `view_name` / `view_sql`, for the windowed compile path ([`incremental.md`](incremental.md)) |
 | [`exporters/dimensional/grains.py`](../../src/fabulexa_forge/exporters/dimensional/grains.py) | `build_grain_sql` and the four per-grain SQL builders — composing the reader faithful-read and versioned-intervals relations |
 | [`exporters/dimensional/scd.py`](../../src/fabulexa_forge/exporters/dimensional/scd.py) | `build_scd2_sql` — the SCD-2 wide reconstruction, composing the versioned-intervals derivation and the reader records relation |
 | [`exporters/dimensional/fk.py`](../../src/fabulexa_forge/exporters/dimensional/fk.py) | `build_fk_expr` — the labeled-edge pathfind, composing the reference-path and membership-edge derivations |
@@ -494,6 +494,16 @@ against the five structural record columns (`fork_path`, `record_id`, `active`,
 `deactivated_at`, `last_mutation_sim_time`) before suggesting a stripped name; the
 author edits freely thereafter.
 
+**`last_mutation_sim_time` is a reserved output name** — the presentation-name
+posture. The column is a sim-internal bookkeeping high-water mark; its value is
+freely projectable (it is the default records-grain `timestamp.source` and any
+`from:` reads it), but naming an output column `last_mutation_sim_time` is refused
+at plan build (`check_reserved_presentation_name`, the shared check in
+[`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py)).
+[`source.md`](source.md) carries the same reservation on its `rename` targets, and
+the playback seam presents the column as the recorded trail under `state`
+([`playback.md`](playback.md) § The recorded trail).
+
 ### Determinism and ordering
 
 The exporter is a pure function of `(emit, config, code version)`: same inputs →
@@ -668,6 +678,7 @@ error message. The remaining business rules run against the sidecar in
 | `LookupColumnSafety` | A `lookup` column resolves and reads only temporally exact data: the terminal `records__<kind>` table and its `prop__<property>` exist; a unique reference path resolves from the anchor kind to `to` (or the `path` hint validates hop-by-hop); the terminal property plus every traversed hop column are `temporal_class: constant` (the exempt discriminator excepted, any class — § Lookup); a zero-hop self lookup is not on a `records` grain (redundant with `from`); and the table is not `scd: type2` (the SCD-2 wide builder does not project lookup columns) |
 | `ExcludedKindNotSourced` | No declared table sources an `exclude.kinds` kind |
 | `ExcludedTableNotSourced` | No declared table's source resolves to an `exclude.tables` sidecar table name |
+| `check_reserved_presentation_name` | No author-named output column is `last_mutation_sim_time` — a reserved output name (the presentation-name posture; § Output naming). The shared check in [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py); the value channels freely under any other name |
 
 The engine does not validate author `role` against `record_roles`: role is
 author-authoritative (Principle #7), and the registry informs only `init`'s proposal.
@@ -827,6 +838,7 @@ What the dimensional exporter deliberately does not own:
 |---|---|
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` resolution surface — origin/zone precedence, the `rebase` config + CLI flags, the anchor `derived: timestamp` renders through |
 | [`derivations.md`](derivations.md) | The interpretive layer this mode composes — versioned-intervals and reference-resolution; the source of the shared `require_single_branch` guard |
+| [`playback.md`](playback.md) | The seam whose tier-2 `state` compiles this mode over a truncated tape via `base_relations`; the presentation-name posture's companion |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — `query_arrow`, the `history_tracked` flag, the faithful-read builders, the per-type decode contract |
 | [`conformance.md`](conformance.md) | The C1–C14 contract the input is trusted to satisfy |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The config grammar these semantics bind |

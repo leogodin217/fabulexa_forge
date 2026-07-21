@@ -167,6 +167,20 @@ They tie on `sim_time`, and the `event_class` tiebreak — `u` is `1`, `d` is `2
 orders the `u` strictly before the `d`. No final change is lost, and the `d` still
 terminates the record.
 
+**The canonical order and `seq` are seam-owned guarantees.** The canonical total
+order and the global-`seq` definition are owned by the playback seam
+([`playback.md`](playback.md) § Canonical total order and entry-point-invariant
+`seq`); a streaming stream's per-content output conforms to them by construction —
+exactly under full-set selections. Two scoped subset divergences follow from
+streaming invoking each fold over its config-selected columns rather than the full
+set: a field-subset config's intra-instant membership tail spans the subset (so
+order agreement holds up to intra-instant same-class same-owner ties), and a
+tracked-subset config's `u` row set — and therefore its `seq` numbering — spans
+the subset's change points, where the seam's row set is selection-invariant by
+design. A shipped stream is single-content and never merges the two event
+families, so its per-content order is the canonical order with `family` held
+constant; the cross-family interleave lives only at the seam.
+
 ### Message key
 
 The message key is **always `record_id`** — on every op and for every source. For
@@ -795,6 +809,7 @@ What the streaming exporter deliberately does not own:
 | [`streaming-routing.md`](streaming-routing.md) | The two-layer routing surface this driver composes — sub-type selection, topic naming and grouping, declared-but-empty topics, the `table_identity` masquerade, and the routing validation rules |
 | [`streaming-pacing.md`](streaming-pacing.md) | The realtime-pacing surface this driver composes — clock resolution (config × CLI), the drift-free release schedule, paced per-line-flush delivery, and the clock validation rules |
 | [`derivations.md`](derivations.md) | The row-state-events fold (`state-changes`) and the membership-events fold (`membership-events`) this driver composes — `c`/`u`/`d` and `join`/`leave` generation, op classification, after-image reconstruction, and per-source order; the source of the shared `require_single_branch` guard |
+| [`playback.md`](playback.md) | The seam that owns the canonical total order and the global-`seq` definition this stream conforms to; the tier-1 `events` head that re-seams `stream` later |
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` resolution surface — origin/zone precedence, `rebase` + CLI flags; the absolute instant `ts` renders from |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — the records spine, current values, and `history_tracked` flag |
 | [`config-docstrings.md`](config-docstrings.md) | The three-channel docstring convention the `StreamConfig` models follow |

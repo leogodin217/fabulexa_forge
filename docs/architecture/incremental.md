@@ -167,6 +167,14 @@ snapshot is therefore the deliberate choice — every column value is still hori
 (the gate admits only temporally constant sources), so the snapshot is wider than a
 real nightly extract, never wrong, and FK-safe at every horizon.
 
+This per-table-class window-membership contract — the window keys, the per-class
+behavior, the type-1 row-membership carve-out, and the windowed-grain rejection —
+is also the playback seam's tier-2 `window` contract, promoted verbatim from
+driver-internal to seam-owned ([`playback.md`](playback.md) § Shaped window). The
+driver keeps its own mechanics (the window-boundary sequence, cursor, fingerprint,
+drained detection, labels, staging, writers); those remain above the seam, and the
+driver becomes tier 2's first re-seam customer when it is next materially touched.
+
 ### The SCD-2 view
 
 `valid_to` is redundant: version N's `valid_to` **is** version N+1's `valid_from`.
@@ -425,6 +433,7 @@ usage error on stderr, exit 1, before the emit opens).
 |---|---|
 | [`dimensional.md`](dimensional.md) | One mode the driver wraps — grain semantics, SCD-2 `LEAD`, derived columns (incl. the ordinal amendment), the timestamp anchor |
 | [`source.md`](source.md) | The other mode the driver wraps — per-genre window membership, junction extract-on-change, snapshot delivery |
+| [`playback.md`](playback.md) | The seam that promotes this driver's per-table-class window-membership rules to its tier-2 `window` contract |
 | [`anchor.md`](anchor.md) | The single `EffectiveAnchor` calendar windows resolve through |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface the driver reads through |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored contract carrying the relied-on `last_mutation_sim_time` / `slice_at` guarantees |

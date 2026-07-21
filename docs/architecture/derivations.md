@@ -3,7 +3,8 @@
 **Status:** Implemented. Code is the contract — see
 [`derivations/`](../../src/fabulexa_forge/derivations/)
 (`versioned_intervals.py`, `reference_resolution.py`, `row_state_events.py`,
-`membership_events.py`, `state_at.py`, `guard.py`),
+`membership_events.py`, `state_at.py`, `membership_state_at.py`,
+`truncated_tape.py`, `guard.py`),
 [`tests/derivations/`](../../tests/derivations/).
 Public API: `VERSIONED_INTERVAL_COLUMNS`,
 `build_versioned_intervals_sql`, `REFERENCE_RESOLUTION_COLUMNS`,
@@ -11,7 +12,10 @@ Public API: `VERSIONED_INTERVAL_COLUMNS`,
 `build_row_state_events_sql`, `EVENT_CLASS_CREATE` / `EVENT_CLASS_UPDATE` /
 `EVENT_CLASS_DELETE`, `MEMBERSHIP_EVENT_COLUMNS`, `EVENT_CLASS_JOIN` /
 `EVENT_CLASS_LEAVE`, `resolve_membership_columns`, `build_membership_events_sql`,
-`STATE_AT_COLUMNS`, `build_state_at_sql`, `require_single_branch`.
+`STATE_AT_COLUMNS`, `build_state_at_sql`, `build_state_at_end_sql`,
+`MEMBERSHIP_STATE_AT_COLUMNS`, `build_membership_state_at_sql`,
+`build_truncated_history_sql`, `build_truncated_membership_sql`,
+`build_truncated_records_sql`, `build_truncated_sidecar`, `require_single_branch`.
 
 The interpretive layer between the base reader and the exporter modes. The reader
 is faithful — it makes no reshaping choices. A derivation makes the *shared*
@@ -20,15 +24,20 @@ reference resolution, point-in-time replay), so each mode composes a derivation
 rather than re-deriving the answer. Every derivation is a pure SQL fold whose
 output values each trace to reader-visible base values; the mode materializes the
 SQL through the reader's query surfaces, wraps it in a representation step, and
-dispatches to a writer. The layer holds five residents: `history` →
+dispatches to a writer. The layer holds six residents: `history` →
 versioned-intervals, the reference-resolution pair (reference-path and
 membership-edge), `history` → row-state-events (the per-record `c`/`u`/`d`
 change-event stream the streaming exporter replays and the source exporter's
 change-log render lands as a table), `membership__<K>__<p>` → membership-events
 (the `join`/`leave` event stream the streaming exporter replays for
-collection-valued properties), and `history` + `records__<kind>` → state-at (the
-point-in-time row reconstruction the source exporter's snapshot delivery
-composes).
+collection-valued properties), `history` + `records__<kind>` → state-at (the
+point-in-time row reconstruction, with a horizoned and an end-of-tape entry
+point), and `membership__<K>__<p>` → membership-state-at (interval containment
+at a horizon). Alongside the folds it carries the **truncated-tape surface** —
+three relation presenters and a sidecar view that render the emit sliced at T
+for a mode to compile over. The playback seam composes state-at,
+membership-state-at, and the truncated-tape surface for its point-in-time and
+shaped-`state` answers ([`playback.md`](playback.md)).
 
 ```
 reader        — faithful, no choices
@@ -38,7 +47,9 @@ derivations   — interpretive shared folds (this layer)
   │              reference resolution           (reference-path · membership-edge)
   │              history → row-state-events      (one event per record state change: c/u/d)
   │              membership → membership-events  (join/leave per membership interval)
-  │              history + records → state-at    (one row per record, as of a horizon)
+  │              history + records → state-at    (one row per record, as of a horizon or the tape's end)
+  │              membership → membership-state-at (one row per interval containing a horizon)
+  │              truncated-tape presenters        (base tables rendered sliced at T, for a mode to compile over)
   │   owns:      the temporal-honesty contract and the single-branch guard
   ▼
 exporters     — modes compose a derivation + a representation step + a writer
@@ -352,6 +363,53 @@ delivery) is this fold's first consumer; point-in-time export (§ Staged roadmap
 Stage 5) is a later one. Behavioral cases are exercised in
 [`tests/derivations/test_state_at.py`](../../tests/derivations/test_state_at.py).
 
+**The end-of-tape entry point.** `build_state_at_end_sql(sidecar, fork_path,
+kind, properties)` is the resident's second entry point: the same canonical
+`STATE_AT_COLUMNS` relation and declared ORDER BY as the horizoned builder,
+reconstructed with no horizon — no `created_sim_time` row filter (every record
+of the kind), `active` / `deactivated_at` from the spine verbatim, each tracked
+property at its latest recorded `history` value, constant properties at their
+current records value. "The tape's end" is **structural**: the SQL carries no
+horizon parameter and no horizon predicate, so composing this relation over
+truncated base relations bounds it at the truncation position with no horizon
+ever computed — the property the playback seam's shaped `state` and horizon-less
+`change_delivery: snapshot` both rest on ([`playback.md`](playback.md),
+[`source.md`](source.md) § Snapshot delivery). The equivalence is the testable
+contract: this relation equals `build_state_at_sql` at any `horizon_ns` strictly
+beyond every `history` and lifecycle instant of the composed relations — a
+horizon cleared against `history` alone is wrong, rendering a later-deactivated
+record active, because a deactivation is a spine fact, not a `history` row. The
+horizoned builder's signature is untouched; `build_state_at_end_sql` raises the
+same cause-based errors (`TableNotFoundError`, `ExportError`).
+
+### The membership-state-at derivation
+
+`build_membership_state_at_sql(sidecar, fork_path, owner_kind, property_name,
+fields, horizon_ns)` is the point-in-time counterpart to membership-events —
+interval containment at an exclusive horizon, under the same six-rule layer
+contract. One row per `membership__<owner_kind>__<property_name>` interval
+(discovered through the sidecar, filtered to `fork_path`) satisfying
+`joined_sim_time < horizon_ns AND (left_sim_time IS NULL OR left_sim_time >=
+horizon_ns)`. Canonical columns are `MEMBERSHIP_STATE_AT_COLUMNS` — `record_id`
+(the owner), `joined_sim_time` (raw ns) — followed by each selected
+element-schema field's column shape in `resolve_membership_columns` order
+(`elem__<f>` for a scalar field, the `member__<f>__kind` / `member__<f>__id`
+pair for a reference field), each cast to codec `VARCHAR`. **`left_sim_time` is
+never projected**: for a contained interval it is `NULL` or strictly-future
+state relative to the horizon, and carrying it would break temporal honesty.
+Declared order is `(joined_sim_time, record_id, <field tail>)`, the tail
+compared `CAST(... AS VARCHAR) NULLS FIRST` (the membership-events tail rule).
+The event-time key is the constant horizon; every projected field value is
+interval-constant by the same upstream guarantee membership-events relies on, so
+the fold is temporally honest. Totality holds as for every resident: an inverted
+interval (`left < joined`) satisfies the predicate for no horizon and answers
+deterministically, overlapping duplicates yield one row each — faithfully wrong,
+never an error. A missing membership table raises `TableNotFoundError`; an
+unresolvable field raises `ExportError`. Its first consumer is the playback
+seam's tier-1 `snapshot` ([`playback.md`](playback.md)). Behavioral cases are
+exercised in
+[`tests/derivations/test_membership_state_at.py`](../../tests/derivations/test_membership_state_at.py).
+
 ### The reference-resolution derivations
 
 Two functions resolve an anchor record to a related value, each returning
@@ -394,6 +452,64 @@ absent membership table on the edge) is a mode pre-validation gap and raises
 rules (`ReferencePathResolvable`, `MembershipEdgeResolvable`, `LookupColumnSafety` in
 [`dimensional.md`](dimensional.md)), so the "is this resolvable?" check and the
 executed resolution give one answer.
+
+### The truncated-tape surface
+
+Three relation builders and one sidecar view present the emit as the producer
+would have emitted it sliced at `at_sim_time` (inclusive) — the input to the
+playback seam's shaped `state` ([`playback.md`](playback.md) § Shaped state).
+Unlike the folds, these are relation **presenters**: each returns a complete
+SELECT that *replaces* a base table inside a mode's full-export compile, so each
+carries the replaced table's column shape (with declared deviations) rather than
+a canonical ORDER BY — a replacing relation's order is imposed by the compile
+that reads it. They are pure, anti-weld, deterministic, and total over
+structurally-conformant input like the folds. No existing resident changes.
+
+- `build_truncated_history_sql(fork_path, at_sim_time)` — `history` rows with
+  `sim_time <= at_sim_time`, filtered to `fork_path`; column shape verbatim.
+  History is a fixed table, so there is no resolvability to check.
+- `build_truncated_membership_sql(sidecar, fork_path, owner_kind, property_name,
+  at_sim_time)` — intervals with `joined_sim_time <= at_sim_time`, filtered to
+  `fork_path`, with `left_sim_time` masked `NULL` when `> at_sim_time` (an
+  interval still open at T, exactly as a slice-at-T emit renders it); every
+  other column verbatim. A missing table raises `TableNotFoundError`.
+- `build_truncated_records_sql(sidecar, fork_path, kind, at_sim_time)` — one row
+  per record with `created_sim_time <= at_sim_time`. Identity columns and
+  `record_index` verbatim (`record_index` is slice-stable by contract);
+  `active` / `deactivated_at` horizon-rendered; `constant` properties verbatim;
+  `tracked` properties reconstructed as of T and `TRY_CAST` back to their
+  sidecar-declared type (`NULL` where corrupted history text does not parse — a
+  cast never errors); presentation-property columns by the same per-class rule;
+  each `ref_index__<name>` re-derived from the reconstructed `prop__<name>` via
+  the target kind's *truncated* spine (`NULL` beside an unresolvable reference).
+  `slice_only` columns are absent — except a sub-typed kind's `slice_only`
+  discriminator `prop__<kind>_type`, carried verbatim as the classification
+  column (invariant 5's carve-out, [`slice-only.md`](slice-only.md)) — and
+  `last_mutation_sim_time` is presented as the recorded trail
+  `greatest(created_sim_time, the latest tracked history instant <= T,
+  deactivated_at when <= T)`, never the physical value ([`playback.md`](playback.md)
+  § The recorded trail). A missing table raises `TableNotFoundError`.
+
+**One consistent truncated world.** Wherever a builder's recipe reads a base
+table other than the one it presents — the records builder's tracked
+reconstruction reads `history`; its `ref_index__` re-derivation reads the target
+kind's spine — the read carries truncated-world semantics via an inline
+truncation predicate, so its result equals a read of that table's truncated
+presentation, never the physical table. A builder's read of the table it
+*presents* names the physical table (the source being truncated). This makes the
+cross-reads binding-insensitive under the seam's name-shadowing composition
+(§ The compile indirection in [`playback.md`](playback.md)).
+
+`build_truncated_sidecar(sidecar)` is a pure `Sidecar` derivation identical to
+the physical sidecar except that each `records__<kind>` entry's column list
+drops exactly the columns its truncated relation lacks (every `slice_only`
+column bar the discriminator carve-out; `last_mutation_sim_time` remains declared
+— the relation presents it as the trail). It is T-independent — the dropped set
+is a function of the declared schema — and column-list agreement with the
+relation builders is a stated invariant of the surface. Every other sidecar
+field remains physical, the branch's slice bound included, which is why no compile
+path under `state` may read a slice bound from the sidecar: the truncated world's
+end is defined by its data, never by metadata.
 
 ### Relied-on upstream guarantees
 
@@ -464,15 +580,19 @@ filter on; it raises `ExportError` on zero or more than one branch.
 
 ## Boundaries
 
-- **Five residents.** The layer holds `history` → versioned-intervals, the
-  reference-resolution pair (reference-path and membership-edge), `history` →
-  row-state-events, `membership__<K>__<p>` → membership-events, and `history` +
-  `records__<kind>` → state-at. The dimensional exporter's interval reconstruction
-  and its reference / membership FK and `lookup` resolution compose the first two
-  residents; the streaming exporter composes row-state-events (for `state-changes`)
-  and membership-events (for `membership-events`); the source exporter composes
-  row-state-events (its change-log render) and state-at (its snapshot delivery) —
-  rather than any mode authoring its own base-table SQL. Grain assembly and the
+- **Six residents plus the truncated-tape surface.** The folds are `history` →
+  versioned-intervals, the reference-resolution pair (reference-path and
+  membership-edge), `history` → row-state-events, `membership__<K>__<p>` →
+  membership-events, `history` + `records__<kind>` → state-at, and
+  `membership__<K>__<p>` → membership-state-at; the truncated-tape surface adds
+  three base-table presenters and a sidecar view. The dimensional exporter's
+  interval reconstruction and its reference / membership FK and `lookup`
+  resolution compose the first two residents; the streaming exporter composes
+  row-state-events (for `state-changes`) and membership-events (for
+  `membership-events`); the source exporter composes row-state-events (its
+  change-log render) and state-at (its snapshot delivery); the playback seam
+  composes state-at, membership-state-at, and the truncated-tape surface — rather
+  than any mode authoring its own base-table SQL. Grain assembly and the
   representation step (renames, casts, anchor rendering, the total `ORDER BY`) are
   mode-side — the format's own concern, not a derivation's.
 - **Named, unbuilt slots.** Further derivations are anticipated but carry no code
@@ -486,9 +606,10 @@ filter on; it raises `ExportError` on zero or more than one branch.
   gating; row-state-events reads that column directly for its `c` event rather than
   composing this shared primitive. Current-state reconstruction (a planned `base`
   mode) and point-in-time replay-to-T (Stage-5 feature-store rows) both compose the
-  state-at resident above — the source exporter's snapshot delivery is its first
-  consumer. The remaining gap for these two is at the *mode* level, not the
-  derivation level: the fold both need already exists.
+  state-at resident above — the source exporter's snapshot delivery and the
+  playback seam's point-in-time answers are its consumers. The remaining gap for
+  the `base` and Stage-5 modes is at the *mode* level, not the derivation level:
+  the folds they need already exist.
 - **Single-branch.** Each derivation filters to the sole `fork_path`. Branch-aware
   derivation (paired counterfactuals, per-branch slices) is parked — the sanitised
   subset carries exactly one branch.
@@ -506,13 +627,15 @@ filter on; it raises `ExportError` on zero or more than one branch.
 - **Reconstruction never carries `ref_index__` values.** `history.value` is
   id-space only, and `ref_index__<name>` is a point-in-time key valid only at
   its own slice ([`bundle.md`](bundle.md) § The dense record index) — so any
-  reconstruction surface that surfaces the index (a future state-at extension,
-  Stage-5 point-in-time export) **re-derives** `ref_index__<name>` from the
-  reconstructed `prop__<name>` via the target's `record_index`; it never
-  carries the emitted slice's `ref_index__` value to another horizon. Today no
-  resident reads or emits identity columns beyond `record_id`; state-at's
-  reconstructed column set is `STATE_AT_COLUMNS` plus selected `prop__` columns
-  only.
+  reconstruction surface that surfaces the index **re-derives** `ref_index__<name>`
+  from the reconstructed `prop__<name>` via the target's `record_index`; it never
+  carries the emitted slice's `ref_index__` value to another horizon. The
+  truncated-records presenter is the first surface to apply this rule — it carries
+  `record_index` verbatim (slice-stable by contract) and re-derives each
+  `ref_index__<name>` from the target kind's *truncated* spine. The folds
+  themselves remain narrower: no fold reads or emits identity columns beyond
+  `record_id`, and state-at's reconstructed column set is `STATE_AT_COLUMNS` plus
+  selected `prop__` columns only.
 - **A `slice_only` column has no faithful point-in-time read.** State-at and the
   row-state-events after-image render a type-1 column's *current* `records__` value
   at every horizon — the declared temporal-honesty exception. For a `constant` column
@@ -534,6 +657,7 @@ filter on; it raises `ExportError` on zero or more than one branch.
 | [`dimensional.md`](dimensional.md) | The mode that composes the versioned-intervals and reference-resolution residents; the consumer that shares the single-branch guard. |
 | [`streaming.md`](streaming.md) | The delivery driver that composes the row-state-events resident (`state-changes`) and the membership-events resident (`membership-events`) into ordered event streams. |
 | [`source.md`](source.md) | The mode that composes row-state-events (its change-log render) and state-at (its snapshot delivery) into landed operational tables. |
+| [`playback.md`](playback.md) | The seam that composes state-at, membership-state-at, and the truncated-tape surface for its point-in-time and shaped-`state` answers. |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored input contract — `history`, `records__*`, branch enumeration. |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap. |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles, the isolation boundary, vocabulary. |
