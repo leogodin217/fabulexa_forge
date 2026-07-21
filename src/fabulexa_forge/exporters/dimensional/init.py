@@ -17,7 +17,10 @@ from typing import TYPE_CHECKING, Callable
 from fabulexa_forge.errors import InitRequiresRecordRoles
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
-from fabulexa_forge.reader.records_columns import records_column_role
+from fabulexa_forge.reader.records_columns import (
+    REF_INDEX_PREFIX,
+    records_column_role,
+)
 from fabulexa_forge.reader.relations import distinct_prop_values
 from fabulexa_forge.reader.sidecar import TableSpec
 
@@ -122,6 +125,60 @@ def _get_records_columns(kind: str, all_tables: tuple[TableSpec, ...]) -> list[s
     return []
 
 
+def _owned_columns(
+    sidecar: "Sidecar", kind: str, sub_type: str
+) -> frozenset[str] | None:
+    """Value columns sub-type `sub_type` of `kind` declares, per the sidecar.
+
+    The set init prunes each per-sub-type stub to, read from the sidecar's
+    `sub_type_columns` partition. None signals 'do not prune' (union-schema
+    fallback): the partition is absent (an older emit) or does not cover this
+    kind/sub-type. A present-but-empty partition entry returns an empty
+    frozenset — the sub-type owns no value column, so every partitionable
+    column is pruned.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The sub-typed record kind.
+        sub_type: The declared sub-type.
+
+    Returns:
+        The owned column-name set, or None when the partition does not cover it.
+    """
+    partition = sidecar.sub_type_columns()
+    if partition is None:
+        return None
+    try:
+        return frozenset(partition.columns_for(kind, sub_type))
+    except KeyError:
+        return None
+
+
+def _is_pruned(col: str, owned: frozenset[str] | None, discriminator: str) -> bool:
+    """Whether `col` is omitted from a per-sub-type stub as structurally inapplicable.
+
+    True only for a sub-type-partitionable value column (`prop__` / `ref_index__`,
+    never the kind-wide `discriminator`) the sub-type does not declare. Never
+    prunes when `owned` is None, so the union-schema behaviour is preserved
+    exactly on emits without the `sub_type_columns` field.
+
+    Args:
+        col: The records-table column name under consideration.
+        owned: The sub-type's declared columns, or None to disable pruning.
+        discriminator: The kind's `prop__<kind>_type` column (never pruned).
+
+    Returns:
+        True to omit the column, False to keep it.
+    """
+    if owned is None:
+        return False
+    if col == discriminator:
+        return False
+    if not (col.startswith("prop__") or col.startswith(REF_INDEX_PREFIX)):
+        return False
+    return col not in owned
+
+
 def _distinct_values(emit: "Emit", table: str, column: str) -> list[str]:
     """Run SELECT DISTINCT on a column and return the values as strings.
 
@@ -172,6 +229,7 @@ def _write_dim_scd2_stub(
     sidecar: "Sidecar",
     notice_sink: "NoticeSink",
     filter_line: str | None,
+    owned_columns: frozenset[str] | None = None,
 ) -> None:
     """Write a SCD-2 dim table stub block.
 
@@ -179,6 +237,12 @@ def _write_dim_scd2_stub(
     proposal loop (via is_non_exempt_slice_only), emitting one
     'slice-only-column-omitted' notice per skip naming kind and column, in
     sidecar column order. The exempt discriminator remains proposable.
+
+    When `owned_columns` is provided (a per-sub-type stub over an emit carrying
+    `sub_type_columns`), columns the sub-type does not declare are pruned as
+    structurally inapplicable — the stub proposes only this sub-type's columns
+    instead of the whole union. None (the default) preserves union-schema
+    behaviour.
 
     Args:
         w: Line-writing callable.
@@ -188,9 +252,13 @@ def _write_dim_scd2_stub(
         sidecar: The open emit's sidecar.
         notice_sink: Receiver for skip notices.
         filter_line: Filter YAML line to include in source, or None for no filter.
+        owned_columns: The sub-type's declared columns for pruning, or None to
+            propose the full union (bare-string kinds, or emits without the
+            `sub_type_columns` field).
     """
     tracked_cols = _get_tracked_columns(kind, all_tables)
     all_cols = _get_records_columns(kind, all_tables)
+    discriminator = f"prop__{kind}_type"
     w(f"    - name: {name}")
     w("      role: dim  # proposal: dimension kind")
     w("      scd: type2  # proposal: history_tracked columns present")
@@ -204,6 +272,8 @@ def _write_dim_scd2_stub(
     w("        - {name: id, from: record_id}")
     for col in all_cols:
         if records_column_role(col) not in ("payload", "presentation"):
+            continue
+        if _is_pruned(col, owned_columns, discriminator):
             continue
         if is_non_exempt_slice_only(sidecar, kind, col):
             notice_sink(
@@ -264,8 +334,14 @@ def _write_fact_stub(
     name: str,
     all_tables: tuple[TableSpec, ...],
     filter_line: str | None = None,
+    owned_columns: frozenset[str] | None = None,
 ) -> None:
     """Write a fact table stub block with FK-candidate comments.
+
+    When `owned_columns` is provided (a per-sub-type stub over an emit carrying
+    `sub_type_columns`), reference columns the sub-type does not declare are
+    pruned from the FK-candidate comments as structurally inapplicable. None
+    (the default) lists every reference on the union table.
 
     Args:
         w: Line-writing callable.
@@ -273,7 +349,11 @@ def _write_fact_stub(
         name: The proposed output table name.
         all_tables: All sidecar TableSpec objects.
         filter_line: Optional filter YAML line to include in source, or None.
+        owned_columns: The sub-type's declared columns for pruning, or None to
+            list the full union (bare-string kinds, or emits without the
+            `sub_type_columns` field).
     """
+    discriminator = f"prop__{kind}_type"
     w(f"    - name: {name}")
     w("      role: fact  # proposal: fact kind")
     w("      source:")
@@ -288,6 +368,8 @@ def _write_fact_stub(
         if tbl.name == f"records__{kind}":
             for tbl_col in tbl.columns:
                 if tbl_col.references:
+                    if _is_pruned(tbl_col.name, owned_columns, discriminator):
+                        continue
                     ref = tbl_col.references
                     w(
                         f"        # FK candidate:"
@@ -343,6 +425,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
             # Object-valued kind: split per declared sub-type
             has_tracked = _columns_have_history_tracked(kind, all_tables)
             for sub_type in record_roles.sub_types(kind):
+                owned = _owned_columns(sidecar, kind, sub_type)
                 registry_role = record_roles.role_of(kind, sub_type)
                 config_role = _ROLE_MAP[registry_role]
                 name = f"{config_role}_{kind}_{sub_type}"
@@ -354,12 +437,21 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                 if config_role == "dim":
                     if has_tracked:
                         _write_dim_scd2_stub(
-                            w, kind, name, all_tables, sidecar, notice_sink, filter_line
+                            w,
+                            kind,
+                            name,
+                            all_tables,
+                            sidecar,
+                            notice_sink,
+                            filter_line,
+                            owned_columns=owned,
                         )
                     else:
                         _write_dim_type1_stub(w, kind, name, filter_line)
                 else:
-                    _write_fact_stub(w, kind, name, all_tables, filter_line)
+                    _write_fact_stub(
+                        w, kind, name, all_tables, filter_line, owned_columns=owned
+                    )
         else:
             # Bare-string kind: single role
             registry_role = record_roles.role_of(kind, None)

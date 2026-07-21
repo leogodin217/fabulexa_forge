@@ -37,6 +37,14 @@ _RECORD_ROLES_BLOCK = {
     "asset": "fact",
 }
 
+_SUB_TYPE_COLUMNS_BLOCK = {
+    "actor": {
+        "staff": ["prop__doctor", "ref_index__doctor", "prop__salary"],
+        "trip": ["prop__distance"],
+        "visit": [],
+    },
+}
+
 
 def _get_validator() -> jsonschema.Draft202012Validator:
     schema = json.loads((_CONTRACT / "base-format.schema.json").read_text())
@@ -128,5 +136,45 @@ def test_record_roles_actor_sub_type_invalid_role_fails() -> None:
     validator = _get_validator()
     bad_roles = {"actor": {"trip": "bad_role"}, "entity": "dimension"}
     sidecar = {**_MINIMAL_SIDECAR, "record_roles": bad_roles}
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(sidecar)
+
+
+# ---------------------------------------------------------------------------
+# sub_type_columns: valid cases
+# ---------------------------------------------------------------------------
+
+
+def test_sidecar_without_sub_type_columns_validates() -> None:
+    """A sidecar with no sub_type_columns key is valid (field is optional)."""
+    _get_validator().validate(_MINIMAL_SIDECAR)
+
+
+def test_sidecar_with_well_formed_sub_type_columns_validates() -> None:
+    """A well-formed sub_type_columns block (incl. an empty per-sub-type list) validates."""
+    validator = _get_validator()
+    sidecar = {**_MINIMAL_SIDECAR, "sub_type_columns": _SUB_TYPE_COLUMNS_BLOCK}
+    validator.validate(sidecar)
+
+
+# ---------------------------------------------------------------------------
+# sub_type_columns: invalid cases
+# ---------------------------------------------------------------------------
+
+
+def test_sub_type_columns_non_string_column_fails() -> None:
+    """A column entry that is not a string fails schema validation."""
+    validator = _get_validator()
+    bad = {"actor": {"staff": ["prop__doctor", 42]}}
+    sidecar = {**_MINIMAL_SIDECAR, "sub_type_columns": bad}
+    with pytest.raises(jsonschema.ValidationError):
+        validator.validate(sidecar)
+
+
+def test_sub_type_columns_empty_sub_type_map_fails() -> None:
+    """A kind mapping to an empty sub-type object fails (minProperties: 1)."""
+    validator = _get_validator()
+    bad = {"actor": {}}
+    sidecar = {**_MINIMAL_SIDECAR, "sub_type_columns": bad}
     with pytest.raises(jsonschema.ValidationError):
         validator.validate(sidecar)

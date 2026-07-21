@@ -466,4 +466,5 @@ def build_truncated_sidecar(sidecar: Sidecar) -> Sidecar:
         pinned_ids=sidecar.pinned_ids(),
         enum_domains=sidecar.enum_domains(),
         record_roles=sidecar.record_roles(),
+        sub_type_columns=sidecar.sub_type_columns(),
     )

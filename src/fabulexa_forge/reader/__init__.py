@@ -38,6 +38,7 @@ from fabulexa_forge.reader.sidecar import (
     RecordRoles,
     RuntimeAnchor,
     Sidecar,
+    SubTypeColumns,
     TableSpec,
     TemporalClass,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "Sidecar",
     "SidecarParseError",
     "SidecarStructureError",
+    "SubTypeColumns",
     "TableNotFoundError",
     "TableSpec",
     "TemporalClass",
