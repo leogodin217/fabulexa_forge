@@ -10,6 +10,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.sidecar_builder import identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.reader import open_emit, run_check, validate
@@ -1829,3 +1830,242 @@ def test_validate_ok_false_when_check_fails(
     with open_emit(base_fixtures["c12_missing_kind"]) as emit:
         report = validate(emit)
     assert not report.ok
+
+
+# ---------------------------------------------------------------------------
+# C14: sub-type column partition consistency
+# ---------------------------------------------------------------------------
+
+#: Actor records columns for the C14 fixtures. The discriminator prop__actor_type
+#: itself carries the temporal pair (proving the carve-out subtracts it), and
+#: prop__manager is a reference-typed value column paired with ref_index__manager.
+_C14_ACTOR_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__manager",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
+    identity_column("ref_index__manager", "BIGINT"),
+]
+
+#: The declared discriminator domain for the C14 actor fixtures.
+_C14_ENUM_DOMAINS: dict[str, dict[str, list[str]]] = {
+    "actor": {"actor_type": ["driver", "staff"]}
+}
+
+#: A C14-consistent partition: union == {prop__name, prop__status, prop__manager,
+#: ref_index__manager} == value columns minus the discriminator, plus the
+#: reference sibling; driver carries the reference pair, staff carries neither.
+_C14_VALID_PARTITION: dict[str, dict[str, list[str]]] = {
+    "actor": {
+        "driver": ["prop__name", "prop__manager", "ref_index__manager"],
+        "staff": ["prop__status"],
+    }
+}
+
+
+def _write_c14_emit(
+    dest: Path,
+    *,
+    sub_type_columns: dict[str, dict[str, list[str]]] | None,
+    enum_domains: dict[str, dict[str, list[str]]] | None = None,
+) -> Path:
+    """Write a records__actor emit for C14 (no data rows; C14 reads only sidecar).
+
+    Args:
+        dest: Directory to write into.
+        sub_type_columns: The partition block; omitted from the sidecar when None.
+        enum_domains: The discriminator registry; defaults to the actor domain,
+            omitted from the sidecar when explicitly None.
+    """
+    tables: list[dict[str, object]] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": list(_HISTORY_COLUMNS),
+            "rows": 0,
+        },
+        {
+            "name": "records__actor",
+            "category": "records",
+            "record_kind": "actor",
+            "columns": list(_C14_ACTOR_COLUMNS),
+            "rows": 0,
+        },
+    ]
+    sidecar = _single_branch_sidecar(tables)
+    if enum_domains is not None:
+        sidecar["enum_domains"] = enum_domains
+    if sub_type_columns is not None:
+        sidecar["sub_type_columns"] = sub_type_columns
+    return _write_emit(dest, sidecar)
+
+
+def test_c14_valid_partition_passes(tmp_path: Path) -> None:
+    """A C14-consistent partition passes; the discriminator carries the temporal
+    pair yet is correctly excluded from the required column set (carve-out)."""
+    dest = _write_c14_emit(
+        tmp_path / "c14_ok",
+        sub_type_columns=_C14_VALID_PARTITION,
+        enum_domains=_C14_ENUM_DOMAINS,
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+    assert result.passed, result.messages
+    assert result.messages == ()
+
+
+def test_c14_skips_when_sub_type_columns_absent(tmp_path: Path) -> None:
+    """C14 passes by vacuity (skip) when sub_type_columns is absent."""
+    dest = _write_c14_emit(
+        tmp_path / "c14_skip",
+        sub_type_columns=None,
+        enum_domains=_C14_ENUM_DOMAINS,
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+    assert result.passed
+    assert any("sub_type_columns" in s and "absent" in s.lower() for s in result.skips)
+
+
+def test_c14_enum_domains_absent_is_failure_not_skip(tmp_path: Path) -> None:
+    """sub_type_columns present with enum_domains absent is a C14 failure, not a skip."""
+    dest = _write_c14_emit(
+        tmp_path / "c14_no_enum",
+        sub_type_columns=_C14_VALID_PARTITION,
+        enum_domains=None,
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+    assert not result.passed
+    assert result.skips == ()
+    assert any("enum_domains" in m for m in result.messages)
+
+
+def test_c14_subtype_keys_mismatch_fails(tmp_path: Path) -> None:
+    """A partition sub-type outside the declared discriminator domain fails C14."""
+    partition = {
+        "actor": {
+            "driver": ["prop__name", "prop__manager", "ref_index__manager"],
+            "staff": ["prop__status"],
+            "ghost": [],
+        }
+    }
+    dest = _write_c14_emit(
+        tmp_path / "c14_keys",
+        sub_type_columns=partition,
+        enum_domains=_C14_ENUM_DOMAINS,
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+    assert not result.passed
+    assert any("sub-type" in m.lower() and "domain" in m for m in result.messages)
+
+
+def test_c14_uncovered_value_column_fails(tmp_path: Path) -> None:
+    """A value column attributed to no sub-type fails the union-equality clause."""
+    partition = {
+        "actor": {
+            "driver": ["prop__name", "prop__manager", "ref_index__manager"],
+            "staff": [],  # prop__status now covered by nobody
+        }
+    }
+    dest = _write_c14_emit(
+        tmp_path / "c14_uncovered",
+        sub_type_columns=partition,
+        enum_domains=_C14_ENUM_DOMAINS,
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+    assert not result.passed
+    assert any("prop__status" in m and "no sub-type" in m for m in result.messages)
+
+
+def test_c14_extra_column_fails(tmp_path: Path) -> None:
+    """A listed column that is not a partitionable value column fails C14."""
+    partition = {
+        "actor": {
+            "driver": [
+                "prop__name",
+                "prop__manager",
+                "ref_index__manager",
+                "prop__ghost",
+            ],
+            "staff": ["prop__status"],
+        }
+    }
+    dest = _write_c14_emit(
+        tmp_path / "c14_extra",
+        sub_type_columns=partition,
+        enum_domains=_C14_ENUM_DOMAINS,
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+    assert not result.passed
+    assert any("prop__ghost" in m for m in result.messages)
+
+
+def test_c14_reference_pair_split_fails(tmp_path: Path) -> None:
+    """Listing a reference column without its ref_index sibling fails pair integrity."""
+    partition = {
+        "actor": {
+            # driver keeps prop__manager but drops ref_index__manager
+            "driver": ["prop__name", "prop__manager"],
+            "staff": ["prop__status", "ref_index__manager"],
+        }
+    }
+    dest = _write_c14_emit(
+        tmp_path / "c14_pair",
+        sub_type_columns=partition,
+        enum_domains=_C14_ENUM_DOMAINS,
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+    assert not result.passed
+    assert any("reference pair" in m for m in result.messages)
+
+
+def test_c14_kind_without_discriminator_is_not_partitioned(tmp_path: Path) -> None:
+    """A sub_type_columns kind whose enum_domains has no '<kind>_type' is rejected —
+    it is not a partitioned records kind."""
+    dest = _write_c14_emit(
+        tmp_path / "c14_notpart",
+        sub_type_columns=_C14_VALID_PARTITION,
+        enum_domains={"actor": {"status": ["a", "b"]}},  # no actor_type discriminator
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+    assert not result.passed
+    assert any("not" in m and "partitioned" in m for m in result.messages)
+
+
+def test_c14_included_in_full_validate_report(tmp_path: Path) -> None:
+    """validate() runs C14 as part of the full report on a conforming emit."""
+    dest = _write_c14_emit(
+        tmp_path / "c14_report",
+        sub_type_columns=_C14_VALID_PARTITION,
+        enum_domains=_C14_ENUM_DOMAINS,
+    )
+    with open_emit(dest) as emit:
+        report = validate(emit)
+    c14 = [r for r in report.results if r.check == "C14"]
+    assert len(c14) == 1
+    assert c14[0].passed

@@ -1,4 +1,4 @@
-"""Conformance checks C1–C13 for base-layer emits.
+"""Conformance checks C1–C14 for base-layer emits.
 
 Independent reimplementation of the base-format conformance procedure.
 Zero imports outside the vendored contract. Reads the vendored JSON Schema and DuckDB
@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Callable, get_args
+from typing import TYPE_CHECKING, Callable, Mapping, get_args
 
 import jsonschema
 
@@ -19,7 +19,7 @@ from fabulexa_forge.reader.records_columns import records_column_role, ref_index
 
 if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
-    from fabulexa_forge.reader.sidecar import Sidecar, TableSpec
+    from fabulexa_forge.reader.sidecar import Sidecar, SubTypeColumns, TableSpec
 
 from fabulexa_forge.reader.sidecar import ColumnSpec, RecordRoles, TemporalClass
 
@@ -30,13 +30,13 @@ from fabulexa_forge.reader.sidecar import ColumnSpec, RecordRoles, TemporalClass
 
 @dataclass(frozen=True)
 class CheckResult:
-    """Outcome of one conformance check (C1–C13).
+    """Outcome of one conformance check (C1–C14).
 
     `passed` is the authoritative verdict; `messages` and `skips` are diagnostics
     and never decide pass/fail.
     """
 
-    check: str  # "C1" .. "C13"
+    check: str  # "C1" .. "C14"
     passed: bool
     messages: tuple[str, ...]  # failure detail; empty when passed
     skips: tuple[str, ...]  # parts deliberately not examined. Informational.
@@ -44,9 +44,9 @@ class CheckResult:
 
 @dataclass(frozen=True)
 class ConformanceReport:
-    """Aggregate outcome of running C1–C13 over one emit."""
+    """Aggregate outcome of running C1–C14 over one emit."""
 
-    results: tuple[CheckResult, ...]  # one per check, in C1..C13 order
+    results: tuple[CheckResult, ...]  # one per check, in C1..C14 order
 
     @property
     def ok(self) -> bool:
@@ -1819,6 +1819,172 @@ def _check_c13(emit: "Emit") -> CheckResult:
     )
 
 
+def _check_c14_kind(
+    kind: str,
+    table_spec: "TableSpec",
+    partition: "SubTypeColumns",
+    enum_domains: Mapping[str, Mapping[str, tuple[str, ...]]],
+    messages: list[str],
+) -> None:
+    """Check one partitioned kind's entry for C14.
+
+    Asserts (for kind K): the entry's sub-type keys equal the declared
+    '<K>_type' domain; the union of its per-sub-type column lists equals the
+    kind's value columns (those carrying the temporal pair) minus the
+    discriminator prop__<K>_type, plus each reference-typed value column's
+    ref_index__ sibling; and per sub-type each reference pair (prop__<n>,
+    ref_index__<n>) is listed together or not at all.
+
+    Args:
+        kind: The partitioned records kind.
+        table_spec: The kind's records-category TableSpec.
+        partition: The parsed SubTypeColumns view.
+        enum_domains: The sidecar's closed-domain registry.
+        messages: Accumulator for failure messages.
+    """
+    discriminator = f"prop__{kind}_type"
+    disc_key = f"{kind}_type"
+
+    declared_sub_types = set(enum_domains.get(kind, {}).get(disc_key, ()))
+    partition_sub_types = set(partition.sub_types(kind))
+    if partition_sub_types != declared_sub_types:
+        messages.append(
+            f"C14: sub_type_columns[{kind!r}] sub-types "
+            f"{sorted(partition_sub_types)!r} do not match the declared "
+            f"{disc_key!r} domain {sorted(declared_sub_types)!r}"
+        )
+
+    # V = value columns (those carrying the temporal pair) minus the discriminator.
+    value_cols = {
+        col.name for col in table_spec.columns if col.history_tracked is not None
+    }
+    v = value_cols - {discriminator}
+    # X = ref_index siblings of the reference-typed value columns in V.
+    x: set[str] = set()
+    ref_props: set[str] = set()
+    for col in table_spec.columns:
+        if col.name in v and col.references is not None:
+            x.add(ref_index_sibling(col.name))
+            ref_props.add(col.name)
+    expected = v | x
+
+    union_cols: set[str] = set()
+    for sub_type in partition.sub_types(kind):
+        union_cols |= set(partition.columns_for(kind, sub_type))
+    if union_cols != expected:
+        unexpected = union_cols - expected
+        uncovered = expected - union_cols
+        if unexpected:
+            messages.append(
+                f"C14: sub_type_columns[{kind!r}] lists column(s) "
+                f"{sorted(unexpected)!r} that are not partitionable value columns "
+                f"of records__{kind} (or are the kind-wide discriminator)"
+            )
+        if uncovered:
+            messages.append(
+                f"C14: value column(s) {sorted(uncovered)!r} of records__{kind} are "
+                "attributed to no sub-type in sub_type_columns"
+            )
+
+    # Pair integrity: prop__<n> and ref_index__<n> are listed together per sub-type.
+    for sub_type in partition.sub_types(kind):
+        listed = set(partition.columns_for(kind, sub_type))
+        for prop in ref_props:
+            sibling = ref_index_sibling(prop)
+            if (prop in listed) != (sibling in listed):
+                messages.append(
+                    f"C14: sub_type_columns[{kind!r}][{sub_type!r}] lists exactly one "
+                    f"of the reference pair ({prop!r}, {sibling!r}) — a reference "
+                    "column and its ref_index sibling must appear together"
+                )
+
+
+def _check_c14(emit: "Emit") -> CheckResult:
+    """C14: Sub-type column partition consistency.
+
+    Skips when sub_type_columns is absent from the sidecar (the producer
+    predates the additive field). When present, enum_domains MUST also be
+    present — its '<kind>_type' entries define the sub-typed-kind set, so its
+    absence is a C14 failure, not a skip.
+
+    When both are present, asserts:
+    - sub_type_columns' kinds are exactly the records-category kinds whose
+      enum_domains registry carries a '<kind>_type' discriminator.
+    - Per kind, the sub-type keys equal the declared '<kind>_type' domain.
+    - Per kind, the union of the per-sub-type lists equals the value columns
+      (those carrying the temporal pair) minus prop__<kind>_type, plus each
+      reference-typed value column's ref_index__ sibling.
+    - Per sub-type, a reference column and its ref_index sibling are listed
+      together or not at all.
+
+    Reads only the sidecar (tables, enum_domains, sub_type_columns); runs no
+    data query. Classed with the semantic checks (C6, C7, C9–C13).
+
+    Args:
+        emit: An open emit.
+
+    Returns:
+        A CheckResult for check id "C14".
+    """
+    messages: list[str] = []
+    skips: list[str] = []
+    sidecar = emit.sidecar
+
+    partition = sidecar.sub_type_columns()
+    if partition is None:
+        skips.append("sub_type_columns absent from sidecar — C14 skipped")
+        return CheckResult(check="C14", passed=True, messages=(), skips=tuple(skips))
+
+    enum_domains = sidecar.enum_domains()
+    if not enum_domains:
+        messages.append(
+            "C14: sub_type_columns is present but enum_domains is absent — the "
+            "discriminator registry that defines the sub-typed-kind set is required"
+        )
+        return CheckResult(
+            check="C14", passed=False, messages=tuple(messages), skips=tuple(skips)
+        )
+
+    records_tables: dict[str, "TableSpec"] = {}
+    partitioned_kinds: set[str] = set()
+    for table_spec in sidecar.tables():
+        if table_spec.category != "records":
+            continue
+        kind = table_spec.record_kind
+        if kind is None:
+            continue  # C3 owns record_kind absence; avoid double-reporting
+        records_tables[kind] = table_spec
+        if f"{kind}_type" in enum_domains.get(kind, {}):
+            partitioned_kinds.add(kind)
+
+    partition_kinds = set(partition.kinds())
+    if partition_kinds != partitioned_kinds:
+        extra = partition_kinds - partitioned_kinds
+        missing = partitioned_kinds - partition_kinds
+        if extra:
+            messages.append(
+                f"C14: sub_type_columns declares kind(s) {sorted(extra)!r} that are "
+                "not partitioned records kinds (no '<kind>_type' in enum_domains)"
+            )
+        if missing:
+            messages.append(
+                f"C14: partitioned records kind(s) {sorted(missing)!r} are absent "
+                "from sub_type_columns"
+            )
+
+    for kind in partition.kinds():
+        if kind not in records_tables:
+            continue  # kind/table mismatch already reported via the keys inequality
+        _check_c14_kind(kind, records_tables[kind], partition, enum_domains, messages)
+
+    return CheckResult(
+        check="C14",
+        passed=len(messages) == 0,
+        messages=tuple(messages),
+        skips=tuple(skips),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Check registry
 # ---------------------------------------------------------------------------
@@ -1837,6 +2003,7 @@ _CHECKS: dict[str, Callable[["Emit"], CheckResult]] = {
     "C11": _check_c11,
     "C12": _check_c12,
     "C13": _check_c13,
+    "C14": _check_c14,
 }
 
 _RECOGNIZED_IDS: tuple[str, ...] = (
@@ -1853,6 +2020,7 @@ _RECOGNIZED_IDS: tuple[str, ...] = (
     "C11",
     "C12",
     "C13",
+    "C14",
 )
 
 
@@ -1862,12 +2030,13 @@ _RECOGNIZED_IDS: tuple[str, ...] = (
 
 
 def validate(emit: "Emit") -> ConformanceReport:
-    """Run conformance checks C1–C13 against an opened emit.
+    """Run conformance checks C1–C14 against an opened emit.
 
     Reimplements the base-format conformance procedure independently of the
     producer's emitters.conformance. C1 validates base.json against the vendored
     JSON Schema; C2–C5 check catalog/sidecar agreement, required tables,
-    and column shapes; C6–C13 check data-level integrity.
+    and column shapes; C6–C13 check data-level integrity; C14 checks the
+    sub-type column partition's consistency against the sidecar.
 
     A conformance failure is reported as a failing CheckResult, never raised:
     callers inspect the report and choose an exit code. Operational failures
@@ -1877,7 +2046,7 @@ def validate(emit: "Emit") -> ConformanceReport:
         emit: An emit already opened — and therefore version-gated — by open_emit.
 
     Returns:
-        A ConformanceReport with one CheckResult per check, in C1..C13 order.
+        A ConformanceReport with one CheckResult per check, in C1..C14 order.
 
     Raises:
         RunDatabaseError: An operational failure reading run.duckdb mid-check.
@@ -1896,7 +2065,7 @@ def run_check(emit: "Emit", check_id: str) -> CheckResult:
 
     Args:
         emit: An opened emit.
-        check_id: One of "C1" .. "C13".
+        check_id: One of "C1" .. "C14".
 
     Returns:
         The CheckResult for that check.

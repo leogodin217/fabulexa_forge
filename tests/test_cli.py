@@ -61,8 +61,8 @@ def test_validate_conforming_exits_zero(
     captured = capsys.readouterr()
     assert exit_code == 0
     assert "PASS" in captured.out
-    # Each of C1–C13 should appear in output
-    for i in range(1, 14):
+    # Each of C1–C14 should appear in output
+    for i in range(1, 15):
         assert f"C{i}" in captured.out
 
 
