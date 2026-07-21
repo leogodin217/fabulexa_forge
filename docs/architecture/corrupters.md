@@ -494,7 +494,7 @@ Each rewrite holds properties load-bearing for C10:
 | `left_before_join` violates C10 strictly: `left' < joined'` | the population requires `left > joined` strictly; the swap inverts it |
 | no two units rewrite one cell | pair units key on distinct earlier rows; single-row units are distinct rows |
 
-`B_end ≤ slice_at` is an **inherited producer guarantee**, not a C1–C13 predicate: the
+`B_end ≤ slice_at` is an **inherited producer guarantee**, not a C1–C14 predicate: the
 producer constructs membership intervals from a slice-bounded series, so every non-NULL
 `joined_sim_time` / `left_sim_time` is ≤ the branch's `slice_at` — for `left_sim_time` the
 contract's NULL biconditional (non-NULL *means* the member left before the slice boundary)
@@ -968,7 +968,7 @@ operation's own removals apply, so same-operation removals compose correctly:
 | `records__<K>` row, `record_id` R | `C6` iff zero rows carrying R survive **and** ≥ 1 working `history` series `(K, R, p)` has a non-empty C6 view whose `prop__<p>` exists in the working `records__<K>` schema with a round-trippable type — the C6 oracle's own gates (§ Family-C's impact rule: mirroring C6), mirrored gate-for-gate: an orphaned series is an *unresolved* series, which C6 fails, never skips |
 | `records__<K>` row, `record_id` R | `C10` iff zero rows carrying R survive **and** ≥ 1 surviving membership row anywhere in the working set carries a non-NULL member pair resolving to (K, R) |
 | `records__<K>` row — dangling records-prop references from other tables, an orphaned series outside the C6 gates, an intact pin via a surviving copy | none of these trip a check — contributes nothing to the union |
-| membership row | always `beyond-c1-c12` — removing an interval removes the check subject; no C1–C13 check quantifies over interval existence |
+| membership row | always `beyond-c1-c12` — removing an interval removes the check subject; no C1–C14 check quantifies over interval existence |
 
 Codes compose by set union; an empty union declares the lone sentinel
 `beyond-c1-c12`. The dangling records-prop reference and the removed membership interval
@@ -2030,7 +2030,7 @@ What the corrupter family deliberately does not own:
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles (#1 domain-agnostic, #3 the corrupter exception, #7 no invented defaults, #8 no scaffolding, #9 the base contract is not ours to extend), the boundary, vocabulary |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The base format the writer regenerates and the operations break; base row identity columns and the duplicate-tick / multiplicity legality the locator scheme accounts for |
 | [`reader.md`](reader.md) | `Emit.query_arrow` (the one faithful materialization), the typed `Sidecar` the selector reads metadata from, the `to_csv_text` codec `RowRef` renders through, and the row-order / binary-determinism caveat |
-| [`conformance.md`](conformance.md) | The C1–C13 split (structural preserved, semantic broken) this design targets, and the C1–C13-is-narrower-than-QA boundary the `impact` field and `beyond-c1-c12` sentinel build on |
+| [`conformance.md`](conformance.md) | The C1–C14 split (structural preserved, semantic broken) this design targets, and the C1–C14-is-narrower-than-QA boundary the `impact` field and `beyond-c1-c12` sentinel build on |
 | [`config-docstrings.md`](config-docstrings.md) | The three-channel docstring convention the corrupter config models adopt |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Stage 4 corrupter inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |

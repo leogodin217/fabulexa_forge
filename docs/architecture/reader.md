@@ -12,7 +12,7 @@ opens a base-layer emit (`run.duckdb` + `base.json`), version-gates it to the
 supported `base_format_version`, parses the sidecar into typed handles, and opens the single
 sanctioned read-only query surface over `run.duckdb`. It depends on nothing outside
 the vendored [`contract/`](../../contract/base-format.md) — that is the only
-coupling. Conformance assessment (C1–C13) is a separate surface that reads through
+coupling. Conformance assessment (C1–C14) is a separate surface that reads through
 this one — see [`conformance.md`](conformance.md).
 
 ```
@@ -482,7 +482,7 @@ What the reader deliberately does not own:
 - **Timestamp rebasing.** The reader exposes `RuntimeAnchor`; mapping `sim_time`
   through the anchor to wallclock is a downstream exporter concern.
 - **Conformance assessment.** The reader *opens*; assessing whether an emit conforms
-  (C1–C13) is [`conformance.md`](conformance.md)'s surface, which reads through the
+  (C1–C14) is [`conformance.md`](conformance.md)'s surface, which reads through the
   `Emit` this reader produces.
 - **Class policy.** The reader *resolves* a column's class; what a consumer does with
   it is that consumer's contract. The genre predicate that consults the class is the
@@ -494,7 +494,7 @@ What the reader deliberately does not own:
 
 | Document | Why |
 |---|---|
-| [`conformance.md`](conformance.md) | The C1–C13 conformance contract that reads through this reader |
+| [`conformance.md`](conformance.md) | The C1–C14 conformance contract that reads through this reader |
 | [`bundle.md`](bundle.md) | Consumer-side orientation to the format — the column temporal classes and the genesis guarantee the temporal accessors surface |
 | [`source.md`](source.md) | The genre predicate — the first consumer of `Sidecar.temporal_class` |
 | [`derivations.md`](derivations.md) | The interpretive layer that composes the faithful-read builders — the home for reads that reconstruct versions or resolve references |

@@ -524,7 +524,7 @@ carries the same declared sub-type set *and* the per-sub-type role, so one field
 set and the roles coherent, and its object-vs-string shape is itself the sub-typed-kind
 signal.
 
-`init` trusts a C1–C13-conformant emit exactly as the engine does — it does not
+`init` trusts a C1–C14-conformant emit exactly as the engine does — it does not
 re-validate — and relies on these guarantees:
 
 - `record_roles` is present whenever the emit carries ≥ 1 records kind; its absence raises
@@ -818,7 +818,7 @@ What the dimensional exporter deliberately does not own:
   the writers; Parquet is not.
 - **Conformance re-validation.** Neither the engine nor `init` re-validates the emit: the
   engine consumes `history_tracked` (C11) and `init` reads `record_roles` (C12) on an emit
-  both trust to be conformant (as they trust all of C1–C13) — see
+  both trust to be conformant (as they trust all of C1–C14) — see
   [`conformance.md`](conformance.md) § Boundaries.
 
 ## Related
@@ -828,7 +828,7 @@ What the dimensional exporter deliberately does not own:
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` resolution surface — origin/zone precedence, the `rebase` config + CLI flags, the anchor `derived: timestamp` renders through |
 | [`derivations.md`](derivations.md) | The interpretive layer this mode composes — versioned-intervals and reference-resolution; the source of the shared `require_single_branch` guard |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — `query_arrow`, the `history_tracked` flag, the faithful-read builders, the per-type decode contract |
-| [`conformance.md`](conformance.md) | The C1–C13 contract the input is trusted to satisfy |
+| [`conformance.md`](conformance.md) | The C1–C14 contract the input is trusted to satisfy |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The config grammar these semantics bind |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The input contract (table categories, `references`, membership, `history_tracked`) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |

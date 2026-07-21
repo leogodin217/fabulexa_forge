@@ -67,7 +67,7 @@ See [`architecture/reader.md`](architecture/reader.md) and
   `enum_domains`, per-column `references`, and the per-column temporal pair
   (`history_tracked` + the `Sidecar.temporal_class` narrowing accessor — verbatim
   carry, never inferred) — all read from the sidecar, never hard-coded.
-- ✓ **Conformance C1–C13** — reimplemented independently of the producer (`fabulexa-forge
+- ✓ **Conformance C1–C14** — reimplemented independently of the producer (`fabulexa-forge
   validate <emit_dir>`). The producer's reference conformance checker is a reference to
   read, never a dependency.
 - ✓ **Records-column taxonomy** — `records_column_role` classifies every
@@ -80,6 +80,12 @@ See [`architecture/reader.md`](architecture/reader.md) and
   resolving each kind's warehouse role (`dimension` / `fact`) — `actor` per sub-type,
   every other kind as a bare role — without callers re-deriving the object-vs-string
   rule.
+- ✓ **Sub-type column partition accessor** — `Sidecar.sub_type_columns()` exposes the
+  optional `sub_type_columns` partition as a typed `SubTypeColumns` view (or `None`
+  when absent, distinct from a present-but-empty per-sub-type list), naming the value
+  columns each sub-type of a sub-typed kind declares — the NULL-disambiguation surface
+  (structurally-inapplicable vs value-absent). C14 verifies its consistency; `init`
+  reads it to prune per-sub-type column proposals.
 
 ---
 
@@ -158,7 +164,9 @@ Each mode reads the same emit and writes a different target shape.
   timestamp, SCD window); arbitrary per-table transforms beyond these are not.
 - ✓ **`init`** — generate a commented candidate dimensional config by reading the
   sidecar (`record_roles` for warehouse role, kinds, discriminators, membership tables,
-  `history_tracked`).
+  `history_tracked`). When the sidecar carries `sub_type_columns`, each per-sub-type
+  stub proposes only that sub-type's declared columns (structurally-inapplicable
+  columns pruned); absent the field, it falls back to the full union.
 - ✓ **Incremental drip-feed** — window-at-a-time export, wired for both the
   dimensional and source modes: `--next` reads a cursor and emits the next window
   (or `--from`/`--to` runs a stateless range), one calendar period
@@ -274,7 +282,7 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
 
 ## CLI
 
-- ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C13 against an emit.
+- ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C14 against an emit.
 - ✓ `fabulexa-forge export` *(Stage 2)* — run an export config against an emit,
   dispatching on `config.mode` to the dimensional or source engine; `--fmt csv|duckdb`
   selects delivery; `--next` / `--from` / `--to` drive incremental window-at-a-time
