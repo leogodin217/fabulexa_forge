@@ -685,22 +685,25 @@ and `mutate_cells` ever reach `history` — near-duplicate `jitter` is confined 
 
 Every operation **preserves structural conformance (C1–C5, C8) by construction** (§ The
 base-emit writer) and breaks only semantic conformance and/or the pin surface, or falls
-outside C1–C12 entirely. The manifest requires each operation to declare the **complete,
-correct** `impact` set for each defect it injects — the set of semantic codes it
-*actually* trips, computed per-defect from the target's metadata, the operation config,
-and **the working state the handler reads as of its own operation** (prior mutations
-visible, later ones not). When that set is empty, and only then, the impact is the lone
-sentinel `beyond-c1-c12`; codes compose by set union, and the sentinel is never unioned
-with a real code.
+outside the impact vocabulary entirely. The manifest requires each operation to declare
+the **complete, correct** `impact` set for each defect it injects — the set of semantic
+codes it *actually* trips, computed per-defect from the target's metadata, the operation
+config, and **the working state the handler reads as of its own operation** (prior
+mutations visible, later ones not). When that set is empty, and only then, the impact is
+the lone sentinel `beyond-c1-c12`; codes compose by set union, and the sentinel is never
+unioned with a real code.
 
-**C13 sits outside the impact vocabulary.** The sentinel means exactly "no C1–C12 code
-fired" — nothing more. A defect that breaks *only* C13 (a phantom `records__` row with
-no `history` rows, a genesis row shifted off `created_sim_time`, a dropped genesis row
-with later rows intact) carries the sentinel: accurate, not precise. A defect that
-breaks C13 *alongside* an in-vocabulary code names the real code alone — the exclusive
-vocabulary cannot express the co-break, so it stays unlabeled, never mislabeled (an
-emptied `history` series is the canonical case: zero rows implies no genesis row, and
-the impact is `[C11]` — § Family-C's impact rule).
+**C13 is in the impact vocabulary; C14 is not.** C13's genesis clause is breakable, so an
+operation that leaves a record without its genesis `history` row (its row at the record's
+own `created_sim_time`) declares `C13` — a phantom `records__` row (no `history` rows at
+all), a `history_tracked` round-trippable column renamed off its history property, a
+genesis row shifted off `created_sim_time`, or a dropped genesis row. `C13` composes by
+set union like any other code: a renamed tracked column declares `[C11, C13]`, and an
+emptied `history` series declares `[C11, C13]` (zero rows fails both C11's converse and
+C13's genesis clause). The sentinel keeps its historical spelling `beyond-c1-c12` and now
+means "no C6–C13 code fired". The sole conformance check still outside the vocabulary is
+C14 (a sidecar-only sub-type partition no corrupter can break), which — like C13 before
+this — folds silently into the sentinel when it is the only break.
 
 A multi-table operation declares each defect with the impact rules of *its own* table — a
 pooled `null_cells` over `category: records` declares `C6` for a tracked round-trippable
@@ -721,8 +724,10 @@ location vocabulary of any defect.
 | `duplicate_rows` `mutation` (conflicting duplicate) | `conflicting_duplicate_row` | row | recomputed independently: `C9` iff the target is `records__<kind>` and the copy's id is pinned; unioned with `C6` iff a mutated column is a `history_tracked` `prop__` whose current type is round-trippable, the copy's record has a history series with a non-empty C6 view, and the transform actually changed the stored value; unioned with `C12` iff the table is `records__actor`, a mutated column is `prop__actor_type`, `record_roles` declares sub-types, and the post-mutation value is undeclared; `beyond-c1-c12` iff that union is empty (§ `duplicate_rows` — the `mutation` mode) |
 | `delete_rows`, `records__<kind>` row | `deleted_row` | row (source coordinate) | the wake, evaluated against the post-operation state: `C9` iff the id is pinned and zero copies survive in a non-empty table; unioned with `C6` iff zero copies survive and a working history series' C6 view exists on a round-trippable tracked property; unioned with `C10` iff zero copies survive and a surviving membership row still resolves to the id; `beyond-c1-c12` iff that union is empty (§ `delete_rows`) |
 | `delete_rows`, membership row | `deleted_row` | row (source coordinate) | `beyond-c1-c12` always — removing an interval removes the check subject |
-| `insert_rows` | `phantom_row` | row (post-corruption coordinate) | `beyond-c1-c12` always — phantom isolation guarantees no series, reference, or pin touches the fresh id (§ `insert_rows`). A records-table phantom carries no genesis rows, a C13 break the sentinel leaves unnamed (outside the vocabulary); C11's converse still holds, since it quantifies per `(kind, property)`, not per record |
-| `schema_drift` rename/drop, ticked column | `column_rename` / `column_drop` | column | `C11` |
+| `insert_rows`, kind with a `history_tracked` round-trippable `prop__` | `phantom_row` | row (post-corruption coordinate) | `C13` — the phantom carries no `history`, so it lacks its genesis row for that property (phantom isolation still guarantees no series, reference, or pin touches the fresh id, and C11's converse holds — it quantifies per `(kind, property)`, not per record) |
+| `insert_rows`, kind with no such property | `phantom_row` | row (post-corruption coordinate) | `beyond-c1-c12` — no genesis obligation, so the phantom breaks nothing |
+| `schema_drift` rename, ticked round-trippable column | `column_rename` | column | `C11, C13` — the history stays under the old property name, so every record loses its genesis row for the new name |
+| `schema_drift` rename (non-round-trippable) / drop, ticked column | `column_rename` / `column_drop` | column | `C11` — a drop removes the column from C13's genesis check; a non-round-trippable rename is outside C13's flagged set |
 | `schema_drift` retype, ticked column, round-trippable `retype_to` that changes the round-trip | `column_retype` | column | `C6` |
 | `schema_drift` rename/retype/drop of an un-ticked payload column, a round-tripping retype, or a retype to a non-round-trippable type | `column_*` | column | `beyond-c1-c12` |
 | `dangle_reference`, membership `member__<f>__id` | `dangling_reference` | cell | `C10` |
@@ -1050,13 +1055,17 @@ resurrection of an id an earlier `delete_rows` removed.
 
 **Defect declaration.** One `DefectRecord` per phantom — class `phantom_row`, a `RowRef`
 locator carrying the phantom's post-corruption coordinate (`fork_path`, the fresh
-`record_id`). Impact is always the lone `beyond-c1-c12`, guaranteed by phantom isolation
-rather than asserted per-defect: no series to break (C6 skips), no pin (C9), no reference
-resolution touched (C10/C7), no history change (C11), and clone-or-resample payload
-comes from the working state, so a phantom fails no check its donor's values did not
-already fail (C12 included — an inherited out-of-domain discriminator is the originating
-defect's declaration, not this one's; § Invariants). The detection signature is the
-anti-join — a records row with no history trail — the orphan-detection lesson inverted.
+`record_id`). Impact is `C13` when the phantom's kind carries a `history_tracked`
+round-trippable `prop__` column (`kind_has_tracked_genesis_property`) — the phantom
+carries no `history`, so it lacks its genesis row for that property — and the lone
+`beyond-c1-c12` otherwise. Every *other* code is excluded by phantom isolation rather than
+asserted per-defect: no series to break (C6 skips), no pin (C9), no reference resolution
+touched (C10/C7), no history *change* (C11's converse quantifies per `(kind, property)`,
+not per record), and clone-or-resample payload comes from the working state, so a phantom
+fails no check its donor's values did not already fail (C12 included — an inherited
+out-of-domain discriminator is the originating defect's declaration, not this one's;
+§ Invariants). The detection signature is the anti-join — a records row with no history
+trail — the orphan-detection lesson inverted, and exactly the C13 genesis gap.
 
 ### What freeze_series, drop_events, and shift_sim_time do
 
@@ -1130,19 +1139,19 @@ two records. The unit remains what `amount` pooled over, within the same manifes
 
 ### Family-C's impact rule: mirroring C6
 
-Every family-C defect declares `C6`, `C11`, or `beyond-c1-c12` — never another code: no
-pin target changes for C9; no membership row or reference changes for C7/C10;
+Every family-C defect declares `C6`, `C11`, `C13`, or `beyond-c1-c12` — never another
+code: no pin target changes for C9; no membership row or reference changes for C7/C10;
 `record_roles` and the records data are untouched for C12. C11's *forward* clause
 quantifies over the distinct `(kind, property)` pairs in `history`, and removing rows or
 rewriting `sim_time` never adds a pair, so the forward clause cannot start failing. Its
 **converse** clause can: a draw that removes a `(kind, property)` series' every row —
 `drop_events` is the operation that can — leaves zero `history` rows for a flagged
 column of a kind whose `records__<kind>` still has rows. Every dropped row of an emptied
-pair declares `C11`, and `C11` alone, taking precedence over the anchor-participant rule
-below: C11 is *inside* the manifest's vocabulary, so the sentinel there would be false,
-not vague — `validate` would name a failure the ground truth denied. The co-occurring
-C13 break (zero rows implies no genesis row) cannot sit beside a real code in the
-exclusive vocabulary and stays unlabeled (§ What each operation breaks).
+pair declares `C11`, taking precedence over the anchor-participant `C6`/sentinel base
+below (C11 is *inside* the vocabulary, so the sentinel there would be false, not vague).
+The co-occurring **C13** break (zero rows implies no genesis row) now joins it — `C13` is
+in the vocabulary too — so an emptied pair's rows declare `[C11, C13]` (§ What each
+operation breaks).
 
 **Round-trip evaluation** (`series_round_trip_fails`) for a series, on the working state
 after the calling operation, mirrors `_check_c6` gate-for-gate against the current
@@ -1165,7 +1174,12 @@ hold; otherwise it declares `beyond-c1-c12`: (1) its series' round-trip fails on
 post-operation state (table above); (2) its row is an **anchor participant** — it was the
 series' anchor in the state the operation began with, or it is the series' anchor after
 the operation (a removed row can only satisfy the first disjunct; for a `swap`, each of
-the two records tests its own row). Anchor participation is decided by content, never by
+the two records tests its own row). **`C13` then joins that base** (`with_c13`) iff the
+mutation leaves the series without its genesis row — `series_missing_genesis_row` on the
+post-operation state, i.e. `history` no longer carries a row at the record's own
+`created_sim_time`. An `offset` can move the genesis tick off `created_sim_time` and a
+`drop` can remove it; `collide` / `swap` pre-filter to rows with a strict predecessor and
+`freeze` always keeps the earliest tick, so neither ever touches the genesis row. Anchor participation is decided by content, never by
 position: a row is the anchor in a given state iff its `(sim_time, value)` pair equals
 that state's anchor pair — with byte-identical duplicates, every copy carrying the pair
 participates, since ties are interchangeable and participation must be a function of the
@@ -1178,7 +1192,9 @@ multiset and the selection content, not of which physical copy a draw touched.
 | Drop of a mid-series event | `beyond-c1-c12` (lost CDC message — subconformant) |
 | Drop of the anchor, exposed value differs | `C6` |
 | Drop of the anchor, exposed value's codec text equal | `beyond-c1-c12` (actual-divergence stance) |
-| Drop / shift-out of a series' entire C6 view | all `beyond-c1-c12` — the series leaves C6's iteration; the records cell is an orphaned snapshot value (subconformance). Exception: a drop that empties the whole `(kind, property)` pair declares `C11` instead (the converse rule above; a shift moves rows, never removes them, so it cannot empty a pair) |
+| Drop / shift-out of a series' entire C6 view | all `beyond-c1-c12` — the series leaves C6's iteration; the records cell is an orphaned snapshot value (subconformance). Exception: a drop that empties the whole `(kind, property)` pair declares `[C11, C13]` instead (the converse rule above, plus the lost genesis row; a shift moves rows, never removes them, so it cannot empty a pair) |
+| Drop of the genesis tick (the row at the record's `created_sim_time`) | `C13` joins the base — `[C13]` for a lone genesis drop, `[C6, C13]` when that tick was also the anchor |
+| Offset shifting the genesis tick off `created_sim_time` | `C13` joins the base (`[C13]`, or `[C6, C13]` when the genesis tick was also the anchor) |
 | Offset shifting a non-anchor event above the anchor (new anchor, value differs) | `C6` on that event |
 | Offset shifting the anchor past `slice_at` (older value exposed, differs) | `C6` on that event |
 | Zero-rounded offset delta (the row is unchanged) | no defect emitted; the unit is not counted (the no-mutation rule) |
@@ -1330,8 +1346,8 @@ Each record names one or more `impact` codes:
 
 | `impact` entry | Meaning | Visible to `validate`? |
 |---|---|---|
-| `C6`, `C7`, `C9`–`C12` | This defect causes that named *semantic* check to fail on the corrupted emit. | Yes |
-| `beyond-c1-c12` | No C1–C12 check fails from this defect. A C13 break — outside the vocabulary — may still surface in `validate` (a phantom row's missing genesis, a dropped or shifted genesis row); the sentinel stays accurate, not precise (§ What each operation breaks). | Not via C1–C12; possibly via C13. |
+| `C6`, `C7`, `C9`–`C13` | This defect causes that named *semantic* check to fail on the corrupted emit. `C13` covers a lost genesis `history` row (a phantom row, a renamed tracked column, a dropped or shifted genesis tick). | Yes |
+| `beyond-c1-c12` | No C6–C13 check fails from this defect. A C14 break — a sidecar-only sub-type partition, outside the vocabulary — cannot arise from a corrupter; the sentinel keeps its historical spelling (§ What each operation breaks). | Not via C6–C13; C14 unreachable. |
 
 A corrupter preserves structural conformance (C1–C5, C8, and C13's structural clauses)
 by construction, so `ImpactCode` omits the structural codes entirely — Principle #3 is

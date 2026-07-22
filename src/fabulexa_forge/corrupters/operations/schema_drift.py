@@ -19,6 +19,8 @@ from fabulexa_forge.corrupters.operations._impact import (
     column_locator,
     is_round_trippable_type,
     property_name_for_prop_column,
+    records_missing_genesis_for_property,
+    with_c13,
 )
 from fabulexa_forge.corrupters.state import OperationOutcome, WorkingTable
 from fabulexa_forge.corrupters.validate import _apply_drift_to_spec
@@ -283,7 +285,25 @@ class SchemaDriftCorrupter:
 
         for column in sorted(rename_to):
             col_spec = columns_by_name[column]
-            impact = ("C11",) if col_spec.history_tracked else ("beyond-c1-c12",)
+            base: tuple["ImpactCode", ...] = (
+                ("C11",) if col_spec.history_tracked else ("beyond-c1-c12",)
+            )
+            # C13: renaming a tracked, round-trippable prop__ column strands its
+            # history under the old property name, so every record of the kind
+            # loses its genesis row for the new name (history is never renamed).
+            missing_genesis = (
+                col_spec.history_tracked is True
+                and is_round_trippable_type(col_spec.type)
+                and spec.record_kind is not None
+                and records_missing_genesis_for_property(
+                    history_data,
+                    working_table.data,
+                    fork_path,
+                    spec.record_kind,
+                    property_name_for_prop_column(rename_to[column]),
+                )
+            )
+            impact = with_c13(base, missing_genesis)
             defects.append(
                 DefectRecord.model_validate(
                     {

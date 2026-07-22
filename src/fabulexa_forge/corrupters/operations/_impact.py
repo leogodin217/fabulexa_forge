@@ -857,6 +857,217 @@ def anchor_participant_impact(
     return ("beyond-c1-c12",)
 
 
+def with_c13(
+    base: tuple["ImpactCode", ...], missing_genesis: bool
+) -> tuple["ImpactCode", ...]:
+    """Fold a C13 genesis break into a base impact tuple.
+
+    C13 is a real conformance code, so it is mutually exclusive with the
+    `beyond-c1-c12` sentinel (`_normalize_impact` rejects the mix): when the
+    genesis break joins a base that is only the sentinel, C13 replaces it; when it
+    joins real codes, C13 is added alongside. A no-op when `missing_genesis` is
+    False. Shared by every operation whose C13 impact composes with another code
+    (`schema_drift`'s C11, `shift_sim_time` / `drop_events`' C6, and
+    `insert_rows`' sentinel-or-C13 base).
+
+    Args:
+        base: The operation's non-C13 impact tuple (real codes or the sentinel).
+        missing_genesis: Whether the mutation leaves a record without its
+            genesis history row (a C13 break).
+
+    Returns:
+        `base` unchanged when `missing_genesis` is False; otherwise `base` with
+        the sentinel stripped and `"C13"` appended.
+    """
+    if not missing_genesis:
+        return base
+    codes: list[ImpactCode] = [c for c in base if c != "beyond-c1-c12"]
+    codes.append("C13")
+    return tuple(codes)
+
+
+def kind_has_tracked_genesis_property(records_working: "WorkingTable") -> bool:
+    """Whether `records_working`'s kind carries a C13 genesis obligation.
+
+    True iff some `prop__` column is `history_tracked: true` with a
+    round-trippable type -- exactly the flagged-column set `_check_c13_genesis`
+    iterates. A record of such a kind that carries no `history` row (an
+    `insert_rows` phantom) therefore lacks its genesis row for that property, so
+    the phantom breaks C13.
+
+    Args:
+        records_working: A working records-category table.
+
+    Returns:
+        True iff the kind has at least one history_tracked, round-trippable
+        `prop__` column.
+    """
+    return any(
+        col.name.startswith("prop__")
+        and col.history_tracked is True
+        and is_round_trippable_type(col.type)
+        for col in records_working.spec.columns
+    )
+
+
+def _record_created_sim_time(
+    records_data: pa.Table, fork_path: str, record_id: str
+) -> object | None:
+    """`record_id`'s `created_sim_time` on `fork_path`, or None when absent.
+
+    Returns None when the table lacks `record_id`/`created_sim_time` -- the same
+    guard `_check_c13_genesis` uses to skip (not fail) a table missing the
+    genesis-check columns.
+    """
+    names = set(records_data.schema.names)
+    if "record_id" not in names or "created_sim_time" not in names:
+        return None
+    fork_paths = records_data.column("fork_path")
+    record_ids = records_data.column("record_id")
+    created = records_data.column("created_sim_time")
+    for i in range(records_data.num_rows):
+        if fork_paths[i].as_py() == fork_path and record_ids[i].as_py() == record_id:
+            value: object = created[i].as_py()
+            return value
+    return None
+
+
+def _history_has_genesis_row(
+    history_data: "pa.Table | None",
+    fork_path: str,
+    kind: str,
+    record_id: str,
+    property_name: str,
+    created_sim_time: object,
+) -> bool:
+    """Whether working `history` carries a row for this series at
+    `created_sim_time` -- the genesis-row match `_check_c13_genesis` makes."""
+    if history_data is None:
+        return False
+    fork_paths = history_data.column("fork_path")
+    kinds = history_data.column("kind")
+    record_ids = history_data.column("record_id")
+    properties = history_data.column("property")
+    sim_times = history_data.column("sim_time")
+    for i in range(history_data.num_rows):
+        if (
+            fork_paths[i].as_py() == fork_path
+            and kinds[i].as_py() == kind
+            and record_ids[i].as_py() == record_id
+            and properties[i].as_py() == property_name
+            and sim_times[i].as_py() == created_sim_time
+        ):
+            return True
+    return False
+
+
+def series_missing_genesis_row(
+    state: "CorruptState",
+    fork_path: str,
+    kind: str,
+    property_name: str,
+    record_id: str,
+) -> bool:
+    """Decide whether C13's genesis clause would fail this series on the working state.
+
+    Mirrors `_check_c13_genesis` for a single (kind, property, record_id): the
+    property must be `history_tracked: true` with a round-trippable type (per the
+    current `WorkingTable.spec`, honoring earlier `schema_drift`), the record must
+    exist (carry a `created_sim_time`), and working `history` must carry no row
+    for the series at that `created_sim_time`. An untracked / non-round-trippable
+    property, an absent `records__<kind>` table, or a missing records row cannot
+    fail (returns False) -- C13's genesis clause does not apply there. Shared by
+    `shift_sim_time` and `drop_events`, the operations that move or remove a
+    genesis tick (parameter order matches `SeriesKey`, so a key unpacks directly).
+
+    Args:
+        state: The shared working set, as of after the calling operation.
+        fork_path: The sole branch's fork_path.
+        kind: The series' record kind.
+        property_name: The series' property.
+        record_id: The series' record id.
+
+    Returns:
+        True iff C13, run on an emit written from this state, would report this
+        record as lacking its genesis history row for `property_name`.
+    """
+    records_working = state.tables.get(f"records__{kind}")
+    if records_working is None:
+        return False
+    col_spec = next(
+        (
+            c
+            for c in records_working.spec.columns
+            if c.name == f"prop__{property_name}"
+        ),
+        None,
+    )
+    if col_spec is None or col_spec.history_tracked is not True:
+        return False
+    if not is_round_trippable_type(col_spec.type):
+        return False
+    created = _record_created_sim_time(records_working.data, fork_path, record_id)
+    if created is None:
+        return False
+    history_working = state.tables.get("history")
+    history_data = history_working.data if history_working is not None else None
+    return not _history_has_genesis_row(
+        history_data, fork_path, kind, record_id, property_name, created
+    )
+
+
+def records_missing_genesis_for_property(
+    history_data: "pa.Table | None",
+    records_data: pa.Table,
+    fork_path: str,
+    kind: str,
+    property_name: str,
+) -> bool:
+    """Whether any record of `kind` lacks its genesis history row for
+    `property_name` -- C13's genesis clause over a whole (kind, property).
+
+    Explicit-table form (records + history Arrow, no `state` spec lookup) for
+    `schema_drift`, whose rename evolves the spec after this is computed: a
+    tracked column renamed to a fresh `prop__<property_name>` has no matching
+    history rows (history keeps the old property name), so every record loses its
+    genesis -> C13. The caller applies the flagged-column gate (history_tracked +
+    round-trippable) before calling.
+
+    Args:
+        history_data: The working `history` Arrow, or None.
+        records_data: The working records Arrow for `kind` (carries `record_id`
+            and `created_sim_time`).
+        fork_path: The sole branch's fork_path.
+        kind: The record kind.
+        property_name: The property name (without its `prop__` prefix).
+
+    Returns:
+        True iff at least one `fork_path` record of `kind` has no history row for
+        `property_name` at its own `created_sim_time`. False when the records
+        table lacks `record_id`/`created_sim_time` -- the guard
+        `_check_c13_genesis` uses to skip (not fail) the genesis check.
+    """
+    names = set(records_data.schema.names)
+    if "record_id" not in names or "created_sim_time" not in names:
+        return False
+    fork_paths = records_data.column("fork_path")
+    record_ids = records_data.column("record_id")
+    created = records_data.column("created_sim_time")
+    for i in range(records_data.num_rows):
+        if fork_paths[i].as_py() != fork_path:
+            continue
+        if not _history_has_genesis_row(
+            history_data,
+            fork_path,
+            kind,
+            record_ids[i].as_py(),
+            property_name,
+            created[i].as_py(),
+        ):
+            return True
+    return False
+
+
 def history_pair_row_count(
     history_data: pa.Table, kind: str, property_name: str
 ) -> int:

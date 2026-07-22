@@ -153,7 +153,11 @@ property set and key their row sets on tracked-property change instants only.
   never consults a `slice_only` column.
 - Structural lifecycle columns (`updated_at` sourcing, `last_mutation_sim_time`)
   carry no class and are outside the population; their presentation is owned
-  elsewhere (the playback seam owns `last_mutation_sim_time` presentation).
+  elsewhere. `last_mutation_sim_time` is a reserved output column name under the
+  presentation-name posture ([`source.md`](source.md) § Presentation-name posture,
+  [`dimensional.md`](dimensional.md) § Output naming) — its value channels freely,
+  its raw name never — and the playback seam presents it as the recorded trail
+  under `state` ([`playback.md`](playback.md)).
 - Corrupters are outside the policy: they write base-shaped output, and a
   corrupted emit flows through exporters under the same policy as a clean one.
 - Membership tables, `history`, identity and lifecycle columns are classless by

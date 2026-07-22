@@ -57,7 +57,7 @@ writers (CSV | DuckDB — both via Emit.query_arrow)
 | [`exporters/source/plan.py`](../../src/fabulexa_forge/exporters/source/plan.py) | `SourceTableSpec`; `build_source_plan` — the genre trichotomy classification, the untracked-only sub-type split, `exclude`, presentation defaults (delivery-dependent for a change-log kind), `rename` resolution, the collision and reserved-name checks |
 | [`exporters/source/columns.py`](../../src/fabulexa_forge/exporters/source/columns.py) | The shared `prop__<p>` scalar-property lookup `plan.py` and `renders.py` both need, so neither duplicates it |
 | [`exporters/source/renders.py`](../../src/fabulexa_forge/exporters/source/renders.py) | `build_render_sql` / `build_snapshot_render_sql` — the four genre renders (change-log via the row-state-events fold, reference/transaction via the faithful records relation, junction via the faithful membership relation, snapshot via the state-at derivation), each carrying its genre's total `ORDER BY` and wallclock rendering through the shared anchor renderer |
-| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `export_source`, `build_source_query_specs` — plan → per-genre render → optional windowing (`write_mode` by genre) → dispatch to the shared writer |
+| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `export_source`, `build_source_query_specs` — plan → per-genre render → optional windowing (`write_mode` by genre) → dispatch to the shared writer. `build_source_query_specs` is the pure compile surface: it takes a required `base_relations: Mapping[str, str] \| None` (the full-export and windowed callers pass `None`; the playback seam's tier-2 `state` passes a truncated-relation mapping — see [`playback.md`](playback.md) § The compile indirection) |
 | [`exporters/query_spec.py`](../../src/fabulexa_forge/exporters/query_spec.py) | `QuerySpec`, `write_query_specs` — the mode-neutral compiled-table shape and full-export write dispatch every mode's `export_*` entry point shares. Relocated out of the dimensional engine so a second mode can compile to the same writer-ready shape without a cross-mode import |
 | [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py) | `is_reserved_table_name` / `is_reserved_column_name` — the cross-mode bookkeeping-name check both dimensional's and source's plan-time collision resolution call |
 | [`derivations/state_at.py`](../../src/fabulexa_forge/derivations/state_at.py) | `build_state_at_sql`, `STATE_AT_COLUMNS` — the point-in-time row reconstruction snapshot delivery composes; owned by [`derivations.md`](derivations.md) § The state-at derivation |
@@ -333,6 +333,23 @@ resolvable: the `prop__id`-onto-`id` case is broken by renaming source column
 `prop__id` (or `record_id`), which the shared output name `id` alone could not
 address.
 
+### Presentation-name posture
+
+`last_mutation_sim_time` is a sim-internal bookkeeping column — a high-water mark
+over a record's content lifecycle. Its **value** channels freely: it is the
+`updated_at` presentation default above, and a downstream reference or transaction
+render carries that rendered column. Its **raw name** never reaches output. The
+name `last_mutation_sim_time` is a reserved output column name (the shared check
+in [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py),
+with the source-specific guard in
+[`exporters/source/plan.py`](../../src/fabulexa_forge/exporters/source/plan.py)),
+so a `rename` targeting that output name is refused at plan build — the one path
+by which a source config could deliver the raw name. This is the companion of the
+playback seam's posture, where the column is never selectable by its own name and
+is presented as the recorded trail under `state` ([`playback.md`](playback.md) §
+The recorded trail); [`dimensional.md`](dimensional.md) carries the same
+reserved-output-name check on its author-named columns.
+
 ### Wallclock timestamps: the anchor is required
 
 Every structural sim-time column renders through the effective anchor via the
@@ -453,11 +470,18 @@ not CLI, and participates in the incremental fingerprint like any config change.
 | Condition | Result |
 |---|---|
 | `change_delivery: snapshot` with an incremental invocation (`--next` or `--from`/`--to`) | Each change-log kind emits one full-table snapshot per window: every record with `created_sim_time < end_ns`, reconstructed at the window horizon. `replace` in DuckDB, re-emitted per CSV drop |
-| `change_delivery: snapshot` on a plain full export | Error `SourceSnapshotRequiresWindows` — without windows the snapshot degenerates to current-state-at-slice-end, which teaches nothing this mode owns |
-| `change_delivery: changelog` (the default) | The CDC render, unchanged |
+| `change_delivery: snapshot` on a plain full export | Each change-log kind emits one end-of-tape snapshot: every record of the kind, reconstructed at the tape's end. `create` in DuckDB, one CSV drop |
+| `change_delivery: changelog` (the default) | The CDC render |
 
 **Snapshot row reconstruction** composes the state-at derivation (see
-[`derivations.md`](derivations.md) § The state-at derivation). The snapshot
+[`derivations.md`](derivations.md) § The state-at derivation). A windowed
+invocation reconstructs at the window horizon through `build_state_at_sql`; a
+full export reconstructs at the tape's end through the resident's end-of-tape
+entry point `build_state_at_end_sql`, which carries no horizon — "the tape's
+end" is structural, whatever data the composed relations hold, so the end-of-run
+state renders with every history and lifecycle instant applied (a deactivation
+is a spine fact, not a `history` row, so a horizon cleared against `history`
+alone would wrongly render a later-deactivated record active). The snapshot
 table's shape mirrors a reference table with two deviations:
 
 - **No `updated_at`.** `last_mutation_sim_time` at a past horizon is not
@@ -512,9 +536,11 @@ delivery. The `genre` label stays `changelog` — it selects the render — whil
 6. **Total order over raw sim-time, never rendered timestamps.** Every emitted
    table carries a deterministic `ORDER BY` over raw ns keys and identity, so
    microsecond truncation in wallclock rendering cannot introduce ties.
-7. **Snapshot delivery requires windows.** `change_delivery: snapshot` runs only
-   under an incremental invocation; a full export under `snapshot` errors rather
-   than silently degrading to current-state-at-slice-end.
+7. **Snapshot delivery reconstructs at a horizon.** `change_delivery: snapshot`
+   reconstructs each change-log kind through the state-at resident: at the window
+   horizon under an incremental invocation, at the tape's end under a full export
+   (the resident's horizon-free end-of-tape entry point). Every snapshot value is
+   an as-of-horizon value, never a raw slice read.
 8. **Determinism.** Same emit + export config + code version → identical output
    (CLAUDE.md § Key Invariants).
 9. **`slice_only` omission is column-projection-only.** Row sets, ordering, and
@@ -559,8 +585,7 @@ funnel.
 | `SourceRenameUnresolved` | Every rename entry's `table` (+ `sub_type` iff the kind splits, and only then) resolves, and every `columns` key names a source column of that table | `"rename entry '{table}': {detail}"` |
 | `SourceRenameSliceOnly` | No `rename` columns key names a non-exempt `slice_only` source column — the column is policy-omitted (§ The `slice_only` omission), so the rename is unsatisfiable | Names the rename entry, the column, and the omission reason |
 | `SourceNameCollision` | All output table names are unique; within each table all output column names are unique | `"output name collision: {names}; resolve via source.rename"` |
-| `SourceSnapshotRequiresWindows` | `change_delivery: snapshot` runs only under `--next` or `--from`/`--to` | `"change_delivery: snapshot requires an incremental invocation; a full export snapshot is current state at slice end"` |
-| Reserved-name check (`exporters/reserved_names.py`, raised as `ExportError`) | No resolved output table name collides with the bookkeeping names or reserved suffixes — checked at plan build over all output names, so a full export and a later `--next` on the same target agree | — |
+| Reserved-name check (`exporters/reserved_names.py` + `exporters/source/plan.py`, raised as `ExportError`) | No resolved output **table** name collides with the bookkeeping names or reserved suffixes, and no resolved output **column** name is `last_mutation_sim_time` (the presentation-name posture — § Presentation-name posture) — checked at plan build over all output names, so a full export and a later `--next` on the same target agree | — |
 | Single-branch guard (`derivations/guard.py`, cross-mode) | Exactly one branch | — |
 
 ## Rationale
@@ -606,11 +631,13 @@ funnel.
   recomputing anything; every emitted value stays on-or-before the window
   horizon, preserving the temporal honesty a projected future `left_at` would
   break.
-- **A full-export snapshot degrades to an error, not a silent fallback.** Without
-  windows, "the snapshot" is indistinguishable from current-state-at-slice-end —
-  a shape the reference/transaction genres already deliver. Refusing rather than
-  silently rendering that shape keeps `change_delivery: snapshot` meaningful only
-  where it adds something: a horizon series.
+- **A full-export snapshot reconstructs at the tape's end, structurally.** With no
+  window the render composes the state-at resident's horizon-free end-of-tape
+  entry point (`build_state_at_end_sql`): the end is whatever the composed base
+  relations hold, never a slice bound read from metadata. This yields end-of-run
+  state tables (a meaningful `base`-shaped output), and it is the same
+  reconstruction the playback seam's shaped `state` drives over a truncated tape —
+  one horizon-free rule, two callers ([`playback.md`](playback.md)).
 - **The corrupter-composition guarantee is by construction, never
   special-cased.** No corrupter-aware branch exists in the source mode; the
   guarantee that a dirty emit yields a dirty dump follows from the mode reading
@@ -658,6 +685,7 @@ funnel.
 | [`dimensional.md`](dimensional.md) | The contrasting mode — reconstructed star schema vs. source's raw operational shape; both compile to the mode-neutral `QuerySpec` |
 | [`streaming.md`](streaming.md) | The change-log render's sibling delivery — the same row-state-events fold, replayed as a live event feed instead of landed as a table |
 | [`incremental.md`](incremental.md) | The cross-mode window/cursor/fingerprint driver source's windowed compile plugs into |
+| [`playback.md`](playback.md) | The seam whose tier-2 `state` compiles this mode over a truncated tape via `base_relations`; the presentation-name posture's companion |
 | [`anchor.md`](anchor.md) | The effective-anchor resolution source requires — its first mandatory consumer |
 | [`corrupters.md`](corrupters.md) | The corrupt → source composition — a source export over a corrupted emit surfaces declared defects unchanged |
 | [`writers.md`](writers.md) | The CSV / DuckDB adapters source shares with every mode |

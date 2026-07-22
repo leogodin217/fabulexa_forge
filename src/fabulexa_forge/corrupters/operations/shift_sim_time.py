@@ -33,9 +33,11 @@ from fabulexa_forge.corrupters.operations._impact import (
     row_dict,
     row_locator,
     series_key,
+    series_missing_genesis_row,
     series_round_trip_fails,
     series_timeline,
     unit_row_weights,
+    with_c13,
 )
 from fabulexa_forge.corrupters.selection import (
     derive_row_weights,
@@ -369,11 +371,19 @@ class ShiftSimTimeCorrupter:
             key: series_round_trip_fails(state, fork_path, slice_at, *key)
             for key in involved
         }
+        # C13: `offset` draws from an unfiltered population, so it can move a
+        # series' genesis tick off its record's created_sim_time (collide / swap
+        # pre-filter to rows with a strict predecessor and never touch it).
+        missing_genesis = {
+            key: series_missing_genesis_row(state, fork_path, *key)
+            for key in involved
+        }
 
         row_category = row_category_for_table(history_table.spec)
         defects: list[DefectRecord] = []
         for mutation in mutations:
-            impact = _shift_impact(mutation, pre_anchor, post_anchor, round_trip_fails)
+            base = _shift_impact(mutation, pre_anchor, post_anchor, round_trip_fails)
+            impact = with_c13(base, missing_genesis[mutation.series])
             defects.append(
                 DefectRecord.model_validate(
                     {

@@ -122,6 +122,7 @@ def build_records_sql(
     fork_path: str,
     config: "DimensionalConfig | None" = None,
     sidecar: "Sidecar | None" = None,
+    extra_col_exprs: "list[str] | None" = None,
 ) -> str:
     """Build the SELECT SQL for a records grain (Type-1 dim or fact).
 
@@ -138,6 +139,9 @@ def build_records_sql(
         fork_path: The sole branch fork_path; composes the reader relation.
         config: The dimensional config (for fk resolution), or None.
         sidecar: The open emit's sidecar; required to compose the reader relation.
+        extra_col_exprs: Additional SELECT-list expressions (already qualified
+            against "_grain") appended after the declared columns — used to
+            inject the internal raw-ns window-key helper for windowed export.
 
     Returns:
         A complete, deterministic SELECT statement.
@@ -153,6 +157,8 @@ def build_records_sql(
         sidecar=sidecar,
         source_table_name=source_table_name,
     )
+    if extra_col_exprs:
+        col_exprs = [*col_exprs, *extra_col_exprs]
     select_list = ", ".join(col_exprs)
 
     # Compose the reader relation: the format authors no base-table SQL.
@@ -177,6 +183,7 @@ def build_history_point_sql(
     fork_path: str,
     config: "DimensionalConfig | None" = None,
     sidecar: "Sidecar | None" = None,
+    extra_col_exprs: "list[str] | None" = None,
 ) -> str:
     """Build the SELECT SQL for a history_point grain.
 
@@ -192,6 +199,9 @@ def build_history_point_sql(
         fork_path: The sole branch fork_path; composes the reader relation.
         config: The dimensional config (for fk resolution), or None.
         sidecar: The open emit's sidecar (for fk resolution), or None.
+        extra_col_exprs: Additional SELECT-list expressions (already qualified
+            against "_grain") appended after the declared columns — used to
+            inject the internal raw-ns window-key helper for windowed export.
 
     Returns:
         A complete, deterministic SELECT statement.
@@ -208,6 +218,8 @@ def build_history_point_sql(
         sidecar=sidecar,
         source_table_name="history",
     )
+    if extra_col_exprs:
+        col_exprs = [*col_exprs, *extra_col_exprs]
     select_list = ", ".join(col_exprs)
     join_sql = (" " + " ".join(join_clauses)) if join_clauses else ""
     order_by = '"_grain"."record_id"'
@@ -427,6 +439,7 @@ def _wrap_with_window_predicate(
     window_key_col: str,
     window_start_ns: int,
     window_end_ns: int,
+    exclude_key: bool = False,
 ) -> str:
     """Wrap a full-export SELECT with a half-open window predicate.
 
@@ -439,15 +452,51 @@ def _wrap_with_window_predicate(
         window_key_col: The column name to filter on (from the inner SELECT).
         window_start_ns: Inclusive start (ns).
         window_end_ns: Exclusive end (ns).
+        exclude_key: When True, `window_key_col` is an internal raw-ns helper
+            column (not an author-declared output column); project everything
+            except it via `SELECT * EXCLUDE` so it never reaches the output.
 
     Returns:
         The wrapped SELECT SQL with outer WHERE predicate.
     """
+    projection = f'* EXCLUDE ("{window_key_col}")' if exclude_key else "*"
     return (
-        f"SELECT * FROM ({inner_sql}) AS _windowed"
+        f"SELECT {projection} FROM ({inner_sql}) AS _windowed"
         f' WHERE "_windowed"."{window_key_col}" >= {window_start_ns}'
         f' AND "_windowed"."{window_key_col}" < {window_end_ns}'
     )
+
+
+# Internal raw-ns helper column injected into a fact grain's projection so the
+# window predicate can compare in raw-ns space when the only window-key output
+# column renders time (derived: timestamp under an anchor → TIMESTAMP, which
+# cannot be compared to raw-ns bounds). Excluded from the emitted output.
+_WINDOW_KEY_NS_HELPER = "__fabulexa_window_key_ns"
+
+
+def _window_key_output_is_rendered(
+    table_decl: "TableDecl",
+    key_col: str,
+) -> bool:
+    """Report whether the window-key output column renders time rather than
+    projecting the raw-ns value directly.
+
+    A `derived: timestamp` output column renders to a TIMESTAMP under an anchor
+    (raw sim_time // 1000 → wallclock), so a raw-ns window bound cannot bind
+    against it. A plain `from_: <raw_key>` column projects the raw ns value and
+    compares directly.
+
+    Args:
+        table_decl: The output table declaration.
+        key_col: The resolved window-key output column name.
+
+    Returns:
+        True when key_col is a `derived: timestamp` column; False otherwise.
+    """
+    for col in table_decl.columns:
+        if col.name == key_col:
+            return col.derived is not None and col.derived.timestamp is not None
+    return False
 
 
 def _find_window_key_output_col(
@@ -622,23 +671,53 @@ def build_grain_sql(
     # Facts (records and history_point grains)
     if grain == "records":
         raw_key = "last_mutation_sim_time"
-        full_sql = build_records_sql(
-            table_decl, source_table_name, anchor, fork_path, config, sidecar
-        )
         key_col = _require_window_key_output_col(table_decl, raw_key)
+        # When the window key's ONLY projection renders time (derived: timestamp
+        # under an anchor → TIMESTAMP), the raw-ns bounds cannot bind against it.
+        # Inject the raw-ns source as an internal helper and window in raw-ns
+        # space, mirroring the ordinal amendment (columns.py).
+        redirect = anchor is not None and _window_key_output_is_rendered(
+            table_decl, key_col
+        )
+        extra = (
+            [f'"_grain"."{raw_key}" AS "{_WINDOW_KEY_NS_HELPER}"'] if redirect else None
+        )
+        full_sql = build_records_sql(
+            table_decl,
+            source_table_name,
+            anchor,
+            fork_path,
+            config,
+            sidecar,
+            extra_col_exprs=extra,
+        )
         windowed_sql = _wrap_with_window_predicate(
-            full_sql, key_col, window.start_ns, window.end_ns
+            full_sql,
+            _WINDOW_KEY_NS_HELPER if redirect else key_col,
+            window.start_ns,
+            window.end_ns,
+            exclude_key=redirect,
         )
         return windowed_sql, "append", None, None
 
     if grain == "history_point":
         raw_key = "sim_time"
-        full_sql = build_history_point_sql(
-            table_decl, anchor, fork_path, config, sidecar
-        )
         key_col = _require_window_key_output_col(table_decl, raw_key)
+        redirect = anchor is not None and _window_key_output_is_rendered(
+            table_decl, key_col
+        )
+        extra = (
+            [f'"_grain"."{raw_key}" AS "{_WINDOW_KEY_NS_HELPER}"'] if redirect else None
+        )
+        full_sql = build_history_point_sql(
+            table_decl, anchor, fork_path, config, sidecar, extra_col_exprs=extra
+        )
         windowed_sql = _wrap_with_window_predicate(
-            full_sql, key_col, window.start_ns, window.end_ns
+            full_sql,
+            _WINDOW_KEY_NS_HELPER if redirect else key_col,
+            window.start_ns,
+            window.end_ns,
+            exclude_key=redirect,
         )
         return windowed_sql, "append", None, None
 

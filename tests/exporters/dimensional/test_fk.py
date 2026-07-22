@@ -1831,6 +1831,238 @@ def test_pit_membership_unresolvable_member_path_raises(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Point-in-time membership FK: `where` predicate on elem__ columns
+#
+# Regression: FkClause.where was silently dropped on the PIT builder while the
+# on_records / membership-grain paths rendered it. A `where` must narrow the
+# resolved interval (matching the other membership paths), never be ignored.
+# ---------------------------------------------------------------------------
+
+_HOLDER_WITH_ROLE_COLUMNS = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "member__actor__kind", "type": "VARCHAR"},
+    {"name": "member__actor__id", "type": "VARCHAR"},
+    {"name": "elem__role", "type": "VARCHAR"},
+]
+
+
+def build_pit_membership_where_emit(tmp_path: Path) -> Path:
+    """Emit for PIT membership FK `where` tests.
+
+    Decision d001 fires at T=15, resolving member actor a001 via the journey
+    reference path. At T=15 a001 is held by BOTH owners (overlapping intervals),
+    distinguished only by elem__role:
+      - o001: [10..30], role='secondary'
+      - o002: [12..30], role='primary'  (later joined_sim_time — the natural
+              deterministic winner of ORDER BY joined_sim_time DESC)
+
+    So the PIT resolution WITHOUT a where predicate yields o002. A where of
+    {elem__role: 'secondary'} must instead yield o001, and {elem__role:
+    'primary'} must yield o002 — proving the predicate filters.
+    """
+    import duckdb
+
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__owner", _OWNER_SURROGATE_COLUMNS))
+    conn.execute(_create_ddl("records__journey_instance", _PIT_JOURNEY_COLUMNS))
+    conn.execute(_create_ddl("records__actor", _PIT_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("records__decision", _PIT_DECISION_COLUMNS))
+    conn.execute(_create_ddl("membership__owner__holders", _HOLDER_WITH_ROLE_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__owner" VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "o001", "OWN_001", 100, True, 100, 0],
+    )
+    conn.execute(
+        'INSERT INTO "records__owner" VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "o002", "OWN_002", 100, True, 100, 1],
+    )
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "a001", 100, True, 100, 0],
+    )
+    conn.execute(
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 100, True, 100, 0, "a001", 0],
+    )
+    conn.execute(
+        'INSERT INTO "records__decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "d001", 15, True, 15, 0, "j001", 0],  # T=15, member=a001
+    )
+
+    # Two overlapping holds of a001 covering T=15, distinguished by role.
+    conn.execute(
+        'INSERT INTO "membership__owner__holders" VALUES (?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "o001", 10, 30, "actor", "a001", "secondary"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__owner__holders" VALUES (?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "o002", 12, 30, "actor", "a001", "primary"],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__owner", "records", _OWNER_SURROGATE_COLUMNS, 2, "owner"
+            ),
+            _table_spec("records__actor", "records", _PIT_ACTOR_COLUMNS, 1, "actor"),
+            _table_spec(
+                "records__journey_instance",
+                "records",
+                _PIT_JOURNEY_COLUMNS,
+                1,
+                "journey_instance",
+            ),
+            _table_spec(
+                "records__decision", "records", _PIT_DECISION_COLUMNS, 1, "decision"
+            ),
+            _table_spec(
+                "membership__owner__holders",
+                "membership",
+                _HOLDER_WITH_ROLE_COLUMNS,
+                2,
+                "owner",
+                "holders",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
+    return tmp_path
+
+
+def _resolve_pit_owner_with_where(emit_dir: Path, role: str) -> object:
+    """Resolve d001's PIT owner_id FK filtered by elem__role == role."""
+    with open_emit(emit_dir) as emit:
+        config = DimensionalConfig(
+            tables=[
+                _dim("dim_owner", "owner", [_from_col("record_id", "record_id")]),
+                _fact(
+                    "fact_decision",
+                    "records",
+                    "decision",
+                    [
+                        _from_col("record_id", "record_id"),
+                        _pit_fk_col(
+                            "owner_id", "dim_owner", where={"elem__role": role}
+                        ),
+                    ],
+                ),
+            ]
+        )
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        fact_spec = next(s for s in specs if s.table_name == "fact_decision")
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+    return dict(zip(rows["record_id"], rows["owner_id"]))["d001"]
+
+
+def test_pit_membership_where_narrows_resolved_interval(tmp_path: Path) -> None:
+    """PIT membership FK `where` filters the resolved hold by an elem__ column.
+
+    Both owners hold a001 at T=15; the where predicate must pick the matching
+    role. Without rendering (the old silent-drop bug) resolution always returned
+    the deterministic winner o002 regardless of the where value.
+    """
+    emit_dir = build_pit_membership_where_emit(tmp_path)
+    # where='secondary' selects o001 (NOT the deterministic winner) — proves the
+    # predicate takes effect. where='primary' selects o002.
+    assert _resolve_pit_owner_with_where(emit_dir, "secondary") == "o001"
+    assert _resolve_pit_owner_with_where(emit_dir, "primary") == "o002"
+
+
+def test_pit_membership_where_no_match_is_null(tmp_path: Path) -> None:
+    """PIT membership FK `where` matching no hold resolves to NULL (not unfiltered)."""
+    emit_dir = build_pit_membership_where_emit(tmp_path)
+    assert _resolve_pit_owner_with_where(emit_dir, "nonexistent") is None
+
+
+def test_pit_membership_where_presentation_id_projects_surrogate(
+    tmp_path: Path,
+) -> None:
+    """PIT `where` composes with target_key=presentation_id."""
+    emit_dir = build_pit_membership_where_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        config = DimensionalConfig(
+            tables=[
+                _dim("dim_owner", "owner", [_from_col("record_id", "record_id")]),
+                _fact(
+                    "fact_decision",
+                    "records",
+                    "decision",
+                    [
+                        _from_col("record_id", "record_id"),
+                        _pit_fk_col(
+                            "owner_id",
+                            "dim_owner",
+                            where={"elem__role": "secondary"},
+                            target_key="presentation_id",
+                        ),
+                    ],
+                ),
+            ]
+        )
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        fact_spec = next(s for s in specs if s.table_name == "fact_decision")
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+
+    # o001's surrogate is OWN_001 (role='secondary').
+    assert dict(zip(rows["record_id"], rows["owner_id"]))["d001"] == "OWN_001"
+
+
+def test_pit_membership_where_non_elem_column_raises(tmp_path: Path) -> None:
+    """PIT `where` on a non-elem__ column fails fast (never silently ignored)."""
+    emit_dir = build_pit_membership_where_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        config = DimensionalConfig(
+            tables=[
+                _dim("dim_owner", "owner", [_from_col("record_id", "record_id")]),
+                _fact(
+                    "fact_decision",
+                    "records",
+                    "decision",
+                    [
+                        _from_col("record_id", "record_id"),
+                        _pit_fk_col(
+                            "owner_id",
+                            "dim_owner",
+                            where={"member__actor__id": "a001"},
+                        ),
+                    ],
+                ),
+            ]
+        )
+        with pytest.raises(ExportError, match="not an elem__ column"):
+            build_query_specs(
+                emit,
+                config,
+                None,
+                None,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
+            )
+
+
+# ---------------------------------------------------------------------------
 # Non-records-grain reference FKs + per-column alias namespacing
 # ---------------------------------------------------------------------------
 

@@ -6,6 +6,7 @@ impact_union:
   - C6
   - C9
   - C10
+  - C13
 
 contains_defects:
   - class: deleted_row
@@ -20,5 +21,5 @@ contains_defects:
 
   - class: phantom_row
     rule: phantom_actor_bystander
-    impact: [beyond-c1-c12]
+    impact: [C13]
     location.table: records__actor

@@ -11,14 +11,17 @@ Covers:
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import duckdb
 from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
+from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
@@ -1208,3 +1211,133 @@ def test_scd2_with_valid_to_two_versions_same_microsecond_order_deterministic(
     # Must be non-decreasing
     for i in range(1, len(ns_values)):
         assert ns_values[i] >= ns_values[i - 1]
+
+
+# ---------------------------------------------------------------------------
+# Windowed export + rebase anchor: window key ONLY projected via derived:timestamp
+#
+# Regression: with an anchor, a derived:timestamp column renders to a TIMESTAMP,
+# so a raw-ns window bound cannot bind against it (DuckDB: "Cannot compare
+# values of type TIMESTAMP and type INTEGER_LITERAL"). The window predicate must
+# compare in raw-ns space via the internal helper column. anchor=None already
+# worked (derived:timestamp then projects the raw ns integer).
+# ---------------------------------------------------------------------------
+
+
+def _utc_anchor() -> EffectiveAnchor:
+    """A minimal UTC EffectiveAnchor for rendering derived:timestamp columns."""
+    return EffectiveAnchor(
+        start_instant=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        timezone=ZoneInfo("UTC"),
+    )
+
+
+def test_windowed_records_anchor_derived_timestamp_window_key_binds(
+    tmp_path: Path,
+) -> None:
+    """Records fact whose ONLY window-key projection is a derived:timestamp
+    column exports under a rebase anchor + window without a binder error, and
+    windows in raw-ns space (matches the full-export values)."""
+    emit_dir = _build_records_emit(tmp_path)
+    config = DimensionalConfig(
+        tables=[
+            TableDecl(
+                name="fact_entity",
+                role="fact",
+                source=SourceDecl(grain="records", kind="entity"),
+                key=["id"],
+                columns=[
+                    ColumnDecl(name="id", **{"from": "record_id"}),
+                    # The ONLY projection of last_mutation_sim_time is rendered.
+                    ColumnDecl(
+                        name="mutated_at",
+                        derived=DerivedSpec(
+                            timestamp=TimestampSpec(source="last_mutation_sim_time")
+                        ),
+                    ),
+                ],
+            )
+        ]
+    )
+    anchor = _utc_anchor()
+    # Entities at last_mutation_sim_time 10, 20, 30. Window [15, 25) -> only e002.
+    window = _make_window(start_ns=15, end_ns=25)
+
+    with open_emit(emit_dir) as emit:
+        full_specs = build_query_specs(
+            emit,
+            config,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        # Previously raised: Binder Error comparing TIMESTAMP to INTEGER_LITERAL.
+        windowed_specs = build_query_specs(
+            emit,
+            config,
+            anchor,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        full_rows = emit.query_arrow(full_specs[0].sql, ()).to_pydict()
+        windowed_rows = emit.query_arrow(windowed_specs[0].sql, ()).to_pydict()
+
+    # The window selects exactly e002 (raw ns 20 in [15, 25)).
+    assert windowed_rows["id"] == ["e002"]
+    # Internal raw-ns helper must never surface in the output.
+    assert "__fabulexa_window_key_ns" not in windowed_rows
+    # Values-equal-full-export: mutated_at (a rendered TIMESTAMP) matches.
+    full_by_id = {
+        full_rows["id"][i]: full_rows["mutated_at"][i]
+        for i in range(len(full_rows["id"]))
+    }
+    assert windowed_rows["mutated_at"][0] == full_by_id["e002"]
+
+
+def test_windowed_history_point_anchor_derived_timestamp_window_key_binds(
+    tmp_path: Path,
+) -> None:
+    """history_point fact whose ONLY window-key projection is a derived:timestamp
+    column exports under a rebase anchor + window without a binder error."""
+    emit_dir = _build_history_point_emit(tmp_path)
+    config = DimensionalConfig(
+        tables=[
+            TableDecl(
+                name="fact_state",
+                role="fact",
+                source=SourceDecl(
+                    grain="history_point", kind="journey", property="state"
+                ),
+                key=["id", "at"],
+                columns=[
+                    ColumnDecl(name="id", **{"from": "record_id"}),
+                    ColumnDecl(name="state", **{"from": "value"}),
+                    # The ONLY projection of sim_time is rendered.
+                    ColumnDecl(
+                        name="at",
+                        derived=DerivedSpec(timestamp=TimestampSpec(source="sim_time")),
+                    ),
+                ],
+            )
+        ]
+    )
+    anchor = _utc_anchor()
+    # History rows at sim_time 5, 15, 25. Window [10, 20) -> only sim_time 15.
+    window = _make_window(start_ns=10, end_ns=20)
+
+    with open_emit(emit_dir) as emit:
+        # Previously raised: Binder Error comparing TIMESTAMP to INTEGER_LITERAL.
+        windowed_specs = build_query_specs(
+            emit,
+            config,
+            anchor,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        windowed_rows = emit.query_arrow(windowed_specs[0].sql, ()).to_pydict()
+
+    assert windowed_rows["state"] == ["state_15"]
+    assert "__fabulexa_window_key_ns" not in windowed_rows
