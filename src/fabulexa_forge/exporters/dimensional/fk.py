@@ -27,6 +27,7 @@ from fabulexa_forge.derivations.reference_resolution import (
     _collect_reference_columns,
     _find_all_reference_paths,
     _path_hint_to_cols,
+    _render_typed_literal,
     build_membership_edge_sql,
     build_reference_path_sql,
     get_fork_path_from_sidecar,
@@ -572,6 +573,19 @@ def build_point_in_time_membership_fk_expr(
     mf_id_col = f"member__{member_field}__id"
     mf_kind_col = f"member__{member_field}__kind"
 
+    # --- Render where predicate against the membership table's elem__ columns ---
+    # Consistent with the on_records / membership-grain paths: a `where` narrows
+    # the membership interval by elem__ column values. Silently dropping it would
+    # let a misconfigured FK resolve unfiltered (Principle #7).
+    where = fk.where or {}
+    extra_where = ""
+    if where:
+        _check_where_columns_exist(where, mem_table_name, sidecar, table_decl, col_decl)
+        mem_col_types = {c.name: c.type for c in sidecar.columns(mem_table_name)}
+        for where_col, value in where.items():
+            literal = _render_typed_literal(value, mem_col_types[where_col])
+            extra_where += f'   AND h."{where_col}" = {literal}\n'
+
     # INT64 max sentinel for open-interval containment
     _INT64_MAX = 9223372036854775807
 
@@ -585,6 +599,7 @@ def build_point_in_time_membership_fk_expr(
             f"   {rec_join}\n"
             f' WHERE h."{mf_id_col}" = {member_id_expr}\n'
             f"   AND h.\"{mf_kind_col}\" = '{member_kind}'\n"
+            f"{extra_where}"
             f'   AND h."joined_sim_time" <= "_grain"."{as_of}"\n'
             f'   AND "_grain"."{as_of}" < COALESCE(h."left_sim_time", {_INT64_MAX})\n'
             f' ORDER BY h."joined_sim_time" DESC, h."record_id" ASC LIMIT 1'
@@ -595,6 +610,7 @@ def build_point_in_time_membership_fk_expr(
             f'SELECT {proj} FROM "{mem_table_name}" h\n'
             f' WHERE h."{mf_id_col}" = {member_id_expr}\n'
             f"   AND h.\"{mf_kind_col}\" = '{member_kind}'\n"
+            f"{extra_where}"
             f'   AND h."joined_sim_time" <= "_grain"."{as_of}"\n'
             f'   AND "_grain"."{as_of}" < COALESCE(h."left_sim_time", {_INT64_MAX})\n'
             f' ORDER BY h."joined_sim_time" DESC, h."record_id" ASC LIMIT 1'
