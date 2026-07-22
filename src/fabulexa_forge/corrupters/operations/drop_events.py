@@ -6,7 +6,9 @@ source-coordinate locator stance and the anchor-participant impact rule this
 handler implements. A removal that empties a `(kind, property)` pair's
 `history` rows entirely (C11's converse grain) takes the emptied-series
 clause instead: every row of that pair's removals declares `impact: ("C11",)`
-alone, ahead of the anchor-participant rule.
+ahead of the anchor-participant rule. Either base impact then folds in `C13`
+(via `with_c13`) when the removal drops a series' genesis tick, leaving its
+record without a genesis history row.
 """
 
 from __future__ import annotations
@@ -31,8 +33,10 @@ from fabulexa_forge.corrupters.operations._impact import (
     row_dict,
     row_locator,
     series_key,
+    series_missing_genesis_row,
     series_round_trip_fails,
     unit_row_weights,
+    with_c13,
 )
 from fabulexa_forge.corrupters.selection import (
     derive_row_weights,
@@ -124,18 +128,25 @@ class DropEventsCorrupter:
             key: series_round_trip_fails(state, fork_path, slice_at, *key)
             for key in series_keys
         }
+        # C13: dropping a series' genesis tick (its row at the record's own
+        # created_sim_time) leaves that record without a genesis history row.
+        missing_genesis = {
+            key: series_missing_genesis_row(state, fork_path, *key)
+            for key in series_keys
+        }
 
         row_category = row_category_for_table(history_table.spec)
         defects: list[DefectRecord] = []
         for _physical_row, row in selected:
             key = series_key(row)
-            impact: tuple["ImpactCode", ...]
+            base: tuple["ImpactCode", ...]
             if pair_emptied[(key[0], key[1])]:
-                impact = ("C11",)
+                base = ("C11",)
             else:
-                impact = anchor_participant_impact(
+                base = anchor_participant_impact(
                     row, pre_anchor[key], round_trip_fails[key]
                 )
+            impact = with_c13(base, missing_genesis[key])
             defects.append(
                 DefectRecord.model_validate(
                     {

@@ -12,14 +12,15 @@ Four gates:
                     spot-checked defects).
 3. corpus guard   : corpus is non-empty; every folder contains exactly the two
                     expected files.
-4. set equality   : validate's failing-check set, scoped to the manifest's C1-C12
+4. set equality   : validate's failing-check set, scoped to the manifest's C1-C13
                     impact vocabulary, == manifest impact union minus
                     'beyond-c1-c12' -- the recipes are curated so every declared
                     code fires (no heals, no skip-guard cases). Containment alone
                     is asserted more broadly in tests/corrupters/test_agreement.py.
-                    The C1-C12 scoping keeps a sentinel-labeled C13 break accurate,
-                    not false: C13 is outside the manifest's ImpactCode vocabulary
-                    entirely, so no corrupter can declare it.
+                    The C1-C13 scoping keeps a sentinel-labeled C14 break accurate,
+                    not false: C14 (a sidecar-only sub-type check) is outside the
+                    manifest's ImpactCode vocabulary entirely, and no corrupter can
+                    break it.
 """
 
 from __future__ import annotations

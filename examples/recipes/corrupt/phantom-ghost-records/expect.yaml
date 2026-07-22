@@ -1,10 +1,11 @@
 defect_counts:
   phantom_row: 2
 
-impact_union: []
+impact_union:
+  - C13
 
 contains_defects:
   - class: phantom_row
     rule: ghost_doctors
-    impact: [beyond-c1-c12]
+    impact: [C13]
     location.table: records__doctor

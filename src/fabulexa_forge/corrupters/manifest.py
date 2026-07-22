@@ -29,14 +29,20 @@ ImpactCode = Literal[
     "C10",
     "C11",
     "C12",
+    "C13",
     "beyond-c1-c12",
 ]
-"""A semantic conformance check id, or the sentinel for defects outside C1-C12.
+"""A semantic conformance check id, or the sentinel for defects outside those codes.
 
-Only the semantic checks (C6, C7, C9-C12) appear; a corrupter preserves
-structural conformance (C1-C5, C8) by construction, so the vocabulary excludes
-them. The sentinel is mutually exclusive with the real codes -- normalize_impact
-rejects a mix."""
+Only the semantic checks a corrupter can break appear (C6, C7, C9-C13); a
+corrupter preserves structural conformance (C1-C5, C8) and the sidecar-only
+sub-type check (C14) by construction, so the vocabulary excludes them. C13's
+genesis clause is breakable -- `insert_rows` (a phantom carries no history),
+`schema_drift` (a renamed tracked column strands its history under the old
+property name), and `shift_sim_time` / `drop_events` (moving or dropping a
+series' genesis tick). The `beyond-c1-c12` sentinel keeps its historical spelling
+for defects that break none of these codes; it is mutually exclusive with the
+real codes -- normalize_impact rejects a mix."""
 
 RowCategory = Literal["records", "history", "membership"]
 """The row-identity scheme a RowRef uses -- a RowRef tag, not a base table

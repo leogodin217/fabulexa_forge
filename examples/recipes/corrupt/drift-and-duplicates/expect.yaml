@@ -5,6 +5,7 @@ defect_counts:
 impact_union:
   - C9
   - C11
+  - C13
 
 contains_defects:
   - class: duplicate_row
@@ -14,6 +15,6 @@ contains_defects:
 
   - class: column_rename
     rule: rename_name_column
-    impact: [C11]
+    impact: [C11, C13]
     location.table: records__actor
     location.column: prop__full_name

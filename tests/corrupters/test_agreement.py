@@ -847,9 +847,9 @@ def _config_delete_membership_beyond() -> CorruptConfig:
     )
 
 
-def _config_insert_rows_green() -> CorruptConfig:
-    """insert_rows with a resampled column -- phantom isolation holds by
-    construction, so the corrupted emit re-validates fully green."""
+def _config_insert_rows_c13() -> CorruptConfig:
+    """insert_rows into a kind with a tracked property -- the phantom carries no
+    history, so it lacks its genesis row for `prop__specialty` (C13)."""
     return CorruptConfig(
         seed=404,
         operations=[
@@ -952,7 +952,7 @@ _ROWSET_CONFIG_FACTORIES: dict[str, "Callable[[], CorruptConfig]"] = {
     "delete_referenced_doctor_c10": _config_delete_referenced_doctor_c10,
     "delete_pinned_actor_c6_c9": _config_delete_pinned_actor_c6_c9,
     "delete_membership_beyond": _config_delete_membership_beyond,
-    "insert_rows_green": _config_insert_rows_green,
+    "insert_rows_c13": _config_insert_rows_c13,
     "duplicate_mutation_c6_c9": _config_duplicate_mutation_c6_c9,
     "duplicate_mutation_c12": _config_duplicate_mutation_c12,
     "heal_dangle_then_delete_membership": _config_heal_dangle_then_delete_membership,
@@ -966,7 +966,7 @@ _ROWSET_CONFIG_FACTORIES: dict[str, "Callable[[], CorruptConfig]"] = {
 def test_rowset_containment_holds(name: str, tmp_path: Path) -> None:
     """validate's failing-check set is a subset of the manifest impact union,
     over the row-set operations matrix (history-series fixture) -- delete_rows
-    wake arms, insert_rows green re-validation, duplicate_rows mutation arms,
+    wake arms, the insert_rows C13 genesis gap, duplicate_rows mutation arms,
     and the healing compositions those operations introduce."""
     config = _ROWSET_CONFIG_FACTORIES[name]()
     failing, impact_union = _run_and_agreement_sets(
@@ -975,15 +975,15 @@ def test_rowset_containment_holds(name: str, tmp_path: Path) -> None:
     assert failing <= impact_union
 
 
-def test_insert_rows_green_validate_fully_passes(tmp_path: Path) -> None:
-    """A resampled insert_rows: impact is pure beyond-c1-c12 and validate
-    reports no failing check at all -- phantom isolation holds by
-    construction."""
+def test_insert_rows_declares_c13_genesis_gap(tmp_path: Path) -> None:
+    """insert_rows into a tracked kind: the phantom has no genesis history row,
+    so the manifest declares C13 and validate agrees (C13 is the only break --
+    the phantom is otherwise isolated by construction)."""
     failing, impact_union = _run_and_agreement_sets(
-        _config_insert_rows_green(), tmp_path, build_fixture=build_history_series
+        _config_insert_rows_c13(), tmp_path, build_fixture=build_history_series
     )
-    assert impact_union == set()
-    assert failing == set()
+    assert impact_union == {"C13"}
+    assert failing == {"C13"}
 
 
 def test_heal_dangle_then_delete_membership_demonstrates_sound_overapproximation(

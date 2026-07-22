@@ -14,6 +14,7 @@ from fabulexa_forge.config.models import InsertRows
 from fabulexa_forge.corrupters.manifest import DefectRecord
 from fabulexa_forge.corrupters.operations._impact import (
     enumerate_row_units,
+    kind_has_tracked_genesis_property,
     membership_kind_id_pairs,
     placement_populations,
     resolve_pooled_populations,
@@ -21,6 +22,7 @@ from fabulexa_forge.corrupters.operations._impact import (
     row_dict,
     row_locator,
     unit_row_weights,
+    with_c13,
 )
 from fabulexa_forge.corrupters.operations._mutations import (
     apply_resample,
@@ -176,6 +178,7 @@ class InsertRowsCorrupter:
             )
 
         id_universe_cache: dict[str, set[str]] = {}
+        c13_by_kind: dict[str, bool] = {}
         donor_pool_cache: dict[tuple[int, str], list[object]] = {}
         new_rows_by_table: list[list[dict[str, object]]] = [[] for _ in populations]
         defects: list[DefectRecord] = []
@@ -217,13 +220,21 @@ class InsertRowsCorrupter:
                 )
 
             new_rows_by_table[table_idx].append(phantom)
+            # C13: a phantom carries no history, so it lacks its genesis row for
+            # every history_tracked, round-trippable prop of its kind. When the
+            # kind has no such property the phantom breaks no conformance code.
+            if kind not in c13_by_kind:
+                c13_by_kind[kind] = kind_has_tracked_genesis_property(
+                    population.working_table
+                )
+            impact = with_c13(("beyond-c1-c12",), c13_by_kind[kind])
             row_category = row_category_for_table(table_spec)
             defects.append(
                 DefectRecord.model_validate(
                     {
                         "class": "phantom_row",
                         "rule": rule,
-                        "impact": ("beyond-c1-c12",),
+                        "impact": impact,
                         "location": row_locator(
                             population.table_name, row_category, table_spec, phantom
                         ),

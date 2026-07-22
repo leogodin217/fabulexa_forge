@@ -217,9 +217,10 @@ these are out of reach until the contract restores multi-branch / provenance:
 
 ## Corrupters *(Stage 4)*
 
-Read base, write base. Break **semantic** conformance (C6/C7/C9–C12, and C13's genesis
-clause as an unlabeled side effect) while preserving **structural** conformance (C1–C5,
-C8, C13's structural clauses); output stays base-shaped so any exporter can run
+Read base, write base. Break **semantic** conformance (C6/C7/C9–C13, including C13's
+genesis clause — now a declared impact) while preserving **structural** conformance
+(C1–C5, C8, C13's structural clauses, and the sidecar-only C14); output stays base-shaped
+so any exporter can run
 downstream of a corrupter. A `CorruptConfig` YAML envelope (sibling of `ExportConfig` /
 `StreamConfig`) declares a seed and an ordered list of operations over a shared
 selector/distribution/placement grammar; every run also writes `defects.json`, a
@@ -256,8 +257,9 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
 - ✓ **Temporal defects over `history`** (family C: `freeze_series`, `drop_events`,
   `shift_sim_time`) — suppress a change series' tail so its value sticks, drop sampled
   events (lost CDC messages), or skew/collide/reorder event timestamps. Each defect
-  declares `C6` or `beyond-c1-c12` by mirroring C6's own round-trip predicate against the
-  working state.
+  declares `C6`, `C11`, `C13`, or `beyond-c1-c12` by mirroring C6's round-trip predicate,
+  C11's converse, and C13's genesis clause against the working state (a drop that empties
+  a series or removes its genesis tick, or an `offset` that shifts the genesis tick).
 - ✓ **Interval defects over membership timelines** (family E: `distort_intervals`) —
   overlap an adjacent interval pair, shrink a closed interval into a coverage gap, or
   invert a closed interval's `joined_sim_time`/`left_sim_time`. `overlap`/`gap` declare
