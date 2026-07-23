@@ -240,3 +240,22 @@ class SourceUnclassifiedColumn(ExportError):
     contract column family forge does not know is an error, never a silent
     pass-through.
     """
+
+
+class BaseExcludeUnresolved(ExportError):
+    """A `base.exclude.kinds`/`base.exclude.tables` entry matches nothing base emits."""
+
+
+class BaseRenameUnresolved(ExportError):
+    """A `base.rename` entry's `table` is not a surviving `records__<kind>`, or a
+    `columns` key does not name a state-at column of that kind."""
+
+
+class BaseRenameSliceOnly(ExportError):
+    """A `base.rename` entry's `columns` key names a column omitted by the
+    `slice_only` policy — the rename is unsatisfiable rather than silently ignored."""
+
+
+class BaseNameCollision(ExportError):
+    """Two resolved base output tables share a name, or two columns of one output
+    table do, after presentation defaults and `base.rename`. Never suffixed."""
