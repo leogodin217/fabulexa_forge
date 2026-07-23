@@ -89,6 +89,7 @@ own the rule detail:
 |---|---|---|
 | dimensional | Refuse every config-referenced value-read; `lookup` regated to `constant`; `init` skips proposals with a notice | `SliceOnlyColumnRefused`, `LookupColumnSafety` — [`dimensional.md`](dimensional.md) |
 | source | Omit from every records-genre render, one notice per unit × column; a `rename` naming an omitted column errors | `SourceRenameSliceOnly` — [`source.md`](source.md) |
+| base | Omit every non-exempt `slice_only` `prop__` column from the flat table, one `slice-only-column-omitted` notice per kind × column; the sub-typed-discriminator carve-out honored; a `rename` naming an omitted column errors | `BaseRenameSliceOnly` — [`base.md`](base.md) |
 | streaming | Refuse-only: the after-image is wholly author-named, so a `kinds[].properties` entry naming a non-exempt `slice_only` property is refused in the eager pass; no notices | `StreamPropertySliceOnly` — [`streaming.md`](streaming.md) |
 | incremental | No rules of its own: refusal is always-on before any window gate runs | [`incremental.md`](incremental.md) |
 
