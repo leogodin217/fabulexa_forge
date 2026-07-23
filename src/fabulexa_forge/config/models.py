@@ -563,6 +563,87 @@ class SourceConfig(StrictBaseModel):
         return self
 
 
+class BaseConfig(StrictBaseModel):
+    """The base-mode section: presentation escape hatches plus an optional point-in-time slice."""  # noqa: E501
+
+    exclude: ExcludeDecl | None = None
+    """Kinds/output tables dropped before export. `kinds` names records kinds;
+    `tables` names base output table names."""
+    rename: list[RenameEntry] | None = None
+    """Per-table (`name`) / per-column (`columns`) overrides, keyed on the sidecar
+    `records__<kind>` name. `columns` keys are state-at column identities
+    (`record_id`, `presentation_id`, `created_sim_time`, `active`,
+    `deactivated_at`, `prop__<p>`). `sub_type` rejected; `table` targets disjoint."""
+    slice_at: int | None = None
+    """Inclusive point-in-time horizon (sim-time ns). Absent -> tape's end.
+    Mutually exclusive with `incremental` (enforced on ExportConfig)."""
+
+    @model_validator(mode="after")
+    def at_least_one_field(self) -> Self:
+        """A present `base` section sets at least one of exclude/rename/slice_at.
+
+        Raises:
+            ValueError: An empty `base: {}` block; omit the section instead.
+        """
+        if not self.model_fields_set:
+            raise ValueError(
+                "base section must set at least one of exclude / rename / slice_at"
+                " (an empty base: {} block is not meaningful;"
+                " omit the section for a bare current-state dump)"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def slice_at_non_negative(self) -> Self:
+        """`slice_at`, when set, is a non-negative sim-time ns.
+
+        Raises:
+            ValueError: `slice_at` is negative.
+        """
+        if self.slice_at is not None and self.slice_at < 0:
+            raise ValueError(f"base.slice_at must be non-negative; got {self.slice_at}")
+        return self
+
+    @model_validator(mode="after")
+    def rename_no_sub_type(self) -> Self:
+        """No rename entry sets `sub_type` — base never splits a kind.
+
+        Raises:
+            ValueError: A rename entry sets `sub_type`.
+        """
+        if self.rename is not None:
+            offenders = [
+                entry.table for entry in self.rename if entry.sub_type is not None
+            ]
+            if offenders:
+                raise ValueError(
+                    "base.rename entries must not set 'sub_type'"
+                    f" (base never splits a kind): {offenders}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def entries_disjoint(self) -> Self:
+        """No two rename entries share a `table` target.
+
+        Raises:
+            ValueError: Two rename entries target the same table.
+        """
+        if self.rename is not None:
+            seen: set[str] = set()
+            duplicates: list[str] = []
+            for entry in self.rename:
+                if entry.table in seen:
+                    duplicates.append(entry.table)
+                seen.add(entry.table)
+            if duplicates:
+                raise ValueError(
+                    "base.rename contains more than one entry for the same"
+                    f" table: {duplicates}"
+                )
+        return self
+
+
 class DimensionalConfig(StrictBaseModel):
     """The dimensional-mode section: the star-schema declaration."""
 
@@ -654,7 +735,7 @@ class IncrementalConfig(StrictBaseModel):
 class ExportConfig(StrictBaseModel):
     """Top-level export configuration block."""
 
-    mode: Literal["dimensional", "source"]
+    mode: Literal["dimensional", "source", "base"]
     """The export mode; determines which mode-specific section is required."""
     rebase: RebaseConfig | None = None
     """Optional wallclock origin and timezone for timestamp rendering."""
@@ -665,28 +746,60 @@ class ExportConfig(StrictBaseModel):
     source: SourceConfig | None = None
     """The escape-hatch declaration for the source mode; absent means a bare
     full dump with no exclude/rename."""
+    base: BaseConfig | None = None
+    """The escape-hatch + slice declaration for the base mode; absent means a bare
+    current-state dump with no exclude/rename/slice_at."""
 
     @model_validator(mode="after")
     def mode_section_matches(self) -> Self:
-        """The section named by `mode` matches; the other mode's section is absent.
+        """The section named by `mode` matches; the other modes' sections are absent.
 
         `mode='dimensional'` requires the `dimensional` section (unchanged single-arm
-        behavior). `mode='source'` has no such requirement — `SourceConfig` is pure
-        escape hatches, so a bare `mode: source` (no `source` section at all) is a
-        valid full dump. Either way, the *other* mode's section must be absent.
+        behavior). `mode='source'` and `mode='base'` have no such requirement — both
+        sections are pure escape hatches, so a bare `mode: source` / `mode: base`
+        (no mode-specific section at all) is a valid full dump. Whichever mode is
+        selected, the *other* modes' sections must be absent.
 
         Raises:
             ValueError: `mode='dimensional'` with the `dimensional` section absent;
-                or either mode with the other mode's section present.
+                or any mode with another mode's section present.
         """
         if self.mode == "dimensional":
             if self.dimensional is None:
                 raise ValueError("mode='dimensional' requires a 'dimensional' section")
             if self.source is not None:
                 raise ValueError("mode='dimensional' forbids a 'source' section")
-        else:  # mode == "source"
+            if self.base is not None:
+                raise ValueError("mode='dimensional' forbids a 'base' section")
+        elif self.mode == "source":
             if self.dimensional is not None:
                 raise ValueError("mode='source' forbids a 'dimensional' section")
+            if self.base is not None:
+                raise ValueError("mode='source' forbids a 'base' section")
+        else:  # mode == "base"
+            if self.dimensional is not None:
+                raise ValueError("mode='base' forbids a 'dimensional' section")
+            if self.source is not None:
+                raise ValueError("mode='base' forbids a 'source' section")
+        return self
+
+    @model_validator(mode="after")
+    def base_slice_at_excludes_incremental(self) -> Self:
+        """Reject `base.slice_at` together with an `incremental` block — a pinned
+        instant and a window sequence are contradictory temporal selectors.
+
+        Raises:
+            ValueError: Both are set.
+        """
+        if (
+            self.base is not None
+            and self.base.slice_at is not None
+            and self.incremental is not None
+        ):
+            raise ValueError(
+                "base.slice_at and incremental are mutually exclusive"
+                " (a pinned instant and a window sequence are contradictory)"
+            )
         return self
 
 

@@ -2,7 +2,7 @@ sprint: base-mode
 parent_branch: design/base-mode
 baseline_sha: ab1921ed343f6aba8e8bd8613da25f563ee1bc5c
 started: 2026-07-23
-current_phase: 1
+current_phase: 2
 
 capabilities:
   - exporters: [base-mode, slice-at-point-in-time, base-incremental-snapshots]
@@ -14,7 +14,7 @@ gates:
 
 phases:
   1:
-    status: pending
+    status: complete
     name: "Config surface"
     demo: "docs/sprints/base-mode/demos/phase_1_base_config.py"
   2:
