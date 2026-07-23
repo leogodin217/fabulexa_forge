@@ -45,7 +45,7 @@ from fabulexa_forge.exporters.reserved_names import (
     is_reserved_column_name,
     is_reserved_table_name,
 )
-from fabulexa_forge.exporters.slice_only import omitted_slice_only_columns
+from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 
 #: Prefix marking a records-category column as a reconstructable property.
 _PROP_PREFIX = "prop__"
@@ -159,6 +159,31 @@ def _apply_exclude(
 # ---------------------------------------------------------------------------
 
 
+def _omitted_slice_only_columns(sidecar: "Sidecar", kind: str) -> tuple[str, ...]:
+    """The kind-invariant omitted set for one records kind.
+
+    Every non-exempt temporal_class: slice_only prop__ column of
+    records__<kind>, in sidecar column-declaration order
+    (is_non_exempt_slice_only per column).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The record kind owning the records__<kind> table.
+
+    Returns:
+        Omitted column names (prop__ prefix included), sidecar column order.
+
+    Raises:
+        TemporalClassUnavailableError: Propagated.
+    """
+    table = f"{_RECORDS_PREFIX}{kind}"
+    return tuple(
+        col.name
+        for col in sidecar.columns(table)
+        if is_non_exempt_slice_only(sidecar, kind, col.name)
+    )
+
+
 def _surviving_properties(sidecar: "Sidecar", kind: str) -> frozenset[str]:
     """The bare property names a kind's flat table reconstructs.
 
@@ -176,7 +201,7 @@ def _surviving_properties(sidecar: "Sidecar", kind: str) -> frozenset[str]:
     Raises:
         TemporalClassUnavailableError: Propagated from the omission scan.
     """
-    omitted = frozenset(omitted_slice_only_columns(sidecar, kind))
+    omitted = frozenset(_omitted_slice_only_columns(sidecar, kind))
     table = f"{_RECORDS_PREFIX}{kind}"
     return frozenset(
         col.name[len(_PROP_PREFIX) :]
@@ -316,7 +341,7 @@ def _resolve_specs(
     specs: list[BaseTableSpec] = []
     for kind in kinds:
         table = f"{_RECORDS_PREFIX}{kind}"
-        omitted_names = omitted_slice_only_columns(sidecar, kind)
+        omitted_names = _omitted_slice_only_columns(sidecar, kind)
         for column_name in omitted_names:
             notice_sink(_slice_only_omission_notice(kind, column_name))
         omitted = frozenset(omitted_names)

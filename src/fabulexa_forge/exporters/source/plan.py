@@ -50,7 +50,7 @@ from fabulexa_forge.exporters.reserved_names import (
     is_reserved_column_name,
     is_reserved_table_name,
 )
-from fabulexa_forge.exporters.slice_only import omitted_slice_only_columns
+from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, _scalar_properties
 from fabulexa_forge.reader.records_columns import records_column_role
 
@@ -330,9 +330,10 @@ def _default_table_name(unit: _Unit) -> str:
 def _omitted_slice_only_columns(sidecar: "Sidecar", kind: str) -> tuple[str, ...]:
     """The unit-invariant omitted set for one records kind.
 
-    Never called for junction units (membership columns carry no class). Thin
-    wrapper over the mode-neutral `omitted_slice_only_columns` (shared with
-    base's plan).
+    Every non-exempt temporal_class: slice_only prop__ column of
+    records__<kind>, in sidecar column-declaration order
+    (is_non_exempt_slice_only per column). Never called for junction units
+    (membership columns carry no class).
 
     Args:
         sidecar: The open emit's sidecar.
@@ -344,7 +345,12 @@ def _omitted_slice_only_columns(sidecar: "Sidecar", kind: str) -> tuple[str, ...
     Raises:
         TemporalClassUnavailableError: Propagated.
     """
-    return omitted_slice_only_columns(sidecar, kind)
+    source_table = f"records__{kind}"
+    return tuple(
+        col.name
+        for col in sidecar.columns(source_table)
+        if is_non_exempt_slice_only(sidecar, kind, col.name)
+    )
 
 
 def _changelog_columns(

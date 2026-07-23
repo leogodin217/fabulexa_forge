@@ -13,48 +13,16 @@ slice-only-policy.md § The discriminator carve-out / § Invariant 5.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from fabulexa_forge.reader.slice_only import (
     is_exempt_discriminator,
     is_non_exempt_slice_only,
 )
 
-if TYPE_CHECKING:
-    from fabulexa_forge.reader.sidecar import Sidecar
-
 __all__ = [
     "is_exempt_discriminator",
     "is_non_exempt_slice_only",
-    "omitted_slice_only_columns",
     "slice_only_refusal_message",
 ]
-
-
-def omitted_slice_only_columns(sidecar: "Sidecar", kind: str) -> tuple[str, ...]:
-    """The unit-invariant omitted set for one records kind.
-
-    Every non-exempt temporal_class: slice_only prop__ column of
-    records__<kind>, in sidecar column-declaration order. Shared by source's
-    per-unit omission and base's per-kind omission — the same predicate, the
-    same order.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        kind: The record kind owning the records__<kind> table.
-
-    Returns:
-        Omitted column names (prop__ prefix included), sidecar column order.
-
-    Raises:
-        TemporalClassUnavailableError: Propagated.
-    """
-    source_table = f"records__{kind}"
-    return tuple(
-        col.name
-        for col in sidecar.columns(source_table)
-        if is_non_exempt_slice_only(sidecar, kind, col.name)
-    )
 
 
 def slice_only_refusal_message(
