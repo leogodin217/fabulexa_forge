@@ -1,0 +1,171 @@
+# ExportConfig — retail (TechMart) bundle, dimensional mode (star schema)
+# ============================================================
+# `fabulexa-forge export docs/examples/retail/bundle docs/examples/retail/dimensional.yaml`
+#
+# Adapted from `fabulexa-forge init docs/examples/retail/bundle`, then curated
+# against the atlas. Curation decisions (the author judgment init can't make):
+#
+#   KEPT     tick_decision -> fact_customer_action. THE central retail call:
+#            NHS excluded its `tick_decision` as engine bookkeeping, but here the
+#            atlas is explicit that this is an EVENT-GRAIN "customer actions"
+#            dataset and tick_decision IS that event — one row per funnel action
+#            (view / cart / compare / checkout / purchase in `decision_type`),
+#            inside a shopping_session, bound to the product it acted on. That is
+#            the grain of the whole star: a real fact, not noise. Kept, with its
+#            journey FK (reference) and product FK (membership) wired in.
+#   SPLIT    actor -> dim_customer + dim_ops. record_roles.actor is an object
+#            {customer: dimension, ops: dimension} — BOTH sub-types are
+#            dimensions, so actor sub-type-SPLITS on the actor_type discriminator
+#            into two narrow dims rather than one wide dim of mostly-null columns.
+#            The commercial/demographic columns belong to the shopper; the ops
+#            monitor bot carries only what it monitors (component / store), so
+#            each dim keeps only its own meaningful columns. actor_type is
+#            dropped from both (constant within each filtered table).
+#   T1       dim_customer stays SCD-2 (total_purchases, the lifetime order count,
+#            is class-tracked and genuinely versions per order); dim_ops is a
+#            single automated agent with nothing that versions -> Type-1.
+#   CONFORM  entity: kept as ONE conformed SCD-2 dimension with entity_type as
+#            the discriminator attribute, NOT split. status/error_rate are
+#            class-tracked (the storefront's health/incident timeline — the very
+#            thing the atlas's incidents drive), so SCD-2 preserves that history;
+#            product rows (all-constant) get a single version each. A per-type
+#            split into dim_product / dim_infrastructure is possible, but the
+#            sidecar carries no sub_type_columns, so the column->sub-type mapping
+#            would be author guesswork; left conformed (as in the NHS template).
+#   FACT     tick_decision: filled its columns + the journey FK (reference edge
+#            prop__journey_instance) and the product FK (membership edge
+#            bindings -> member__entity__id) that init left as commented stubs.
+#
+# SCD-2 dims kept where a genuine attribute versions over time: dim_customer
+# (total_purchases), dim_entity (status/error_rate), dim_journey_instance
+# (current_state). journey_instance's slice_only columns (state_entry_time,
+# complete, bound_roles) are auto-omitted (a notice, not an error).
+
+mode: dimensional
+
+dimensional:
+  tables:
+    # --- dim: actor sub-type 'customer' (shopper) — SCD-2 (total_purchases versions) ---
+    - name: dim_customer
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: customer}
+      key: [id, valid_from]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: acquisition_source, from: prop__acquisition_source}
+        - {name: tier, from: prop__tier}
+        - {name: segment, from: prop__segment}
+        - {name: income, from: prop__income}
+        - {name: age, from: prop__age}
+        - {name: country, from: prop__country}
+        - {name: store, from: prop__store}
+        - {name: total_purchases, from: prop__total_purchases}
+        - {name: first_name, from: prop__first_name}
+        - {name: last_name, from: prop__last_name}
+        - {name: name, from: prop__name}
+        - {name: place_city, from: prop__place_city}
+        - {name: place_subdivision, from: prop__place_subdivision}
+        - {name: place_postal_code, from: prop__place_postal_code}
+        - {name: place_area_code, from: prop__place_area_code}
+        - {name: birth_date, from: prop__birth_date}
+        - {name: email, from: prop__email}
+        - {name: username, from: prop__username}
+        - {name: phone, from: prop__phone}
+        - {name: street_address, from: prop__street_address}
+        - {name: valid_from, derived: {scd_window: valid_from}}
+        - {name: valid_to, derived: {scd_window: valid_to}}
+
+    # --- dim: actor sub-type 'ops' (storefront monitor bot) — Type-1 (nothing versions) ---
+    - name: dim_ops
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: ops}
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: component, from: prop__component}
+        - {name: store, from: prop__store}
+
+    # --- dim: entity (products + storefront infrastructure) — conformed SCD-2 ---
+    #     status/error_rate version (infra health/incident timeline); products
+    #     are all-constant. entity_type is the discriminator ATTRIBUTE (kept,
+    #     since this dim is conformed rather than split).
+    - name: dim_entity
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: entity
+      key: [id, valid_from]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: entity_type, from: prop__entity_type}
+        - {name: category, from: prop__category}
+        - {name: price_cents, from: prop__price_cents}
+        - {name: popularity, from: prop__popularity}
+        - {name: margin, from: prop__margin}
+        - {name: product_name, from: prop__product_name}
+        - {name: identity_brand, from: prop__identity_brand}
+        - {name: identity_line, from: prop__identity_line}
+        - {name: identity_naming_style, from: prop__identity_naming_style}
+        - {name: identity_tier, from: prop__identity_tier}
+        - {name: designator, from: prop__designator}
+        - {name: status, from: prop__status}
+        - {name: error_rate, from: prop__error_rate}
+        - {name: primary_ip, from: prop__primary_ip}
+        - {name: domain, from: prop__domain}
+        - {name: valid_from, derived: {scd_window: valid_from}}
+        - {name: valid_to, derived: {scd_window: valid_to}}
+
+    # --- dim: journey_instance (shopping / ops sessions) — SCD-2 on current_state ---
+    #     `actor` kept as a plain column, not an FK: journeys belong to BOTH
+    #     customers (shopping_session) and the ops bot (storefront_ops), so an FK
+    #     to either sub-type dim would dangle for the other's rows.
+    - name: dim_journey_instance
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: journey_instance
+      key: [id, valid_from]
+      columns:
+        - {name: id, from: record_id}
+        - {name: actor, from: prop__actor}
+        - {name: journey_type, from: prop__journey_type}
+        - {name: current_state, from: prop__current_state}
+        - {name: output_roles, from: prop__output_roles}
+        - {name: customer_handle, from: prop__customer_handle}
+        - {name: valid_from, derived: {scd_window: valid_from}}
+        - {name: valid_to, derived: {scd_window: valid_to}}
+
+    # --- fact: customer_action (the funnel event) — grain: one tick_decision ---
+    - name: fact_customer_action
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: occurred_at, from: created_sim_time}
+        # journey the action happened in — labeled reference edge
+        - {name: journey_id, fk: {to: dim_journey_instance, via: reference}}
+        # product the action was bound to — membership edge (bindings)
+        - name: product_id
+          fk:
+            to: dim_entity
+            via: membership
+            property: bindings       # membership__tick_decision__bindings
+            member_field: entity     # member__entity__id
+        - {name: decision_type, from: prop__decision_type}
+        - {name: context, from: prop__context}

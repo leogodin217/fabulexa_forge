@@ -1,0 +1,120 @@
+# ExportConfig — ride-sharing bundle, dimensional mode (star schema)
+# ============================================================
+# `fabulexa-forge export docs/examples/ride-sharing/bundle docs/examples/ride-sharing/dimensional.yaml`
+#
+# Adapted from `fabulexa-forge init docs/examples/ride-sharing/bundle`, then
+# curated against the atlas. Curation decisions (the author judgment init can't
+# make):
+#
+#   FACT     actor: init proposed fact_actor_trip. The actor KIND *is* the trip
+#            fact — grain one trip — so it is renamed fact_trip. The trip record
+#            is deliberately thin: its only history is prop__status (the terminal
+#            outcome, completed/cancelled) and prop__surge_tier is slice_only
+#            (auto-omitted, not named). Note there are NO reference FKs to wire:
+#            records__actor carries no ref_index__ / references columns, so the
+#            fact has no outgoing edges. The trip's rider/zone assignment is
+#            materialized only inside the excluded tick_decision bindings log,
+#            and the driver hold only in membership__resource__holders (reachable
+#            from the driver side, not the trip side) — denormalizing either onto
+#            the fact would require fabrication, so neither is done. dim_journey
+#            _instance.actor is the join key back to fact_trip.id.
+#   SPLIT    entity -> dim_rider + dim_zone. entity is polymorphic
+#            (entity_type ∈ {rider, zone}), and unlike the nhs entity this split
+#            is well-founded, not guesswork: enum_domains gives a clean
+#            discriminator and each sub-type has its own meaningful column
+#            (rider -> loyalty, zone -> zone_type). The atlas also models them as
+#            two distinct dimensions. So we filter the records grain per sub-type
+#            (dim-type1-subtype-split) rather than keep one conformed dim.
+#   DIM->T1  resource (drivers): init proposed SCD-2 because `allocated` (drivers
+#            currently busy) is history-tracked. That is operational STATE, not a
+#            slowly-changing dimension attribute — dropped, and the dim is Type-1
+#            constant reference data (capacity, name, region). prop__queue is
+#            slice_only (auto-omitted).
+#   DROPPED  tick_decision (fact) + queue (dim) — simulation-mechanism kinds, not
+#            marketplace data (see base.yaml). init proposed a fact_tick_decision
+#            and an attribute-thin dim_queue; both are engine bookkeeping, so they
+#            and their membership tables are excluded from the star entirely.
+#
+# SCD-2 kept only where a genuine attribute versions over time: journey_instance
+# (current_state walks requested -> matching -> ... -> completed/cancelled).
+
+mode: dimensional
+
+dimensional:
+  tables:
+    # --- fact: trip (actor) — grain: one trip; thin, no wireable FKs ---
+    - name: fact_trip
+      role: fact
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: trip}
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: status, from: prop__status}
+
+    # --- dim: rider (entity sub-type) — Type-1 reference ---
+    - name: dim_rider
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: rider}
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: name, from: prop__name}
+        - {name: loyalty, from: prop__loyalty}
+
+    # --- dim: zone (entity sub-type) — Type-1 reference ---
+    - name: dim_zone
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: zone}
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: name, from: prop__name}
+        - {name: zone_type, from: prop__zone_type}
+
+    # --- dim: driver (resource) — Type-1 reference (allocated=state, dropped) ---
+    - name: dim_driver
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: resource
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: capacity, from: prop__capacity}
+        - {name: name, from: prop__name}
+        - {name: region, from: prop__region}
+        - {name: resource_type, from: prop__resource_type}
+
+    # --- dim: journey_instance (trip lifecycle) — SCD-2 on current_state ---
+    # `actor` is the trip's record_id — the join key back to fact_trip.id.
+    - name: dim_journey_instance
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: journey_instance
+      key: [id, valid_from]
+      columns:
+        - {name: id, from: record_id}
+        - {name: actor, from: prop__actor}
+        - {name: journey_type, from: prop__journey_type}
+        - {name: current_state, from: prop__current_state}
+        - {name: output_roles, from: prop__output_roles}
+        - {name: valid_from, derived: {scd_window: valid_from}}
+        - {name: valid_to, derived: {scd_window: valid_to}}

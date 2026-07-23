@@ -36,9 +36,9 @@ kinds:
     types: [customer]       # explicit sub-type selection (the only declared value)
     properties: [tier, segment, total_purchases]
   - kind: entity            # entity_type=[product,infrastructure] -> splits into both topics
-    properties: [category, price, status]
+    properties: [category, price_cents, status]
   - kind: journey_instance  # no <kind>_type domain -> not sub-typed -> route_table = `journey_instance`
-    properties: [current_state, complete]
+    properties: [current_state]
 
 routing:
   topic_template: "retail.{route_table}"

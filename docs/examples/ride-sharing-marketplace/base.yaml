@@ -1,0 +1,24 @@
+# ExportConfig — ride-sharing marketplace, base mode (flat current-state dump)
+# ============================================================
+# `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/base.yaml`
+#
+# Base mode reconstructs one flat table per records kind at the tape's end:
+# every tracked property (actor.status, actor.zone, entity.demand_pressure,
+# journey_instance.current_state, ...) carries its LATEST history value. No
+# genre split, no sub-type split, no FK joins — the faithful "current state of
+# every record" landing shape. `record_id` presents as `id`; every other column
+# is presentation-verbatim.
+#
+# This marketplace is the CLEAN example: it declares NO simulation-mechanism
+# kinds — no tick_decision rule-firing log, no internal queue. Every kind is
+# domain data:
+#   actor  — riders + drivers, merged on one table (actor_type discriminator)
+#   entity — zone_market records (the spatial grain + surge pressure signals)
+#   journey_instance — the trip / driver-session lifecycles
+#   pairing — the rider<->driver match records (the two-sided-market centerpiece)
+# So there is nothing to drop. Base takes a bare `mode: base` — no `exclude:`.
+#
+# Anchor is optional for base — omitted here, so lifecycle timestamps stay raw
+# sim-time ns. Add a `rebase:` block (see source.yaml) to land wallclock dates.
+
+mode: base

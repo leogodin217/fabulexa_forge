@@ -1,0 +1,19 @@
+# ExportConfig — parent-child bundle, base mode (flat current-state dump)
+# ============================================================
+# `fabulexa-forge export docs/examples/parent-child/bundle docs/examples/parent-child/base.yaml`
+#
+# parent-child is the smallest fixture — a deliberately minimal example for
+# UNDERSTANDING the bundle shape, not a domain showcase. It carries three
+# domain kinds and no simulation-mechanism kinds (no tick_decision, no queue),
+# so the base mode's faithful flat dump needs no exclusions at all:
+#   actor (member)     — children/parents; the membership reference flows via
+#                        ref_index__group -> entity.record_index (NOT the
+#                        opaque prop__group id).
+#   entity             — the parent groups.
+#   journey_instance   — the tiny journey spine (current_state tracked).
+#
+# One flat table per kind, reconstructed at the tape's end; `record_id` -> `id`.
+# The bare `mode: base` (no `base:` section) is the complete config. This is the
+# clearest way to see exactly what the bundle contains.
+
+mode: base
