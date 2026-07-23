@@ -17,10 +17,13 @@ recurring-report, and landing-zone teaching targets — data that arrives period
 period. The compile step is mode-dispatched: `mode: dimensional` compiles through
 `exporters/dimensional/engine.py`, `mode: source` through
 `exporters/source/engine.py` (see [`source.md`](source.md) § Incremental
-composition); both compile to the shared, mode-neutral `QuerySpec`
-(`exporters/query_spec.py`), so this driver's window math, cursor, fingerprint,
-drained detection, labels, and staging apply identically to either mode. Streaming / base
-wire into the same driver when they land.
+composition), and `mode: base` through `exporters/base/engine.py` — every base
+table snapshot-delivered at the window's `end_ns` with `write_mode='replace'`,
+reusing this driver's window math, cursor, and fingerprint with no new window
+derivation ([`base.md`](base.md) § Three horizons). All three compile to the
+shared, mode-neutral `QuerySpec` (`exporters/query_spec.py`), so this driver's
+window math, cursor, fingerprint, drained detection, labels, and staging apply
+identically across the modes.
 
 ```
 emit (run.duckdb + base.json @ the supported `base_format_version`)

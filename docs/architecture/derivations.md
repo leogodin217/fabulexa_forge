@@ -604,12 +604,13 @@ filter on; it raises `ExportError` on zero or more than one branch.
   structural `created_sim_time` column — non-NULL on every records row, set once at
   creation — so a record's genesis time is always exact, with no availability
   gating; row-state-events reads that column directly for its `c` event rather than
-  composing this shared primitive. Current-state reconstruction (a planned `base`
-  mode) and point-in-time replay-to-T (Stage-5 feature-store rows) both compose the
-  state-at resident above — the source exporter's snapshot delivery and the
-  playback seam's point-in-time answers are its consumers. The remaining gap for
-  the `base` and Stage-5 modes is at the *mode* level, not the derivation level:
-  the folds they need already exist.
+  composing this shared primitive. Current-state reconstruction and point-in-time
+  replay-to-T (feature-store rows) both compose the state-at resident above — the
+  source exporter's snapshot delivery and the playback seam's point-in-time answers
+  are its consumers, and the `base` exporter is the consumer for which the resident
+  *is* the whole output, materialized at three horizons: the tape's end (via the
+  horizon-free end-of-tape entry point), `slice_at: T` at horizon `T + 1`, and each
+  window's end under an incremental invocation ([`base.md`](base.md)).
 - **Single-branch.** Each derivation filters to the sole `fork_path`. Branch-aware
   derivation (paired counterfactuals, per-branch slices) is parked — the sanitised
   subset carries exactly one branch.
