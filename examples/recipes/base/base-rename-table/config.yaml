@@ -1,0 +1,21 @@
+# Recipe: base-rename-table
+# ============================================================
+# `base: {rename: [...]}` overrides one kind's derived default output table
+# name. The `table` key is SIDECAR IDENTITY — the base records table name
+# (`records__<kind>`), never the derived output name — so the entry below
+# targets `records__queue` (the queue kind's records table), NOT the string
+# `queue` (its default output name).
+#
+# This is a bare current-state dump otherwise: every table exports exactly
+# as it does in base-current-state, except `queue`'s output table is named
+# `triage_desk` instead of the default `queue`.
+#
+# Output: identical to base-current-state, but `queue` -> renamed to
+# `triage_desk` (and the default name `queue` no longer present).
+
+mode: base
+
+base:
+  rename:
+    - table: records__queue
+      name: triage_desk

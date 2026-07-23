@@ -30,6 +30,6 @@ phases:
     name: "Engine and wiring"
     demo: "docs/sprints/base-mode/demos/phase_4_base_export.py"
   5:
-    status: pending
+    status: complete
     name: "Recipe corpus and corrupter totality"
     demo: "docs/sprints/base-mode/demos/phase_5_base_recipes.py"

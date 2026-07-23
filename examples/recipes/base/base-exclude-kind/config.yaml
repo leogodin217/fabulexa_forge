@@ -1,0 +1,19 @@
+# Recipe: base-exclude-kind
+# ============================================================
+# `base: {exclude: {kinds: [...]}}` drops a records kind's flat table
+# entirely before export. Unlike source's exclude (which also drops every
+# membership table the excluded kind owns), base never emits membership
+# tables at all — it reads records__* + history only — so excluding a kind
+# here is simpler: the one flat table for that kind disappears, full stop.
+#
+# Excluding `queue` drops the `queue` output table. Every other kind's table
+# (patient, doctor, staff, admission) survives untouched.
+#
+# Output: four tables — patient, doctor, staff, admission — `queue` is
+# entirely absent.
+
+mode: base
+
+base:
+  exclude:
+    kinds: [queue]
