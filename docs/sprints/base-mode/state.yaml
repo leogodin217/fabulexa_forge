@@ -1,0 +1,35 @@
+sprint: base-mode
+parent_branch: design/base-mode
+baseline_sha: ab1921ed343f6aba8e8bd8613da25f563ee1bc5c
+started: 2026-07-23
+current_phase: 1
+
+capabilities:
+  - exporters: [base-mode, slice-at-point-in-time, base-incremental-snapshots]
+  - shared: [slice-only-omit-surface, optional-anchor-consumer]
+
+gates:
+  tests:
+    - "make test"
+
+phases:
+  1:
+    status: pending
+    name: "Config surface"
+    demo: "docs/sprints/base-mode/demos/phase_1_base_config.py"
+  2:
+    status: pending
+    name: "Plan"
+    demo: "docs/sprints/base-mode/demos/phase_2_base_plan.py"
+  3:
+    status: pending
+    name: "Render"
+    demo: "docs/sprints/base-mode/demos/phase_3_base_render.py"
+  4:
+    status: pending
+    name: "Engine and wiring"
+    demo: "docs/sprints/base-mode/demos/phase_4_base_export.py"
+  5:
+    status: pending
+    name: "Recipe corpus and corrupter totality"
+    demo: "docs/sprints/base-mode/demos/phase_5_base_recipes.py"
