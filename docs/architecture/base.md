@@ -1,53 +1,64 @@
----
-status: draft
----
+# Base Exporter
 
-# `base` Exporter Mode
+**Status:** Implemented. Code is the contract — see
+[`exporters/base/`](../../src/fabulexa_forge/exporters/base/)
+(`plan.py`, `renders.py`, `engine.py`),
+[`derivations/state_at.py`](../../src/fabulexa_forge/derivations/state_at.py),
+[`config/models.py`](../../src/fabulexa_forge/config/models.py) (`BaseConfig`), and
+[`tests/exporters/base/`](../../tests/exporters/base/),
+[`tests/config/test_base_config.py`](../../tests/config/test_base_config.py),
+[`tests/recipes/test_base_recipes.py`](../../tests/recipes/test_base_recipes.py),
+[`tests/integration/test_corrupt_base.py`](../../tests/integration/test_corrupt_base.py).
+Public API: [`exporters/base/engine.py`](../../src/fabulexa_forge/exporters/base/engine.py)
+(`export_base`, `build_base_query_specs`) and
+[`exporters/base/plan.py`](../../src/fabulexa_forge/exporters/base/plan.py)
+(`build_base_plan`).
 
-The flat single-branch projection: one row per record, reconstituted to current
-state (or to an as-of-T state), with no genre distinction and no change log. The
-last unshipped Stage-3 exporter mode. It closes the Stage-3 mode set
-(dimensional / source / streaming / **base**) and — by the position this doc
-takes — subsumes the Stage-5 point-in-time / feature-store export.
+The `mode: base` exporter is the flat single-branch projection: one row per
+record, reconstituted to current state (or to an as-of-T state), with no genre
+distinction and no change log. It closes the Stage-3 mode set (dimensional /
+source / streaming / **base**) and subsumes the Stage-5 point-in-time /
+feature-store export.
 
-## Problem
+## Why base exists
 
-The reader emits `records__<kind>` as a spine plus a long-form `history` SCD-2
-change log. Every shipped mode either preserves that change-log shape (source's
+The reader exposes `records__<kind>` as a spine plus a long-form `history` SCD-2
+change log. Every other mode either preserves that change-log shape (source's
 CDC render, streaming's event replay) or reshapes it into a warehouse
 (dimensional's star). None delivers the *merged result* — the flat current-truth
 table an incremental-ETL author is trying to build: one row per record, every
 tracked property carrying its latest reconstituted value, denormalized and
-ready to consume. There is also no way to ask "what did every record look like
-at sim-time T?" as a **dataset** — the state-at reconstruction ships as a
+ready to consume. Nor did any mode answer "what did every record look like at
+sim-time T?" as a **dataset**: the state-at reconstruction already shipped as a
 derivation and as source's per-window snapshot, but not as a standalone,
-whole-emit table output an author points a feature pipeline at.
+whole-emit table output an author can point a feature pipeline at. The closest
+shipped alternative — source with `change_delivery: snapshot` — keeps the genre
+trichotomy, requires an anchor, emits junction/reference/transaction tables too,
+and cannot pin a single point-in-time as a full export.
 
-Concretely, an author who wants "current state of all customers, flat, as of the
-end of the run" or "state of all customers as of sim-time 50, for a training
-label window" has no mode to select:
+## Surface
 
-```yaml
-# No mode: base exists. The closest shipped option is source with
-# change_delivery: snapshot — but that keeps the genre trichotomy, requires an
-# anchor, emits junction/reference/transaction tables too, and has no way to
-# pin a single point-in-time as a full export (snapshot needs a windowed run).
-mode: source
-source:
-  change_delivery: snapshot   # per-window snapshots; no single-T full export
-```
-
-## Solution
-
-Add `mode: base` — a records-only flat projection whose every output table is
-the **state-at** reconstruction of one records kind, materialized as a table.
+`mode: base` is a records-only flat projection whose every output table is the
+**state-at** reconstruction of one records kind, materialized as a table.
 With no slice pinned it renders each kind at the tape's end (current state);
 with `slice_at: T` it renders each kind as of an inclusive horizon; under an
 incremental invocation it renders each kind at each window's horizon. All three
-are entry points into the already-shipped state-at resident — base introduces
-**no new point-in-time reconstruction**. It is the flattened, already-merged
-counterpart to source: source hands the author the change log to merge; base
-hands the author the answer.
+are entry points into the already-shipped state-at resident — base carries
+**no point-in-time reconstruction of its own**. It is the flattened,
+already-merged counterpart to source: source hands the author the change log to
+merge; base hands the author the answer.
+
+| Module | Owns |
+|---|---|
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `ExportConfig.mode: Literal["dimensional", "source", "base"]`, `ExportConfig.base: BaseConfig \| None`; `BaseConfig` and its parse-time validators; the `mode_section_matches` `base` arm and the `base_slice_at_excludes_incremental` cross-field rule |
+| [`exporters/base/plan.py`](../../src/fabulexa_forge/exporters/base/plan.py) | `BaseTableSpec`, `BasePlan`; `build_base_plan` — kind enumeration (no classification), `exclude`, `slice_only` omission + notices, presentation defaults, `rename` resolution, the collision and reserved-name checks |
+| [`exporters/base/renders.py`](../../src/fabulexa_forge/exporters/base/renders.py) | `build_base_render_sql` — state-at composition at a horizon, anchor-or-raw-ns lifecycle rendering, cast-back to sidecar types, rename projection, the total `ORDER BY` |
+| [`exporters/base/engine.py`](../../src/fabulexa_forge/exporters/base/engine.py) | `export_base`, `build_base_query_specs` — plan → per-kind render at one resolved horizon → `write_mode` by full/sliced vs windowed → dispatch to the shared writer. `build_base_query_specs` is the pure compile surface; it takes no `base_relations` parameter (§ Relationship to the truncated tape) |
+| [`exporters/query_spec.py`](../../src/fabulexa_forge/exporters/query_spec.py) · [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py) | The mode-neutral compiled-table shape + write dispatch, and the cross-mode bookkeeping-name check base's plan calls |
+| [`derivations/state_at.py`](../../src/fabulexa_forge/derivations/state_at.py) | `build_state_at_sql`, `build_state_at_end_sql`, `STATE_AT_COLUMNS` — base's whole engine; owned by [`derivations.md`](derivations.md) |
+| [`errors.py`](../../src/fabulexa_forge/errors.py) | The `Base*` error hierarchy (`ExportError` subclasses) |
+| [`cli.py`](../../src/fabulexa_forge/cli.py) | `cmd_export` — dispatches `config.mode == "base"` to `export_base` |
+| [`incremental/driver.py`](../../src/fabulexa_forge/incremental/driver.py) | `export_window` — the `mode == "base"` branch calling `build_base_query_specs` with the window |
 
 ```yaml
 # Current-state full dump of every records kind — no section needed.
@@ -77,46 +88,47 @@ history          ─┼─▶  state-at resident  ─▶  flat  <kind>  table (o
                   └────────────────────────────────────────────────────────────
 ```
 
-## Affected Subsystems
+## What base touches
 
-- **Config models (`ExportConfig`)** — `mode` gains a third literal, `base`; a
-  new optional `base` section (`BaseConfig`) joins `dimensional` and `source`.
-  The discriminator validator gains a `base` arm (base's section is optional, a
-  bare `mode: base` is a valid full dump; the other two modes' sections are
-  forbidden). One new cross-field rule: `slice_at` and an `incremental` block
-  are mutually exclusive.
-- **A new `base` exporter** — a records-only compile that classifies nothing
+- **Config models (`ExportConfig`)** — `mode` carries a third literal, `base`;
+  an optional `base` section (`BaseConfig`) sits beside `dimensional` and
+  `source`. The discriminator validator has a `base` arm (base's section is
+  optional, a bare `mode: base` is a valid full dump; the other two modes'
+  sections are forbidden). One cross-field rule: `slice_at` and an
+  `incremental` block are mutually exclusive.
+- **The `base` exporter** — a records-only compile that classifies nothing
   (no genre trichotomy) and reshapes nothing (no star): every records kind maps
   to exactly one flat output table whose columns and rows are the state-at
-  resident's canonical relation. It composes the shipped state-at builders,
+  resident's canonical relation. It composes the state-at builders,
   the effective-anchor renderer, the `slice_only` policy, the notice channel,
   the operational presentation-name posture, and the writers.
-- **Derivations layer** — gains a new consumer, not new code. `build_state_at_sql`
+- **Derivations layer** — a new consumer, not new code. `build_state_at_sql`
   and `build_state_at_end_sql` (and their `STATE_AT_COLUMNS` relation) are
-  base's per-table engine. Base is the first mode for which state-at is the
+  base's per-table engine. Base is the mode for which state-at is the
   *whole* output rather than one delivery option.
-- **Incremental driver** — gains `base` as a third wrapped mode. Every base
+- **Incremental driver** — `base` is its third wrapped mode. Every base
   table is snapshot-delivered (reconstructed at the window horizon), so base
   wires into the existing window sequence, cursor, and fingerprint exactly as
   source's `change_delivery: snapshot` change-log kinds do — no new window
   derivation.
-- **`slice_only` export policy** — gains base as an omit-with-notice surface
+- **`slice_only` export policy** — base is an omit-with-notice surface
   (source-style), reusing the `slice-only-column-omitted` notice and the
   discriminator carve-out verbatim; a `rename` naming an omitted column errors.
-- **CLI (`fabulexa-forge export`)** — dispatches `mode: base` to the new
-  exporter. No new verb.
+- **CLI (`fabulexa-forge export`)** — dispatches `mode: base` to `export_base`.
+  No new verb.
 - **The Stage-5 point-in-time export** — this mode's `slice_at` *is* the
   "point-in-time reconstruction → ML feature-store rows" capability, so base
   delivers it directly rather than as a separate build (see § Point-in-time
-  subsumption). The Stage-5 membership / queue-state prong is a different grain
-  and is not subsumed.
+  subsumption); that roadmap item is retired. The Stage-5 membership /
+  queue-state prong is a different grain and is not subsumed — it remains
+  planned.
 
-## What Doesn't Change
+## Boundaries
 
 - **The state-at derivation.** Base composes `build_state_at_sql` /
   `build_state_at_end_sql` unchanged — same signatures, same
-  `STATE_AT_COLUMNS`, same exclusive-horizon arithmetic. No new reconstruction
-  path is written.
+  `STATE_AT_COLUMNS`, same exclusive-horizon arithmetic. Base writes no
+  reconstruction path of its own.
 - **The truncated-tape / playback seam.** Base is a CLI file exporter, not a
   playback consumer; it does not call `state(T)` and does not use the
   compile-indirection (`base_relations`) wrapping. It reaches state-at directly
@@ -125,7 +137,7 @@ history          ─┼─▶  state-at resident  ─▶  flat  <kind>  table (o
   emits no `membership__*` / junction / queue tables. The Stage-5 queue-state
   export is a separate derivation on a separate grain and is **not** subsumed.
 - **The `slice_only` invariant.** Base decides *how* it enforces the policy
-  (omit, source-style), never *whether*. No opt-out knob, no new YAML field.
+  (omit, source-style), never *whether*. No opt-out knob, no YAML field.
 - **The effective-anchor contract.** Base resolves through the one shared
   anchor and adds only its own lifecycle-timestamp rendering; it introduces no
   second anchor and no new precedence rule.
@@ -211,7 +223,7 @@ as-of-T value. Base is a new surface for one already-decided rule.
 - **Ordering** is the state-at resident's declared `(created_sim_time,
   record_id)`, over raw ns keys — never rendered timestamps.
 
-### Point-in-time subsumption (the position this doc takes)
+### Point-in-time subsumption
 
 **Base mode subsumes the Stage-5 point-in-time / ML-feature-store export.** A
 `mode: base` export with `slice_at: T` is exactly "replay `history` to sim-time
@@ -227,9 +239,9 @@ reconstitution. It is orthogonal to base's records-only flat projection and
 remains a separate future item.
 
 The build-order note's framing ("base likely subsumes Stage-5 point-in-time
-export through the playback surface") is honored with one refinement: base
-subsumes it through the **state-at derivation** the playback surface itself
-composes, reached directly by horizon rather than through the playback API.
+export through the playback surface") holds with one refinement: base subsumes
+it through the **state-at derivation** the playback surface itself composes,
+reached directly by horizon rather than through the playback API.
 
 ### Relationship to the truncated tape (why direct-horizon is equivalent)
 
@@ -300,8 +312,9 @@ class BaseConfig(StrictBaseModel):
 
     exclude: ExcludeDecl | None = None
     """Kinds and output tables dropped before export. `kinds` names records kinds;
-    `tables` names base's output table names (the reused model's semantics), which
-    `BaseExcludeResolvable` checks against the surviving output set."""
+    `tables` names base's output table names (the reused model's semantics) — which,
+    at exclude time, are the prefix-stripped kinds, base's only presentation default
+    before `rename`, so both checks resolve against the same known set."""
     rename: list[RenameEntry] | None = None
     """Per-table (`name`) and per-column (`columns`) output overrides. Each entry is
     matched on the sidecar `records__<kind>` name (`table`, keyed by sidecar
@@ -350,13 +363,13 @@ class BaseConfig(StrictBaseModel):
         """
 ```
 
-`ExportConfig` changes (described, not re-listed): `mode` becomes
+`ExportConfig` (described, not re-listed): `mode` is
 `Literal["dimensional", "source", "base"]`; a `base: BaseConfig | None = None`
-field is added; the `mode_section_matches` validator gains a `base` arm —
-`mode='base'` forbids the `dimensional` and `source` sections and requires no
-`base` section (a bare `mode: base` is a valid full dump). A new
-`base_slice_at_excludes_incremental` cross-field validator rejects a config that
-sets both `base.slice_at` and `incremental`.
+field sits beside the other two sections; the `mode_section_matches` validator
+carries a `base` arm — `mode='base'` forbids the `dimensional` and `source`
+sections and requires no `base` section (a bare `mode: base` is a valid full
+dump). The `base_slice_at_excludes_incremental` cross-field validator rejects a
+config that sets both `base.slice_at` and `incremental`.
 
 ### Plan Models
 
@@ -430,11 +443,23 @@ def build_base_plan(
         `prop__<p>` in sidecar declaration order), so it is derived, not stored.
 
     Raises:
-        ExportError: A `rename` entry names an omitted `slice_only` column, an
-            unresolvable table/column, or a presentation-name collision.
+        BaseRenameSliceOnly: A `rename` entry names an omitted `slice_only` column.
+        BaseRenameUnresolved: A `rename` entry's `table` is not a surviving
+            `records__<kind>`, or a `columns` key is not a state-at column identity.
+        BaseExcludeUnresolved: An `exclude.kinds`/`exclude.tables` entry matches
+            nothing base emits.
+        BaseNameCollision: Two output tables, or two columns of one output table,
+            share a name after presentation defaults and `rename`.
+        ExportError: A resolved output name is reserved under incremental export
+            (`_export_meta`/`_export_windows`/`*__rows`, `__valid_from_ns`,
+            `last_mutation_sim_time`) — checked always-on via
+            `exporters.reserved_names`, as source's check does, so a full export
+            and a later incremental drip on the same target agree.
         TableNotFoundError: A declared `records__<kind>` table is absent.
     """
 ```
+
+All four `Base*` errors are `ExportError` subclasses.
 
 ```python
 def build_base_render_sql(
@@ -511,6 +536,45 @@ def build_base_query_specs(
         ExportError: A base business rule fails (rename resolution or collision).
         TableNotFoundError: A declared `records__<kind>` table is absent.
     """
+
+
+def export_base(
+    emit: Emit,
+    config: ExportConfig,
+    out: Path,
+    fmt: Literal["csv", "duckdb"],
+    anchor: EffectiveAnchor | None,
+    notice_sink: NoticeSink,
+) -> dict[str, int]:
+    """
+    Run the base exporter and write the flat projection.
+
+    The full-export writer wrapper the CLI calls, mirroring `export_source`.
+    Builds the full-export base query specs (`window=None`, so the horizon is
+    `config.base.slice_at + 1` when set, else the tape's end), then dispatches to
+    the fmt-selected writer via the shared `write_query_specs` — minus source's
+    anchor requirement.
+
+    Args:
+        emit: The open emit.
+        config: The validated export config (`mode='base'`).
+        out: Output target — a directory receiving one `<table>.csv` per output
+            table (`fmt='csv'`), or the `.duckdb` file path to create
+            (`fmt='duckdb'`).
+        fmt: Output format; the CLI constrains the raw string before this point.
+        anchor: The resolved effective anchor, or None. Base does NOT require one
+            — None renders lifecycle timestamps as raw sim-time ns.
+        notice_sink: Receiver for plan notices (`slice-only-column-omitted`).
+
+    Returns:
+        Mapping of every output table name -> row count written (0-row tables are
+        still emitted, never dropped).
+
+    Raises:
+        ExportError: The single-branch guard or a base business rule fails.
+        ExportRuntimeError: A writer fails.
+        TableNotFoundError: A declared `records__<kind>` table is absent.
+    """
 ```
 
 The state-at signatures these compose are unchanged and are not redefined here.
@@ -547,12 +611,13 @@ def base_slice_at_excludes_incremental(self) -> Self:
 
 ### Business Rules
 
-| Rule | Checks | Error Message |
+| Error | Checks | Error Message |
 |---|---|---|
 | `BaseRenameSliceOnly` | A `base.rename` entry names a column omitted by the `slice_only` policy | `"rename targets column {column!r} on table {table!r}, which is omitted by the slice_only policy"` |
-| `BaseRenameResolvable` | Every `rename` `table` target is a surviving `records__<kind>` sidecar table (matched before prefix-stripping, disjoint per `entries_disjoint`) | `"rename targets table {table!r}, which is not a records kind base emits"` |
-| `BaseNameCollision` | No two output tables (after rename + presentation defaults) share a name | `"output table name {name!r} is produced by two kinds"` |
-| `BaseExcludeResolvable` | Every `exclude.kinds` entry names a real records kind; every `exclude.tables` entry names a surviving base output table | `"exclude names {name!r}, which base does not emit"` |
+| `BaseRenameUnresolved` | Every `rename` `table` target is a surviving `records__<kind>` sidecar table (matched before prefix-stripping, disjoint per `entries_disjoint`); every `columns` key is a state-at column identity of that kind | `"rename targets table {table!r}, which is not a records kind base emits"` · `"rename targets column {column!r} on table {table!r}, which is not a state-at column of this kind"` |
+| `BaseNameCollision` | No two output tables (after rename + presentation defaults) share a name, and no two columns of one output table do | `"output table name {name!r} is produced by two kinds"` · `"output column name {name!r} is produced by two columns on table {table!r}"` |
+| `BaseExcludeUnresolved` | Every `exclude.kinds` entry names a real records kind; every `exclude.tables` entry names a surviving base output table (pre-`rename`, i.e. the prefix-stripped kind) | `"exclude names {name!r}, which base does not emit"` |
+| Reserved names (`ExportError`) | No resolved output name collides with the cross-mode incremental bookkeeping names/suffixes (`_export_meta` / `_export_windows` / `*__rows` tables, a `__valid_from_ns` column) nor with the reserved presentation column `last_mutation_sim_time` — the shared [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py) check, always-on because base participates in incremental export, so a full export and a later drip on the same target agree | `"table {name!r}: name is reserved under incremental export"` · `"table {name!r}: column {column!r} is reserved under incremental export"` · `"table {name!r}: column {column!r} names the reserved last_mutation_sim_time column — it is sim-internal bookkeeping and is never emitted by base"` |
 
 `slice_only` omission itself is not a business-rule error — it is a notice
 (`slice-only-column-omitted`), emitted per surviving kind × omitted column,
@@ -608,9 +673,9 @@ before any data is written.
 
 | Document | Why |
 |---|---|
-| [`derivations.md`](../derivations.md) | The state-at / end-of-tape residents base composes as its whole engine |
-| [`playback.md`](../playback.md) | Shaped state and the bridging theorem that make direct-horizon equivalent |
-| [`slice-only.md`](../slice-only.md) · [`notices.md`](../notices.md) | The reused omission policy and the channel its notices flow through |
-| [`source.md`](../source.md) | Snapshot delivery (the same state-at composition), presentation-name posture, and `slice_only` omission shape base reuses |
-| [`anchor.md`](../anchor.md) · [`incremental.md`](../incremental.md) | The shared wallclock and window surfaces base wires into |
+| [`derivations.md`](derivations.md) | The state-at / end-of-tape residents base composes as its whole engine |
+| [`playback.md`](playback.md) | Shaped state and the bridging theorem that make direct-horizon equivalent |
+| [`slice-only.md`](slice-only.md) · [`notices.md`](notices.md) | The reused omission policy and the channel its notices flow through |
+| [`source.md`](source.md) | Snapshot delivery (the same state-at composition), presentation-name posture, and `slice_only` omission shape base reuses |
+| [`anchor.md`](anchor.md) · [`incremental.md`](incremental.md) | The shared wallclock and window surfaces base wires into |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | `temporal_class`, the MUST-NOT-present-as-of-T clause, and the records/`history` shapes |

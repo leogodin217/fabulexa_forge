@@ -7,7 +7,7 @@ records-category kind in the sidecar (base classifies nothing — no genre
 trichotomy, no sub-type split); (2) `exclude`; (3) operational presentation
 defaults (prefix-stripped table name, `record_id -> id`); (4) `rename`; (5) the
 collision and reserved-name checks. See
-`docs/architecture/pending/base.md` for the semantics this module implements
+`docs/architecture/base.md` for the semantics this module implements
 (no horizon here — render.py's concern).
 
 Layer-direction invariant: imports only the reader, the derivations layer
