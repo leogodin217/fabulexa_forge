@@ -42,7 +42,20 @@ Full suite: `uv run pytest --cov=src/fabulexa_forge --cov-report=term-missing` �
 
 ### Gate 5: Coverage
 
-- **finding 1** (observation): `exporters/base/plan.py:454-459` and `:460-464` — `_check_reserved_names`'s two column-level `raise ExportError` branches (a `base.rename` entry producing an output column named `last_mutation_sim_time`, and one producing a name caught by the generic `is_reserved_column_name` check, e.g. `__valid_from_ns`) have zero test coverage. The spec's Phase 2 test list only specifies a **table**-name reserved-name test (`_export_meta`, `*__rows`); no column-name case was ever specified or written, and both existing reserved-name tests in `test_plan.py` (`test_rename_producing_reserved_table_name_raises_export_error`, `test_rename_producing_reserved_rows_suffix_raises_export_error`) hit only the table-name branch. Per the review gate's explicit callout ("uncovered lines that are error conditions… even if 'shouldn't happen'") this should be flagged. Not a blocker — the logic is a straightforward mirror of the already-tested table-name path and of source's identically-shaped, identically-untested column-level branches (`exporters/source/plan.py:881-893`) — but a test would close the gap.
+- **finding 1** — **RESOLVED** by user request after the review round; see the resolution note below. (observation, as originally filed): `exporters/base/plan.py:454-459` and `:460-464` — `_check_reserved_names`'s two column-level `raise ExportError` branches (a `base.rename` entry producing an output column named `last_mutation_sim_time`, and one producing a name caught by the generic `is_reserved_column_name` check, e.g. `__valid_from_ns`) have zero test coverage. The spec's Phase 2 test list only specifies a **table**-name reserved-name test (`_export_meta`, `*__rows`); no column-name case was ever specified or written, and both existing reserved-name tests in `test_plan.py` (`test_rename_producing_reserved_table_name_raises_export_error`, `test_rename_producing_reserved_rows_suffix_raises_export_error`) hit only the table-name branch. Per the review gate's explicit callout ("uncovered lines that are error conditions… even if 'shouldn't happen'") this should be flagged. Not a blocker — the logic is a straightforward mirror of the already-tested table-name path and of source's identically-shaped, identically-untested column-level branches (`exporters/source/plan.py:881-893`) — but a test would close the gap.
+
+  **Resolution:** closed at the user's direction at the ACCEPT/FIX checkpoint.
+  `tests/exporters/base/test_plan.py` gained
+  `test_rename_producing_reserved_presentation_column_raises_export_error` and
+  `test_rename_producing_reserved_column_name_raises_export_error`, covering the
+  `last_mutation_sim_time` and `is_reserved_column_name` branches respectively.
+  Both assert exact `ExportError` message equality. `exporters/base/plan.py` is
+  now 137/137 statements, 100%, zero missing — verified independently. Test-only
+  change; no source file touched.
+
+  Observations 1 (spec-mandated `_omitted_slice_only_columns` duplication) and 2
+  (Gate 7 `__init__.py` spec-summary wording) were reviewed by the user at the same
+  checkpoint and **accepted as-is** — deliberately not fixed.
 
 ### Gate 7: Spec ↔ codebase
 
