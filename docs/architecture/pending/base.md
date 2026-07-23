@@ -62,7 +62,7 @@ base:
   exclude:
     kinds: [audit_log]
   rename:
-    - table: customer
+    - table: records__customer   # matched on the sidecar base-table name
       name: dim_customer_current
 rebase:                    # optional wallclock rendering (raw ns otherwise)
   base_date: 2020-01-01
@@ -105,10 +105,11 @@ history          ─┼─▶  state-at resident  ─▶  flat  <kind>  table (o
   discriminator carve-out verbatim; a `rename` naming an omitted column errors.
 - **CLI (`fabulexa-forge export`)** — dispatches `mode: base` to the new
   exporter. No new verb.
-- **Roadmap (`CAPABILITIES.md` / architecture `README.md`)** — the Stage-5
-  "Point-in-time reconstruction → ML feature-store rows" item is subsumed by
-  this mode (see § Point-in-time subsumption) and retired as a standalone
-  future item; the Stage-5 membership/queue-state item is untouched.
+- **The Stage-5 point-in-time export** — this mode's `slice_at` *is* the
+  "point-in-time reconstruction → ML feature-store rows" capability, so base
+  delivers it directly rather than as a separate build (see § Point-in-time
+  subsumption). The Stage-5 membership / queue-state prong is a different grain
+  and is not subsumed.
 
 ## What Doesn't Change
 
@@ -138,7 +139,7 @@ history          ─┼─▶  state-at resident  ─▶  flat  <kind>  table (o
 | Condition | Result |
 |---|---|
 | An emit with records kinds `K1…Kn` | One flat output table per kind; no junction, membership, reference, or fact tables |
-| A records kind `K` | Exactly one output table: `STATE_AT_COLUMNS` for `K` — `record_id`, `presentation_id` (when the kind carries it), `created_sim_time`, `active`, `deactivated_at`, then one `prop__<p>` per surviving property in sidecar column-declaration order |
+| A records kind `K` | Exactly one output table: the state-at column set for `K` — the `STATE_AT_COLUMNS` prefix (`record_id`, `created_sim_time`, `active`, `deactivated_at`), then `presentation_id` (when the kind carries it), then one `prop__<p>` per surviving property in sidecar column-declaration order |
 | A tracked property | Its most-recent `history.value` at-or-before the horizon (raw slice value at the tape's end); `NULL` when no history precedes the horizon |
 | A constant (untracked) property | Its current records value — the same declared temporal-honesty exception every state-at consumer shares |
 | A `slice_only` property | Omitted with a notice (§ The `slice_only` posture) |
@@ -191,13 +192,22 @@ as-of-T value. Base is a new surface for one already-decided rule.
 
 - **Operational presentation-name posture.** Output table names are the
   prefix-stripped kind (`records__customer` → `customer`) and `record_id` →
-  `id`, matching source's defaults, overridable via `rename`; a name collision
-  fails fast. Author-verbatim `name`s win.
+  `id`, matching source's defaults. Both are overridable via `rename`: a `name`
+  overrides the table name, a `columns` entry overrides a column keyed on the
+  state-at column identity (`record_id`, `presentation_id`, `created_sim_time`,
+  `active`, `deactivated_at`, `prop__<p>` — the pre-default identity, so
+  `record_id`, not `id`). A name collision **fails fast** — base emits one table
+  per kind and never combines kinds into one table. Author-verbatim `name`s win.
 - **Wallclock rendering is optional.** When the effective anchor resolves
   (`rebase` / `--base-date` / sidecar `runtime`), lifecycle timestamps render
   through the shared `render_anchor_timestamp_expr`; absent an anchor, base
   emits raw `sim_time` `BIGINT` columns — the dimensional-style raw-ns fallback.
   Unlike source, **base does not require an anchor.**
+- **Column typing.** Data columns (`prop__<p>`, `presentation_id`) are cast back
+  to their declared sidecar types — the state-at resident's codec-VARCHAR
+  after-image is reconstituted to the column's type, exactly as source's snapshot
+  delivery. Base delivers a typed table, not an all-string one. Lifecycle
+  timestamps follow the wallclock / raw-ns rule above; `active` is boolean.
 - **Ordering** is the state-at resident's declared `(created_sim_time,
   record_id)`, over raw ns keys — never rendered timestamps.
 
@@ -238,9 +248,12 @@ truncated world. Base has no such structure to keep consistent.
 
 A base export over a corrupted emit surfaces the corrupter's declared defects
 unchanged, never manufacturing new ones (Principle #3), and never special-cased.
-State-at is a total function of structurally-conformant input: a tracked value
-whose corrupted `history` text does not parse reconstructs `NULL` via `TRY_CAST`;
-no row a semantic defect made weird is dropped or errored.
+Base casts each data column back to its sidecar type (§ Presentation, "Column
+typing") — exactly as source's snapshot delivery does — so totality rests on the
+corrupter family's value transforms being **type-preserving**: a corrupted
+`history.value` remains a valid instance of its column's declared type, so the
+cast-back succeeds and the defect surfaces *in* the reconstructed value rather than
+dropping or erroring a row. No row a semantic defect made weird is dropped.
 
 ## Configuration
 
@@ -250,18 +263,20 @@ mode: base
 base:                      # optional; omit entirely for a bare current-state dump
   slice_at: 50             # optional point-in-time horizon (sim-time ns, inclusive)
   exclude:
-    kinds: [audit_log]     # kinds dropped before export
-    tables: []
+    kinds: [audit_log]     # records kinds dropped before export
+    # tables: [customer]   # optional; base output table names (non-empty when present)
   rename:
-    - table: customer      # base/state-at source name
+    - table: records__customer   # matched on the sidecar base-table name
       name: dim_customer_current
 
 rebase:                    # optional; raw ns when omitted
   base_date: 2020-01-01
   timezone: America/New_York
 
-incremental:               # optional; mutually exclusive with base.slice_at
-  period: day
+# incremental is an ALTERNATIVE to base.slice_at above — the two are mutually
+# exclusive (§ Validation Rules), so a real config sets at most one:
+# incremental:
+#   period: day            # per-window snapshots instead of a single pinned horizon
 ```
 
 | Field | Type | Required | Description |
@@ -269,8 +284,8 @@ incremental:               # optional; mutually exclusive with base.slice_at
 | `mode` | `Literal["dimensional","source","base"]` | Yes | `base` selects this mode |
 | `base` | `BaseConfig \| None` | No | Escape hatches + optional slice; omit for a bare current-state full dump |
 | `base.slice_at` | `int \| None` | No | Inclusive point-in-time horizon (sim-time ns); `≥ 0`. Absent → tape's end. Forbidden with `incremental` |
-| `base.exclude` | `ExcludeDecl \| None` | No | Kinds / sidecar tables dropped before export (reused model) |
-| `base.rename` | `list[RenameEntry] \| None` | No | Per-table output-name overrides (reused model); targets must be disjoint |
+| `base.exclude` | `ExcludeDecl \| None` | No | `kinds` (records kinds) / `tables` (base output table names, per the reused model) dropped before export |
+| `base.rename` | `list[RenameEntry] \| None` | No | Per-table (`name`) and per-column (`columns`) output overrides (reused model). Each entry is matched on the sidecar `records__<kind>` name (`table`, keyed by sidecar identity); `columns` keys are state-at column identities. `sub_type` is rejected (base never splits a kind); `table` targets must be disjoint |
 | `rebase` | `RebaseConfig \| None` | No | Shared effective-anchor knobs; raw ns when absent (not required) |
 | `incremental` | `IncrementalConfig \| None` | No | Per-window snapshot cadence; forbidden with `base.slice_at` |
 
@@ -284,9 +299,16 @@ class BaseConfig(StrictBaseModel):
     point-in-time slice. Omit the whole section for a bare current-state dump."""
 
     exclude: ExcludeDecl | None = None
-    """Kinds and sidecar tables dropped before export."""
+    """Kinds and output tables dropped before export. `kinds` names records kinds;
+    `tables` names base's output table names (the reused model's semantics), which
+    `BaseExcludeResolvable` checks against the surviving output set."""
     rename: list[RenameEntry] | None = None
-    """Per-table output-name overrides; targets must be disjoint."""
+    """Per-table (`name`) and per-column (`columns`) output overrides. Each entry is
+    matched on the sidecar `records__<kind>` name (`table`, keyed by sidecar
+    identity, as source does); `columns` keys are state-at column identities
+    (`record_id`, `presentation_id`, `created_sim_time`, `active`, `deactivated_at`,
+    `prop__<p>`). `sub_type` is not applicable — base never splits a kind — and is
+    rejected. `table` targets must be disjoint."""
     slice_at: int | None = None
     """Inclusive point-in-time horizon in sim-time ns. Absent renders each kind
     at the tape's end (current state). Mutually exclusive with an incremental
@@ -310,11 +332,21 @@ class BaseConfig(StrictBaseModel):
         """
 
     @model_validator(mode="after")
-    def entries_disjoint(self) -> Self:
-        """No two rename entries share the same (table, sub_type) target.
+    def rename_no_sub_type(self) -> Self:
+        """No base rename entry sets `sub_type` — base emits one table per kind and
+        never splits, so a split-unit selector is meaningless.
 
         Raises:
-            ValueError: Two rename entries target the same (table, sub_type).
+            ValueError: A rename entry sets `sub_type`.
+        """
+
+    @model_validator(mode="after")
+    def entries_disjoint(self) -> Self:
+        """No two rename entries share the same `table` target — base has one output
+        table per kind, so `table` alone is the key.
+
+        Raises:
+            ValueError: Two rename entries target the same table.
         """
 ```
 
@@ -326,13 +358,50 @@ field is added; the `mode_section_matches` validator gains a `base` arm —
 `base_slice_at_excludes_incremental` cross-field validator rejects a config that
 sets both `base.slice_at` and `incremental`.
 
+### Plan Models
+
+```python
+@dataclass(frozen=True)
+class BaseTableSpec:
+    """One surviving records kind's resolved flat-output shape — time-agnostic.
+
+    Everything the render step needs except the horizon: the source kind, its
+    output table name, the bare property names to reconstruct (post `slice_only`
+    omission, discriminator carve-out retained), whether the kind carries a
+    presentation_id, and the resolved column-rename map."""
+
+    kind: str
+    """The records kind (the `records__<kind>` suffix)."""
+    table_name: str
+    """The output table name after presentation defaults and `rename`."""
+    properties: frozenset[str]
+    """Bare property names to reconstruct, passed straight to the state-at builder;
+    `slice_only` omissions already removed, an exempt discriminator retained."""
+    has_presentation_id: bool
+    """Whether the kind carries presentation_id. The state-at builder decides this
+    itself from the sidecar (it takes no presentation flag); base keeps the bit to
+    drive its own presentation-name projection — whether to project and `rename` a
+    `presentation_id` column in the wrapper."""
+    column_renames: Mapping[str, str]
+    """State-at column identity → output name; includes the `record_id → id`
+    default unless a `rename` entry overrides it."""
+
+
+@dataclass(frozen=True)
+class BasePlan:
+    """The time-agnostic base plan: one `BaseTableSpec` per surviving kind, in
+    deterministic sidecar kind-declaration order. Identical for a full, a sliced,
+    and a windowed export — the horizon is supplied at render, never here."""
+
+    tables: tuple[BaseTableSpec, ...]
+```
+
 ### Functions
 
 ```python
 def build_base_plan(
     sidecar: Sidecar,
     config: BaseConfig | None,
-    anchor: EffectiveAnchor | None,
     notice_sink: NoticeSink,
 ) -> BasePlan:
     """
@@ -351,12 +420,14 @@ def build_base_plan(
         sidecar: The reader's narrowing view of `base.json`; source of kinds,
             declared property order, `temporal_class`, and `subtype_values`.
         config: The `base` section, or None for a bare current-state dump.
-        anchor: The resolved effective anchor, or None to render raw ns.
         notice_sink: Required caller-supplied sink for omission notices.
 
     Returns:
-        A BasePlan: per-kind output table name and ordered column set, ready for
-        the engine to render at a caller-chosen horizon.
+        A `BasePlan`: one `BaseTableSpec` per surviving kind (output name, bare
+        property set, presentation_id flag, column-rename map), ready for
+        `build_base_render_sql` to render at a caller-chosen horizon. Column
+        emission order is fixed (STATE_AT_COLUMNS prefix, presentation_id, then
+        `prop__<p>` in sidecar declaration order), so it is derived, not stored.
 
     Raises:
         ExportError: A `rename` entry names an omitted `slice_only` column, an
@@ -365,12 +436,84 @@ def build_base_plan(
     """
 ```
 
-Rendering a `BasePlan` at a horizon composes the shipped derivations verbatim:
-`build_state_at_end_sql(sidecar, fork_path, kind, properties)` for a full
-current-state export, `build_state_at_sql(sidecar, fork_path, kind, properties,
-horizon_ns)` for `slice_at: T` (`horizon_ns = T + 1`) and for each incremental
-window (`horizon_ns = end_ns`). These signatures are unchanged and are not
-redefined here.
+```python
+def build_base_render_sql(
+    sidecar: Sidecar,
+    fork_path: str,
+    spec: BaseTableSpec,
+    anchor: EffectiveAnchor | None,
+    horizon_ns: int | None,
+) -> str:
+    """Render one `BaseTableSpec` to a complete, deterministic SELECT at a horizon.
+
+    Base's counterpart to source's `build_snapshot_render_sql`. Composes the shipped
+    state-at derivation verbatim — `build_state_at_end_sql(sidecar, fork_path,
+    spec.kind, spec.properties)` when `horizon_ns is None` (the structural tape's
+    end, current state), `build_state_at_sql(sidecar, fork_path, spec.kind,
+    spec.properties, horizon_ns)` otherwise — then wraps the raw relation with base's
+    own presentation: the lifecycle timestamps `created_sim_time` and
+    `deactivated_at` render wallclock through `render_anchor_timestamp_expr` when
+    `anchor` is set and stay raw sim-time `BIGINT` otherwise; `prop__<p>` and
+    `presentation_id` cast back from the state-at codec VARCHAR to their sidecar
+    types (as source's snapshot render does); every column is projected under
+    `spec.column_renames` (including `record_id → id`). Never uses the
+    compile-indirection (`base_relations`) wrapping. Ordered by the state-at
+    resident's `(created_sim_time, record_id)` over raw ns.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        spec: The resolved per-kind flat-output shape from `build_base_plan`.
+        anchor: The resolved effective anchor, or None to emit raw sim-time ns.
+        horizon_ns: The exclusive reconstruction horizon — `T + 1` for `slice_at: T`,
+            a window's `end_ns` under incremental — or None for the tape's end.
+
+    Returns:
+        A complete SELECT producing the flat table, ordered by
+        `(created_sim_time, record_id)`.
+
+    Raises:
+        TableNotFoundError: `records__<kind>` is absent (propagated from state-at).
+    """
+
+
+def build_base_query_specs(
+    emit: Emit,
+    config: ExportConfig,
+    anchor: EffectiveAnchor | None,
+    window: Window | None,
+    notice_sink: NoticeSink,
+) -> list[QuerySpec]:
+    """Compile the base plan to writer-ready QuerySpecs at one horizon.
+
+    Base's counterpart to `build_source_query_specs`, and the entry point the
+    incremental driver's new `mode == 'base'` branch and the full-export CLI path
+    both call. Builds the plan once (threading `notice_sink`), then one QuerySpec per
+    surviving kind via `build_base_render_sql`. The horizon is `window.end_ns` when
+    `window` is set (a per-window snapshot), else `config.base.slice_at + 1` when
+    `slice_at` is set, else None (the tape's end). Every base spec is view-less;
+    `write_mode` is `'create'` for a full or sliced export and `'replace'` for a
+    windowed snapshot — exactly source's snapshot delivery. `base_relations` is not a
+    parameter: base never uses the compile-indirection wrapping.
+
+    Args:
+        emit: The open emit.
+        config: The validated export config (`mode='base'`).
+        anchor: The resolved effective anchor, or None to emit raw sim-time ns.
+            Not required — unlike source, base falls back to raw ns.
+        window: The window to snapshot at, or None for a full or sliced export.
+        notice_sink: Receiver for `slice-only-column-omitted` notices.
+
+    Returns:
+        One QuerySpec per surviving kind, in deterministic sidecar order.
+
+    Raises:
+        ExportError: A base business rule fails (rename resolution or collision).
+        TableNotFoundError: A declared `records__<kind>` table is absent.
+    """
+```
+
+The state-at signatures these compose are unchanged and are not redefined here.
 
 ## Validation Rules
 
@@ -384,6 +527,11 @@ def at_least_one_field(self) -> Self:
 @model_validator(mode="after")
 def slice_at_non_negative(self) -> Self:
     """BaseConfig: `slice_at` ≥ 0 when set."""
+
+@model_validator(mode="after")
+def rename_no_sub_type(self) -> Self:
+    """BaseConfig: reject a `rename` entry that sets `sub_type` — base never splits
+    a kind, so a split-unit selector is meaningless."""
 
 @model_validator(mode="after")
 def mode_section_matches(self) -> Self:
@@ -402,9 +550,9 @@ def base_slice_at_excludes_incremental(self) -> Self:
 | Rule | Checks | Error Message |
 |---|---|---|
 | `BaseRenameSliceOnly` | A `base.rename` entry names a column omitted by the `slice_only` policy | `"rename targets column {column!r} on table {table!r}, which is omitted by the slice_only policy"` |
-| `BaseRenameResolvable` | Every `rename` table target is a surviving base output table | `"rename targets table {table!r}, which base does not emit"` |
+| `BaseRenameResolvable` | Every `rename` `table` target is a surviving `records__<kind>` sidecar table (matched before prefix-stripping, disjoint per `entries_disjoint`) | `"rename targets table {table!r}, which is not a records kind base emits"` |
 | `BaseNameCollision` | No two output tables (after rename + presentation defaults) share a name | `"output table name {name!r} is produced by two kinds"` |
-| `BaseExcludeResolvable` | Every `exclude.kinds` / `exclude.tables` entry names a real sidecar kind/table | `"exclude names {name!r}, which is not in the sidecar"` |
+| `BaseExcludeResolvable` | Every `exclude.kinds` entry names a real records kind; every `exclude.tables` entry names a surviving base output table | `"exclude names {name!r}, which base does not emit"` |
 
 `slice_only` omission itself is not a business-rule error — it is a notice
 (`slice-only-column-omitted`), emitted per surviving kind × omitted column,
