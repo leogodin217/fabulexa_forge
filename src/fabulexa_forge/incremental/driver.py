@@ -130,11 +130,12 @@ def export_window(
     """Run one pure windowed export (the body --next wraps; also --from/--to).
 
     The compile step dispatches on `config.mode`: `source` calls
-    `build_source_query_specs`; `dimensional` calls `build_query_specs`;
-    both thread notice_sink to their compile — the source mode contributes
-    only its windowed compile, the window math, cursor, fingerprint, drained
-    detection, and staging below are mode-neutral. Dispatches to the fmt's
-    windowed write path. fingerprint is None iff window.index is None (an
+    `build_source_query_specs`; `base` calls `build_base_query_specs`;
+    `dimensional` calls `build_query_specs`; all three thread notice_sink to
+    their compile — the mode-specific compile contributes only the
+    QuerySpecs, the window math, cursor, fingerprint, drained detection, and
+    staging below are mode-neutral. Dispatches to the fmt's windowed write
+    path. fingerprint is None iff window.index is None (an
     explicit range): the output is then a standalone artifact — a fresh
     .duckdb / a single drop directory at out (a CSV range stages at the
     sibling <out parent>/.tmp_<label> and renames to out), refused if out
@@ -186,6 +187,10 @@ def export_window(
         specs = build_source_query_specs(
             emit, config, anchor, window, notice_sink, base_relations=None
         )
+    elif config.mode == "base":
+        from fabulexa_forge.exporters.base.engine import build_base_query_specs
+
+        specs = build_base_query_specs(emit, config, anchor, window, notice_sink)
     else:
         from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 

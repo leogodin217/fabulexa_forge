@@ -130,3 +130,79 @@ def build_base_test_emit(tmp_path: Path) -> Path:
         },
     )
     return tmp_path
+
+
+_DOCTOR_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "BIGINT"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+]
+
+
+def build_multi_kind_base_emit(tmp_path: Path) -> Path:
+    """Build a two-kind emit: `patient` (the render fixture's 3 rows) declared
+    first in sidecar order, `doctor` (zero rows) declared second.
+
+    The engine's kind-order and zero-row-still-emitted contract tests: one
+    QuerySpec per surviving kind in sidecar declaration order, and a kind
+    whose table materializes no rows is still compiled and written.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__patient", _PATIENT_COLUMNS))
+    conn.execute(_create_ddl("records__doctor", _DOCTOR_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "p001", 1001, 0, True, 4 * DAY_NS, 0, "discharged", 30],
+    )
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            {
+                "name": "records__patient",
+                "category": "records",
+                "record_kind": "patient",
+                "columns": _PATIENT_COLUMNS,
+                "rows": 1,
+            },
+            {
+                "name": "records__doctor",
+                "category": "records",
+                "record_kind": "doctor",
+                "columns": _DOCTOR_COLUMNS,
+                "rows": 0,
+            },
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": _HISTORY_COLUMNS,
+                "rows": 0,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 5 * DAY_NS}],
+        extra={
+            "record_roles": {"patient": "dimension", "doctor": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path

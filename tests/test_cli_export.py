@@ -35,6 +35,7 @@ from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
+from exporters.base._base_fixtures import build_base_test_emit
 from exporters.source._source_fixtures import build_day_scale_source_emit
 from fabulexa_forge.cli import cmd_export, main
 from fabulexa_forge.config.models import (
@@ -1284,6 +1285,54 @@ def test_cmd_export_source_mode_from_to_supported(tmp_path: Path) -> None:
         "duckdb",
         range_from="2024-01-01",
         range_to="2024-01-02",
+    )
+    assert exit_code == 0
+    assert out.exists()
+
+
+def write_base_config(config_path: Path) -> None:
+    """Write a bare `mode: base` export config (no exclude/rename/slice_at).
+
+    Args:
+        config_path: Path to write the YAML config to.
+    """
+    config_path.write_text("mode: base\n", encoding="utf-8")
+
+
+def test_cmd_export_base_mode_duckdb_success(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """mode: base dispatches to export_base and prints per-table counts."""
+    emit_subdir = tmp_path / "emit"
+    emit_subdir.mkdir()
+    emit_dir = build_base_test_emit(emit_subdir)
+    config_path = tmp_path / "config.yaml"
+    write_base_config(config_path)
+    out_db = tmp_path / "out.duckdb"
+
+    exit_code = cmd_export(emit_dir, config_path, out_db, "duckdb")
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert out_db.exists()
+    assert "patient: 3 rows" in captured.out
+
+
+def test_cmd_export_base_mode_from_to_supported(tmp_path: Path) -> None:
+    """mode: base + --from/--to writes a standalone range export."""
+    emit_subdir = tmp_path / "emit"
+    emit_subdir.mkdir()
+    emit_dir = build_base_test_emit(emit_subdir)
+    config_path = tmp_path / "config.yaml"
+    write_base_config(config_path)
+    out = tmp_path / "range.duckdb"
+
+    exit_code = cmd_export(
+        emit_dir,
+        config_path,
+        out,
+        "duckdb",
+        range_from="2024-01-01",
+        range_to="2024-01-03",
     )
     assert exit_code == 0
     assert out.exists()
