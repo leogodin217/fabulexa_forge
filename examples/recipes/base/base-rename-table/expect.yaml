@@ -1,0 +1,33 @@
+tables:
+  patient:
+    columns:
+      [
+        id,
+        created_sim_time,
+        active,
+        deactivated_at,
+        prop__status,
+        prop__name,
+        prop__doctor_id,
+        prop__primary_staff_id,
+        prop__backup_staff_id,
+      ]
+    row_count: 2
+  doctor:
+    columns: [id, created_sim_time, active, deactivated_at, prop__name]
+    row_count: 1
+  staff:
+    columns:
+      [id, created_sim_time, active, deactivated_at, prop__name, prop__staff_type]
+    row_count: 2
+  admission:
+    columns: [id, created_sim_time, active, deactivated_at, prop__ward]
+    row_count: 2
+  # The renamed table — `queue` no longer appears; `triage_desk` does, with
+  # the author-verbatim table name and its output columns unchanged.
+  triage_desk:
+    columns: [id, created_sim_time, active, deactivated_at, prop__name]
+    row_count: 1
+    contains_rows:
+      - id: q001
+        prop__name: Triage

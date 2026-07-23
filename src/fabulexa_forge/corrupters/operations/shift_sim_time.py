@@ -375,8 +375,7 @@ class ShiftSimTimeCorrupter:
         # series' genesis tick off its record's created_sim_time (collide / swap
         # pre-filter to rows with a strict predecessor and never touch it).
         missing_genesis = {
-            key: series_missing_genesis_row(state, fork_path, *key)
-            for key in involved
+            key: series_missing_genesis_row(state, fork_path, *key) for key in involved
         }
 
         row_category = row_category_for_table(history_table.spec)

@@ -1,0 +1,20 @@
+# Recipe: base-slice-at
+# ============================================================
+# `base.slice_at: T` reconstructs every kind at an author-chosen point-in-time
+# horizon rather than the tape's end — the recipe that makes the point-in-time
+# capability author-visible.
+#
+# T = 2*DAY = 172800000000000 ns. p001's `status` history is
+# pending@1*DAY, active@2*DAY, discharged@3*DAY. At T=2*DAY (inclusive —
+# every event with sim_time <= T counts, nothing after), the reconstruction
+# sees pending and active but NOT discharged: p001.status = 'active', not
+# 'discharged' as it is at the tape's end (see base-current-state).
+#
+# Output: same five tables as base-current-state (no record in this fixture
+# is created at-or-after T, so no table shrinks), but p001's reconstructed
+# `status` differs from the tape's-end recipe.
+
+mode: base
+
+base:
+  slice_at: 172800000000000 # 2*DAY

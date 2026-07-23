@@ -995,11 +995,7 @@ def series_missing_genesis_row(
     if records_working is None:
         return False
     col_spec = next(
-        (
-            c
-            for c in records_working.spec.columns
-            if c.name == f"prop__{property_name}"
-        ),
+        (c for c in records_working.spec.columns if c.name == f"prop__{property_name}"),
         None,
     )
     if col_spec is None or col_spec.history_tracked is not True:

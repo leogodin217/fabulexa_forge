@@ -1,0 +1,19 @@
+# Recipe: base-current-state
+# ============================================================
+# `mode: base` with NO `base` section — the bare current-state dump. One flat
+# table per surviving records kind, reconstructed at the tape's end: every
+# tracked property (e.g. patient.status) carries its LATEST history value,
+# not the point-in-time value at any earlier instant.
+#
+# Base classifies nothing (no genre split, no sub-type split like source):
+# every records-category kind — patient, doctor, staff, admission, queue —
+# yields exactly one output table, named after the kind, with `record_id`
+# presented as `id` and every other column presentation-verbatim
+# (`prop__<p>` keeps its prefix; base has no rename here to strip it).
+#
+# Output: five tables — patient, doctor, staff, admission, queue — each at
+# the tape's end. p001 (created@1*DAY) has three history events for
+# `status` (pending@1*DAY, active@2*DAY, discharged@3*DAY); at the tape's
+# end the reconstruction takes the LATEST one: discharged.
+
+mode: base

@@ -140,11 +140,11 @@ def _dispatch_export(
     range_to: str | None,
     notice_sink: "NoticeSink",
 ) -> int:
-    """Run the full, next-window, or explicit-range export for either mode.
+    """Run the full, next-window, or explicit-range export for any mode.
 
     The `--next` / `--from`/`--to` leaves call the incremental driver, which
-    dispatches on `config.mode` internally (dimensional vs. source engine
-    compile). The full-export leaf dispatches here on `config.mode`.
+    dispatches on `config.mode` internally (dimensional vs. source vs. base
+    engine compile). The full-export leaf dispatches here on `config.mode`.
 
     Args:
         emit: The open emit.
@@ -188,6 +188,10 @@ def _dispatch_export(
         from fabulexa_forge.exporters.source.engine import export_source
 
         full_counts = export_source(emit, config, out, fmt, anchor, notice_sink)
+    elif config.mode == "base":
+        from fabulexa_forge.exporters.base.engine import export_base
+
+        full_counts = export_base(emit, config, out, fmt, anchor, notice_sink)
     else:
         from fabulexa_forge.exporters.dimensional.engine import export_dimensional
 
@@ -210,10 +214,10 @@ def cmd_export(
     """`fabulexa-forge export` — full, next-window, or explicit-range export.
 
     Dispatches on `config.mode` throughout: `dimensional` routes to the
-    dimensional engine; `source` routes to the source engine. Both support
-    the full export and the `--next` / `--from`/`--to` incremental leaves
-    identically — the incremental driver dispatches on `config.mode`
-    internally (§ `_dispatch_export`).
+    dimensional engine; `source` routes to the source engine; `base` routes
+    to the base engine. All three support the full export and the `--next` /
+    `--from`/`--to` incremental leaves identically — the incremental driver
+    dispatches on `config.mode` internally (§ `_dispatch_export`).
 
     Args:
         emit_dir: Directory holding run.duckdb + base.json.

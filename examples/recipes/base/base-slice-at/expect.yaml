@@ -1,0 +1,39 @@
+tables:
+  patient:
+    columns:
+      [
+        id,
+        created_sim_time,
+        active,
+        deactivated_at,
+        prop__status,
+        prop__name,
+        prop__doctor_id,
+        prop__primary_staff_id,
+        prop__backup_staff_id,
+      ]
+    row_count: 2
+    contains_rows:
+      # At T=2*DAY, p001's reconstructed status is 'active' (the value as of
+      # 2*DAY), NOT 'discharged' (which only takes effect at 3*DAY, after
+      # this horizon) — the point-in-time capability, author-visible.
+      - id: p001
+        active: true
+        deactivated_at: null
+        prop__status: active
+        prop__name: Alice
+      - id: p002
+        prop__status: pending
+  doctor:
+    columns: [id, created_sim_time, active, deactivated_at, prop__name]
+    row_count: 1
+  staff:
+    columns:
+      [id, created_sim_time, active, deactivated_at, prop__name, prop__staff_type]
+    row_count: 2
+  admission:
+    columns: [id, created_sim_time, active, deactivated_at, prop__ward]
+    row_count: 2
+  queue:
+    columns: [id, created_sim_time, active, deactivated_at, prop__name]
+    row_count: 1

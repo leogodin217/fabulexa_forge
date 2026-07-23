@@ -21,19 +21,21 @@ against a base-layer emit today.
 
 **Stage** tags reference the roadmap in
 [`architecture/README.md`](architecture/README.md) (1 reader · 2 dimensional ·
-3 source/base/streaming · 4 corrupter · 5 queue-state + point-in-time). The Stage-1 reader +
+3 source/base/streaming · 4 corrupter · 5 queue-state). The Stage-1 reader +
 conformance (`fabulexa-forge validate`) and the Stage-2 dimensional exporter (`fabulexa-forge
 export` + `init`, CSV + DuckDB) have shipped, along with two cross-mode surfaces —
-timestamp rebasing and incremental export, both wired over the dimensional and source
-modes. The derivations layer (versioned-intervals + reference-resolution +
+timestamp rebasing and incremental export, the latter wired over the dimensional,
+source, and base modes. The derivations layer (versioned-intervals + reference-resolution +
 row-state-events + membership-events + state-at residents, the single-branch guard)
-has shipped, composed by the dimensional, streaming, and source modes. The Stage-3
-streaming exporter (`fabulexa-forge stream` — `state-changes` `c`/`u`/`d` CDC and
-`membership-events` `join`/`leave` content) and the Stage-3 source exporter
-(`mode: source` — the change-log/reference/transaction/junction genre trichotomy,
-`change_delivery: snapshot`) have shipped, as has the Stage-4 corrupter family
-(`fabulexa-forge corrupt`); the remaining Stage-3 mode (base) and Stage 5
-(queue-state + point-in-time export) are planned.
+has shipped, composed by the dimensional, streaming, source, and base modes. All three
+remaining Stage-3 modes have shipped — streaming (`fabulexa-forge stream` —
+`state-changes` `c`/`u`/`d` CDC and `membership-events` `join`/`leave` content),
+source (`mode: source` — the change-log/reference/transaction/junction genre
+trichotomy, `change_delivery: snapshot`), and base (`mode: base` — the flat
+one-row-per-record projection with an optional `slice_at` point-in-time horizon) —
+as has the Stage-4 corrupter family (`fabulexa-forge corrupt`). Stage 5's
+queue-state export remains planned; its point-in-time prong is retired, delivered
+by `mode: base`.
 
 ---
 
@@ -95,9 +97,29 @@ See [`architecture/reader.md`](architecture/reader.md) and
 
 Each mode reads the same emit and writes a different target shape.
 
-- ○ **base** *(Stage 3)* — flat single-branch projection. Current-state reconstitution
-  from long-form `history`, optional point-in-time slice, timestamp rebasing. *Teaches:
-  incremental ETL, SCD merge.* Uses `records__*` + `history`.
+- ✓ **base** *(Stage 3)* — flat single-branch projection: one table per records kind,
+  one row per record, every tracked property carrying its reconstituted value. No
+  genre trichotomy and no classification — every records kind yields exactly one
+  table; membership, junction, and fact tables are never emitted. It composes the
+  shipped state-at derivation as its *whole* engine (no new point-in-time
+  reconstruction path) at one of three horizons: the tape's end by default (current
+  state, via the end-of-tape entry point), an inclusive `slice_at: T` point-in-time
+  horizon for a full export, or each window's horizon under an incremental
+  invocation (a per-window full-table snapshot) — `slice_at` and `incremental` are
+  mutually exclusive at load time. A `slice_only` property is omitted with a
+  `slice-only-column-omitted` notice (the source-style auto-projection posture; the
+  sub-typed-discriminator carve-out honored, a `rename` naming an omitted column
+  errors). Operational presentation defaults (prefix-stripped table names,
+  `record_id` → `id`) apply, overridable via `exclude`/`rename`; a name collision
+  fails fast. Data columns cast back from the state-at codec VARCHAR to their
+  declared sidecar types, so the table is typed, not all-string. The wallclock
+  anchor is **optional** — absent one, lifecycle timestamps stay raw sim-time ns
+  (explicitly unlike source, which requires a resolved anchor) — so raw sim-time
+  keys remain a legitimate landing shape. A base export over a corrupted emit
+  surfaces the corrupter's declared defects unchanged (test-guarded, never
+  special-cased). CSV + DuckDB output. See
+  [`architecture/base.md`](architecture/base.md). *Teaches: incremental ETL, SCD
+  merge, point-in-time / feature-store reconstruction.*
 - ✓ **dimensional** *(Stage 2)* — star schema. `records__<kind>` → `dim_*` (SCD-2 wide
   via `LEAD`, or Type-1 sub-type split); `history` point/interval and membership-binding
   grains → `fact_*`; typed `prop__` columns read directly (no JSON expansion); FK
@@ -167,13 +189,14 @@ Each mode reads the same emit and writes a different target shape.
   `history_tracked`). When the sidecar carries `sub_type_columns`, each per-sub-type
   stub proposes only that sub-type's declared columns (structurally-inapplicable
   columns pruned); absent the field, it falls back to the full union.
-- ✓ **Incremental drip-feed** — window-at-a-time export, wired for both the
-  dimensional and source modes: `--next` reads a cursor and emits the next window
+- ✓ **Incremental drip-feed** — window-at-a-time export, wired for the
+  dimensional, source, and base modes: `--next` reads a cursor and emits the next window
   (or `--from`/`--to` runs a stateless range), one calendar period
   (`day`/`week`/`month`, anchor-resolved) or sim-time interval per window.
   Dimensional: append-only facts and SCD-2 version rows (`valid_to` supplied by a
   view, never materialized); full-snapshot type-1 dims. Source: per-genre window
-  membership (see the source mode above). Either mode: a growing DuckDB warehouse
+  membership (see the source mode above). Base: every table reconstructed at the
+  window horizon — a full-table snapshot per kind per window. Any mode: a growing DuckDB warehouse
   (cursor atomic with data) or one CSV drop directory per window. See
   [`architecture/incremental.md`](architecture/incremental.md). *Teaches: incremental/
   merge ETL, landing zones, building SCD-2 yourself.*
@@ -181,12 +204,14 @@ Each mode reads the same emit and writes a different target shape.
   through the resolved effective anchor: an author-chosen origin (`rebase.base_date` /
   `--base-date`) and zone (`rebase.timezone` / `--timezone`), falling back to the
   sidecar `runtime` anchor. CLI-wins precedence per knob; DST and ambiguous-origin
-  rules fail fast. Cross-mode (one anchor per invocation); the dimensional renderer
-  consumes it today. See [`architecture/anchor.md`](architecture/anchor.md).
+  rules fail fast. Cross-mode (one anchor per invocation): the dimensional, source,
+  streaming, and base renderers all consume it — source and the `debezium` stream
+  format *require* a resolved anchor, dimensional and base fall back to raw
+  sim-time ns. See [`architecture/anchor.md`](architecture/anchor.md).
 - ✓ **`slice_only` export policy** — export-wide: no output value, row membership,
   linkage, or ordering derives from a `slice_only` column's value. Author-named reads
   refused always-on (dimensional + streaming); auto-projected surfaces omit with a
-  notice (source renders, `init` proposals); `lookup` regated to
+  notice (source renders, base's flat projection, `init` proposals); `lookup` regated to
   `temporal_class: constant`; one mechanical carve-out for the sub-typed
   discriminator. See [`architecture/slice-only.md`](architecture/slice-only.md).
 - ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
@@ -194,15 +219,19 @@ Each mode reads the same emit and writes a different target shape.
   off stdout. See [`architecture/notices.md`](architecture/notices.md).
 - ○ **Dry-run / combine** — preview without writing; compose multiple emits.
 
-### Queue-state and point-in-time export *(Stage 5)*
+### Queue-state export *(Stage 5)*
 
-Both build on the sanitised subset (one branch, no provenance); neither needs
+Builds on the sanitised subset (one branch, no provenance); it needs no
 branch-awareness.
 
 - ○ **Membership / queue export** — `membership__*` → queue-state facts (wait time,
-  FIFO/priority order as SQL).
-- ○ **Point-in-time reconstruction** — replay `history` to any `sim_time` → ML
-  feature-store rows.
+  FIFO/priority order as SQL). Explicitly **not** subsumed by base: a different
+  grain (member intervals, not per-record state) over a different derivation
+  (membership-state-at, not state-at).
+- ✓ **Point-in-time reconstruction** — *retired as a separate item; shipped as
+  `mode: base` with `slice_at: T`* — replay `history` to any `sim_time` → one flat
+  row per record, the ML feature-store shape. See
+  [`architecture/base.md`](architecture/base.md).
 
 ### Parked — needs a future contract extension
 
@@ -286,9 +315,9 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
 
 - ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C14 against an emit.
 - ✓ `fabulexa-forge export` *(Stage 2)* — run an export config against an emit,
-  dispatching on `config.mode` to the dimensional or source engine; `--fmt csv|duckdb`
-  selects delivery; `--next` / `--from` / `--to` drive incremental window-at-a-time
-  export.
+  dispatching on `config.mode` to the dimensional, source, or base engine;
+  `--fmt csv|duckdb` selects delivery; `--next` / `--from` / `--to` drive
+  incremental window-at-a-time export.
 - ✓ `fabulexa-forge stream` *(Stage 3)* — replay the base layer as a CDC event stream;
   `--fmt jsonl|debezium`, `--sink stdout|file|kafka` (output directory for `file`;
   `--bootstrap-servers` / `FABEXPORT_KAFKA_BOOTSTRAP` for `kafka`), plus the
@@ -317,7 +346,8 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
 - ○ Teaching datasets — ETL, SCD-2, star schema, dimensional modeling, CDC, streaming.
 - ✓ Realistic data-quality corpora — corrupter-injected defects on faithful data, with
   a label-grade defect manifest (`defects.json`) as the answer key.
-- ○ ML feature-store training data — point-in-time reconstruction from `history`.
+- ✓ ML feature-store training data — point-in-time reconstruction from `history`
+  via `mode: base` + `slice_at: T`, one flat as-of-T row per record.
 - ○ Entity-resolution / MDM workloads — multi-observer views (needs a multi-branch
   contract + multi-emit; parked).
 

@@ -13,6 +13,8 @@ import pytest
 from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, write_emit
 
+from exporters.base._base_fixtures import DAY_NS as _BASE_DAY_NS
+from exporters.base._base_fixtures import build_base_test_emit
 from exporters.source._source_fixtures import (
     build_day_scale_source_emit,
     build_source_test_emit,
@@ -1232,6 +1234,70 @@ def test_source_mode_fingerprint_mismatch_on_source_config_change(
                 anchor,
                 notice_sink=discard_notice_sink,
             )
+
+
+# ---------------------------------------------------------------------------
+# Base mode: build_base_query_specs dispatch (the three-way regression fix)
+#
+# Base mode requires no resolved anchor (anchor=None throughout) and, unlike
+# source, supports the sim-time regime (`sim_period_ns`) directly.
+# ---------------------------------------------------------------------------
+
+
+def _base_config(sim_period_ns: int) -> ExportConfig:
+    """Build a mode='base' config with a sim-time-regime incremental block.
+
+    Args:
+        sim_period_ns: incremental.sim_period_ns.
+
+    Returns:
+        Validated ExportConfig.
+    """
+    return ExportConfig.model_validate(
+        {"mode": "base", "incremental": {"sim_period_ns": sim_period_ns}}
+    )
+
+
+def test_base_mode_multi_window_drip_dispatches_to_base_engine(tmp_path: Path) -> None:
+    """--next over mode='base' drips full per-window snapshots via
+    build_base_query_specs: three non-drained windows over the patient
+    fixture's 5*DAY_NS slice_at, each a full 3-row snapshot."""
+    emit_dir = build_base_test_emit(tmp_path)
+    config = _base_config(sim_period_ns=2 * _BASE_DAY_NS)
+    out = tmp_path / "wh.duckdb"
+
+    outcomes: list[IncrementalOutcome] = []
+    with open_emit(emit_dir) as emit:
+        while True:
+            outcome = export_incremental_next(
+                emit, config, out, "duckdb", None, notice_sink=discard_notice_sink
+            )
+            if outcome.status == "drained":
+                break
+            outcomes.append(outcome)
+
+    assert [o.window.index for o in outcomes if o.window is not None] == [0, 1, 2]
+    for outcome in outcomes:
+        assert outcome.row_counts == {"patient": 3}
+
+
+def test_base_mode_config_no_longer_reaches_dimensional_branch(tmp_path: Path) -> None:
+    """A mode='base' config with no `dimensional` section drips cleanly — the
+    regression a two-way (source vs. else) dispatch would hit: `else` used to
+    mean 'dimensional', so build_query_specs' `assert config.dimensional is
+    not None` would raise for a base-mode config."""
+    emit_dir = build_base_test_emit(tmp_path)
+    config = _base_config(sim_period_ns=2 * _BASE_DAY_NS)
+    out = tmp_path / "wh.duckdb"
+
+    with open_emit(emit_dir) as emit:
+        outcome = export_incremental_next(
+            emit, config, out, "duckdb", None, notice_sink=discard_notice_sink
+        )
+
+    assert outcome.status == "emitted"
+    assert outcome.window is not None
+    assert outcome.window.index == 0
 
 
 # ---------------------------------------------------------------------------

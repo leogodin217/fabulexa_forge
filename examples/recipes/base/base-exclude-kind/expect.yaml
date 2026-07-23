@@ -1,0 +1,28 @@
+tables:
+  # queue is ABSENT — declaring the exact remaining set is how this recipe
+  # proves it: assert_recipe_output's table check fails loudly if it
+  # reappears.
+  patient:
+    columns:
+      [
+        id,
+        created_sim_time,
+        active,
+        deactivated_at,
+        prop__status,
+        prop__name,
+        prop__doctor_id,
+        prop__primary_staff_id,
+        prop__backup_staff_id,
+      ]
+    row_count: 2
+  doctor:
+    columns: [id, created_sim_time, active, deactivated_at, prop__name]
+    row_count: 1
+  staff:
+    columns:
+      [id, created_sim_time, active, deactivated_at, prop__name, prop__staff_type]
+    row_count: 2
+  admission:
+    columns: [id, created_sim_time, active, deactivated_at, prop__ward]
+    row_count: 2
