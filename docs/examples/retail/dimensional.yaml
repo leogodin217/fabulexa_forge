@@ -10,9 +10,22 @@
 #            atlas is explicit that this is an EVENT-GRAIN "customer actions"
 #            dataset and tick_decision IS that event — one row per funnel action
 #            (view / cart / compare / checkout / purchase in `decision_type`),
-#            inside a shopping_session, bound to the product it acted on. That is
-#            the grain of the whole star: a real fact, not noise. Kept, with its
-#            journey FK (reference) and product FK (membership) wired in.
+#            inside a shopping_session, bound to the product(s) it acted on. That
+#            is the grain of the whole star: a real fact, not noise. Kept, with
+#            its journey FK (reference) wired in.
+#   BRIDGE   the product binding is NOT an FK on fact_customer_action. The
+#            `bindings` membership carries a MULTI-PICK role — `compared_products`
+#            binds TWO products to one product_comparison decision (3,901
+#            decisions, 7,802 bindings, ordered by elem__pick_index) — and
+#            dimensional.md § "Membership-grain facts (multi-pick)" is explicit
+#            that a multi-pick role's fact grain must be the BINDING, not the
+#            owner. A membership-edge FK on the records grain is valid only for
+#            SINGLE-pick roles; here it fanned the fact to 127,543 rows over
+#            123,642 decisions, silently breaking `key: [id]`. So the bindings
+#            become their own binding-grain fact, fact_action_product, carrying
+#            ALL 93,799 bindings for every role uniformly (viewed_product,
+#            carted_product, compared_products, store) — dropping a compared
+#            product to force a 1:1 would be a fidelity violation.
 #   SPLIT    actor -> dim_customer + dim_ops. record_roles.actor is an object
 #            {customer: dimension, ops: dimension} — BOTH sub-types are
 #            dimensions, so actor sub-type-SPLITS on the actor_type discriminator
@@ -33,13 +46,19 @@
 #            sidecar carries no sub_type_columns, so the column->sub-type mapping
 #            would be author guesswork; left conformed (as in the NHS template).
 #   FACT     tick_decision: filled its columns + the journey FK (reference edge
-#            prop__journey_instance) and the product FK (membership edge
-#            bindings -> member__entity__id) that init left as commented stubs.
+#            prop__journey_instance) that init left as a commented stub; the
+#            product binding stub became the fact_action_product bridge above.
 #
 # SCD-2 dims kept where a genuine attribute versions over time: dim_customer
 # (total_purchases), dim_entity (status/error_rate), dim_journey_instance
 # (current_state). journey_instance's slice_only columns (state_entry_time,
-# complete, bound_roles) are auto-omitted (a notice, not an error).
+# complete, bound_roles) are auto-omitted — that omission is unconditional and
+# happens whatever the author excludes; it is a notice, not an error.
+#
+# TIME: this emit's sidecar carries a `runtime` anchor (2022-03-01T00:00:00 UTC),
+# so `derived: {scd_window: ...}` renders the dims' valid_from/valid_to as
+# wallclock TIMESTAMPs. The fact's `occurred_at` is NOT comparable to them — see
+# the note on that column.
 
 mode: dimensional
 
@@ -149,6 +168,13 @@ dimensional:
         - {name: valid_to, derived: {scd_window: valid_to}}
 
     # --- fact: customer_action (the funnel event) — grain: one tick_decision ---
+    #     TRUE grain: one row per tick_decision. NO product FK here — the
+    #     `bindings` membership carries a MULTI-PICK role (`product_comparison`
+    #     binds two products per decision, ordered by elem__pick_index), so a
+    #     membership-edge FK on this records grain would fan the fact out to one
+    #     row per binding and break `key: [id]` (dimensional.md § Membership-grain
+    #     facts). The product bindings live in fact_action_product below, at the
+    #     binding grain, where every pick survives.
     - name: fact_customer_action
       role: fact
       source:
@@ -157,15 +183,41 @@ dimensional:
       key: [id]
       columns:
         - {name: id, from: record_id}
+        # Raw sim-time nanosecond offset of the action. NOTE: this stays a raw
+        # BIGINT — `derived: {timestamp: {source: created_sim_time}}` is refused
+        # on a records grain (only `last_mutation_sim_time` is an accepted
+        # timestamp source there), so the action's event time cannot currently be
+        # rendered as a wallclock TIMESTAMP comparable to the SCD-2 dims'
+        # valid_from/valid_to. Reported upstream as a forge gap.
         - {name: occurred_at, from: created_sim_time}
         # journey the action happened in — labeled reference edge
         - {name: journey_id, fk: {to: dim_journey_instance, via: reference}}
-        # product the action was bound to — membership edge (bindings)
+        - {name: decision_type, from: prop__decision_type}
+        - {name: context, from: prop__context}
+
+    # --- fact: action_product (the binding bridge) — grain: one binding ---
+    #     One row per (tick_decision, bound product) from
+    #     membership__tick_decision__bindings. Single-pick roles contribute one
+    #     row; the multi-pick `product_comparison` role contributes one row per
+    #     compared product, distinguished by pick_index — so BOTH compared
+    #     products survive (dropping one would be a fidelity violation).
+    - name: fact_action_product
+      role: fact
+      source:
+        grain: membership
+        kind: tick_decision
+        property: bindings           # membership__tick_decision__bindings
+      key: [action_id, product_id, pick_index]
+      columns:
+        - {name: action_id, from: record_id}
+        # the bound member — FK to the conformed entity dim (member__entity__id)
         - name: product_id
           fk:
             to: dim_entity
             via: membership
-            property: bindings       # membership__tick_decision__bindings
-            member_field: entity     # member__entity__id
-        - {name: decision_type, from: prop__decision_type}
-        - {name: context, from: prop__context}
+            member_field: entity
+        - {name: role_name, from: elem__role_name}
+        - {name: pick_index, from: elem__pick_index}
+        - {name: bound_at, derived: {timestamp: {source: joined_sim_time}}}
+        - {name: joined_sim_time, from: joined_sim_time}
+        - {name: left_sim_time, from: left_sim_time}

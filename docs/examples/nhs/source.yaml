@@ -22,6 +22,12 @@
 # Same two mechanism kinds excluded as base/dimensional (see base.yaml). In
 # source, excluding `tick_decision` also drops the membership table it owns
 # (tick_decision__bindings) — a junction without its owner is not operational.
+#
+# `exclude` drops KINDS. Columns are dropped independently of it: a non-exempt
+# `temporal_class: slice_only` column is ALWAYS auto-omitted with a notice,
+# whatever this config says — here booking.attended_at,
+# journey_instance.state_entry_time / complete / bound_roles / output_roles, and
+# resource.queue. The export's `notice:` lines are the authoritative list.
 
 mode: source
 

@@ -54,7 +54,7 @@ for ex in "${EXAMPLES[@]}"; do
     uv run python tools/qa/scd2_windows.py "$ds" >"$GATE_TMP"/qa_scd2_"${ex}_${mode}".json 2>"$GATE_TMP"/qa_scd2_"${ex}_${mode}".err
     record "$ex" "$mode" "scd2" $?
 
-    uv run python tools/qa/refs_resolve.py "$ds" >"$GATE_TMP"/qa_refs_"${ex}_${mode}".json 2>"$GATE_TMP"/qa_refs_"${ex}_${mode}".err
+    uv run python tools/qa/refs_resolve.py "$cfg" "$ds" >"$GATE_TMP"/qa_refs_"${ex}_${mode}".json 2>"$GATE_TMP"/qa_refs_"${ex}_${mode}".err
     record "$ex" "$mode" "refs" $?
 
     uv run python tools/qa/trace_domain.py "$cfg" "$ds" "${bundle}/run.duckdb" \

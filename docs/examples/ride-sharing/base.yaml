@@ -21,8 +21,31 @@
 # Everything domain-meaningful survives: actor (trips), entity (riders + zones),
 # journey_instance (trip lifecycles), resource (drivers).
 #
-# Anchor is optional for base — omitted here, so lifecycle timestamps stay raw
-# sim-time ns. Add a `rebase:` block (see source.yaml) to land wallclock dates.
+# Two things this config does NOT control, both worth knowing before you read the
+# output:
+#
+#   TIMESTAMPS  No `rebase:` block is declared here, but the lifecycle columns
+#               still land as wallclock TIMESTAMPs, not raw ns: this bundle's
+#               sidecar carries a `runtime` anchor (2026-01-05T00:00:00 UTC), and
+#               base renders through the *effective* anchor — the `rebase:` block
+#               when one is given, else the sidecar's `runtime`, else nothing. So
+#               `created_sim_time` and `deactivated_at` come out TIMESTAMP.
+#               Only the framework/lifecycle columns rebase; domain `prop__`
+#               columns are presentation-verbatim at their declared sidecar type,
+#               so a sim-time-valued property stays a raw ns BIGINT. Add a
+#               `rebase:` block (see source.yaml) only to OVERRIDE the origin or
+#               zone; it is not what turns timestamps on here.
+#
+#   SLICE_ONLY  `exclude` drops whole KINDS / output TABLES — base has no
+#               author-facing column drop at all. Columns still go missing, and
+#               the reason is policy, not this config: every non-exempt
+#               `temporal_class: slice_only` column is auto-omitted export-wide,
+#               with a notice, independently of whatever `exclude` declares (and
+#               naming one in `rename` is an error, since the column is gone). Its
+#               past is unknowable, so base will not present it. In this bundle
+#               that drops actor.surge_tier, journey_instance's state_entry_time /
+#               complete / bound_roles, and resource.queue — nothing below needs
+#               to (or can) name them, and their absence is not a bug.
 
 mode: base
 

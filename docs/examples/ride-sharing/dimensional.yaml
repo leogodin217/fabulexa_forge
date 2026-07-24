@@ -10,14 +10,18 @@
 #            fact — grain one trip — so it is renamed fact_trip. The trip record
 #            is deliberately thin: its only history is prop__status (the terminal
 #            outcome, completed/cancelled) and prop__surge_tier is slice_only
-#            (auto-omitted, not named). Note there are NO reference FKs to wire:
-#            records__actor carries no ref_index__ / references columns, so the
-#            fact has no outgoing edges. The trip's rider/zone assignment is
-#            materialized only inside the excluded tick_decision bindings log,
-#            and the driver hold only in membership__resource__holders (reachable
-#            from the driver side, not the trip side) — denormalizing either onto
-#            the fact would require fabrication, so neither is done. dim_journey
-#            _instance.actor is the join key back to fact_trip.id.
+#            (auto-omitted, not named). records__actor carries no ref_index__ /
+#            references columns, so the trip row itself has NO outgoing FK
+#            columns — the trip's driver / rider / pickup-zone links are
+#            materialized in the base layer as membership bindings, not as actor
+#            properties. They are therefore wired as membership-grain BRIDGE
+#            FACTS (below), which is where the base layer actually carries them;
+#            denormalizing them onto fact_trip would require an edge the base
+#            layer does not have. dim_journey_instance.actor is the join key back
+#            to fact_trip.id.
+#   BRIDGE   fact_trip_driver / fact_trip_rider / fact_trip_pickup_zone — the
+#            three membership-grain bridges that make the dims reachable. See
+#            each table's comment for the exact membership table and edge.
 #   SPLIT    entity -> dim_rider + dim_zone. entity is polymorphic
 #            (entity_type ∈ {rider, zone}), and unlike the nhs entity this split
 #            is well-founded, not guesswork: enum_domains gives a clean
@@ -32,8 +36,21 @@
 #            slice_only (auto-omitted).
 #   DROPPED  tick_decision (fact) + queue (dim) — simulation-mechanism kinds, not
 #            marketplace data (see base.yaml). init proposed a fact_tick_decision
-#            and an attribute-thin dim_queue; both are engine bookkeeping, so they
-#            and their membership tables are excluded from the star entirely.
+#            and an attribute-thin dim_queue; both are engine bookkeeping, so
+#            neither RECORDS table becomes a star table.
+#            NOTE — the exclusion is per-table, not per-kind, and it is
+#            deliberately NOT extended to membership__tick_decision__bindings.
+#            That membership table is the only place the base layer materializes
+#            "which rider / which pickup zone for this trip"; the *decision*
+#            record around it (decision_type, context) is bookkeeping, but the
+#            *binding* is marketplace data. Excluding it too would leave dim_rider
+#            and dim_zone unreachable from anything in the star — and the fix for
+#            that is not to invent an edge onto fact_trip, it is to model the real
+#            edge where it lives. So the bindings table is modelled as two
+#            role-filtered bridge facts and the tick_decision record stays out.
+#            membership__queue__waiters stays out entirely: its owner is the queue
+#            mechanism record and its member is the trip, so it adds no dimension
+#            the star does not already reach.
 #
 # SCD-2 kept only where a genuine attribute versions over time: journey_instance
 # (current_state walks requested -> matching -> ... -> completed/cancelled).
@@ -54,6 +71,80 @@ dimensional:
         - {name: id, from: record_id}
         - {name: presentation_id, from: presentation_id}
         - {name: status, from: prop__status}
+        # Anchored event time, so the fact is point-in-time joinable against the
+        # SCD-2 dim's TIMESTAMP valid_from / valid_to. A records grain accepts
+        # `last_mutation_sim_time` plus any sim-time-valued `prop__` as a
+        # timestamp source, and actor has no sim-time property — so this is the
+        # trip's one anchorable time, the moment prop__status last changed (its
+        # terminal completed / cancelled event). NOTE: the trip's *request* time
+        # would be `created_sim_time`, but neither it nor `deactivated_at` is an
+        # accepted timestamp source on a records grain (forge gap — the same one
+        # retail's fact_action.occurred_at notes), so the terminal event time is
+        # what this grain can carry.
+        - {name: settled_at, derived: {timestamp: {source: last_mutation_sim_time}}}
+
+    # --- bridge fact: trip <-> driver — grain: one resource hold ---
+    #     membership__resource__holders: owner = resource (the driver), member =
+    #     actor (the trip). 1497 rows, one per trip, no NULL members — the real,
+    #     faithful trip<->driver edge the base layer carries. Without it dim_driver
+    #     is orphaned; with it the driver hold is a first-class fact of the star.
+    #     `driver_id` is an fk (via reference) resolved from the binding's OWNER
+    #     record, which IS the resource — so it is a declared, checkable edge to
+    #     dim_driver rather than a bare projection of record_id.
+    - name: fact_trip_driver
+      role: fact
+      source:
+        grain: membership
+        kind: resource
+        property: holders
+      key: [trip_id, hold_start_ts]
+      columns:
+        - {name: trip_id, from: member__actor__id}
+        - {name: driver_id, fk: {to: dim_driver, via: reference}}
+        - {name: slots_held, from: elem__slots_held}
+        - {name: hold_start_ts, derived: {timestamp: {source: joined_sim_time}}}
+        - {name: hold_end_ts, derived: {timestamp: {source: left_sim_time}}}
+
+    # --- bridge fact: trip <-> rider — grain: one rider binding ---
+    #     membership__tick_decision__bindings filtered to elem__role_name=rider:
+    #     1497 rows, one per trip. `trip_id` is a lookup along the real reference
+    #     chain tick_decision -> journey_instance -> prop__actor (both hops are
+    #     temporal_class: constant, so the lookup is exact at any T); `rider_id`
+    #     is the bound member. This is the ONLY base-layer edge from a trip to its
+    #     rider — see the DROPPED note above for why the bindings table is in the
+    #     star while the tick_decision record is not.
+    - name: fact_trip_rider
+      role: fact
+      source:
+        grain: membership
+        kind: tick_decision
+        property: bindings
+        where: {elem__role_name: rider}
+      key: [decision_id]
+      columns:
+        - {name: decision_id, from: record_id}
+        - {name: trip_id, lookup: {to: journey_instance, property: actor}}
+        - {name: rider_id, fk: {to: dim_rider, via: membership, member_field: entity}}
+        - {name: assigned_at, derived: {timestamp: {source: joined_sim_time}}}
+
+    # --- bridge fact: trip <-> pickup zone — grain: one pickup_zone binding ---
+    #     Same membership table, the other role. Kept as its own table rather than
+    #     one polymorphic bridge because dim_rider and dim_zone are two sub-type
+    #     splits of the SAME kind (entity) — one shared fk column could not tell
+    #     them apart, and narrowing by role is exactly what source.where is for.
+    - name: fact_trip_pickup_zone
+      role: fact
+      source:
+        grain: membership
+        kind: tick_decision
+        property: bindings
+        where: {elem__role_name: pickup_zone}
+      key: [decision_id]
+      columns:
+        - {name: decision_id, from: record_id}
+        - {name: trip_id, lookup: {to: journey_instance, property: actor}}
+        - {name: zone_id, fk: {to: dim_zone, via: membership, member_field: entity}}
+        - {name: assigned_at, derived: {timestamp: {source: joined_sim_time}}}
 
     # --- dim: rider (entity sub-type) — Type-1 reference ---
     - name: dim_rider

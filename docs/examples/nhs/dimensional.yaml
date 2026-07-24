@@ -26,6 +26,18 @@
 #
 # SCD-2 dims kept where a genuine attribute versions over time: actor (patient
 # clinical flags), diary (next_opening drift), journey_instance (current_state).
+#
+# Not every column below is an author choice. `temporal_class: slice_only`
+# columns cannot be projected in any mode — base/source omit them with a notice;
+# dimensional, where the author names columns, REFUSES the config outright. That
+# is why booking.attended_at is absent from fact_booking, and why
+# journey_instance.state_entry_time / complete / bound_roles / output_roles and
+# resource.queue are absent from their dims.
+#
+# Timestamps: no `rebase:` block, so the effective anchor is the sidecar's own
+# `runtime` (2023-01-01T00:00 UTC). Framework/lifecycle sim-time columns render
+# wallclock through it; domain `prop__` columns stay raw BIGINT sim-time ns
+# unless explicitly rendered with `derived: {timestamp: ...}` (see fact_booking).
 
 mode: dimensional
 
@@ -169,6 +181,17 @@ dimensional:
         - {name: id, from: record_id}
         - {name: patient_id, fk: {to: dim_actor, via: reference}}
         - {name: diary_id, fk: {to: dim_diary, via: reference}}
-        - {name: requested_at, from: prop__requested_at}
-        - {name: opening_at, from: prop__opening_at}
+        # Event time as an anchored wallclock TIMESTAMP, so the fact is
+        # point-in-time joinable against the SCD-2 dims, whose valid_from /
+        # valid_to are TIMESTAMP too:
+        #   JOIN dim_actor d ON f.patient_id = d.id
+        #                   AND f.requested_at >= d.valid_from
+        #                   AND f.requested_at <  d.valid_to
+        # Projecting the raw BIGINT sim-time ns here instead would make that
+        # comparison type-incompatible and fan the fact out across versions.
+        - {name: requested_at, derived: {timestamp: {source: prop__requested_at}}}
+        - {name: opening_at, derived: {timestamp: {source: prop__opening_at}}}
+        # The raw sim-time ns kept alongside, under distinct names.
+        - {name: requested_at_ns, from: prop__requested_at}
+        - {name: opening_at_ns, from: prop__opening_at}
         - {name: status, from: prop__status}

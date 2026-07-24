@@ -1,164 +1,112 @@
 # Data QA round — `data_qa`
 
 Full-round QA of the per-example export configs (base / source / dimensional /
-streaming) and the datasets they produce. Branch `data_qa`.
+streaming) and the datasets they produce, followed by a fix pass that resolved every
+**config** error. Branch `data_qa`.
 
 **Method** — the composite QA doctrine, adapted to a reshaper: *script the
 generation, agent-judge the data.* Two tiers:
 
-- **Tier A — mechanical gates** (producer-free checkers under `tools/qa/`, read
-  only output datasets + the base bundle via `duckdb`/stdlib; never
-  `import fabulexa_forge`): `trace_domain` (no-fabrication), `scd2_windows`,
-  `refs_resolve`, `determinism`.
+- **Tier A — mechanical gates** (producer-free checkers under `tools/qa/`, reading only
+  output datasets + the base bundle via `duckdb`/stdlib; never `import fabulexa_forge`):
+  `trace_domain` (no-fabrication), `scd2_windows`, `refs_resolve`, `determinism`.
 - **Tier B — judgment lenses** (11 subagents, one report each in gitignored
   `qa/data_qa/`): a **blind cold-read** (coherence/legibility, output only) and an
-  **intent-aware audit** (fidelity vs the config's declared target + the base) per
-  example.
+  **intent-aware audit** (fidelity vs declared target + base) per example.
 
-Scope: 5 examples × up to 4 modes = 13 export datasets + the streaming replays.
-
----
-
-## Headline verdict
-
-**The reshape is faithful.** The two reshaper priorities with no producer analogue
-both pass across every dataset:
-
-- **No fabrication** — `trace_domain` traced ~500 output columns across 13 datasets;
-  every output value is present in its source column's domain. Zero fabricated
-  values. (Principle #3 holds.)
-- **Referential integrity survived** — every author-declared `fk:` resolves with
-  **0 orphans** in every dataset. (Principle #4 holds.)
-
-Plus: **SCD-2 windows sound everywhere** (no inverted/overlapping/duplicate-open
-intervals), and **export is deterministic** (2× run, row-for-row identical, all 5
-examples).
-
-No finding is a correctness/integrity break in the data. Every open finding is a
-**modeling, legibility, or config-comment** issue — i.e. the datasets are *correct*
-but, in specific spots, *not as useful or as self-describing as they should be.*
-
-### Tier A gate matrix
-
-| dataset | scd2 | refs | trace (no-fab) | determinism |
-|---|---|---|---|---|
-| nhs/{base,source,dimensional} | PASS | PASS | PASS | PASS |
-| parent-child/base | PASS | PASS | PASS | PASS |
-| retail/{base,source,dimensional} | PASS | PASS | PASS | PASS |
-| ride-sharing/{base,source} | PASS | PASS | PASS | PASS |
-| ride-sharing/dimensional | PASS | FAIL\* | PASS | PASS |
-| rs-marketplace/{base,source} | PASS | PASS | PASS | PASS |
-| rs-marketplace/dimensional | PASS | FAIL\* | PASS | PASS |
-
-\* Both `refs` FAILs are **false-positives** — see F7. No real dangling reference
-exists; every declared `fk:` resolves cleanly.
+Then a **fix pass** (5 agents) under one governing rule: *fix only authoring errors; if
+a fix cannot be expressed in the config grammar, stop and report it as a bug or missing
+feature.* No workarounds, no fabricated joins. That rule is what makes the residue below
+trustworthy.
 
 ---
 
-## Findings — classified
+## Status: all config errors resolved
 
-Two outcomes per the doctrine: **DROP** (provably correct, or a trivial fix) vs
-**FINDING** (open item worth acting on). Biased toward filing.
+Final verification on a quiet tree (no concurrent agents):
 
-### F1 — Config comments overclaim "raw sim-time ns" — **DROP (comment fix)**
-*Systemic; nhs, retail, ride-sharing, rs-marketplace.*
-base mode rebases framework lifecycle columns (`created_sim_time`, `deactivated_at`)
-and dimensional rebases `scd_window` columns (`valid_from`/`valid_to`) to wallclock
-TIMESTAMP **whenever the sidecar carries a `runtime` anchor**. nhs/retail/rs/rsm all
-do; parent-child (anchor ABSENT) correctly stays raw BIGINT. The behavior is
-**correct and consistent** with the documented anchor-fallback rule — but my
-`base.yaml`/`dimensional.yaml` comments claim "lifecycle timestamps stay raw
-sim-time ns," which is only true when no anchor exists. **Fix the comments** in the 4
-anchored examples. Evidence: `base.actor.created_sim_time` = `TIMESTAMP 2026-02-01
-18:57:40` (rsm) vs source BIGINT; parent-child keeps BIGINT `138728814821`.
+- `tools/run_all_exports.sh` → **17 configs, 0 failures**
+- `tools/qa/run_gates.sh` → **13/13 datasets PASS** (scd2 / refs / trace),
+  **determinism PASS** on all 5 examples, **0 failing gate invocations**
+  (two consecutive clean full runs)
+- `uv run pytest` → 3760 passed, 13 skipped
 
-### F2 — In-mode timestamp inconsistency (base vs dimensional) — **FINDING (arch/maintainer)**
-*Priority: medium.* Within dimensional, `scd_window` columns rebase to TIMESTAMP but
-a plain `from: created_sim_time` column stays raw BIGINT — e.g.
-`retail.fact_customer_action.occurred_at` is raw ns while the base mode rebases the
-same underlying `created_sim_time`. So the *same base column* surfaces as TIMESTAMP
-in base and as raw BIGINT in a dimensional fact. Likely intentional (base "presents"
-lifecycle; facts keep raw measures) but **undocumented** — worth a forge maintainer
-decision + a note in `architecture/anchor.md`.
-
-### F3 — `dim_journey_instance` is an SCD-2 changelog labeled `dim_` — **FINDING (modeling)**
-*Systemic; all 4 rich examples. Priority: medium.* Named `dim_` but has non-unique
-`id`, many rows/key, `valid_from`/`valid_to` (e.g. rsm 54,573 rows / 8,742 ids). It's
-a faithful SCD-2 on `current_state`, but reads as a state-transition fact/history, not
-a dimension. Reconsider modeling it as a fact (one row per transition) or renaming.
-This is a config choice in our own `dimensional.yaml` files.
-
-### F4 — SCD-2 dims have no surrogate key; facts have no effective-date — **FINDING (modeling)**
-*Systemic. Priority: medium.* Facts join versioned dims on the natural `id`, so a
-join fans out: nhs `fact_booking` (9,371) × `dim_actor` versions → 26,813 rows. The
-star is correct but not point-in-time-joinable as-is. Options: surrogate keys +
-effective-dated FKs, Type-1 for join-simplicity where versioning isn't the lesson, or
-document the natural-key+effective-date join. May be a forge dimensional-capability
-question.
-
-### F5 — retail `fact_customer_action` grain violation — **FINDING (config bug, actionable)**
-*retail dimensional. Priority: HIGH.* Declared `key: [id]` (one row per action) but
-`id` is **not unique**: 127,543 rows / 123,642 distinct (3,901 dup ids, verified).
-The `product_id` FK uses `via: membership`, and the 3,901 actions binding two products
-(e.g. `product_comparison`) each fan to 2 rows. All values real (0 orphans) — not
-fabrication, but the membership join pushes the fact past its stated grain. **Fix
-the config**: drop the multi-valued `product_id`, move it to a bridge table, or
-change the declared grain/key.
-
-### F6 — ride-sharing dimensional star is weak (orphaned dims) — **FINDING (config, actionable)**
-*ride-sharing dimensional. Priority: HIGH.* `records__actor(trip)` carries no
-`ref_index__` columns, so `fact_trip` is a thin 3-column fact with **no FKs**;
-`dim_rider`/`dim_zone`/`dim_driver` are orphaned (nothing references them) — only
-`dim_journey_instance.actor` links back to `fact_trip.id`. Faithful (no fabrication)
-but not a useful star. **Reconsider**: drop the orphaned dims, bridge trips→rider/
-zone/driver via journey_instance or a membership edge, or accept that ride-sharing's
-value is its CDC/streaming shape, not a star.
-
-### F7 — `refs_resolve` false-positives on business-id columns — **FINDING (tooling)**
-*Priority: low.* The checker's `<x>_id` name heuristic flags author business
-identifiers (`presentation_id`, `prop__driver_id`, `prop__account_id`) as FKs and
-reports orphans, producing the 2 gate FAILs above. No real dangling reference exists.
-Refine the checker to read the config and validate only declared `fk:` columns (as
-`trace_domain` already parses the config).
-
-### F8 — Opaque raw-BIGINT columns named like timestamps — **FINDING (legibility)**
-*nhs, retail. Priority: low.* `requested_at`/`opening_at` (nhs), `occurred_at`
-(retail) are raw sim-time ns named like timestamps and not comparable to the rebased
-TIMESTAMP SCD windows. Consider a `derived` anchored-timestamp, or a name signaling
-raw ns. (Related to F2.)
-
-### F9 — base mode drops surrogate join keys — **DROP (comment fix) + note**
-*parent-child; general base-mode behavior.* base strips `ref_index__*` and
-`record_index`, so cross-table joins in base output fall back to the opaque `prop__`
-business id (which resolves: parent-child `actor.prop__group → entity.id`, 0 dangling).
-My parent-child comment touts a `ref_index__group → record_index` surrogate path the
-output doesn't preserve. **Fix the comment**; optionally document the general base-mode
-behavior.
-
-### F10 — `slice_only` auto-omission under "no exclusions" comments — **DROP (comment fix)**
-*parent-child, others.* `journey_instance.state_entry_time`/`complete` are
-`slice_only` → auto-omitted with a notice, even where the config comment says "no
-exclusions at all." Technically true (no *author* exclusion) but misleading. **Clarify
-the comments** that `slice_only` columns are always auto-omitted.
-
-### Non-findings (DROP — provably correct)
-- **Zero-variance / all-null columns** (`actor_type='default'`, `resource_type=
-  'consultant'`, single-`ops`-actor null PII, empty `label`) — every one mirrors the
-  source; faithful, not defects.
-- **parent-child not rebased** — correct (no anchor).
-- **Terminal `journey_instance` rows** (`active=False`, `created==deactivated`) — a
-  base-layer characteristic, inherited, not introduced.
+**Fidelity held throughout.** `trace_domain` traced ~500 output columns across 13
+datasets with **zero fabricated values**, and every author-declared `fk:` resolves with
+**0 orphans**. Principles #3 (no fabrication) and #4 (integrity preserved) hold.
 
 ---
 
-## Recommended actions (in priority order)
-1. **F5** — fix retail `fact_customer_action` grain (multi-valued product FK).
-2. **F6** — rework or scope down ride-sharing's dimensional config.
-3. **F1, F9, F10** — correct the overclaiming config comments (trivial, safe).
-4. **F3, F4** — decide the journey_instance modeling + SCD-2 join story (may warrant
-   a forge maintainer / arch discussion).
-5. **F2, F7, F8** — anchor-inconsistency note, refs-checker refinement, timestamp
-   legibility (lower priority).
+## Resolved — config errors, now fixed
+
+| # | Finding | Resolution |
+|---|---|---|
+| **F5** | retail `fact_customer_action` grain violation (127,543 rows / 123,642 ids) — a multi-pick binding role wired as a `records`-grain membership FK, which `dimensional.md:438` forbids | Removed `product_id` from the fact (restoring true `key: [id]` → **123,642 / 123,642**) and added `fact_action_product` at `grain: membership`. **93,799** rows = every binding; both compared products preserved (3,901 at `pick_index` 0 **and** 1). |
+| **F6** | ride-sharing orphaned dims — thin `fact_trip` with no FKs left `dim_rider`/`dim_zone`/`dim_driver` unreferenced | Bridged with real base-layer edges: `fact_trip_driver` (from `membership__resource__holders`, 1:1), `fact_trip_rider` + `fact_trip_pickup_zone` (from `tick_decision__bindings`). No orphaned dims remain; no join invented. |
+| **F4 / F8** | facts not point-in-time joinable — raw BIGINT time columns vs TIMESTAMP SCD windows | `derived: {timestamp: ...}` where a source exists. nhs `fact_booking`→`dim_actor` fan-out **26,813 → 9,371**; →`dim_diary` **7,967,978 → 9,371**. rsm/ride-sharing use `last_mutation_sim_time` (`state_as_of`, `settled_at`). |
+| **F1 / F9 / F10** | config comments overclaiming (raw-ns rebase, a surrogate join path base doesn't emit, "no exclusions" vs `slice_only`) | Corrected across every example; each retained claim verified against emitted output. |
+| **F7** | `refs_resolve` false-positives on business-id columns | Rewritten config-aware: validates only columns declared `fk: {to:}` against their declared target. **Negative-tested** — deleting referenced `dim_actor` rows makes it FAIL with orphan evidence. |
+| — | `trace_domain.py` crashed on non-`records` grains (hardcoded `src.records__<kind>`) | Fixed with a grain→bundle-table mapping. |
+| — | `fact_driver.session_earnings` (BIGINT 0–10) named like money | Renamed `session_rides_completed` per source + atlas ("credited as it completes rides"). Value untouched. |
+
+### Dropped — not defects
+- **F3 `dim_journey_instance` "mislabeled `dim_`"** — an SCD-2 dimension legitimately has
+  one row per version, and `key: [id, valid_from]` is correctly declared. The blind
+  cold-readers flagged normal SCD-2 behavior.
+- **Zero-variance / all-null columns** — every one mirrors the source; faithful.
+- **parent-child not rebased** — correct: its sidecar carries no `runtime` anchor.
+- **Terminal `journey_instance` rows** — a base-layer characteristic, inherited.
+
+---
+
+## Open — genuine bugs / missing features
+
+Everything below resisted a config fix. This is the residue.
+
+### R1 — MISSING FEATURE: `derived: timestamp` rejects lifecycle sim-time columns on a `records` grain
+*Confirmed independently 4× (nhs, retail, rs-marketplace, ride-sharing).*
+```
+ERROR: timestamp source 'created_sim_time' is not available on grain 'records' for '<table>.<col>'
+ERROR: timestamp source 'deactivated_at'   is not available on grain 'records' for '<table>.<col>'
+```
+`src/fabulexa_forge/exporters/dimensional/validation.py:104` —
+`_TIMESTAMP_SOURCES_BY_GRAIN["records"] = frozenset({"last_mutation_sim_time"})`.
+
+**Asymmetric:** `from: created_sim_time` projects fine as BIGINT, but the same column
+cannot be *anchored*. **Consequence:** a records-grain event fact cannot express its own
+event/birth time as wallclock, so no point-in-time SCD-2 join is possible for it. For a
+short-lived record (rsm `fact_pairing`) only the instant the record *closed*
+(`last_mutation` == `deactivated_at` for all 5,109 rows) is reachable — never the instant
+it *opened*, which is the natural event time. Membership grain is unaffected
+(`joined_sim_time` is accepted). Retail's `occurred_at` remains raw BIGINT as a result;
+substituting `last_mutation_sim_time` would be an approximation, so it was not done.
+
+### R2 — MISSING FEATURE: base mode cannot retain a surrogate join key
+`BaseConfig` offers only `exclude` / `rename` / `slice_at`; `record_index` and
+`ref_index__*` are unconditionally stripped, and `docs/architecture/base.md` does not
+mention them. **Consequence:** cross-table joins in base output must use the opaque
+`prop__` business id (e.g. parent-child `actor.prop__group → entity.id`, which does
+resolve: 0 dangling, 3 honest NULLs).
+
+### R3 — DOC BUG: records-grain projectable-columns list is incomplete
+`docs/architecture/dimensional.md:162` omits `created_sim_time`, `presentation_id`, and
+`record_index` from the `records` grain surface — all three project successfully and are
+used in shipped example configs. The doc is also silent on the R1 asymmetry between the
+projection surface and the timestamp-source surface.
+
+### R4 — TOOLING (minor): gate-harness flake under concurrent load
+One non-reproducible `trace FAIL` in `run_gates.sh` while `trace_domain.py` standalone
+returned `pass: true` on identical inputs; likely a DuckDB attach/lock race in the
+harness. Did not reproduce across two clean consecutive full runs. Low priority.
+
+### R5 — PARKED (documented boundary, not a defect)
+**Type-2 (as-of) enrichment** — reading a history-tracked property's value as it stood
+*during* a row's interval needs a correlated as-of join over `history`; explicitly out of
+scope per `dimensional.md` § Boundaries. Not needed by these configs; recorded for
+completeness. Likewise **no surrogate dimension keys** — "Dimension keys are the mechanism
+`record_id`" is by design.
+
+---
 
 Raw per-agent reports: `qa/data_qa/{coldread,audit}-<example>.md`, `qa/data_qa/gates.md`
 (gitignored).

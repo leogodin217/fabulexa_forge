@@ -6,12 +6,16 @@ import `fabulexa_forge` — it verifies exporter *output* against the raw
 base-layer bundle, so trusting the exporter's own code would make the check
 circular.
 
-Parses the export config (YAML) to map each output table -> its source
-`kind`, and each output column -> its source:
+Parses the export config (YAML) to map each output table -> its grain source
+table, and each output column -> its source column:
 
   - dimensional mode: `{name: X, from: prop__Y}` / `{name: id, from: record_id}`
-    (any literal `from:` value is a column name in `records__<kind>`).
-    Columns with `derived:` or `fk:` are skipped -- not direct traces.
+    (any literal `from:` value is a column name on that table's GRAIN surface).
+    The grain decides which bundle table that is -- `records__<kind>` for a
+    records grain, `membership__<kind>__<property>` for a membership grain,
+    `history` for the history grains (see `grain_source`). Columns with
+    `derived:` or `fk:` are skipped -- not direct traces; so is the virtual
+    `lead_sim_time`, which exists in no bundle table.
   - base/source auto modes: the mechanical map `id` -> `record_id`,
     and `X` -> `prop__X` (base mode keeps the `prop__` prefix in the output
     column name; source mode strips it). The kind list is every
@@ -48,26 +52,53 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def dimensional_column_maps(cfg: dict) -> list[tuple[str, str, dict[str, str]]]:
-    """Return [(output_table, kind, {output_col: source_col})] for dimensional mode."""
+#: Grain-source columns that are virtual (engine-computed, not in any bundle
+#: table), so there is no source column to trace them against.
+_VIRTUAL_COLS = frozenset({"lead_sim_time"})
+
+
+def grain_source(src: dict) -> tuple[str, str | None]:
+    """Return (bundle_table, history_property) for a dimensional table's source.
+
+    A dimensional table's grain decides which bundle table its `from:` columns
+    are projected off (dimensional.md § "Projectable columns per grain") -- it is
+    NOT always `records__<kind>`:
+
+      records                        -> records__<kind>
+      membership                     -> membership__<kind>__<property>
+      history_point/history_interval -> history (filtered to kind[, property])
+    """
+    grain = src.get("grain", "records")
+    kind = src["kind"]
+    if grain == "membership":
+        return f"membership__{kind}__{src['property']}", None
+    if grain in ("history_point", "history_interval"):
+        return "history", src.get("property")
+    return f"records__{kind}", None
+
+
+def dimensional_column_maps(cfg: dict) -> list[tuple[str, dict, dict[str, str]]]:
+    """Return [(output_table, source_decl, {output_col: source_col})] for
+    dimensional mode."""
     out = []
     for tbl in cfg["dimensional"]["tables"]:
         name = tbl["name"]
-        kind = tbl["source"]["kind"]
+        src = tbl["source"]
         col_map = {}
         for col in tbl["columns"]:
-            if "from" in col:
+            if "from" in col and col["from"] not in _VIRTUAL_COLS:
                 col_map[col["name"]] = col["from"]
             # `derived:` and `fk:` columns are skipped -- not direct traces.
-        out.append((name, kind, col_map))
+        out.append((name, src, col_map))
     return out
 
 
 def auto_column_maps(
     cfg: dict, mode: str, con: duckdb.DuckDBPyConnection
-) -> list[tuple[str, str, dict[str, str]]]:
-    """Return [(output_table, kind, {output_col: source_col})] for base/source auto
-    modes. `con` must have the bundle attached as `src` and the dataset as `out`."""
+) -> list[tuple[str, dict, dict[str, str]]]:
+    """Return [(output_table, source_decl, {output_col: source_col})] for base/source
+    auto modes. `con` must have the bundle attached as `src` and the dataset as
+    `out`. Auto modes are always a records grain."""
     exclude = set(cfg.get(mode, {}).get("exclude", {}).get("kinds", []) or [])
     bundle_tables = [
         row[0]
@@ -107,21 +138,30 @@ def auto_column_maps(
                 col_map[oc] = oc  # base mode: identity, prop__ prefix kept
             elif f"prop__{oc}" in bundle_cols:
                 col_map[oc] = f"prop__{oc}"  # source mode: prefix stripped
-        result.append((output_table, kind, col_map))
+        result.append((output_table, {"grain": "records", "kind": kind}, col_map))
     return result
 
 
 def check_column(
     con: duckdb.DuckDBPyConnection,
     output_table: str,
-    kind: str,
+    source: dict,
     out_col: str,
     source_col: str,
 ) -> dict:
+    kind = source["kind"]
+    src_table, hist_prop = grain_source(source)
+    where = ""
+    if src_table == "history":
+        where = f" where kind = '{kind}'" + (
+            f" and property = '{hist_prop}'" if hist_prop else ""
+        )
     domain_parts = [
-        f'select distinct cast("{source_col}" as varchar) from src.records__{kind}'
+        f'select distinct cast("{source_col}" as varchar) from src.{src_table}{where}'
     ]
-    if source_col.startswith("prop__"):
+    # Only a records-grain prop__ column carries past states in `history`; a
+    # membership/history grain row IS the historical fact, already in its table.
+    if source_col.startswith("prop__") and src_table.startswith("records__"):
         prop_name = source_col.removeprefix("prop__")
         domain_parts.append(
             "select distinct value from src.history "
@@ -143,6 +183,7 @@ def check_column(
         "table": output_table,
         "column": out_col,
         "source_kind": kind,
+        "source_table": src_table,
         "source_column": source_col,
         "fabricated_value_count": len(fabricated),
         "fabricated_sample": [r[0] for r in fabricated[:5]],
@@ -172,9 +213,9 @@ def main() -> int:
         raise SystemExit(f"trace_domain.py: unsupported export mode {mode!r}")
 
     results = []
-    for output_table, kind, col_map in table_maps:
+    for output_table, source, col_map in table_maps:
         for out_col, source_col in col_map.items():
-            results.append(check_column(con, output_table, kind, out_col, source_col))
+            results.append(check_column(con, output_table, source, out_col, source_col))
 
     summary = {
         "config": args.config,

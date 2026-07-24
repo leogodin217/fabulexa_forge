@@ -18,8 +18,19 @@
 # (wards/theatres/diagnostics/procedures/meds), journey_instance (episodes),
 # resource (consultants), booking (appointments).
 #
-# Anchor is optional for base — omitted here, so lifecycle timestamps stay raw
-# sim-time ns. Add a `rebase:` block (see source.yaml) to land wallclock dates.
+# Note this drops KINDS only. Columns are dropped too, but not by us: a
+# non-exempt `temporal_class: slice_only` column is ALWAYS auto-omitted with a
+# notice, in every mode, no matter what this config says. In this bundle that
+# silently removes booking.attended_at, journey_instance.state_entry_time /
+# complete / bound_roles / output_roles, and resource.queue. Watch the export's
+# `notice:` lines for the authoritative list.
+#
+# Timestamps: no `rebase:` block here, so the effective anchor is whatever the
+# sidecar carries. This bundle HAS a `runtime` anchor (2023-01-01T00:00 UTC), so
+# the framework LIFECYCLE columns (`created_sim_time`, `deactivated_at`) land as
+# wallclock TIMESTAMP. Domain `prop__` columns are never anchored — the
+# sim-time-valued ones (booking.requested_at / opening_at) stay raw BIGINT ns.
+# Add a `rebase:` block (see source.yaml) only to override that origin/zone.
 
 mode: base
 

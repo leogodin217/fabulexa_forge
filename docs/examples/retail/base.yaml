@@ -10,7 +10,7 @@
 # presentation-verbatim (`prop__*` keeps its prefix).
 #
 # The only author decision here is which kinds to drop — and unlike the NHS
-# bundle, retail drops NOTHING. NHS excluded two simulation-MECHANISM kinds
+# bundle, retail drops no kind. NHS excluded two simulation-MECHANISM kinds
 # (an engine `tick_decision` rule-firing log and an internal `queue`). Retail
 # has neither:
 #   - There is no `queue` kind.
@@ -23,7 +23,19 @@
 # (products + storefront infrastructure), journey_instance (shopping / ops
 # sessions), tick_decision (customer-action funnel events).
 #
-# Anchor is optional for base — omitted here, so lifecycle timestamps stay raw
-# sim-time ns. Add a `rebase:` block (see source.yaml) to land wallclock dates.
+# Dropping no KIND is not the same as dropping no COLUMN: `slice_only` columns
+# are ALWAYS auto-omitted, independent of any author exclusion. Retail's
+# journey_instance carries three (prop__state_entry_time, prop__complete,
+# prop__bound_roles); each is omitted with a `slice-only-column-omitted` notice,
+# not an error.
+#
+# Anchor: a `rebase:` block is optional for base — omitted here, but this emit's
+# sidecar CARRIES a `runtime` anchor (2022-03-01T00:00:00 UTC), so the effective
+# anchor resolves from the sidecar and the framework/lifecycle columns
+# (`created_sim_time`, `deactivated_at`) land as wallclock TIMESTAMPs, not raw
+# sim-time ns. Domain `prop__*` columns are presentation-verbatim and stay in
+# whatever units the scenario wrote them. Add a `rebase:` block (see source.yaml)
+# only to override the origin instant or timezone; an emit with NO sidecar anchor
+# and no `rebase:` is the case where lifecycle columns stay raw BIGINT ns.
 
 mode: base
