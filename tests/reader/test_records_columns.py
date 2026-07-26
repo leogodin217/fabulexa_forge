@@ -1,5 +1,6 @@
-"""Tests for the records-column taxonomy: `records_column_role` and
-`ref_index_sibling`.
+"""Tests for the records-column taxonomy (`records_column_role`,
+`ref_index_sibling`) and the structural-temporal surface
+(`structural_instant_columns`, `records_structural_column_is_mutable`).
 
 Pure name classification — no sidecar, no DuckDB, no emit fixtures.
 """
@@ -10,8 +11,11 @@ import pytest
 
 from fabulexa_forge.reader.records_columns import (
     REF_INDEX_PREFIX,
+    StructuralInstant,
     records_column_role,
+    records_structural_column_is_mutable,
     ref_index_sibling,
+    structural_instant_columns,
 )
 
 # ---------------------------------------------------------------------------
@@ -98,3 +102,80 @@ def test_ref_index_sibling_raises_for_non_prop_name(name: str) -> None:
     """A non-prop__-prefixed name raises ValueError."""
     with pytest.raises(ValueError, match="prop__"):
         ref_index_sibling(name)
+
+
+# ---------------------------------------------------------------------------
+# structural_instant_columns
+# ---------------------------------------------------------------------------
+
+
+def test_structural_instant_columns_records() -> None:
+    """records category maps its three lifecycle columns to their instants."""
+    assert structural_instant_columns("records") == {
+        "created_sim_time": "created",
+        "deactivated_at": "closed",
+        "last_mutation_sim_time": "last_touched",
+    }
+
+
+def test_structural_instant_columns_fixed() -> None:
+    """fixed category maps sim_time to 'changed'."""
+    assert structural_instant_columns("fixed") == {"sim_time": "changed"}
+
+
+def test_structural_instant_columns_membership() -> None:
+    """membership category maps joined_sim_time / left_sim_time."""
+    assert structural_instant_columns("membership") == {
+        "joined_sim_time": "joined",
+        "left_sim_time": "left",
+    }
+
+
+def test_structural_instant_columns_unrecognised_category_raises() -> None:
+    """An unrecognised category raises ValueError naming the value."""
+    with pytest.raises(ValueError, match="bogus"):
+        structural_instant_columns("bogus")
+
+
+def test_structural_instant_columns_vocabulary_totality() -> None:
+    """The union of returned instants across the three categories is exactly
+    the six-member StructuralInstant vocabulary, each appearing once."""
+    import typing
+
+    all_instants = [
+        instant
+        for category in ("records", "fixed", "membership")
+        for instant in structural_instant_columns(category).values()
+    ]
+    assert sorted(all_instants) == sorted(typing.get_args(StructuralInstant))
+    assert len(all_instants) == len(set(all_instants))
+
+
+# ---------------------------------------------------------------------------
+# records_structural_column_is_mutable
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", ["active", "deactivated_at", "last_mutation_sim_time"])
+def test_records_structural_column_is_mutable_true(name: str) -> None:
+    """active, deactivated_at, last_mutation_sim_time may change after creation."""
+    assert records_structural_column_is_mutable(name) is True
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["created_sim_time", "fork_path", "record_id", "record_index", "presentation_id"],
+)
+def test_records_structural_column_is_mutable_false(name: str) -> None:
+    """created_sim_time, fork_path, record_id, record_index, presentation_id
+    are set once."""
+    assert records_structural_column_is_mutable(name) is False
+
+
+@pytest.mark.parametrize("name", ["prop__status", "ref_index__owner", "sim_time"])
+def test_records_structural_column_is_mutable_raises_outside_domain(
+    name: str,
+) -> None:
+    """A prop__, ref_index__, or non-records-structural name raises ValueError."""
+    with pytest.raises(ValueError, match=name):
+        records_structural_column_is_mutable(name)

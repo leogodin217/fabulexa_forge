@@ -2,7 +2,7 @@ sprint: structural-temporal
 parent_branch: data_qa
 baseline_sha: 3389f1be44c0a7d58e1f90e846c790b0f9279678
 started: 2026-07-26
-current_phase: 1
+current_phase: 2
 capabilities:
   - reader: [structural-temporal-surface, sidecar-category-gate]
   - dimensional: [records-grain-instant-widening, reader-resolved-sets]
@@ -13,7 +13,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Reader structural-temporal surface + category gate"
     demo: "docs/sprints/structural-temporal/demos/phase_1_structural_surface.py"
   2:

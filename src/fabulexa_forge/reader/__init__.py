@@ -23,8 +23,11 @@ from fabulexa_forge.reader.errors import (
 from fabulexa_forge.reader.records_columns import (
     REF_INDEX_PREFIX,
     RecordsColumnRole,
+    StructuralInstant,
     records_column_role,
+    records_structural_column_is_mutable,
     ref_index_sibling,
+    structural_instant_columns,
 )
 from fabulexa_forge.reader.relations import (
     build_history_relation_sql,
@@ -60,6 +63,7 @@ __all__ = [
     "Sidecar",
     "SidecarParseError",
     "SidecarStructureError",
+    "StructuralInstant",
     "SubTypeColumns",
     "TableNotFoundError",
     "TableSpec",
@@ -72,7 +76,9 @@ __all__ = [
     "distinct_prop_values",
     "open_emit",
     "records_column_role",
+    "records_structural_column_is_mutable",
     "ref_index_sibling",
     "run_check",
+    "structural_instant_columns",
     "validate",
 ]

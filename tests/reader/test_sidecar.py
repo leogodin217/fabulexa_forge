@@ -533,6 +533,21 @@ def test_structure_error_table_missing_category() -> None:
         Sidecar.from_raw(raw)
 
 
+def test_structure_error_table_non_string_category() -> None:
+    """from_raw raises SidecarStructureError when category is not a string."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": 42,
+            "columns": [{"name": "x", "type": "VARCHAR"}],
+            "rows": 0,
+        }
+    ]
+    with pytest.raises(SidecarStructureError):
+        Sidecar.from_raw(raw)
+
+
 def test_structure_error_table_missing_rows() -> None:
     """from_raw raises SidecarStructureError when a table is missing rows."""
     raw = _minimal_raw()
@@ -624,8 +639,10 @@ def test_succeeds_with_empty_columns_array() -> None:
     assert sidecar.columns("history") == ()
 
 
-def test_succeeds_with_bogus_category() -> None:
-    """from_raw SUCCEEDS with a bogus category value."""
+def test_bogus_category_raises_structure_error() -> None:
+    """from_raw raises SidecarStructureError for an out-of-set category, naming
+    the table and the value (structural-temporal sprint: reclassified from a
+    C1 conformance failure to a parse-time refusal)."""
     raw = _minimal_raw()
     raw["tables"] = [
         {
@@ -635,8 +652,24 @@ def test_succeeds_with_bogus_category() -> None:
             "rows": 0,
         }
     ]
+    with pytest.raises(SidecarStructureError, match="history.*bogus"):
+        Sidecar.from_raw(raw)
+
+
+@pytest.mark.parametrize("category", ["fixed", "records", "membership"])
+def test_recognised_categories_parse(category: str) -> None:
+    """Each of the three contract table categories still parses successfully."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "t",
+            "category": category,
+            "columns": [{"name": "x", "type": "VARCHAR"}],
+            "rows": 0,
+        }
+    ]
     sidecar = Sidecar.from_raw(raw)
-    assert sidecar.table("history").category == "bogus"
+    assert sidecar.table("t").category == category
 
 
 def test_succeeds_with_missing_record_kind_on_records_table() -> None:

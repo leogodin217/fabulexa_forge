@@ -27,6 +27,12 @@ needs one refuses rather than deriving it from history_tracked.
 
 _TEMPORAL_CLASSES: frozenset[str] = frozenset({"constant", "tracked", "slice_only"})
 
+#: The contract's closed table-category enum. Restates the vendored schema's
+#: `category` enum — contract-pinned, the same hardcoding class as the pinned
+#: column lists. An out-of-set value refuses at parse (structural-temporal
+#: design doc § Reader — sidecar category validation).
+_TABLE_CATEGORIES: frozenset[str] = frozenset({"fixed", "records", "membership"})
+
 
 @dataclass(frozen=True)
 class ColumnSpec:
@@ -146,6 +152,10 @@ def _parse_table(raw_table: object, table_idx: int) -> TableSpec:
     category_raw = raw_table.get("category")
     if not isinstance(category_raw, str):
         raise SidecarStructureError(f"table '{name}' missing or non-string 'category'")
+    if category_raw not in _TABLE_CATEGORIES:
+        raise SidecarStructureError(
+            f"table '{name}' unrecognised category '{category_raw}'"
+        )
 
     columns_raw = raw_table.get("columns")
     if not isinstance(columns_raw, list):
@@ -546,9 +556,12 @@ class Sidecar:
         conditional-required — those are C1's job. record_kind and property are
         populated by presence alone (absent -> None); the
         category<->record_kind/property correspondence is left to C1/C3.
-        A present-but-schema-invalid sidecar (empty columns array, a "bogus"
-        category, a phantom column) parses successfully here and is diagnosed later by
-        validate — this is the room the negative fixtures need.
+        A present-but-schema-invalid sidecar (empty columns array, a phantom
+        column) parses successfully here and is diagnosed later by validate —
+        this is the room the negative fixtures need. A table `category`
+        outside the contract's closed set ("fixed", "records", "membership")
+        is the one exception: it refuses at this floor with
+        SidecarStructureError, not deferred to validate — see Raises.
 
         Args:
             raw: The parsed base.json object exactly as loaded from disk.
@@ -567,7 +580,10 @@ class Sidecar:
                 required top-level / structural-floor field is absent or mis-typed
                 (branches not a non-empty list, tables not a list, a table missing
                 name/category/columns/rows, a columns element that is not an object or
-                missing name/type, a branch missing fork_path/parent/slice_at).
+                missing name/type, a branch missing fork_path/parent/slice_at), OR a
+                table's `category` is a string outside the contract's closed set
+                ("fixed", "records", "membership") — the same failure class as a
+                missing or non-string category.
                 `parent` must be PRESENT with a value that may be null (-> None); an
                 absent parent key is below the floor.
         """
