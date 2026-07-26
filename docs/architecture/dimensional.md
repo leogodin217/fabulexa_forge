@@ -159,7 +159,7 @@ dim's `record_id`.
 
 | `grain` | Projectable columns (`from` / `correlation`) |
 |---|---|
-| `records` | `fork_path`, `record_id`, `active`, `deactivated_at`, `last_mutation_sim_time`; every `prop__<p>` of the kind |
+| `records` | `fork_path`, `record_id`, `presentation_id` (when the emit carries one), `created_sim_time`, `active`, `deactivated_at`, `last_mutation_sim_time`, `record_index`; every `prop__<p>` of the kind, and the `ref_index__<p>` sibling of each reference-typed property |
 | `history_point` | `fork_path`, `kind`, `record_id`, `property`, `sim_time`, `value` |
 | `history_interval` | the `history_point` surface **plus** the virtual `lead_sim_time` (the engine's `LEAD(sim_time)` interval end; `NULL` on a series' last row) |
 | `membership` | `fork_path`, `record_id`, `joined_sim_time`, `left_sim_time`; every `elem__<f>` element-field column; each reference field's `member__<f>__kind` / `member__<f>__id` pair |
@@ -167,6 +167,19 @@ dim's `record_id`.
 `lead_sim_time` is the only virtual (non-sidecar) entry; every other column is one the
 sidecar lists for that grain's table. A `from:` naming anything outside its grain's
 surface is a `ProjectionColumnExists` failure.
+
+**The surface is sidecar-resolved, not a fixed list.** Each row above spells out the
+shape the base-format contract guarantees for that grain, but the check itself is
+"does the sidecar declare this column on the grain's table?" — so identity and
+lifecycle columns project like any other, and a producer's additional columns (e.g.
+opt-in provenance) become projectable without a change here. Read the emit's sidecar,
+not this table, for what a *particular* emit offers.
+
+**Projecting a column is not the same as anchoring on it.** A column being projectable
+via `from:` does not make it a legal `derived: {timestamp: {source: ...}}` source: the
+timestamp-source set is a separate, narrower per-grain set (§ Timestamp source and the
+runtime anchor). The two surfaces genuinely differ — an author who can read a column
+raw may still be refused when asking to render it as wallclock.
 
 ### Role and SCD class
 

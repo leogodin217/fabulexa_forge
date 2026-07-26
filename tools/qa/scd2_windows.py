@@ -18,6 +18,12 @@ own code would make the check circular.
 
 Usage:
     scd2_windows.py <dataset.duckdb>
+
+Exit codes:
+    0  every SCD-2 table's windows are sane
+    1  at least one window violation (a real data defect)
+    3  ungated -- the dataset could not be opened read-only (locked by a
+       concurrent writer, mid-write, or corrupt). NOT a data defect.
 """
 
 from __future__ import annotations
@@ -26,6 +32,10 @@ import argparse
 import json
 
 import duckdb
+
+#: Exit code for "could not gate". Distinct from 1 so a harness never reports
+#: an unreadable dataset as an invariant violation.
+UNGATED_EXIT = 3
 
 
 def find_scd2_tables(con: duckdb.DuckDBPyConnection) -> list[str]:
@@ -211,7 +221,21 @@ def main() -> int:
     parser.add_argument("dataset", help="Path to the dataset .duckdb file")
     args = parser.parse_args()
 
-    con = duckdb.connect(args.dataset, read_only=True)
+    try:
+        con = duckdb.connect(args.dataset, read_only=True)
+    except duckdb.Error as exc:
+        print(
+            json.dumps(
+                {
+                    "dataset": args.dataset,
+                    "gated": False,
+                    "reason": f"dataset could not be opened read-only: {exc}",
+                },
+                indent=2,
+            )
+        )
+        return UNGATED_EXIT
+
     tables = find_scd2_tables(con)
 
     results = [check_table(con, t) for t in tables]

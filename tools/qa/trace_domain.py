@@ -36,6 +36,12 @@ fabricated by the exporter.
 
 Usage:
     trace_domain.py <config.yaml> <dataset.duckdb> <bundle_run.duckdb>
+
+Exit codes:
+    0  every traced value exists in its source domain
+    1  at least one fabricated value (a real data defect)
+    3  ungated -- the dataset or bundle could not be attached read-only
+       (locked by a concurrent writer, mid-write, or corrupt). NOT a defect.
 """
 
 from __future__ import annotations
@@ -45,6 +51,10 @@ import json
 
 import duckdb
 import yaml
+
+#: Exit code for "could not gate". Distinct from 1 so a harness never reports
+#: an unreadable dataset as an invariant violation.
+UNGATED_EXIT = 3
 
 
 def load_config(path: str) -> dict:
@@ -202,8 +212,22 @@ def main() -> int:
     mode = cfg["mode"]
 
     con = duckdb.connect(":memory:")
-    con.execute(f"attach '{args.bundle}' as src (read_only)")
-    con.execute(f"attach '{args.dataset}' as out (read_only)")
+    for alias, path in (("src", args.bundle), ("out", args.dataset)):
+        try:
+            con.execute(f"attach '{path}' as {alias} (read_only)")
+        except duckdb.Error as exc:
+            print(
+                json.dumps(
+                    {
+                        "dataset": args.dataset,
+                        "bundle": args.bundle,
+                        "gated": False,
+                        "reason": f"could not attach {path} read-only: {exc}",
+                    },
+                    indent=2,
+                )
+            )
+            return UNGATED_EXIT
 
     if mode == "dimensional":
         table_maps = dimensional_column_maps(cfg)

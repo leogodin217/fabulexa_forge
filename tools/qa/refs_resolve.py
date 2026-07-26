@@ -23,6 +23,12 @@ trusting the exporter's own code would make the check circular.
 
 Usage:
     refs_resolve.py <config.yaml> <dataset.duckdb>
+
+Exit codes:
+    0  every declared FK resolves
+    1  at least one declared FK has orphans (a real data defect)
+    3  ungated -- the dataset could not be opened read-only (locked by a
+       concurrent writer, mid-write, or corrupt). NOT a data defect.
 """
 
 from __future__ import annotations
@@ -32,6 +38,10 @@ import json
 
 import duckdb
 import yaml
+
+#: Exit code for "could not gate". Distinct from 1 so a harness never reports
+#: an unreadable dataset as an invariant violation.
+UNGATED_EXIT = 3
 
 
 def load_config(path: str) -> dict:
@@ -90,7 +100,20 @@ def main() -> int:
     cfg = load_config(args.config)
     mode = cfg["mode"]
 
-    con = duckdb.connect(args.dataset, read_only=True)
+    try:
+        con = duckdb.connect(args.dataset, read_only=True)
+    except duckdb.Error as exc:
+        print(
+            json.dumps(
+                {
+                    "dataset": args.dataset,
+                    "gated": False,
+                    "reason": f"dataset could not be opened read-only: {exc}",
+                },
+                indent=2,
+            )
+        )
+        return UNGATED_EXIT
 
     if mode == "dimensional":
         fk_maps = dimensional_fk_maps(cfg)

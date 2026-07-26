@@ -31,6 +31,13 @@ Final verification on a quiet tree (no concurrent agents):
   (two consecutive clean full runs)
 - `uv run pytest` → 3760 passed, 13 skipped
 
+**Re-verified 2026-07-26 on regenerated bundles.** All five example bundles were re-emitted
+that morning; `out/exports/` still held the 07-24 datasets, which the gates correctly began
+failing (see R4). After `tools/run_all_exports.sh` (17 configs, 0 failures) the full gate
+run is **13/13 PASS** on scd2 / refs / trace, **determinism PASS** on all 5, **0 failing
+and 0 ungated** invocations. The fidelity verdict above therefore holds against the current
+bundles, not just the ones the round was run on.
+
 **Fidelity held throughout.** `trace_domain` traced ~500 output columns across 13
 datasets with **zero fabricated values**, and every author-declared `fk:` resolves with
 **0 orphans**. Principles #3 (no fabrication) and #4 (integrity preserved) hold.
@@ -88,16 +95,45 @@ mention them. **Consequence:** cross-table joins in base output must use the opa
 `prop__` business id (e.g. parent-child `actor.prop__group → entity.id`, which does
 resolve: 0 dangling, 3 honest NULLs).
 
-### R3 — DOC BUG: records-grain projectable-columns list is incomplete
-`docs/architecture/dimensional.md:162` omits `created_sim_time`, `presentation_id`, and
+### R3 — DOC BUG: records-grain projectable-columns list is incomplete — **RESOLVED**
+`docs/architecture/dimensional.md:162` omitted `created_sim_time`, `presentation_id`, and
 `record_index` from the `records` grain surface — all three project successfully and are
-used in shipped example configs. The doc is also silent on the R1 asymmetry between the
+used in shipped example configs. The doc was also silent on the R1 asymmetry between the
 projection surface and the timestamp-source surface.
 
-### R4 — TOOLING (minor): gate-harness flake under concurrent load
+**Fixed.** The row now carries every column the contract guarantees for the grain
+(including the `ref_index__<p>` siblings), and two paragraphs follow it: one stating the
+surface is *sidecar-resolved* rather than a closed list — which is where the original
+error came from, the table having transcribed the `_RECORDS_BASE_COLS` constant instead of
+the constant ∪ the sidecar's columns — and one stating that projectable ≠ anchorable,
+cross-referencing § Timestamp source and the runtime anchor. Worded to stay true after R1
+widens the timestamp set.
+
+### R4 — TOOLING (minor): gate-harness flake under concurrent load — **RESOLVED**
 One non-reproducible `trace FAIL` in `run_gates.sh` while `trace_domain.py` standalone
 returned `pass: true` on identical inputs; likely a DuckDB attach/lock race in the
-harness. Did not reproduce across two clean consecutive full runs. Low priority.
+harness. Did not reproduce across two clean consecutive full runs.
+
+**Fixed, and it was hiding a second false-FAIL source.** A gate cell is now one of
+`PASS` / `FAIL` / `UNGATED` / `UNSTABLE` / `STALE` / `MISSING`, and only `FAIL` counts as
+a data defect:
+
+- Each checker exits **3** ("ungated") when the dataset will not open read-only, instead
+  of surfacing a DuckDB `IOException` as a generic nonzero. Verified against both a
+  genuine writer lock held by another process and a corrupt file.
+- The harness refuses to gate a dataset with an open `.wal` beside it, and re-fingerprints
+  (size + ns mtime + wal) after the three gates — if the file moved underneath them, the
+  row is `UNSTABLE` and all three verdicts are discarded, `PASS` included.
+- **`STALE`**: a dataset older than its bundle or config is not gated at all. This came
+  out of the fix: the first full run reported `trace FAIL` on all three retail datasets,
+  and the cause was that every example bundle had been regenerated while `out/exports/`
+  still held datasets built from the previous ones. Re-exporting retail from the current
+  bundle traced 58 columns with **0 failures**. Three FAILs that looked like fabrication
+  were an artifact-age mismatch — the same credibility failure as R4 proper, by a
+  different route.
+
+Ungated invocations are counted and reported separately from failures, each with its own
+remedy, so nothing in that category can be mistaken for a data defect.
 
 ### R5 — PARKED (documented boundary, not a defect)
 **Type-2 (as-of) enrichment** — reading a history-tracked property's value as it stood
