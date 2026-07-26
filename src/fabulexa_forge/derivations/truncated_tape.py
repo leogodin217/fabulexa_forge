@@ -1,8 +1,9 @@
 """The truncated-tape surface: relation builders and sidecar view for T.
 
 Three relation builders (history, membership, records — the last re-deriving
-each ref_index__ column as part of its recipe) and one sidecar view presenting the emit as if its
-slice ended at `at_sim_time` (inclusive). Each builder returns a complete
+each ref_index__ column as part of its recipe) and one sidecar view presenting
+the emit as if its slice ended at `at_sim_time` (inclusive). Each builder
+returns a complete
 SELECT that replaces its base table inside a mode's full-export compile
 (§ Shaped state, docs/architecture/pending/playback.md); totality over
 structurally-conformant input holds as for the folds. Unlike the folds' point-
