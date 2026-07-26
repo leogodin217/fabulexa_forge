@@ -8,6 +8,7 @@ row counts for every table (including 0-row tables), idempotent re-run
 from __future__ import annotations
 
 import csv
+from datetime import datetime
 from pathlib import Path
 
 import duckdb
@@ -518,12 +519,11 @@ def test_records_grain_instant_columns_validate_and_export(tmp_path: Path) -> No
     by_id = {row[0]: row for row in rows}
 
     deactivated = by_id["e001"]
-    assert "2024-01-01" in str(deactivated[1])
-    assert deactivated[2] is not None
-    assert "2024-01-01" in str(deactivated[2])
-    assert deactivated[3] is not None
+    assert deactivated[1] == datetime(2024, 1, 1, 0, 0, 0)
+    assert deactivated[2] == datetime(2024, 1, 1, 0, 0, 50)
+    assert deactivated[3] == datetime(2024, 1, 1, 0, 0, 50)
 
     still_active = by_id["e002"]
-    assert "2024-01-01" in str(still_active[1])
+    assert still_active[1] == datetime(2024, 1, 1, 0, 0, 0)
     assert still_active[2] is None
-    assert still_active[3] is not None
+    assert still_active[3] == datetime(2024, 1, 1, 0, 0, 30)
