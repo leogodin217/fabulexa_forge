@@ -266,6 +266,6 @@ def test_renamed_key_columns_appear_under_their_renamed_names(tmp_path: Path) ->
     with _actor_emit(tmp_path, config) as (emit, spec, fork_path):
         sql = _render(emit, spec, fork_path, None)
         rows = _rows_by_id(emit, sql, _column_order(overrides))
-    assert rows["a001"]["actor_sk"] is not None
+    assert rows["a001"]["actor_sk"] == 0
     assert rows["a001"]["lead_sk"] == 0
     assert '"actor_key"' not in sql
