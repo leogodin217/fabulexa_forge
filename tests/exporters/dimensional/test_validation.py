@@ -329,9 +329,9 @@ def test_records_grain_instant_sources_accepted(
 ) -> None:
     """Each of the three records structural instants passes on records grain.
 
-    created_sim_time and deactivated_at were refused before this sprint's
-    allowlist widened to the reader's structural-temporal surface;
-    last_mutation_sim_time was already accepted and stays accepted.
+    The allowlist is the reader's structural-temporal surface, so every
+    instant-carrying records structural column is a legal timestamp source —
+    a record's birth and close instants as much as its last-touched one.
     """
     emit_dir = build_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:

@@ -641,8 +641,8 @@ def test_succeeds_with_empty_columns_array() -> None:
 
 def test_bogus_category_raises_structure_error() -> None:
     """from_raw raises SidecarStructureError for an out-of-set category, naming
-    the table and the value (structural-temporal sprint: reclassified from a
-    C1 conformance failure to a parse-time refusal)."""
+    the table and the value. The category set is closed at the structural floor,
+    not diagnosed as a C1 conformance failure."""
     raw = _minimal_raw()
     raw["tables"] = [
         {

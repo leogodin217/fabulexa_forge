@@ -10,7 +10,7 @@ doc owns the design and build order.
 | Doc | Subsystem |
 |---|---|
 | [`bundle.md`](bundle.md) | The input, understood — consumer-side orientation to the bundle: where emit data comes from, table-genre semantics, inherited guarantees, mechanism vs presentation columns, single-branch facts. Informational companion to the vendored contract |
-| [`reader.md`](reader.md) | The base reader — open + version-gate an emit, expose the typed sidecar, the records-column taxonomy (the one classifier every records-column consumer reads through), the row-tuple + columnar query surfaces, the faithful-read SQL builders (the sole faithful namer of base tables) |
+| [`reader.md`](reader.md) | The base reader — open + version-gate an emit, expose the typed sidecar, the records-column taxonomy (the one classifier every records-column consumer reads through), the structural-temporal surface (the one answer to which structural columns carry a sim-time instant and which may change after creation), the row-tuple + columnar query surfaces, the faithful-read SQL builders (the sole faithful namer of base tables) |
 | [`conformance.md`](conformance.md) | C1–C14 conformance — `validate` / `fabulexa-forge validate`, the independent codec, comparison sources |
 | [`derivations.md`](derivations.md) | The derivations layer — interpretive shared folds between the reader and the modes; the versioned-intervals, reference-resolution, row-state-events, membership-events, state-at (horizoned + end-of-tape), and membership-state-at residents plus the truncated-tape surface, the layer contract (purity / anti-weld / traceability / temporal honesty), the single-branch guard |
 | [`dimensional.md`](dimensional.md) | The dimensional exporter — `mode: dimensional` star-schema reshape (config grammar, grains, FK pathfind, `lookup` enrichment, SCD-2, writers, `export` / `init`) |
@@ -258,6 +258,7 @@ sidecar-shape churn):
 | Project skeleton + standalone-venv boundary | Scaffolded |
 | Vendored contract (`base_format_version 6`) | Vendored — re-synced on version bump (`contract/README.md`) |
 | Reader + conformance | Implemented (Stage 1) — [`reader.md`](reader.md), [`conformance.md`](conformance.md) |
+| Reader structural-temporal surface — `StructuralInstant`, `structural_instant_columns`, `records_structural_column_is_mutable`; the closed table-category gate at the sidecar structural floor; dimensional / source / base resolving their instant sets through it | Implemented — [`reader.md`](reader.md) § The structural-temporal surface |
 | `fabulexa-forge validate` CLI verb | Implemented (Stage 1) |
 | Dimensional exporter + config + CSV/DuckDB writers | Implemented (Stage 2) — [`dimensional.md`](dimensional.md) |
 | `fabulexa-forge export` + `init` CLI verbs | Implemented (Stage 2) |

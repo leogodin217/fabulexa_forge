@@ -29,8 +29,8 @@ _TEMPORAL_CLASSES: frozenset[str] = frozenset({"constant", "tracked", "slice_onl
 
 #: The contract's closed table-category enum. Restates the vendored schema's
 #: `category` enum — contract-pinned, the same hardcoding class as the pinned
-#: column lists. An out-of-set value refuses at parse (structural-temporal
-#: design doc § Reader — sidecar category validation).
+#: column lists. An out-of-set value refuses at parse (design doc § The
+#: structural-temporal surface).
 _TABLE_CATEGORIES: frozenset[str] = frozenset({"fixed", "records", "membership"})
 
 

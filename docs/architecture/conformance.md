@@ -130,6 +130,14 @@ rejected by this reader.
 validates it directly and it never reaches the carve-out. The carve-out governs only
 genuinely unknown future top-level fields.
 
+C1's schema check carries a `category` enum clause that no emit reaches: a table
+`category` outside `{fixed, records, membership}` refuses at the reader's structural
+floor, so such an emit never opens and `validate` surfaces the sidecar-parse refusal
+instead of a `CheckResult` — the same observable behavior as a *missing* `category`
+([`reader.md`](reader.md) § The structural-temporal surface). C1 validates against the
+vendored schema with that clause intact; the diagnosis of an out-of-set category
+simply sits at the structural floor rather than in conformance.
+
 The mechanism, kept as a normative algorithm:
 
 1. Record the unknown top-level keys as warnings —
@@ -395,6 +403,12 @@ a scenario. `fabulexa-forge validate` is its only user surface.
   producer's deeper QA guarantees remain out of scope.
 - **Decode direction of the codec.** Conformance needs the *encode* direction only;
   the per-type decode contract is the reader's — see [`reader.md`](reader.md).
+- **The pinned structural column lists are literal here.** Elsewhere a consumer
+  needing a structural-column fact reads the reader's surface rather than restating
+  one ([`reader.md`](reader.md) § The structural-temporal surface). C5's lists are the
+  exception, and must remain so: they *are* the check that the contract's structural
+  prefix is present and correctly ordered, so expressing them in terms of a shared
+  surface derived from the same contract would make the check test itself.
 
 ## Related
 

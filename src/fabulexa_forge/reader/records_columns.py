@@ -13,7 +13,7 @@ Also owns the structural-temporal surface (`structural_instant_columns`,
 category carry a sim-time instant, and which records structural columns may
 change after creation. Both are pure and emit-independent — contract facts,
 not presentation — and loud on anything outside their closed domains (design
-doc § Semantics — Loudness).
+doc § The structural-temporal surface).
 """
 
 from __future__ import annotations
@@ -105,13 +105,13 @@ StructuralInstant = Literal[
 """The closed six-member instant vocabulary a structural column may name.
 
 Presentation-free: no output name appears in it. The vocabulary derives from
-the contract's column definitions (design doc § Semantics — the instant
-vocabulary), not from any particular emit.
+the contract's column definitions (design doc § The structural-temporal
+surface), not from any particular emit.
 """
 
 #: The structural columns of each table category that carry a sim-time
-#: instant, and the instant each names (design doc § Semantics — the instant
-#: vocabulary). Contract-pinned, the same hardcoding class as the pinned
+#: instant, and the instant each names (design doc § The structural-temporal
+#: surface). Contract-pinned, the same hardcoding class as the pinned
 #: column lists — restates the vendored schema, never derived from an emit.
 _STRUCTURAL_INSTANT_COLUMNS_BY_CATEGORY: Final[
     Mapping[str, Mapping[str, StructuralInstant]]
@@ -131,7 +131,7 @@ _STRUCTURAL_INSTANT_COLUMNS_BY_CATEGORY: Final[
 }
 
 #: Records structural columns whose value the producer may change after
-#: creation (design doc § Semantics — Mutability).
+#: creation (design doc § The structural-temporal surface).
 _MUTABLE_RECORDS_STRUCTURAL_NAMES: Final[frozenset[str]] = frozenset(
     {"active", "deactivated_at", "last_mutation_sim_time"}
 )

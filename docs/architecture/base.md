@@ -141,7 +141,13 @@ after-image to their declared sidecar types, so base delivers a typed table, not
 all-string one; `record_id` and `active` pass through verbatim. Lifecycle timestamps
 render wallclock through the shared `render_anchor_timestamp_expr` when an anchor
 resolves and stay raw sim-time `BIGINT` when it is `None` — base carries **no anchor
-conditional of its own**, since the renderer already handles `anchor=None`. Ordering is
+conditional of its own**, since the renderer already handles `anchor=None`. Which
+columns are lifecycle timestamps is the reader's answer: base reads the
+instant-carrying structural columns of the `records` category off the
+structural-temporal surface ([`reader.md`](reader.md) § The structural-temporal
+surface). The render iterates the state-at relation's columns, and that projection
+carries no `last_mutation_sim_time`, so that member of the set has nothing to match
+here (§ Lifecycle and mutation columns at a horizon). Ordering is
 the state-at resident's `(created_sim_time, record_id)` over raw ns keys, never rendered
 timestamps.
 
