@@ -23,12 +23,6 @@ from fabulexa_forge.reader.errors import TableNotFoundError
 
 __all__ = ["render_anchor_timestamp_expr", "render_typed_literal"]
 
-# Grain window-key columns: the raw sim-time source column for each grain.
-_GRAIN_WINDOW_KEY: dict[str, str] = {
-    "records": "last_mutation_sim_time",
-    "history_point": "sim_time",
-}
-
 
 def _value_map_duckdb_type(map_values: dict[str, int | float | str]) -> str:
     """Infer the DuckDB type for a value_map column from its map values.

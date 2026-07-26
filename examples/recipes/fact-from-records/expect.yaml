@@ -1,0 +1,19 @@
+tables:
+  fact_admission_event:
+    columns:
+      [admission_id, ward, admitted_at, discharged_at, last_touched_at]
+    row_count: 2
+    contains_rows:
+      # a001: still active — discharged_at (deactivated_at) is NULL, never
+      # fabricated.
+      - admission_id: a001
+        ward: north
+        admitted_at: 2024-01-02 00:00:00
+        discharged_at: null
+        last_touched_at: 2024-01-02 00:00:00
+      # a002: closed at 2*DAY — deactivated_at renders wallclock, not NULL.
+      - admission_id: a002
+        ward: south
+        admitted_at: 2024-01-02 00:00:00
+        discharged_at: 2024-01-03 00:00:00
+        last_touched_at: 2024-01-03 00:00:00

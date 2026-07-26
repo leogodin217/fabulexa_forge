@@ -57,6 +57,10 @@ from fabulexa_forge.exporters.slice_only import (
     slice_only_refusal_message,
 )
 from fabulexa_forge.reader.errors import TableNotFoundError
+from fabulexa_forge.reader.records_columns import (
+    records_structural_column_is_mutable,
+    structural_instant_columns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -100,21 +104,34 @@ _MEMBERSHIP_BASE_COLS: frozenset[str] = frozenset(
 #: The one virtual column added by history_interval.
 _LEAD_SIM_TIME = "lead_sim_time"
 
-#: Timestamp sources available per grain.
-_TIMESTAMP_SOURCES_BY_GRAIN: dict[str, frozenset[str]] = {
-    "records": frozenset({"last_mutation_sim_time"}),
-    "history_point": frozenset({"sim_time"}),
-    "history_interval": frozenset({"sim_time", "lead_sim_time"}),
-    "membership": frozenset({"joined_sim_time", "left_sim_time"}),
+#: Each grain's sidecar table category, for resolving timestamp sources
+#: through the reader's structural-temporal surface. history_interval shares
+#: history_point's category (both read the `history` table); its virtual
+#: `lead_sim_time` column is dimensional's own, layered in separately below.
+_GRAIN_CATEGORY: dict[str, str] = {
+    "records": "records",
+    "history_point": "fixed",
+    "history_interval": "fixed",
+    "membership": "membership",
 }
 
-#: Sources mutable under incremental (may change post-creation).
+#: Timestamp sources available per grain: each grain's category's structural
+#: instant columns, resolved through the reader (`structural_instant_columns`),
+#: plus the virtual `lead_sim_time` for history_interval only.
+_TIMESTAMP_SOURCES_BY_GRAIN: dict[str, frozenset[str]] = {
+    grain: (
+        frozenset(structural_instant_columns(category)) | {_LEAD_SIM_TIME}
+        if grain == "history_interval"
+        else frozenset(structural_instant_columns(category))
+    )
+    for grain, category in _GRAIN_CATEGORY.items()
+}
+
+#: Sources mutable under incremental (may change post-creation): the records
+#: grain's structural surface columns (`_RECORDS_BASE_COLS`) the reader
+#: (`records_structural_column_is_mutable`) marks mutable.
 _MUTABLE_SOURCES: frozenset[str] = frozenset(
-    {
-        "active",
-        "deactivated_at",
-        "last_mutation_sim_time",
-    }
+    name for name in _RECORDS_BASE_COLS if records_structural_column_is_mutable(name)
 )
 
 

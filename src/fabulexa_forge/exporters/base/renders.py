@@ -13,10 +13,11 @@ back from the state-at codec VARCHAR to their sidecar-declared type;
 native columns). Every column is projected under `spec.column_renames`.
 Base never uses the compile-indirection (`base_relations`) wrapping.
 
-Layer-direction invariant: imports the reader (TYPE_CHECKING only), the
-derivations layer (the state-at derivation), fabulexa_forge.anchor, the
-sibling base.plan module (TYPE_CHECKING only), and stdlib. Never imports
-exporters.dimensional.*, exporters.source.*, or exporters.streaming.*.
+Layer-direction invariant: imports the reader (the structural-temporal
+surface at runtime; `Sidecar` TYPE_CHECKING only), the derivations layer (the
+state-at derivation), fabulexa_forge.anchor, the sibling base.plan module
+(TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.*,
+exporters.source.*, or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from fabulexa_forge.derivations.state_at import (
     build_state_at_end_sql,
     build_state_at_sql,
 )
+from fabulexa_forge.reader.records_columns import structural_instant_columns
 
 #: The `records__<kind>` name prefix a base spec's kind is read against.
 _RECORDS_PREFIX = "records__"
@@ -47,8 +49,10 @@ _PROP_PREFIX = "prop__"
 _VERBATIM_COLUMNS: frozenset[str] = frozenset({"record_id", "active"})
 
 #: State-at columns rendered wallclock through the anchor renderer (or raw
-#: sim-time ns, when `anchor` is None).
-_WALLCLOCK_COLUMNS: frozenset[str] = frozenset({"created_sim_time", "deactivated_at"})
+#: sim-time ns, when `anchor` is None) — resolved through the reader's
+#: structural-temporal surface. The state-at derivation never carries
+#: `last_mutation_sim_time`, so this set's third member is inert here.
+_WALLCLOCK_COLUMNS: frozenset[str] = frozenset(structural_instant_columns("records"))
 
 
 def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:

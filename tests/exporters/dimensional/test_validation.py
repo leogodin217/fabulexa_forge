@@ -321,6 +321,70 @@ def test_joined_sim_time_off_membership_raises(tmp_path: Path) -> None:
             check_timestamp_source_available(col, tbl, tbl.source, surface)
 
 
+@pytest.mark.parametrize(
+    "source_name", ["created_sim_time", "deactivated_at", "last_mutation_sim_time"]
+)
+def test_records_grain_instant_sources_accepted(
+    tmp_path: Path, source_name: str
+) -> None:
+    """Each of the three records structural instants passes on records grain.
+
+    created_sim_time and deactivated_at were refused before this sprint's
+    allowlist widened to the reader's structural-temporal surface;
+    last_mutation_sim_time was already accepted and stays accepted.
+    """
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        col = ColumnDecl(
+            name="ts",
+            derived=DerivedSpec(timestamp=TimestampSpec(source=source_name)),
+        )
+        tbl = _make_table_decl(
+            grain="records",
+            kind="entity",
+            columns=[col],
+            key=["ts"],
+        )
+        from fabulexa_forge.exporters.dimensional.validation import (
+            _grain_projectable_surface,
+            _resolve_source_table_name,
+        )
+
+        src_name = _resolve_source_table_name(tbl.source)
+        surface = _grain_projectable_surface(tbl.source, emit.sidecar, src_name)
+        check_timestamp_source_available(
+            col, tbl, tbl.source, surface
+        )  # must not raise
+
+
+def test_record_index_on_records_raises(tmp_path: Path) -> None:
+    """A non-instant records structural column (record_index) is still refused."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        col = ColumnDecl(
+            name="ts",
+            derived=DerivedSpec(timestamp=TimestampSpec(source="record_index")),
+        )
+        tbl = _make_table_decl(
+            grain="records",
+            kind="entity",
+            columns=[col],
+            key=["ts"],
+        )
+        from fabulexa_forge.exporters.dimensional.validation import (
+            _grain_projectable_surface,
+            _resolve_source_table_name,
+        )
+
+        src_name = _resolve_source_table_name(tbl.source)
+        surface = _grain_projectable_surface(tbl.source, emit.sidecar, src_name)
+        with pytest.raises(
+            ExportError,
+            match="timestamp source 'record_index' is not available on grain 'records'",
+        ):
+            check_timestamp_source_available(col, tbl, tbl.source, surface)
+
+
 # ---------------------------------------------------------------------------
 # DiscriminatorValueObserved (notice, not error)
 # ---------------------------------------------------------------------------

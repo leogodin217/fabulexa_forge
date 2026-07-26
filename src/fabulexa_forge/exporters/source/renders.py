@@ -41,21 +41,24 @@ from fabulexa_forge.derivations.state_at import (
     build_state_at_sql,
 )
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX
+from fabulexa_forge.reader.records_columns import structural_instant_columns
 from fabulexa_forge.reader.relations import (
     build_membership_relation_sql,
     build_records_relation_sql,
 )
 
 #: The records-table structural sim-time columns rendered wallclock in the
-#: reference/transaction render (§ Operational presentation defaults).
+#: reference/transaction render (§ Operational presentation defaults) —
+#: resolved through the reader's structural-temporal surface.
 _RECORDS_WALLCLOCK_COLUMNS: frozenset[str] = frozenset(
-    {"created_sim_time", "deactivated_at", "last_mutation_sim_time"}
+    structural_instant_columns("records")
 )
 
 #: The membership-table structural sim-time columns rendered wallclock in the
-#: junction render.
+#: junction render — resolved through the reader's structural-temporal
+#: surface.
 _JUNCTION_WALLCLOCK_COLUMNS: frozenset[str] = frozenset(
-    {"joined_sim_time", "left_sim_time"}
+    structural_instant_columns("membership")
 )
 
 #: The membership table's fixed, non-element prefix columns — excluded from

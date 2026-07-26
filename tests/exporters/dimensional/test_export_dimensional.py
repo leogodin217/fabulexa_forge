@@ -16,6 +16,7 @@ from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
+from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DerivedSpec,
@@ -25,6 +26,7 @@ from fabulexa_forge.config.models import (
     OrdinalSpec,
     SourceDecl,
     TableDecl,
+    TimestampSpec,
 )
 from fabulexa_forge.errors import ExportRuntimeError
 from fabulexa_forge.exporters.dimensional.engine import export_dimensional
@@ -385,3 +387,143 @@ def test_export_dimensional_writer_failure_raises_export_runtime_error(
             export_dimensional(
                 emit, config, bad_path, "duckdb", None, notice_sink=discard_notice_sink
             )
+
+
+# ---------------------------------------------------------------------------
+# Records-grain fact carrying its own structural instants
+# ---------------------------------------------------------------------------
+
+
+def _build_records_instant_emit(tmp_path: Path) -> Path:
+    """Build an emit with one records kind: one deactivated, one still-active row.
+
+    Mirrors the fact-from-records recipe: a single `entity` kind whose two
+    records exercise both a NULL and a populated `deactivated_at`.
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__entity", _ACTOR_COLUMNS))
+
+    # Deactivated record: created at 0, deactivated (and last touched) at 50s.
+    conn.execute(
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "e001",
+            0,
+            False,
+            50_000_000_000,
+            50_000_000_000,
+            0,
+            "Gizmo",
+            "retired",
+        ],
+    )
+    # Still-active record: created at 0, never deactivated, last touched at 30s.
+    conn.execute(
+        'INSERT INTO "records__entity" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "e002", 0, True, None, 30_000_000_000, 1, "Widget", "active"],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__entity",
+                "records",
+                _ACTOR_COLUMNS,
+                2,
+                record_kind="entity",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100_000_000_000}],
+        extra={
+            "enum_domains": {"entity": {}},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+        schema_valid=False,
+    )
+    return tmp_path
+
+
+def _make_records_instant_config() -> ExportConfig:
+    """Return a config for a records-grain fact carrying its three instants."""
+    return ExportConfig(
+        mode="dimensional",
+        dimensional=DimensionalConfig(
+            tables=[
+                TableDecl(
+                    name="fact_entity",
+                    role="fact",
+                    source=SourceDecl(grain="records", kind="entity"),
+                    key=["id"],
+                    columns=[
+                        ColumnDecl(name="id", **{"from": "record_id"}),
+                        ColumnDecl(
+                            name="created_at",
+                            derived=DerivedSpec(
+                                timestamp=TimestampSpec(source="created_sim_time")
+                            ),
+                        ),
+                        ColumnDecl(
+                            name="closed_at",
+                            derived=DerivedSpec(
+                                timestamp=TimestampSpec(source="deactivated_at")
+                            ),
+                        ),
+                        ColumnDecl(
+                            name="last_touched_at",
+                            derived=DerivedSpec(
+                                timestamp=TimestampSpec(source="last_mutation_sim_time")
+                            ),
+                        ),
+                    ],
+                )
+            ]
+        ),
+    )
+
+
+def test_records_grain_instant_columns_validate_and_export(tmp_path: Path) -> None:
+    """created_sim_time and deactivated_at render wallclock through the anchor.
+
+    This exact config (created_sim_time / deactivated_at as `derived:
+    timestamp` sources on a records grain) errored before the
+    structural-temporal sprint's allowlist widened to three instants.
+    """
+    emit_dir = _build_records_instant_emit(tmp_path / "emit")
+    config = _make_records_instant_config()
+    out_path = tmp_path / "out.duckdb"
+
+    with open_emit(emit_dir) as emit:
+        sidecar_runtime = emit.sidecar.runtime()
+        anchor = resolve_effective_anchor(sidecar_runtime, None, None, None)
+        export_dimensional(
+            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+        )
+
+    conn = duckdb.connect(str(out_path), read_only=True)
+    rows = conn.execute(
+        'SELECT "id", "created_at", "closed_at", "last_touched_at"'
+        ' FROM "fact_entity" ORDER BY "id"'
+    ).fetchall()
+    conn.close()
+
+    assert len(rows) == 2
+    by_id = {row[0]: row for row in rows}
+
+    deactivated = by_id["e001"]
+    assert "2024-01-01" in str(deactivated[1])
+    assert deactivated[2] is not None
+    assert "2024-01-01" in str(deactivated[2])
+    assert deactivated[3] is not None
+
+    still_active = by_id["e002"]
+    assert "2024-01-01" in str(still_active[1])
+    assert still_active[2] is None
+    assert still_active[3] is not None

@@ -17,6 +17,6 @@ phases:
     name: "Reader structural-temporal surface + category gate"
     demo: "docs/sprints/structural-temporal/demos/phase_1_structural_surface.py"
   2:
-    status: pending
+    status: complete
     name: "Consumers resolve through the reader"
     demo: "docs/sprints/structural-temporal/demos/phase_2_records_instants.py"
