@@ -1,0 +1,38 @@
+sprint: record-index-keys
+parent_branch: data_qa
+baseline_sha: 5a91f7104f44e50fc775647054883a5df1e141ed
+started: 2026-07-26
+current_phase: 1
+capabilities:
+  - derivations: [record-index resident]
+  - base-exporter: [self keys, edge keys, key rename domain, reference-key-target-absent notice]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "Record-index resident"
+    demo: "docs/sprints/record-index-keys/demos/phase_1_record_index_resident.py"
+  2:
+    status: pending
+    name: "Base exporter key columns"
+    demo: "docs/sprints/record-index-keys/demos/phase_2_base_keys.py"
+    steps:
+      - kind: source
+        summary: "Plan resolves reference edges, key rename domain/rules/notice; render composes the record-index resident for self + edge keys with interleaved emission order; creates the phase demo"
+      - kind: migrate
+        tactic: fan-out
+        change: "Every base output table gains <kind>_key as its first column, and each reference prop__<p> gains <p>_key immediately after it — positional column orders and exact expect.yaml column lists must add them"
+        files:
+          - "tests/exporters/base/test_renders.py"
+          - "examples/recipes/base/base-current-state/expect.yaml"
+          - "examples/recipes/base/base-exclude-kind/expect.yaml"
+          - "examples/recipes/base/base-rename-table/expect.yaml"
+          - "examples/recipes/base/base-slice-at/expect.yaml"
+      - kind: author
+        summary: "Reference-edge fixture builders (new builders, existing untouched) + new plan-rule/notice tests + render-level key semantics tests per the spec"
+        files:
+          - "tests/exporters/base/_base_fixtures.py"
+          - "tests/exporters/base/test_plan.py"
+          - "tests/exporters/base/test_reference_keys.py"
