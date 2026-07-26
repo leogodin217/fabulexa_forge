@@ -15,7 +15,7 @@ phases:
     name: "Record-index resident"
     demo: "docs/sprints/record-index-keys/demos/phase_1_record_index_resident.py"
   2:
-    status: pending
+    status: complete
     name: "Base exporter key columns"
     demo: "docs/sprints/record-index-keys/demos/phase_2_base_keys.py"
     steps:

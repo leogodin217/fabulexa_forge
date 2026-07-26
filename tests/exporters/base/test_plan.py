@@ -19,7 +19,10 @@ from fabulexa_forge.errors import (
     BaseRenameUnresolved,
     ExportError,
 )
-from fabulexa_forge.exporters.base.plan import build_base_plan
+from fabulexa_forge.exporters.base.plan import (
+    NOTICE_REFERENCE_KEY_TARGET_ABSENT,
+    build_base_plan,
+)
 from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
@@ -32,6 +35,7 @@ def _col(
     type_: str = "VARCHAR",
     history_tracked: bool | None = None,
     temporal_class: str | None = None,
+    references: str | None = None,
 ) -> dict[str, object]:
     """Build a raw sidecar column entry."""
     col: dict[str, object] = {"name": name, "type": type_}
@@ -39,6 +43,8 @@ def _col(
         col["history_tracked"] = history_tracked
     if temporal_class is not None:
         col["temporal_class"] = temporal_class
+    if references is not None:
+        col["references"] = references
     return col
 
 
@@ -187,6 +193,99 @@ def _degenerate_slice_only_sidecar() -> Sidecar:
         [_col("prop__tier", history_tracked=False, temporal_class="slice_only")],
     )
     return _sidecar(tables=[member_table])
+
+
+def _target_records_table() -> dict[str, object]:
+    """Build a plain `target`-kind records table with no reference properties."""
+    return _records_table("target", [])
+
+
+def _reference_col(name: str, target_kind: str) -> dict[str, object]:
+    """Build a non-tracked (constant) reference-annotated prop__ column."""
+    return _col(
+        name,
+        history_tracked=False,
+        temporal_class="constant",
+        references=target_kind,
+    )
+
+
+def _reference_kind_sidecar() -> Sidecar:
+    """`actor` references `target` via two surviving reference properties."""
+    actor_table = _records_table(
+        "actor",
+        [
+            _reference_col("prop__lead_id", "target"),
+            _col("ref_index__lead_id", "BIGINT"),
+            _reference_col("prop__backup_id", "target"),
+            _col("ref_index__backup_id", "BIGINT"),
+        ],
+    )
+    return _sidecar(tables=[actor_table, _target_records_table()])
+
+
+def _absent_target_sidecar() -> Sidecar:
+    """`actor` references a `ghost` kind absent from the sidecar."""
+    actor_table = _records_table(
+        "actor",
+        [
+            _reference_col("prop__ghost_id", "ghost"),
+            _col("ref_index__ghost_id", "BIGINT"),
+        ],
+    )
+    return _sidecar(tables=[actor_table])
+
+
+def _excluded_target_sidecar() -> Sidecar:
+    """`actor` references `target`; `target` itself is excludable from the plan."""
+    actor_table = _records_table(
+        "actor",
+        [
+            _reference_col("prop__lead_id", "target"),
+            _col("ref_index__lead_id", "BIGINT"),
+        ],
+    )
+    return _sidecar(tables=[actor_table, _target_records_table()])
+
+
+def _slice_only_reference_sidecar() -> Sidecar:
+    """`actor`'s sole reference property is non-exempt slice_only."""
+    actor_table = _records_table(
+        "actor",
+        [
+            _col(
+                "prop__lead_id",
+                history_tracked=False,
+                temporal_class="slice_only",
+                references="target",
+            ),
+            _col("ref_index__lead_id", "BIGINT"),
+        ],
+    )
+    return _sidecar(tables=[actor_table, _target_records_table()])
+
+
+def _notice_order_sidecar() -> Sidecar:
+    """Two kinds, `alpha` then `beta`, each contributing a slice-only and/or
+    an absent-target-reference notice — checks kind-then-column notice
+    ordering: `alpha`'s slice-only notice, then its absent-target notice,
+    then `beta`'s absent-target notice."""
+    alpha_table = _records_table(
+        "alpha",
+        [
+            _col("prop__tier", history_tracked=False, temporal_class="slice_only"),
+            _reference_col("prop__ghost_id", "ghost"),
+            _col("ref_index__ghost_id", "BIGINT"),
+        ],
+    )
+    beta_table = _records_table(
+        "beta",
+        [
+            _reference_col("prop__ghost2_id", "ghost2"),
+            _col("ref_index__ghost2_id", "BIGINT"),
+        ],
+    )
+    return _sidecar(tables=[alpha_table, beta_table])
 
 
 # ---------------------------------------------------------------------------
@@ -446,3 +545,169 @@ def test_rename_producing_reserved_column_name_raises_export_error() -> None:
     assert str(exc_info.value) == (
         "table 'doctor': column '__valid_from_ns' is reserved under incremental export"
     )
+
+
+# ---------------------------------------------------------------------------
+# reference-key resolution
+# ---------------------------------------------------------------------------
+
+
+def test_reference_keys_resolved_in_column_order() -> None:
+    """reference_keys resolves in sidecar column-declaration order, each
+    carrying the bare property name and target kind."""
+    plan = build_base_plan(_reference_kind_sidecar(), None, discard_notice_sink)
+    spec = next(t for t in plan.tables if t.kind == "actor")
+    assert [(rk.property_name, rk.target_kind) for rk in spec.reference_keys] == [
+        ("lead_id", "target"),
+        ("backup_id", "target"),
+    ]
+
+
+def test_kind_with_no_reference_property_yields_empty_reference_keys() -> None:
+    """A kind with no reference property resolves reference_keys == ()."""
+    plan = build_base_plan(_spanning_sidecar(), None, discard_notice_sink)
+    spec = next(t for t in plan.tables if t.kind == "patient")
+    assert spec.reference_keys == ()
+
+
+def test_column_renames_carries_key_defaults() -> None:
+    """column_renames carries record_index -> <kind>_key and
+    ref_index__<p> -> <p>_key defaults."""
+    plan = build_base_plan(_reference_kind_sidecar(), None, discard_notice_sink)
+    spec = next(t for t in plan.tables if t.kind == "actor")
+    assert spec.column_renames["record_index"] == "actor_key"
+    assert spec.column_renames["ref_index__lead_id"] == "lead_id_key"
+    assert spec.column_renames["ref_index__backup_id"] == "backup_id_key"
+
+
+def test_rename_overrides_key_defaults() -> None:
+    """A rename.columns entry overrides each key default independently."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__actor",
+                columns={
+                    "record_index": "actor_sk",
+                    "ref_index__lead_id": "lead_sk",
+                },
+            )
+        ]
+    )
+    plan = build_base_plan(_reference_kind_sidecar(), config, discard_notice_sink)
+    spec = next(t for t in plan.tables if t.kind == "actor")
+    assert spec.column_renames["record_index"] == "actor_sk"
+    assert spec.column_renames["ref_index__lead_id"] == "lead_sk"
+    assert spec.column_renames["ref_index__backup_id"] == "backup_id_key"
+
+
+def test_rename_ref_index_slice_only_omitted_raises() -> None:
+    """Renaming ref_index__<p> where prop__<p> is slice_only-omitted raises
+    BaseRenameSliceOnly."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__actor",
+                columns={"ref_index__lead_id": "lead_sk"},
+            )
+        ]
+    )
+    with pytest.raises(BaseRenameSliceOnly):
+        build_base_plan(_slice_only_reference_sidecar(), config, discard_notice_sink)
+
+
+def test_rename_ref_index_non_reference_property_raises_unresolved() -> None:
+    """Renaming ref_index__<p> where <p> is not a reference property raises
+    BaseRenameUnresolved."""
+    config = BaseConfig(
+        rename=[RenameEntry(table="records__doctor", columns={"ref_index__name": "x"})]
+    )
+    with pytest.raises(BaseRenameUnresolved):
+        build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
+
+
+def test_rename_ref_index_absent_target_raises_unresolved() -> None:
+    """Renaming ref_index__<p> where the target kind has no records table
+    raises BaseRenameUnresolved."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__actor",
+                columns={"ref_index__ghost_id": "x"},
+            )
+        ]
+    )
+    with pytest.raises(BaseRenameUnresolved):
+        build_base_plan(_absent_target_sidecar(), config, discard_notice_sink)
+
+
+def test_absent_target_yields_no_reference_key_and_one_notice() -> None:
+    """A property whose target kind has no records table yields no
+    ReferenceKey entry and one reference-key-target-absent notice naming the
+    kind, the property, and the absent target kind."""
+    sink = RecordingNoticeSink()
+    plan = build_base_plan(_absent_target_sidecar(), None, sink)
+    spec = plan.tables[0]
+    assert spec.reference_keys == ()
+    notices = [n for n in sink.notices if n.code == NOTICE_REFERENCE_KEY_TARGET_ABSENT]
+    assert len(notices) == 1
+    assert "actor" in notices[0].message
+    assert "ghost_id" in notices[0].message
+    assert "ghost" in notices[0].message
+
+
+def test_notice_order_follows_table_then_column_order() -> None:
+    """Notice order follows sidecar table then column order, alongside the
+    slice-only-column-omitted notices: a kind's slice-only notices precede its
+    reference-key-target-absent notices, kind order otherwise."""
+    sink = RecordingNoticeSink()
+    build_base_plan(_notice_order_sidecar(), None, sink)
+    codes_and_messages = [(n.code, n.message) for n in sink.notices]
+    assert len(codes_and_messages) == 3
+    assert codes_and_messages[0][0] == "slice-only-column-omitted"
+    assert "alpha" in codes_and_messages[0][1]
+    assert codes_and_messages[1][0] == NOTICE_REFERENCE_KEY_TARGET_ABSENT
+    assert "alpha" in codes_and_messages[1][1]
+    assert "ghost_id" in codes_and_messages[1][1]
+    assert codes_and_messages[2][0] == NOTICE_REFERENCE_KEY_TARGET_ABSENT
+    assert "beta" in codes_and_messages[2][1]
+
+
+def test_excluded_target_kind_reference_key_still_present() -> None:
+    """An excluded target kind is NOT absent: its records table is still in
+    the sidecar, so the edge key is still emitted."""
+    config = BaseConfig(exclude=ExcludeDecl(kinds=["target"]))
+    plan = build_base_plan(_excluded_target_sidecar(), config, discard_notice_sink)
+    assert [t.kind for t in plan.tables] == ["actor"]
+    spec = plan.tables[0]
+    assert [(rk.property_name, rk.target_kind) for rk in spec.reference_keys] == [
+        ("lead_id", "target")
+    ]
+
+
+def test_rename_colliding_with_resolved_key_name_raises_collision() -> None:
+    """Renaming another column to the resolved <kind>_key name raises
+    BaseNameCollision."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__doctor",
+                columns={"created_sim_time": "doctor_key"},
+            )
+        ]
+    )
+    with pytest.raises(BaseNameCollision):
+        build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
+
+
+def test_rename_record_index_to_reserved_name_raises_export_error() -> None:
+    """Renaming record_index to a reserved name raises ExportError."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__doctor",
+                columns={"record_index": "__valid_from_ns"},
+            )
+        ]
+    )
+    with pytest.raises(ExportError):
+        build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
