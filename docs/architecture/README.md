@@ -256,7 +256,7 @@ sidecar-shape churn):
 | Area | Status |
 |---|---|
 | Project skeleton + standalone-venv boundary | Scaffolded |
-| Vendored contract (`base_format_version 6`) | Vendored — re-synced on version bump (`contract/README.md`) |
+| Vendored contract (`base_format_version 7`) | Vendored — re-synced on version bump (`contract/README.md`) |
 | Reader + conformance | Implemented (Stage 1) — [`reader.md`](reader.md), [`conformance.md`](conformance.md) |
 | Reader structural-temporal surface — `StructuralInstant`, `structural_instant_columns`, `records_structural_column_is_mutable`; the closed table-category gate at the sidecar structural floor; dimensional / source / base resolving their instant sets through it | Implemented — [`reader.md`](reader.md) § The structural-temporal surface |
 | `fabulexa-forge validate` CLI verb | Implemented (Stage 1) |
