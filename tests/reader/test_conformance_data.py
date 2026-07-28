@@ -365,6 +365,102 @@ def test_c6_fails_not_raises_on_null_numeric_tracked_cell(tmp_path: Path) -> Non
     )
 
 
+def test_c6_null_latest_against_null_cell_passes(tmp_path: Path) -> None:
+    """A NULL latest pre-slice history.value against a NULL records cell is
+    C6-conformant (decoded-value equality, contract § Cross-table round-trip):
+    a never-supplied tracked property reads NULL in both places."""
+    dest = tmp_path / "c6_null_null"
+    dest.mkdir(parents=True, exist_ok=True)
+    db_path = dest / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
+    # a001's sole 'name' history row (its genesis, hence latest pre-slice) is NULL
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+        ["trunk", "actor", "a001", "name", 10, None],
+    )
+    # records__actor's prop__name cell is likewise NULL
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, NULL, ?, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, "active", "d001", 0, "patient"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 1,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": list(_RECORDS_ACTOR_COLUMNS),
+                "rows": 1,
+            },
+        ]
+    )
+    _write_emit(dest, sidecar)
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C6")
+
+    assert result.passed, f"C6 failed: {result.messages}"
+
+
+def test_c6_null_latest_against_non_null_cell_fails(tmp_path: Path) -> None:
+    """A NULL latest pre-slice history.value against a non-NULL records cell is
+    a round-trip mismatch — the decoded values differ."""
+    dest = tmp_path / "c6_null_vs_nonnull"
+    dest.mkdir(parents=True, exist_ok=True)
+    db_path = dest / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_table_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_table_ddl("records__actor", _RECORDS_ACTOR_COLUMNS))
+    # a001's sole 'name' history row (its genesis, hence latest pre-slice) is NULL
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+        ["trunk", "actor", "a001", "name", 10, None],
+    )
+    # records__actor's prop__name cell is non-NULL — a mismatch
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)",
+        ["trunk", "a001", 10, True, 10, 0, "Alice", "active", "d001", 0, "patient"],
+    )
+    conn.close()
+
+    sidecar = _single_branch_sidecar(
+        [
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": list(_HISTORY_COLUMNS),
+                "rows": 1,
+            },
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": list(_RECORDS_ACTOR_COLUMNS),
+                "rows": 1,
+            },
+        ]
+    )
+    _write_emit(dest, sidecar)
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C6")
+
+    assert not result.passed
+    assert any(
+        "history.value is NULL" in m and "encoded=" in m for m in result.messages
+    )
+
+
 def test_c6_set_based_isolates_mismatch_across_series(tmp_path: Path) -> None:
     """C6 over many series-of-the-same-(kind,property): only the bad row is flagged.
 
@@ -1839,9 +1935,13 @@ def test_validate_ok_false_when_check_fails(
 #: Actor records columns for the C14 fixtures. The discriminator prop__actor_type
 #: itself carries the temporal pair (proving the carve-out subtracts it), and
 #: prop__manager is a reference-typed value column paired with ref_index__manager.
+#: presentation_id sits at its contract-pinned slot (2a, immediately after
+#: record_id) -- it has no history_tracked/temporal_class pair and enters V by
+#: column presence alone (contract § C14, presentation_id admission).
 _C14_ACTOR_COLUMNS: list[dict[str, object]] = [
     identity_column("fork_path", "VARCHAR"),
     identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
     {"name": "created_sim_time", "type": "BIGINT"},
     {"name": "active", "type": "BOOLEAN"},
     {"name": "deactivated_at", "type": "BIGINT"},
@@ -1871,12 +1971,19 @@ _C14_ENUM_DOMAINS: dict[str, dict[str, list[str]]] = {
     "actor": {"actor_type": ["driver", "staff"]}
 }
 
-#: A C14-consistent partition: union == {prop__name, prop__status, prop__manager,
-#: ref_index__manager} == value columns minus the discriminator, plus the
-#: reference sibling; driver carries the reference pair, staff carries neither.
+#: A C14-consistent partition: union == {presentation_id, prop__name,
+#: prop__status, prop__manager, ref_index__manager} == value columns minus the
+#: discriminator, plus presentation_id (column-presence admission), plus the
+#: reference sibling; driver mints presentation_id and carries the reference
+#: pair, staff carries neither.
 _C14_VALID_PARTITION: dict[str, dict[str, list[str]]] = {
     "actor": {
-        "driver": ["prop__name", "prop__manager", "ref_index__manager"],
+        "driver": [
+            "presentation_id",
+            "prop__name",
+            "prop__manager",
+            "ref_index__manager",
+        ],
         "staff": ["prop__status"],
     }
 }
@@ -2055,6 +2162,54 @@ def test_c14_kind_without_discriminator_is_not_partitioned(tmp_path: Path) -> No
         result = run_check(emit, "C14")
     assert not result.passed
     assert any("not" in m and "partitioned" in m for m in result.messages)
+
+
+def test_c14_presentation_id_attributed_passes(tmp_path: Path) -> None:
+    """presentation_id, present on records__actor and attributed to a sub-type's
+    list, is admitted into V by column presence (contract's C14 update) and the
+    union-equality clause passes."""
+    dest = _write_c14_emit(
+        tmp_path / "c14_presentation_id_ok",
+        sub_type_columns=_C14_VALID_PARTITION,
+        enum_domains=_C14_ENUM_DOMAINS,
+    )
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+    assert result.passed, result.messages
+
+
+def test_c14_presentation_id_listed_without_column_fails(tmp_path: Path) -> None:
+    """presentation_id listed in a sub_type_columns list but absent from the
+    records table's own columns still fails — as an unexpected (non-
+    partitionable) column, same as any other phantom entry."""
+    columns_without_presentation_id = [
+        col for col in _C14_ACTOR_COLUMNS if col["name"] != "presentation_id"
+    ]
+    tables: list[dict[str, object]] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": list(_HISTORY_COLUMNS),
+            "rows": 0,
+        },
+        {
+            "name": "records__actor",
+            "category": "records",
+            "record_kind": "actor",
+            "columns": columns_without_presentation_id,
+            "rows": 0,
+        },
+    ]
+    sidecar = _single_branch_sidecar(tables)
+    sidecar["enum_domains"] = _C14_ENUM_DOMAINS
+    sidecar["sub_type_columns"] = _C14_VALID_PARTITION
+    dest = _write_emit(tmp_path / "c14_presentation_id_no_column", sidecar)
+
+    with open_emit(dest) as emit:
+        result = run_check(emit, "C14")
+
+    assert not result.passed
+    assert any("presentation_id" in m for m in result.messages)
 
 
 def test_c14_included_in_full_validate_report(tmp_path: Path) -> None:

@@ -281,6 +281,48 @@ def _populate_history_a002_genesis(conn: duckdb.DuckDBPyConnection) -> int:
     return 1
 
 
+def _populate_history_a003_null_genesis(conn: duckdb.DuckDBPyConnection) -> int:
+    """Insert a003's NULL-valued name genesis row into history; return row count.
+
+    The sole row of the (actor, a003, name) series -- its own genesis row is
+    therefore also the latest pre-slice row, so the emit exercises C6's
+    NULL-against-NULL case: a never-supplied tracked property reads NULL in
+    its genesis history row *and* in its records__ cell
+    (`_populate_records_actor_null_tracked_cell`), and the two round-trip.
+    """
+    conn.execute(
+        "INSERT INTO history VALUES (?, ?, ?, ?, ?, ?)",
+        ["trunk", "actor", "a003", "name", 20, None],
+    )
+    return 1
+
+
+def _populate_records_actor_null_tracked_cell(conn: duckdb.DuckDBPyConnection) -> int:
+    """Insert a003's records__actor row (NULL prop__name); return row count.
+
+    Pairs with `_populate_history_a003_null_genesis` -- a003's tracked
+    prop__name has never been supplied, so both its sole history row and its
+    records cell are NULL (C6-conformant NULL-against-NULL).
+    """
+    conn.execute(
+        "INSERT INTO records__actor VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, NULL, NULL, ?)",
+        [
+            "trunk",  # fork_path
+            "a003",  # record_id
+            20,  # created_sim_time
+            True,  # active
+            # deactivated_at = NULL
+            20,  # last_mutation_sim_time
+            2,  # record_index
+            None,  # prop__name -- never supplied, NULL
+            "pending",  # prop__status
+            # prop__doctor_id = NULL, ref_index__doctor_id = NULL (NULL-together)
+            "nurse",  # prop__actor_type
+        ],
+    )
+    return 1
+
+
 def _history_series_actor_columns() -> list[dict[str, object]]:
     """records__actor columns for build_history_series.
 
@@ -660,8 +702,14 @@ def _build_spanning_db(conn: duckdb.DuckDBPyConnection) -> tuple[int, int, int, 
     conn.execute(
         _create_table_ddl("membership__actor__appointments", _MEMBERSHIP_COLUMNS)
     )
-    history_rows = _populate_history(conn) + _populate_history_a002_genesis(conn)
-    actor_rows = _populate_records_actor(conn)
+    history_rows = (
+        _populate_history(conn)
+        + _populate_history_a002_genesis(conn)
+        + _populate_history_a003_null_genesis(conn)
+    )
+    actor_rows = _populate_records_actor(
+        conn
+    ) + _populate_records_actor_null_tracked_cell(conn)
     doctor_rows = _populate_records_doctor(conn)
     membership_rows = _populate_membership(conn)
     return history_rows, actor_rows, doctor_rows, membership_rows
@@ -677,16 +725,19 @@ def build_spanning(dest: Path) -> None:
 
     A single-branch (trunk-only) sanitised emit with no firings table and
     no provenance columns. Exercises: history (6 base cols), records__actor
-    (two rows, record_index 0-1) with a references-annotated prop__doctor_id
-    paired with ref_index__doctor_id (a001 resolves to d001; a002 is a
-    NULL-together pair -- both cells NULL), a closed-domain slice_only
+    (three rows, record_index 0-2) with a references-annotated prop__doctor_id
+    paired with ref_index__doctor_id (a001 resolves to d001; a002 and a003 are
+    NULL-together pairs -- both cells NULL), a closed-domain slice_only
     prop__status, a constant-class sub-type discriminator prop__actor_type,
-    records__doctor (three rows, record_index 0-2, record_id shapes mixing a
-    hex-valid alnum id (d001), a pure decimal-string id ("1005"), and a
-    hex-digest id ("9f2ab1") -- the adversarial id mix an
-    id/index-conflating implementation cannot pass by coincidence), and
-    membership__actor__appointments with elem__* and member__*__kind/id
-    columns, plus pinned_ids, runtime, enum_domains, and record_roles.
+    and a003's tracked prop__name whose sole (hence latest pre-slice) history
+    row and whose records cell are both NULL -- C6's NULL-against-NULL case
+    (a never-supplied tracked property), records__doctor (three rows,
+    record_index 0-2, record_id shapes mixing a hex-valid alnum id (d001), a
+    pure decimal-string id ("1005"), and a hex-digest id ("9f2ab1") -- the
+    adversarial id mix an id/index-conflating implementation cannot pass by
+    coincidence), and membership__actor__appointments with elem__* and
+    member__*__kind/id columns, plus pinned_ids, runtime, enum_domains, and
+    record_roles.
     """
     dest.mkdir(parents=True, exist_ok=True)
     db_path = dest / "run.duckdb"
