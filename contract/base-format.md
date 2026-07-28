@@ -292,7 +292,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `pinned_ids` | object | optional | Pin identity surface, nested `{<kind>: {<label>: <id-string>}}`. Present only when the run had pinned actors; omitted entirely otherwise. Each `<id-string>` is the id portion of the minted record id, equality-joinable against `records__<kind>.record_id`. See § Pin identity surface. |
 | `enum_domains` | object | optional | Closed-domain registry, nested `{<kind>: {<property>: [<option>, ...]}}`. Present only when the scenario declared at least one closed-domain string property (`status` / `category` typed property or a synthesized sub-type discriminator); omitted entirely otherwise. Keys at both nesting levels are sorted lexicographically; option lists preserve declaration order. The authoritative list of allowed values for each closed-domain string property. See § Closed-domain registry. |
 | `record_roles` | object | optional | Warehouse-role registry, nested by kind. The `actor` entry is an object `{<sub_type>: role}`; every other records-category kind maps to a single role string (`"dimension"` or `"fact"`). Present when the emit carries ≥ 1 records kind; keys sorted lexicographically at every level. See § Record roles. |
-| `sub_type_columns` | object | optional | Sub-type column partition, nested `{<kind>: {<sub_type>: [<column-name>, ...]}}` — per sub-typed kind, the value columns each declared sub-type declares. Present when the producing run carries the partition and ≥ 1 sub-typed kind has a records table in the emit; omitted entirely otherwise. Keys sorted lexicographically at both levels. The NULL-disambiguation surface for sub-typed records tables. See § Sub-type column partition. |
+| `sub_type_columns` | object | optional | Sub-type column partition, nested `{<kind>: {<sub_type>: [<column-name>, ...]}}` — per sub-typed kind, the value columns attributed to each declared sub-type: the columns of the properties it declares plus the kind's structural columns. Present when the producing run carries the partition and ≥ 1 sub-typed kind has a records table in the emit; omitted entirely otherwise. Keys sorted lexicographically at both levels. The NULL-disambiguation surface for sub-typed records tables. See § Sub-type column partition. |
 | `tables` | array | yes | Tables present in `run.duckdb`, in the same order as DuckDB's catalog. |
 | `tables[].name` | string | yes | DuckDB table name. |
 | `tables[].category` | enum | yes | `"fixed"`, `"records"`, or `"membership"`. |
@@ -305,6 +305,9 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `tables[].columns[].references` | string | optional | Record kind this column points at, when the source schema declared a record-to-record reference. Present iff the column is a foreign-key column (one `VARCHAR` carrying the id portion of a record id); equality-joinable against `records__<references>.record_id`. Omitted for all other columns. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
 | `tables[].columns[].history_tracked` | boolean | optional | SCD class of a value-carrying column: `true` = type-2 (priors recoverable from the `history` table), `false` = type-1 (current value only). Present on records-category `prop__<name>` columns and presentation-property columns; omitted on structural, fixed-table, membership, and `presentation_id` columns. See § Column temporal semantics. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
 | `tables[].columns[].temporal_class` | enum | optional | Point-in-time semantics of a value-carrying column: `"constant"`, `"tracked"`, or `"slice_only"`. Answers *"can I ask what this column's value was at time T?"*. Carried on **exactly** the columns that carry `history_tracked` — a column carries one iff it carries the other. See § Column temporal semantics. |
+| `tables[].columns[].unique_within` | enum | optional | Uniqueness scope of a `presentation_id` column's non-NULL values: `"emit"` (distinct across every row of the table) or `"branch"` (distinct among rows sharing a `fork_path`). Derived by the producer from the kind's declared minting strategies, never author-asserted. Omitted when no uniqueness guarantee is derivable — absence is "no claim", not "not unique". Only ever present on `presentation_id` columns. See § `presentation_id` key declaration. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
+| `tables[].columns[].branch_stable` | boolean | optional | Whether the same record carries the same non-NULL `presentation_id` value on every branch where it appears — the cross-branch counterfactual join key. Present on exactly the `presentation_id` columns that carry `slice_stable` (always written as a pair). See § `presentation_id` key declaration. |
+| `tables[].columns[].slice_stable` | boolean | optional | Whether a record keeps its non-NULL `presentation_id` value across emits produced from the same producing run and the same producer configuration, regardless of slice or branch selection. Present on exactly the `presentation_id` columns that carry `branch_stable` (always written as a pair). See § `presentation_id` key declaration. |
 | `tables[].rows` | integer | yes | Row count of the table. |
 
 The fields above are the *required* shape at `base_format_version: 6`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 6` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
@@ -435,16 +438,23 @@ A generic exporter branches on `record_roles` with no hard-coded kind→role map
 ### Sub-type column partition
 
 `sub_type_columns` attributes each value column of a sub-typed kind's
-`records__<kind>` table to the sub-type(s) that declare the underlying
-property. The table materializes the **union** of all sub-types' columns, so a
-NULL cell is ambiguous on its own — structurally inapplicable to the row's
-sub-type, or applicable but unrecorded? The partition makes the distinction
-readable from the sidecar alone.
+`records__<kind>` table to the sub-type(s) it applies to. The table
+materializes the **union** of all sub-types' columns, so a NULL cell is
+ambiguous on its own — structurally inapplicable to the row's sub-type, or
+applicable but unrecorded? The partition makes the distinction readable from
+the sidecar alone.
+
+A sub-type's **attributed** properties are the properties that sub-type
+declares plus the kind's **structural** properties — the fixed property tuple
+the producer defines for every record of the kind, independent of sub-type. A
+structural property is carried by every record of the kind, so it is attributed
+to **every** sub-type. The two sets are disjoint: a declared property name may
+not collide with a structural name.
 
 The block is a nested object `{<kind>: {<sub_type>: [<column-name>, ...]}}`.
-Per sub-type, each declared property contributes:
+Per sub-type, each attributed property contributes:
 
-| Declared property | Contributed column names |
+| Attributed property | Contributed column names |
 |---|---|
 | Scalar (non-reference, no element schema) | `prop__<name>` |
 | Reference-typed | `prop__<name>`, `ref_index__<name>` |
@@ -453,10 +463,11 @@ Per sub-type, each declared property contributes:
 A presentation-property column is attributed to its declaring sub-type. Each
 per-sub-type list is ordered by the table's column order (`ref_index__<name>`
 immediately after its own `prop__<name>`) — a sub-type's list reads as a
-filtered view of the table's column sequence. Keys at both nesting levels are
-sorted lexicographically, matching `enum_domains` and `record_roles`.
-Properties declared by every sub-type appear in every sub-type's list; the
-lists are not disjoint.
+filtered view of the table's column sequence, structural columns ahead of
+declared ones. Keys at both nesting levels are sorted lexicographically,
+matching `enum_domains` and `record_roles`. The lists are not disjoint: a
+structural column appears in every sub-type's list, as does any property
+declared by every sub-type.
 
 Presence and coverage:
 
@@ -466,7 +477,8 @@ Presence and coverage:
 | ≥ 1 sub-typed kind has a records table in the emit | Block present; one entry per sub-typed kind present as a records table |
 | Sub-typed kind with no records at the emit's slice (no table) | Kind absent from the block — mirroring `record_roles`' present-kinds behavior |
 | Per-kind sub-type keys | Every declared sub-type, never narrowed to those with surviving rows — slice-stable, like `record_roles`' actor object |
-| Sub-type whose declared properties are all collection-struct | Key present with an empty list `[]` — the partition names the sub-type; no value column is attributable to it |
+| Kind carrying structural properties | Every sub-type's list carries their columns, ahead of that sub-type's own declared columns |
+| Sub-type whose attributed properties are all collection-struct | Key present with an empty list `[]` — the partition names the sub-type; no value column is attributable to it |
 | Non-sub-typed kinds | Never appear |
 
 The block is **declared applicability — intent, not observation** (the same
@@ -476,21 +488,44 @@ partition. The reading rule is therefore stated in terms of the declaration:
 
 | Cell state, for a row routed to sub-type *s* | Reading |
 |---|---|
-| NULL, column ∉ `sub_type_columns[K][s]` | **Structurally inapplicable.** The sub-type does not declare the property |
-| NULL, column ∈ `sub_type_columns[K][s]` | **Value-absent.** Applicable but unrecorded (optional property, or written NULL) |
+| NULL, column ∉ `sub_type_columns[K][s]` | **Structurally inapplicable.** The column belongs to other sub-types alone — a declared property, a presentation column, or `presentation_id` when sub-type *s* mints no id |
+| NULL, column ∈ `sub_type_columns[K][s]` | **Value-absent.** Applicable but unrecorded — an optional declared property, an unconfigured optional structural slot, or a written NULL |
 | Non-NULL, column ∈ `sub_type_columns[K][s]` | Ordinary value |
 | Non-NULL, column ∉ `sub_type_columns[K][s]` | Authoring incoherence surfaced honestly — the scenario wrote outside its own declared partition. Consumers MAY flag it; conformance does not reject it |
+
+A structural column is in every sub-type's list, so it never produces the
+fourth reading: that row fires only on genuine authoring incoherence. Per-sub-type
+configuration of a structural property does not narrow its attribution either: a
+structural property left unconfigured on a sub-type is value-absent on those
+rows, not structurally inapplicable.
+
+Structural columns are attributed rather than carved out of the block, and the
+block carries no marker distinguishing structural from declared columns. A
+consumer therefore reads each sub-type's applicable columns from one list, with
+no second rule for the columns every sub-type shares.
+
+**`presentation_id` attribution.** A partitioned kind's `presentation_id`
+column is attributed to every sub-type whose rows carry a minted id — those
+rows are non-NULL on every row. A sub-type outside the attribution stays
+unattributed; its rows materialize SQL NULL, which the reading table above
+renders as structurally inapplicable, exactly like any other column outside
+the sub-type's list. `presentation_id` is prepended to each attributed
+sub-type's list, preserving the filtered-view ordering (it sits immediately
+after `record_id`, ahead of every `prop__` column). It is an identity column —
+no `history_tracked` / `temporal_class` — so it enters the partition by this
+attribution rule, not by the value-column taxonomy; C14's union equality
+admits it whenever the table carries the column.
 
 **Discriminator carve-out.** `prop__<K>_type` is a value column by the column
 taxonomy — it carries `history_tracked` / `temporal_class` — but belongs to
 **no** sub-type's list: it is kind-wide and synthesized, declared by no
-sub-type. Every equality between "union of sub-type lists" and the table's
-value-column set excludes exactly this one column. C14 references this
-carve-out.
+sub-type, and excluded from the kind's structural set by name. Every equality
+between "union of sub-type lists" and the table's value-column set excludes
+exactly this one column. C14 references this carve-out.
 
-The partition is fixed at run initialization and persisted with the run, so
-every emit derived from the same persisted run carries the same per-kind entry
-across `slice_at` choices. Adding `sub_type_columns` is a version-compatible
+The declared partition and the kind's structural properties are both fixed at
+run initialization and persisted with the run, so every emit derived from the
+same persisted run carries the same per-kind entry across `slice_at` choices. Adding `sub_type_columns` is a version-compatible
 extension at `base_format_version: 6`: an optional top-level field a reader
 that does not recognize it ignores (unknown top-level fields MAY warn but MUST
 NOT fail). Consumers gate on presence and fall back to union-schema behavior
@@ -548,7 +583,8 @@ a record property's value or a presentation value:
 
 `presentation_id` is an identity mint, minted once per record and never
 re-minted; it carries neither attribute (an identity column has no temporal
-semantics). A presentation property bound to a `tracked` source is itself
+semantics) — its identity-column analogue is the key declaration
+(§ `presentation_id` key declaration). A presentation property bound to a `tracked` source is itself
 `tracked` — it is re-minted at each change instant of its source, and those mints
 are appended to the `history` table.
 
@@ -575,6 +611,43 @@ which is precisely the ambiguity the bump resolves.
 Read both from the sidecar: neither is recoverable from raw scenario YAML,
 because the bits are partly synthesized at schema assembly and recovering them
 would require re-running that assembly.
+
+### `presentation_id` key declaration (`unique_within`, `branch_stable`, `slice_stable`)
+
+Three optional attributes on a `presentation_id` column descriptor, declaring
+the key properties the producer's minting-strategy choice fixed — whether the
+column can serve as a union key, a cross-branch join key, or an
+incremental-re-export key. Like `temporal_class`, the declaration is **derived
+by the producer, never author-asserted**.
+
+All guarantees range over **non-NULL** cells; a NULL cell keeps its existing
+reading (the row's sub-type mints no id — structurally inapplicable).
+
+| Attribute | Value | Consumer may rely on |
+|---|---|---|
+| `unique_within` | `"emit"` | Non-NULL values are distinct across every row of the table — a table-wide key even in a multi-branch emit. Implies branch-scope uniqueness. |
+| `unique_within` | `"branch"` | Non-NULL values are distinct among rows sharing a `fork_path`; `(fork_path, presentation_id)` is a table-wide key. Whether the same record repeats its value across branches is `branch_stable`'s claim, not this attribute's. |
+| `unique_within` | absent | No uniqueness claim. Consumer validates against data or keys on `record_id`. |
+| `branch_stable` | `true` | The same record carries the same non-NULL value on every branch where it appears — the cross-branch counterfactual join key. |
+| `branch_stable` | `false` | The same record may carry different values on different branches. |
+| `slice_stable` | `true` | Across emits produced from the same producing run and the same producer configuration, a record keeps its value regardless of slice or branch selection — incremental re-export cannot renumber. |
+| `slice_stable` | `false` | Values depend on the emitted row set; two emits of overlapping scope may disagree. |
+
+**Pairing.** `branch_stable` and `slice_stable` are written as a pair (both
+present or, on a pre-feature emit, both absent); `unique_within` presence is
+independent of the pair.
+
+**Absence.** A pre-feature emit carries none of the three; readers treat
+absence as "no claim" and fall back to out-of-band knowledge. Presence is
+self-describing — per § Format versioning these are version-compatible
+optional column attributes, no bump.
+
+**The declaration describes the emit as produced.** A tool that intentionally
+duplicates or mutates rows downstream may falsify it — the same class of
+semantic non-conformance as breaking C6/C7 — which is precisely what makes
+the declaration a useful validation target. A consumer MAY validate the
+claims against data; the contract does not oblige it to (the C-set is
+unchanged).
 
 ### What the sidecar does *not* carry
 
@@ -811,7 +884,8 @@ let partitioned_kinds = { t.record_kind for t in tables
 require: keys(sub_type_columns) == partitioned_kinds
 for each kind K in sub_type_columns:
     require: keys(sub_type_columns[K]) == set(enum_domains[K]["<K>_type"])
-    let V = columns of records__K carrying the temporal pair, minus prop__<K>_type
+    let V = columns of records__K carrying the temporal pair, minus prop__<K>_type,
+            plus presentation_id when records__K carries that column
     let X = { ref_index__<n> : prop__<n> in V carries a sidecar references field }
     require: union of sub_type_columns[K]'s lists == V ∪ X
     for each sub-type s, each reference-typed property n:
@@ -827,9 +901,14 @@ defines the sub-typed-kind set, so a `sub_type_columns` block without
 which fires only when `sub_type_columns` itself is absent.
 
 Presentation-property columns carry the temporal pair and appear in their
-declaring sub-type's list, so the same union equality holds on every emit with
-no special case. Non-reference `prop__` columns and presentation columns have
-no `ref_index__` companion and are outside the pair-integrity rule. C14 is
+declaring sub-type's list, and `presentation_id` — an identity column —
+enters `V` by column presence (§ Sub-type column partition,
+`presentation_id` attribution), so the same union equality holds on every
+emit with no further special case. The union clause requires only that the
+column be attributed to *some* sub-type; *which* sub-types mint is declared
+intent the checker does not second-guess from row data. Non-reference
+`prop__` columns, presentation columns, and `presentation_id` have no
+`ref_index__` companion and are outside the pair-integrity rule. C14 is
 classed with the semantic checks (C6, C7, C9–C13).
 
 A reference Python conformance check, `check_published_conformance.py`, ships in the producer's repository and implements C1–C14 against any `(emit_dir,)` argument. It checks exactly the format described by this document. Implementations in other languages that pass C1–C14 are equally conformant.
@@ -859,7 +938,7 @@ Adding a *new optional* column group is **not** a version bump as long as prior-
 
 The same rule applies to **new optional top-level sidecar fields** (the `record_roles` registry, a pin-identity surface, a future cross-emit linkage block). Their presence is self-describing — a reader gating on `base_format_version` ignores unknown top-level fields per § Field semantics ("MAY warn but MUST NOT fail"). Adding such a field is a version-compatible extension, not a bump. A bump is required only when a prior-version reader could mis-interpret the sidecar.
 
-It applies equally to a **new optional attribute on a column object** (`references`, `history_tracked`): presence is self-describing, the column object's `required` set (`["name", "type"]`) is unaffected, and a prior-version reader ignores the attribute. Adding one is a version-compatible extension, not a bump.
+It applies equally to a **new optional attribute on a column object** (`references`, `history_tracked`, the `presentation_id` key-declaration attributes `unique_within` / `branch_stable` / `slice_stable`): presence is self-describing, the column object's `required` set (`["name", "type"]`) is unaffected, and a prior-version reader ignores the attribute. Adding one is a version-compatible extension, not a bump.
 
 The `4 → 5` bump is therefore **not** forced by the `temporal_class` column attribute — under the rule above that attribute alone would have been version-compatible. It is forced by the **strengthened normative guarantee** that ships with it: the creation seed became unconditional, so a consumer must be able to distinguish
 
