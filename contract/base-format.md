@@ -778,6 +778,8 @@ load base.json
 validate against base-format.schema.json (the schema matching base_format_version)
 ```
 
+The schema validates *required shape*, not closed shape: its top level and the column object permit unknown members (`additionalProperties: true`), so a sidecar carrying a newer same-version optional field or column attribute still validates against an older revision of the v7 schema. Unknown members fall under the § Field semantics rule — a reader MAY warn but MUST NOT fail.
+
 ### C2. DuckDB catalog matches the sidecar
 
 ```
@@ -1018,9 +1020,9 @@ The `3 → 4` bump is forced by the `created_sim_time` lifecycle column inserted
 
 Adding a *new optional* column group is **not** a version bump as long as prior-version readers continue to read prior-version sidecars correctly — column presence is already self-describing.
 
-The same rule applies to **new optional top-level sidecar fields** (the `record_roles` registry, a pin-identity surface, a future cross-emit linkage block). Their presence is self-describing — a reader gating on `base_format_version` ignores unknown top-level fields per § Field semantics ("MAY warn but MUST NOT fail"). Adding such a field is a version-compatible extension, not a bump. A bump is required only when a prior-version reader could mis-interpret the sidecar.
+The same rule applies to **new optional top-level sidecar fields** (the `record_roles` registry, a pin-identity surface, a future cross-emit linkage block). Their presence is self-describing — a reader gating on `base_format_version` ignores unknown top-level fields per § Field semantics ("MAY warn but MUST NOT fail"). Adding such a field is a version-compatible extension, not a bump. A bump is required only when a prior-version reader could mis-interpret the sidecar. The schema makes this path real: its top level permits unknown fields (`additionalProperties: true`), so the new field ships as a schema *revision* within the same version — the revised schema defines the field, and a reader holding a prior revision still validates the sidecar (C1 checks required shape, not closed shape).
 
-It applies equally to a **new optional attribute on a column object** (`references`, `history_tracked`): presence is self-describing, the column object's `required` set (`["name", "type"]`) is unaffected, and a prior-version reader ignores the attribute. Adding one is a version-compatible extension, not a bump.
+It applies equally to a **new optional attribute on a column object** (`references`, `history_tracked`): presence is self-describing, the column object's `required` set (`["name", "type"]`) is unaffected, and a prior-version reader ignores the attribute. Adding one is a version-compatible extension, not a bump. The column object is likewise open in the schema (`additionalProperties: true`).
 
 The `4 → 5` bump is therefore **not** forced by the `temporal_class` column attribute — under the rule above that attribute alone would have been version-compatible. It is forced by the **strengthened normative guarantee** that ships with it: the creation seed became unconditional, so a consumer must be able to distinguish
 

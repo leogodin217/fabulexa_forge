@@ -4,7 +4,7 @@
   "title": "Base Format Sidecar (base.json)",
   "description": "Sidecar manifest enumerating the branches and tables present in a base-layer emit's run.duckdb. Defined by base-format.md, beside this schema.",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["base_format_version", "branches", "tables"],
   "properties": {
     "base_format_version": {
@@ -234,7 +234,7 @@
     },
     "column": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["name", "type"],
       "properties": {
         "name": {
