@@ -4,6 +4,7 @@
 [`exporters/base/`](../../src/fabulexa_forge/exporters/base/)
 (`plan.py`, `renders.py`, `engine.py`),
 [`derivations/state_at.py`](../../src/fabulexa_forge/derivations/state_at.py),
+[`derivations/record_index.py`](../../src/fabulexa_forge/derivations/record_index.py),
 [`config/models.py`](../../src/fabulexa_forge/config/models.py) (`BaseConfig`), and
 [`tests/exporters/base/`](../../tests/exporters/base/),
 [`tests/config/test_base_config.py`](../../tests/config/test_base_config.py),
@@ -21,16 +22,25 @@ reconstruction of one records kind, materialized as a table. Where source hands 
 consumer the change log to merge (`MAX`-per-id, `LEAD`) and dimensional hands over a
 reconstructed star, base hands over the already-merged answer: the flat current-truth
 table an incremental-ETL author is building. It reads the same emit as the other
-modes and composes the shipped state-at derivation as its whole engine — it introduces
-no point-in-time reconstruction of its own.
+modes and composes two derivations-layer residents as its whole engine — state-at for
+every value, the record-index resident for every identity key — and introduces no
+point-in-time reconstruction of its own.
+
+Each table presents both encodings of every identity the base layer carries: the
+id-space `record_id` and reference id it has always emitted, and the index-space
+integer key beside it. The integer key is the merge key incremental-ETL and SCD-2
+lessons are written against; the opaque id alone is the wrong shape to teach them.
 
 ```
 records__<kind>  ─┐
-history          ─┼─▶  state-at resident  ─▶  flat  <kind>  table (one row/record)
+history          ─┼─▶  state-at resident  ─▶  values  ─┐
                  │      end-of-tape   (no slice_at → current state)
-                 │      horizon T+1   (slice_at: T → as-of-T)
-                 │      window end_ns (incremental → per-window snapshot)
-                 └────────────────────────────────────────────────────────────
+                 │      horizon T+1   (slice_at: T → as-of-T)     ├─▶ flat <kind> table
+                 │      window end_ns (incremental → per-window)  │   (one row/record)
+                 └─────────────────────────────────────────────   │
+records__<kind>  ─┐                                               │
+records__<target>─┴─▶  record-index resident ─▶ self + edge keys ─┘
+                       (LEFT JOIN, same horizon as the values)
 ```
 
 ---
@@ -40,10 +50,11 @@ history          ─┼─▶  state-at resident  ─▶  flat  <kind>  table (o
 | Module | Owns |
 |---|---|
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `ExportConfig.mode: Literal["dimensional", "source", "base"]`, `ExportConfig.base: BaseConfig \| None`; `BaseConfig` (`exclude`, `rename`, `slice_at`) and its parse-time validators; the `mode_section_matches` `base` arm and the `base_slice_at_excludes_incremental` cross-field rule |
-| [`exporters/base/plan.py`](../../src/fabulexa_forge/exporters/base/plan.py) | `BaseTableSpec`, `BasePlan`; `build_base_plan` — records-kind enumeration (no classification), `exclude`, operational presentation defaults, `rename` resolution, the `slice_only` omission with its notices, and the collision and reserved-name checks |
-| [`exporters/base/renders.py`](../../src/fabulexa_forge/exporters/base/renders.py) | `build_base_render_sql` — composes the state-at derivation at a horizon, wraps it with base's presentation (lifecycle wallclock-or-raw-ns, cast-back to sidecar types, rename projection), carrying the state-at resident's total `ORDER BY` |
+| [`exporters/base/plan.py`](../../src/fabulexa_forge/exporters/base/plan.py) | `BaseTableSpec`, `BasePlan`, `ReferenceKey`, `NOTICE_REFERENCE_KEY_TARGET_ABSENT`; `build_base_plan` — records-kind enumeration (no classification), `exclude`, operational presentation defaults, `rename` resolution, the `slice_only` omission with its notices, reference-edge resolution to target kinds with its absent-target notice, and the collision and reserved-name checks over the key identities as well as the state-at ones |
+| [`exporters/base/renders.py`](../../src/fabulexa_forge/exporters/base/renders.py) | `build_base_render_sql` — composes the state-at derivation at a horizon and the record-index resident at the same horizon, wraps them with base's presentation (lifecycle wallclock-or-raw-ns, cast-back to sidecar types, rename projection, key-column emission order), carrying the state-at resident's total `ORDER BY` |
 | [`exporters/base/engine.py`](../../src/fabulexa_forge/exporters/base/engine.py) | `export_base`, `build_base_query_specs` — plan → per-kind render at one resolved horizon → dispatch to the shared writer. `build_base_query_specs` is the pure compile surface the full-export leaf and the incremental driver's `base` branch both call |
-| [`derivations/state_at.py`](../../src/fabulexa_forge/derivations/state_at.py) | `build_state_at_sql`, `build_state_at_end_sql`, `STATE_AT_COLUMNS` — the point-in-time reconstruction base composes as its whole engine; owned by [`derivations.md`](derivations.md) § The state-at derivation |
+| [`derivations/state_at.py`](../../src/fabulexa_forge/derivations/state_at.py) | `build_state_at_sql`, `build_state_at_end_sql`, `STATE_AT_COLUMNS` — the point-in-time reconstruction supplying every base value; owned by [`derivations.md`](derivations.md) § The state-at derivation |
+| [`derivations/record_index.py`](../../src/fabulexa_forge/derivations/record_index.py) | `build_record_index_at_sql`, `build_record_index_at_end_sql`, `RECORD_INDEX_COLUMNS` — the `record_id` → `record_index` join relation supplying every base key column; owned by [`derivations.md`](derivations.md) § The record-index derivation |
 | [`exporters/slice_only.py`](../../src/fabulexa_forge/exporters/slice_only.py) | `is_non_exempt_slice_only` — the cross-mode omission predicate base's plan scans per column; owned by [`slice-only.md`](slice-only.md) |
 | [`exporters/query_spec.py`](../../src/fabulexa_forge/exporters/query_spec.py) · [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py) | The mode-neutral compiled-table shape + full-export write dispatch, and the cross-mode bookkeeping-name check base's reserved-name enforcement calls |
 | [`errors.py`](../../src/fabulexa_forge/errors.py) | The `Base*` error hierarchy (`ExportError` subclasses) |
@@ -73,10 +84,12 @@ history          ─┼─▶  state-at resident  ─▶  flat  <kind>  table (o
 Base classifies nothing and reshapes nothing: every records-category kind in the
 sidecar maps to exactly one flat output table, in sidecar table-declaration order.
 There is no genre trichotomy, no sub-type split, and no membership, junction,
-reference, or fact table. A kind's table carries the `STATE_AT_COLUMNS` prefix
+reference, or fact table. A kind's table opens with its self key, then carries the
+`STATE_AT_COLUMNS` prefix
 (`record_id`, `created_sim_time`, `active`, `deactivated_at`), then `presentation_id`
 when the kind carries it, then one `prop__<p>` per surviving property in sidecar
-column-declaration order. Each output value is a state-at reconstruction at the
+column-declaration order — each reference property immediately followed by its edge
+key (§ Record-index key columns). Each non-key output value is a state-at reconstruction at the
 chosen horizon: a tracked property carries its most-recent `history.value` at-or-before
 the horizon (`NULL` when no history precedes it), a constant property carries its
 current records value (the declared temporal-honesty exception every state-at consumer
@@ -113,6 +126,127 @@ reconstructible (an untracked write advances it leaving no history), so base omi
 column rather than fabricate or understate it — the same deviation source's snapshot
 delivery makes, and `STATE_AT_COLUMNS` already excludes it.
 
+### Record-index key columns
+
+Every emitted table carries exactly one **self key** — the record's own
+`record_index` — and one **edge key** per surviving reference property — the
+referenced record's `record_index`. A *surviving reference property* is a
+`prop__<p>` column of the kind that carries a sidecar `references` target and is not
+omitted by the `slice_only` policy. Both families resolve through one mechanism: a
+`LEFT JOIN` onto some kind's record-index relation ([`derivations.md`](derivations.md)
+§ The record-index derivation), the kind being the table's own for the self key and
+the property's `references` target for an edge key. One uniform rule produces both.
+
+**Edge keys are re-derived, never carried.** An edge key resolves from the
+horizon-reconstructed `prop__<p>` against the target kind's record-index relation at
+the same horizon; the physical `ref_index__<p>` column is never read. The physical
+value carries the target's index *at the emit's own slice* — the correct instant
+only when the horizon is the tape's end. Reading it for `constant` properties and
+re-deriving for `tracked` ones would be correct at one horizon and silently wrong
+under `slice_at` and under every incremental window, so one rule correct everywhere
+is worth the redundant work in the constant case. Both join sides are `VARCHAR` —
+the format pins a reference property's `prop__` column to the id-only form and the
+state-at relation's codec after-image is `VARCHAR` — so no cast participates in the
+join.
+
+**Both encodings ship, and the pair is not redundant.** An edge key is a `LEFT JOIN`
+projection, so several distinct conditions collapse to NULL; the id-space column
+beside it separates them. Emitting only the index would discard information the base
+layer carries, which faithful reshaping forbids (Principle #3).
+
+| Condition | id column (`<p>`) | key column (`<p>_key`) |
+|---|---|---|
+| Property absent on the record | NULL | NULL |
+| Reference names a record created before the horizon | the id | that record's `record_index` |
+| Reference names a record created at-or-after the horizon | the id | NULL |
+| Reference names no record at all (a dangled sentinel) | the id | NULL |
+| Target kind has no records table in this emit | the id | column not emitted |
+
+A target record **deactivated** before the horizon still resolves: the record-index
+relation filters on creation time only, so a deactivated record remains a legal
+reference target and filtering it out would manufacture a dangling edge the base
+layer does not contain.
+
+**Density survives every horizon.** At any horizon a kind's emitted self keys are
+exactly the integers `0 .. n-1` for that table's row count, because the surviving
+set is always a creation-order prefix. Values are projected verbatim; nothing is
+renumbered. This is what makes the self key a merge key rather than a row number — a
+record carries the same integer at every horizon, in every window of an incremental
+run, and in every emit of its branch, so two exports of the same branch are
+comparable on it. Renumbering to close a gap would destroy exactly that
+comparability. Density is inherited from the emit, never enforced: base asserts no
+`0 .. n-1` check, and a corrupted emit whose index set is perforated or repeated
+surfaces those values verbatim — the gap or repeat *is* the defect.
+
+**Horizon binding.** The key relations and the value relation composing one output
+table are composed at one horizon, matching the horizon the values were
+reconstructed at (§ Three horizons). A mismatch would silently resolve edges against
+the wrong population.
+
+| Selector | Record-index entry point |
+|---|---|
+| No `slice_at`, no `incremental` | End-of-tape — no horizon predicate |
+| `slice_at: T` (full export) | Horizoned at `T + 1` |
+| `incremental` window | Horizoned at the window's `end_ns` |
+
+The end-of-tape entry point carries no horizon predicate at all, matching the
+state-at resident's structural posture: composed over truncated base relations it is
+bounded by the truncation with no horizon computed. A tier-2 shaped playback over a
+`mode: base` config therefore carries the key columns by the same composition that
+gives it the value columns, which is what keeps the bridging equivalence intact — a
+`slice_at: T` export and the base-shape compile over the tape truncated at `T` are
+column-for-column equal ([`playback.md`](playback.md)).
+
+**Naming.** The self key defaults to `<kind>_key` and an edge key to `<p>_key`, both
+overridable through `rename` keyed on the contract identity — `record_index` and
+`ref_index__<p>` respectively (§ Presentation, typing, and ordering). Two derivation
+choices are load-bearing. The self key is named from the records **kind**, not the
+post-`rename` output table name: deriving it from the table name would make the
+default depend on whether a `rename` entry applied first, a resolution-order
+dependency with no upside. An edge key is named from the **property**, not the
+target kind: two properties on one kind may reference the same target —
+`referring_doctor` and `attending_doctor` both landing on `doctor` — and naming from
+the target would collide them into one name.
+
+**Emission order and typing.** The self key is the table's **first** column, ahead of
+`id` — surrogate-first is the convention the merge lesson teaches. Each edge key
+immediately follows **its own** id-space column, mirroring the way the base format
+interleaves each `ref_index__<name>` after its `prop__<name>`. Every other column
+keeps its position. Both families are `BIGINT`, projected verbatim from
+`record_index`, which the format pins `BIGINT NOT NULL`; a self key is never NULL,
+while an edge key is nullable — its nullability comes from the outer join, not from
+the source column.
+
+**An omitted property omits its key.** A non-exempt `slice_only` reference property
+is dropped from base output (§ The `slice_only` omission) and its edge key goes with
+it. This is required, not incidental: the export-wide policy forbids any output value
+from deriving from a `slice_only` column's value, and an edge key derived from an
+omitted property's reconstructed value would be exactly that. The disappearance is
+covered by that property's existing per-column omission notice, not separately
+announced. The mechanical sub-typed-discriminator carve-out never interacts with the
+rule — a discriminator is a closed-domain enum, never a reference-annotated property
+— but the rule is stated over the property's `references` annotation rather than over
+the carve-out, so the two are independent.
+
+**An absent target kind omits the key with a notice.** An emit legally omits
+`records__<K>` when kind *K* has no records in the slice, so a reference property
+pointing at such a kind is contract-legal with no target table present. Base emits no
+edge key for it and one `reference-key-target-absent` notice per kind × property
+([`notices.md`](notices.md)); the id-space column is unaffected. Omission is the
+right failure mode rather than raising: the emit is valid, and nothing base emits
+otherwise is lost. The resolution is made at plan time, before any data is written,
+so the notice precedes output and the table's column set is known before the render
+runs. The record-index resident itself is stricter — asked for a kind with no records
+table it raises `TableNotFoundError`, by the derivations layer's cause-based error
+taxonomy. The permissive behavior is base's policy, applied by not asking.
+
+**An excluded target kind keeps its key.** If a reference property's target kind is
+`exclude`d from the export, the edge key is still emitted, matching the id-space
+column's behavior exactly: base emits `prop__<p>` pointing at a kind the author
+excluded. Suppressing one encoding but not the other would make the pair disagree
+about what the export contains, and the author who excluded the kind is the one who
+chose the dangling edge.
+
 ### The `slice_only` omission
 
 Base auto-projects a kind's full property set — a flat projection has no author-named
@@ -133,9 +267,14 @@ than silently ignored. Base decides *how* it enforces the policy, never *whether
 
 Output table names default to the prefix-stripped kind (`records__customer` →
 `customer`) and `record_id → id`, the operational presentation posture base shares with
-source; both are overridable via `rename` (`name` for the table, a `columns` entry keyed
-on the pre-default state-at column identity — `record_id`, `presentation_id`,
-`created_sim_time`, `active`, `deactivated_at`, `prop__<p>` — for a column). Data columns
+source; the key columns' `<kind>_key` / `<p>_key` defaults are the same posture applied
+to the same kind of column, and it is the name the merge lesson is written against.
+All are overridable via `rename` (`name` for the table, a `columns` entry keyed
+on the pre-default column identity — `record_id`, `presentation_id`,
+`created_sim_time`, `active`, `deactivated_at`, `prop__<p>`, `record_index`,
+`ref_index__<p>` — for a column). The key identities join the domain a `rename.columns`
+key is validated against, so a typo fails at load rather than silently doing nothing.
+Data columns
 (`prop__<p>`, `presentation_id`) cast back from the state-at resident's codec VARCHAR
 after-image to their declared sidecar types, so base delivers a typed table, not an
 all-string one; `record_id` and `active` pass through verbatim. Lifecycle timestamps
@@ -161,12 +300,27 @@ remains a valid instance of its column's declared type, the cast-back succeeds, 
 defect surfaces *in* the reconstructed value rather than dropping or erroring a row. The
 guarantee is verified by a dedicated integration test, not asserted by inspection.
 
+The key columns rest on the composition holding in two further ways, both by
+construction. **Reference-rewriting operations co-write coherent pairs** — a dangled
+edge writes a sentinel id beside a sentinel index, a mispointed edge writes the
+donor's id beside the donor's real index — so re-derivation resolves exactly the
+defect the manifest declares: a dangled id finds no target and yields a NULL key, a
+mispointed id finds the donor. **Row-set operations leave key joins one-to-one** —
+exact duplication copies the row whole, so the duplicate carries the identical
+`(record_id, record_index)` pair and the record-index relation's `DISTINCT` collapses
+it out of the join's right side; deletion and insertion never reuse or collide an id
+or an index, and the gaps they leave surface verbatim (§ Record-index key columns).
+The one shape that could fan a key join out — two rows of one kind sharing a
+`record_id` with differing `record_index` — is not producible: identity columns sit
+outside every corrupter cell operation's eligible population.
+
 ## Invariants
 
 1. **Records-only flat grain.** Base emits exactly one flat table per surviving records
    kind and nothing else — no membership, junction, fact, or CDC table.
-2. **State-at is the whole engine.** Every base table value is a state-at reconstruction
-   at some horizon (tape's end, `T + 1`, or a window end); base writes no independent
+2. **Two residents are the whole engine.** Every base table value is a state-at
+   reconstruction at some horizon (tape's end, `T + 1`, or a window end), and every key
+   column is a record-index projection at that same horizon; base writes no independent
    point-in-time path.
 3. **One inclusive horizon per full export.** `slice_at: T` reflects every event with
    `sim_time ≤ T` and nothing after; the exclusive state-at horizon is `T + 1`.
@@ -174,7 +328,8 @@ guarantee is verified by a dedicated integration test, not asserted by inspectio
    against `history` alone.
 4. **`slice_only` enforcement is omit-with-notice, carve-out honored.** Base inherits the
    export-wide invariant and chooses omission; the discriminator carve-out is honored;
-   omission is column-projection-only and never suppresses a table.
+   omission is column-projection-only and never suppresses a table. No output column —
+   key columns included — derives from a non-exempt `slice_only` column's value.
 5. **Faithful reshaping.** Every value traces to a base-layer value or a deterministic
    recoding (a cast, a horizon mask, a wallclock render); base fabricates nothing, and a
    corrupted emit surfaces its declared defects unchanged.
@@ -190,6 +345,27 @@ guarantee is verified by a dedicated integration test, not asserted by inspectio
    and no output column name is `__valid_from_ns` or `last_mutation_sim_time` — checked
    at plan build over every export (full included), so a full export and a later
    `--next` on the same target agree.
+10. **Both encodings or neither, when resolvable.** A surviving reference property whose
+    target kind's records table is present emits its id-space and index-space columns
+    together; neither ships without the other. An absent target kind is the one stated
+    exception: the key column is omitted with a notice and the id-space column stands
+    alone.
+11. **Edge keys are re-derived.** No base output value is read from a physical
+    `ref_index__` column.
+12. **One horizon per table.** The value relation and every key relation composed into
+    one output table are composed at the same horizon.
+13. **Density under every horizon, inherited — never enforced.** Over a conformant emit a
+    table's self keys are exactly `0 .. n-1` for its row count, at every horizon, and
+    nothing is renumbered. The property follows from the emit's dense `record_index` and
+    the creation-order-prefix filter; it is not a check base performs, so a corrupted
+    emit's perforated or repeated indexes surface verbatim.
+14. **Creation-time filtering only.** Key resolution filters targets on creation time and
+    never on `active`.
+15. **Key resolution preserves row count.** Composing the key relations neither adds nor
+    drops output rows — base's row set is the state-at spine's, exactly. The key relation
+    is distinct over `(record_id, record_index)` and a duplicated `record_id` always
+    carries an identical `record_index`, so every key join is at most one-to-one per
+    spine row.
 
 ## Validation Rules
 
@@ -216,15 +392,21 @@ each raises an `ExportError` subclass surfaced through the CLI's existing error 
 | Rule / Error | Checks |
 |---|---|
 | `BaseExcludeUnresolved` | Every `exclude.kinds` and `exclude.tables` entry resolves — both check the pre-`rename` prefix-stripped kind names (base's only presentation default at this stage), so the two resolve against the same known set |
-| `BaseRenameUnresolved` | Every `rename` entry's `table` resolves to a surviving `records__<kind>`, and every `columns` key names a state-at column identity of that kind |
-| `BaseRenameSliceOnly` | No `rename` `columns` key names a non-exempt `slice_only` column — the column is policy-omitted, so the rename is unsatisfiable |
-| `BaseNameCollision` | All output table names are unique, and within each table all output column names are unique, after presentation defaults and `rename` |
-| Reserved-name check (`ExportError`) | No resolved output table name is `_export_meta` / `_export_windows` / `*__rows`, and no output column name is `__valid_from_ns` or `last_mutation_sim_time` — enforced always-on via `exporters/reserved_names.py` |
+| `BaseRenameUnresolved` | Every `rename` entry's `table` resolves to a surviving `records__<kind>`, and every `columns` key names an identity the kind actually emits in this emit — a state-at column identity, `record_index`, or a `ref_index__<p>` whose edge yields a key column. A `ref_index__<p>` for a non-reference property, or for one whose target kind has no records table here, is not in that set, so the rule falls out of the same check |
+| `BaseRenameSliceOnly` | No `rename` `columns` key names a non-exempt `slice_only` column or its `ref_index__` shadow — the column is policy-omitted, so the rename is unsatisfiable |
+| `BaseNameCollision` | All output table names are unique, and within each table all output column names are unique, after presentation defaults and `rename` — the key identities participating in the same domain as the state-at ones |
+| Reserved-name check (`ExportError`) | No resolved output table name is `_export_meta` / `_export_windows` / `*__rows`, and no output column name — key columns included — is `__valid_from_ns` or `last_mutation_sim_time` — enforced always-on via `exporters/reserved_names.py` |
+| Reference target resolvable | Each surviving reference property's target kind has a records table in the sidecar. Present: the edge key is emitted. Absent: the edge key is omitted and one `reference-key-target-absent` notice is emitted — a notice, not an error |
 | Single-branch guard (`derivations/guard.py`, cross-mode) | Exactly one branch |
+
+Every business rule is evaluated over every export — full, sliced, and windowed alike —
+so that a full export and a later incremental run on the same target agree on the output
+shape.
 
 `slice_only` omission itself is not a business-rule error — it is the
 `slice-only-column-omitted` notice, emitted per surviving kind × omitted column before
-any data is written.
+any data is written. The key columns add no config fields: they are the capability, and a
+toggle for a demand nobody has expressed is scaffolding (Principle #8).
 
 ## Rationale
 
@@ -245,6 +427,17 @@ any data is written.
 - **No anchor requirement.** Base's teaching target is incremental ETL / SCD merge, where
   raw sim-time keys are a legitimate and common landing shape; requiring wallclock (as
   source does) would foreclose that lesson.
+- **A join relation, not a wider state-at tuple.** Key resolution composes a narrow
+  `(record_id, record_index)` relation rather than widening the state-at reconstruction
+  tuple. State-at is a reconstruction contract with three consumers, not "the records
+  table minus some columns" — widening it would change three unrelated outputs to serve
+  one. The join is also what keeps the two relations in horizon agreement: an edge is
+  resolved from the very `prop__<p>` value the value relation produced, so nothing is
+  reconstructed twice and the two cannot drift.
+- **Both encodings, never the index alone.** An index-space key alone cannot distinguish
+  "no reference" from "dangling reference" — both are NULL. The id-space column beside it
+  makes the distinction visible, and dropping it would discard information the base layer
+  carries (Principle #3). The pair is the deliverable, not a transition state.
 
 ## Boundaries
 
@@ -269,7 +462,7 @@ any data is written.
 
 | Document | Why |
 |---|---|
-| [`derivations.md`](derivations.md) | The state-at / end-of-tape residents base composes as its whole engine |
+| [`derivations.md`](derivations.md) | The state-at and record-index residents base composes as its whole engine — values from the first, key columns from the second |
 | [`source.md`](source.md) | Snapshot delivery (the same state-at composition), the presentation-name posture, and the `slice_only` omission shape base shares |
 | [`slice-only.md`](slice-only.md) · [`notices.md`](notices.md) | The reused omission policy and the channel its notices flow through |
 | [`playback.md`](playback.md) | Shaped state and the bridging theorem that make direct-horizon equivalent |

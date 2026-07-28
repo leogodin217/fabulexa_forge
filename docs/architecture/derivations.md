@@ -4,7 +4,7 @@
 [`derivations/`](../../src/fabulexa_forge/derivations/)
 (`versioned_intervals.py`, `reference_resolution.py`, `row_state_events.py`,
 `membership_events.py`, `state_at.py`, `membership_state_at.py`,
-`truncated_tape.py`, `guard.py`),
+`record_index.py`, `truncated_tape.py`, `guard.py`),
 [`tests/derivations/`](../../tests/derivations/).
 Public API: `VERSIONED_INTERVAL_COLUMNS`,
 `build_versioned_intervals_sql`, `REFERENCE_RESOLUTION_COLUMNS`,
@@ -14,6 +14,8 @@ Public API: `VERSIONED_INTERVAL_COLUMNS`,
 `EVENT_CLASS_LEAVE`, `resolve_membership_columns`, `build_membership_events_sql`,
 `STATE_AT_COLUMNS`, `build_state_at_sql`, `build_state_at_end_sql`,
 `MEMBERSHIP_STATE_AT_COLUMNS`, `build_membership_state_at_sql`,
+`RECORD_INDEX_COLUMNS`, `build_record_index_at_sql`,
+`build_record_index_at_end_sql`,
 `build_truncated_history_sql`, `build_truncated_membership_sql`,
 `build_truncated_records_sql`, `build_truncated_sidecar`, `require_single_branch`.
 
@@ -24,7 +26,7 @@ reference resolution, point-in-time replay), so each mode composes a derivation
 rather than re-deriving the answer. Every derivation is a pure SQL fold whose
 output values each trace to reader-visible base values; the mode materializes the
 SQL through the reader's query surfaces, wraps it in a representation step, and
-dispatches to a writer. The layer holds six residents: `history` →
+dispatches to a writer. The layer holds seven residents: `history` →
 versioned-intervals, the reference-resolution pair (reference-path and
 membership-edge), `history` → row-state-events (the per-record `c`/`u`/`d`
 change-event stream the streaming exporter replays and the source exporter's
@@ -32,8 +34,11 @@ change-log render lands as a table), `membership__<K>__<p>` → membership-event
 (the `join`/`leave` event stream the streaming exporter replays for
 collection-valued properties), `history` + `records__<kind>` → state-at (the
 point-in-time row reconstruction, with a horizoned and an end-of-tape entry
-point), and `membership__<K>__<p>` → membership-state-at (interval containment
-at a horizon). Alongside the folds it carries the **truncated-tape surface** —
+point), `membership__<K>__<p>` → membership-state-at (interval containment
+at a horizon), and `records__<kind>` → record-index (the id-space-to-index-space
+join relation a mode `LEFT JOIN`s to resolve integer surrogate keys, with the same
+horizoned / end-of-tape entry-point split). Alongside the folds it carries the
+**truncated-tape surface** —
 three relation presenters and a sidecar view that render the emit sliced at T
 for a mode to compile over. The playback seam composes state-at,
 membership-state-at, and the truncated-tape surface for its point-in-time and
@@ -49,6 +54,7 @@ derivations   — interpretive shared folds (this layer)
   │              membership → membership-events  (join/leave per membership interval)
   │              history + records → state-at    (one row per record, as of a horizon or the tape's end)
   │              membership → membership-state-at (one row per interval containing a horizon)
+  │              records → record-index            (record_id → record_index, for a mode to LEFT JOIN)
   │              truncated-tape presenters        (base tables rendered sliced at T, for a mode to compile over)
   │   owns:      the temporal-honesty contract and the single-branch guard
   ▼
@@ -92,7 +98,11 @@ Every derivation — the resident and any future one — obeys six rules:
    of base values (a cast, a `LEAD`/`LAG`, a row number over a defined total
    order), or a `NULL` with exactly one declared meaning. Nothing is invented.
 5. **Determinism.** Same emit + same parameters + same code version → an identical
-   relation under the derivation's own `ORDER BY`, which every derivation declares.
+   relation. A fold — a relation read in its own right — declares its own `ORDER BY`
+   and is identical under it. A **join relation** — reference-resolution,
+   record-index — is deterministic as a set and declares no `ORDER BY`: a consumer
+   `LEFT JOIN`s it rather than reading it ordered, and the reading mode's own order
+   governs the result.
 6. **Temporal honesty.** Every output row carries a derivation-defined **event-time
    key** (raw ns). No value on the row derives from base state later than that key,
    except sources the derivation declares temporally constant. This is the one
@@ -453,6 +463,61 @@ rules (`ReferencePathResolvable`, `MembershipEdgeResolvable`, `LookupColumnSafet
 [`dimensional.md`](dimensional.md)), so the "is this resolvable?" check and the
 executed resolution give one answer.
 
+### The record-index derivation
+
+`build_record_index_at_sql(sidecar, fork_path, kind, horizon_ns)` resolves a kind's
+id-space identity to its index-space identity at an exclusive horizon: one row per
+distinct `(record_id, record_index)` pair among the kind's records created strictly
+before `horizon_ns`, filtered to `fork_path`. Canonical columns are
+`RECORD_INDEX_COLUMNS` — `(record_id, record_index)`. Like the reference-resolution
+pair this is a **join relation**, not a fold: it declares no `ORDER BY`, because a
+mode `LEFT JOIN`s it onto a spine it already orders. A missing `records__<kind>`
+raises `TableNotFoundError`, by the layer's cause-based taxonomy.
+
+Three projection rules carry the contract:
+
+- **`record_index` is projected verbatim, never recomputed.** The format pins it as
+  set once at creation and never renumbered, so it is a temporally-constant value
+  read at a creation instant the horizon predicate has already bounded below — the
+  fold is temporally honest against the constant horizon by the same test as
+  state-at. Recomputing it as a row number over the surviving set would renumber
+  after a horizon filter and destroy the cross-emit stability the column exists to
+  provide.
+- **`DISTINCT`, which keeps a consumer's join one-to-one.** On a conformant emit the
+  pair is already unique per record and the `DISTINCT` is a no-op. It is load-bearing
+  over a corrupted emit: an exactly-duplicated row carries the *identical* pair, and
+  collapsing it here is what keeps a consumer's key join from fanning its spine out
+  (the one shape that would fan — two rows of one kind sharing a `record_id` with
+  differing `record_index` — is not producible, since identity columns sit outside
+  every corrupter cell operation's eligible population).
+- **`active` is never a predicate.** Rows are filtered on creation time only. A
+  record deactivated before the horizon remains a legal reference target; filtering
+  it out would manufacture a dangling edge the base layer does not contain.
+
+Filtering on creation time alone also makes the surviving set a creation-order
+**prefix**: `record_index` is the ordinal in creation order and is monotone in
+`created_sim_time`, and records sharing a `created_sim_time` are retained or dropped
+together, so no tie perforates the prefix. Over a conformant emit the relation's
+indexes at any horizon are therefore exactly `0 .. n-1` for its row count. This is
+inherited, never enforced — the relation asserts no density check, so a corrupted
+emit's perforated or repeated indexes surface verbatim.
+
+**The end-of-tape entry point.** `build_record_index_at_end_sql(sidecar, fork_path,
+kind)` is the resident's second entry point: the same `DISTINCT
+RECORD_INDEX_COLUMNS` relation filtered only to `fork_path`. "The tape's end" is
+**structural** in the state-at sense — the SQL carries no horizon parameter and no
+horizon predicate, so composing it over a truncated base relation bounds it at the
+truncation with no horizon ever computed. The equivalence is the testable contract:
+this relation equals `build_record_index_at_sql` at any `horizon_ns` strictly beyond
+every creation instant of the composed relation.
+
+The signature names no mode's concept (the anti-weld rule), so the one relation
+answers any mode's surrogate-key question. Its consumer is the base exporter, which
+joins it once per output table for the record's own key and once per reference edge
+for that edge's key ([`base.md`](base.md) § Record-index key columns). Behavioral
+cases are exercised in
+[`tests/derivations/test_record_index.py`](../../tests/derivations/test_record_index.py).
+
 ### The truncated-tape surface
 
 Three relation builders and one sidecar view present the emit as the producer
@@ -528,6 +593,14 @@ additionally relies on `joined_sim_time` being non-null on every interval row;
 element-field values being constant across an interval; a reference field's
 `(member__<f>__kind, member__<f>__id)` pair being all-null or all-non-null (C7); and each
 element-schema field carrying exactly one column shape — scalar or reference, never both.
+Record-index relies on the format's `record_index` guarantees: set once at creation and
+never renumbered, dense over each `(fork_path, kind)`, stable for a record across
+every emit of its branch, and monotone in `created_sim_time` — creation order
+agrees with creation time, which is what makes a creation-time filter carve a
+creation-order prefix rather than a perforated set. Agreement between a `prop__<name>`
+and its `ref_index__<name>` sibling is producer-guaranteed and outside the conformance
+procedure ([`conformance.md`](conformance.md)) — the same trust class as id-space
+referential integrity; the layer consumes the guarantee and never re-verifies it.
 
 ## Invariants
 
@@ -580,17 +653,20 @@ filter on; it raises `ExportError` on zero or more than one branch.
 
 ## Boundaries
 
-- **Six residents plus the truncated-tape surface.** The folds are `history` →
+- **Seven residents plus the truncated-tape surface.** The residents are `history` →
   versioned-intervals, the reference-resolution pair (reference-path and
   membership-edge), `history` → row-state-events, `membership__<K>__<p>` →
-  membership-events, `history` + `records__<kind>` → state-at, and
-  `membership__<K>__<p>` → membership-state-at; the truncated-tape surface adds
+  membership-events, `history` + `records__<kind>` → state-at,
+  `membership__<K>__<p>` → membership-state-at, and `records__<kind>` →
+  record-index; the truncated-tape surface adds
   three base-table presenters and a sidecar view. The dimensional exporter's
   interval reconstruction and its reference / membership FK and `lookup`
   resolution compose the first two residents; the streaming exporter composes
   row-state-events (for `state-changes`) and membership-events (for
   `membership-events`); the source exporter composes row-state-events (its
-  change-log render) and state-at (its snapshot delivery); the playback seam
+  change-log render) and state-at (its snapshot delivery); the base exporter
+  composes state-at for its values and record-index for its identity columns; the
+  playback seam
   composes state-at, membership-state-at, and the truncated-tape surface — rather
   than any mode authoring its own base-table SQL. Grain assembly and the
   representation step (renames, casts, anchor rendering, the total `ORDER BY`) are
@@ -630,13 +706,21 @@ filter on; it raises `ExportError` on zero or more than one branch.
   its own slice ([`bundle.md`](bundle.md) § The dense record index) — so any
   reconstruction surface that surfaces the index **re-derives** `ref_index__<name>`
   from the reconstructed `prop__<name>` via the target's `record_index`; it never
-  carries the emitted slice's `ref_index__` value to another horizon. The
-  truncated-records presenter is the first surface to apply this rule — it carries
-  `record_index` verbatim (slice-stable by contract) and re-derives each
-  `ref_index__<name>` from the target kind's *truncated* spine. The folds
-  themselves remain narrower: no fold reads or emits identity columns beyond
-  `record_id`, and state-at's reconstructed column set is `STATE_AT_COLUMNS` plus
-  selected `prop__` columns only.
+  carries the emitted slice's `ref_index__` value to another horizon. Two surfaces
+  apply the rule, and **they bound the target spine with opposite inclusivity** —
+  reading one as a template for the other is an off-by-one boundary defect:
+  - the **truncated-records presenter** re-derives each `ref_index__<name>` inline
+    against a target spine bounded **inclusively** at `at_sim_time`, and carries
+    `record_index` verbatim (slice-stable by contract);
+  - the **record-index resident** hands a mode the relation to join, bounded
+    **exclusively** at a horizon.
+
+  Collapsing the presenter's inline re-derivation onto the resident is a legitimate
+  simplification of two implementations of one idea; it is not required by either
+  surface's contract, and each is independently tested. The folds themselves remain
+  narrower than both: no fold reads or emits identity columns beyond `record_id`,
+  and state-at's reconstructed column set is `STATE_AT_COLUMNS` plus selected
+  `prop__` columns only.
 - **A `slice_only` column has no faithful point-in-time read.** State-at and the
   row-state-events after-image render a type-1 column's *current* `records__` value
   at every horizon — the declared temporal-honesty exception. For a `constant` column
@@ -658,6 +742,7 @@ filter on; it raises `ExportError` on zero or more than one branch.
 | [`dimensional.md`](dimensional.md) | The mode that composes the versioned-intervals and reference-resolution residents; the consumer that shares the single-branch guard. |
 | [`streaming.md`](streaming.md) | The delivery driver that composes the row-state-events resident (`state-changes`) and the membership-events resident (`membership-events`) into ordered event streams. |
 | [`source.md`](source.md) | The mode that composes row-state-events (its change-log render) and state-at (its snapshot delivery) into landed operational tables. |
+| [`base.md`](base.md) | The mode that composes state-at for its values and the record-index resident for its integer key columns. |
 | [`playback.md`](playback.md) | The seam that composes state-at, membership-state-at, and the truncated-tape surface for its point-in-time and shaped-`state` answers. |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored input contract — `history`, `records__*`, branch enumeration. |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap. |

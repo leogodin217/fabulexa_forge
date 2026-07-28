@@ -14,7 +14,7 @@ tests in [`tests/exporters/test_notices.py`](../../tests/exporters/test_notices.
 ## Boundary
 
 - **In:** a `Notice` from any plan/compile path (dimensional validation, source
-  plan, `init` proposal).
+  plan, base plan, `init` proposal).
 - **Out:** each notice passed, synchronously and in discovery order, to the
   `NoticeSink` the caller supplied.
 - Every entry point that can emit a notice takes a **required** `notice_sink`
@@ -38,8 +38,9 @@ tests in [`tests/exporters/test_notices.py`](../../tests/exporters/test_notices.
 
 | `code` | Emitted by | Meaning |
 |---|---|---|
-| `slice-only-column-omitted` | source plan (per unit × column), `init` (per kind × column) | A `slice_only` column was dropped from an auto-projected surface (see [`slice-only.md`](slice-only.md)) |
+| `slice-only-column-omitted` | source plan (per unit × column), base plan (per kind × column), `init` (per kind × column) | A `slice_only` column was dropped from an auto-projected surface (see [`slice-only.md`](slice-only.md)) |
 | `discriminator-value-unobserved` | dimensional validation | A records `filter` value is not among the kind's observed `enum_domains` values; the table will be empty |
+| `reference-key-target-absent` | base plan (per kind × property) | A reference property's target kind has no records table in the emit, so no index-space key column is produced for that edge; the id-space column is unaffected (see [`base.md`](base.md) § Record-index key columns) |
 
 ## Invariants
 
@@ -69,4 +70,5 @@ tests in [`tests/exporters/test_notices.py`](../../tests/exporters/test_notices.
 | [`slice-only.md`](slice-only.md) | The policy whose omissions the channel reports |
 | [`dimensional.md`](dimensional.md) | Emits `discriminator-value-unobserved`; `init` emits skip notices |
 | [`source.md`](source.md) | Emits `slice-only-column-omitted` per unit × column |
+| [`base.md`](base.md) | Emits `slice-only-column-omitted` per kind × column and `reference-key-target-absent` per kind × property |
 | [`incremental.md`](incremental.md) | Threads the sink through windowed compiles |
