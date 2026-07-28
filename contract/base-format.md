@@ -25,7 +25,7 @@ The contract is **two artifacts per emit**, not a Python package:
 | `run.duckdb` | DuckDB's own format | DuckDB (any version supporting the schema written) |
 | `base.json` | `base-format.schema.json` (sibling of this doc) | Any reader of any kind |
 
-**`BASE_FORMAT_VERSION = 6`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
+**`BASE_FORMAT_VERSION = 7`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
 
 ---
 
@@ -117,7 +117,7 @@ Where P is the count of *scalar* declared properties for kind *K* and R is the c
 
 **`created_sim_time` is the record's immutable creation time.** Position 3 carries the `sim_time` at which the record was created and is set exactly once. It is unaffected by every later content event — a property write and a deactivation both leave it unchanged — and is non-NULL on every row, including write-once fact records (`history_tracked: false`). Consumers MAY use it to bound a record's lifetime from below.
 
-**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 6`.
+**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 7`.
 
 **Row order.** Creation order within kind, lexicographic on kind across kinds — the order in which the producer created each record, preserved by insertion-order iteration. A kind whose records are created through more than one id-minting path (e.g. sequential integer-string ids and hex-digest ids on the same kind) yields rows interleaved by creation time, **not** sorted by `record_id` value. Consumers MUST NOT rely on any sort derived from `record_id` — ids minted by different paths are structurally disjoint, and lexicographic order over the mixed set carries no semantic meaning.
 
@@ -251,7 +251,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 ```json
 {
-  "base_format_version": 6,
+  "base_format_version": 7,
   "branches": [
     {"fork_path": "trunk", "parent": null, "slice_at": 1728000000000000}
   ],
@@ -281,7 +281,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `base_format_version` | integer | yes | Format version. Current value: `6`. |
+| `base_format_version` | integer | yes | Format version. Current value: `7`. |
 | `branches` | array | yes | Exactly one entry — an emit covers a single branch. See § Branch enumeration and runtime anchor. |
 | `branches[].fork_path` | string | yes | Canonical `@`-joined fork path of the single branch. |
 | `branches[].parent` | string \| null | yes | Parent fork path (the `@`-joined prefix), or `null` for a root branch; the named parent need not be present in the emit. |
@@ -293,6 +293,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `enum_domains` | object | optional | Closed-domain registry, nested `{<kind>: {<property>: [<option>, ...]}}`. Present only when the scenario declared at least one closed-domain string property (`status` / `category` typed property or a synthesized sub-type discriminator); omitted entirely otherwise. Keys at both nesting levels are sorted lexicographically; option lists preserve declaration order. The authoritative list of allowed values for each closed-domain string property. See § Closed-domain registry. |
 | `record_roles` | object | optional | Warehouse-role registry, nested by kind. The `actor` entry is an object `{<sub_type>: role}`; every other records-category kind maps to a single role string (`"dimension"` or `"fact"`). Present when the emit carries ≥ 1 records kind; keys sorted lexicographically at every level. See § Record roles. |
 | `sub_type_columns` | object | optional | Sub-type column partition, nested `{<kind>: {<sub_type>: [<column-name>, ...]}}` — per sub-typed kind, the value columns attributed to each declared sub-type: the columns of the properties it declares plus the kind's structural columns. Present when the producing run carries the partition and ≥ 1 sub-typed kind has a records table in the emit; omitted entirely otherwise. Keys sorted lexicographically at both levels. The NULL-disambiguation surface for sub-typed records tables. See § Sub-type column partition. |
+| `presentation_keys` | object | optional | Per-kind `presentation_id` key declarations, nested `{<kind>: <flat or partitioned entry>}` — one entry per kind whose `records__<kind>` table carries a `presentation_id` column, carrying per-minting-declaration key claims, key-space identities, and (partitioned kinds) a kind-level rollup. Present only when ≥ 1 `presentation_id` column is minted; omitted entirely otherwise. Keys sorted lexicographically at both levels. See § The `presentation_keys` block. |
 | `tables` | array | yes | Tables present in `run.duckdb`, in the same order as DuckDB's catalog. |
 | `tables[].name` | string | yes | DuckDB table name. |
 | `tables[].category` | enum | yes | `"fixed"`, `"records"`, or `"membership"`. |
@@ -305,12 +306,9 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `tables[].columns[].references` | string | optional | Record kind this column points at, when the source schema declared a record-to-record reference. Present iff the column is a foreign-key column (one `VARCHAR` carrying the id portion of a record id); equality-joinable against `records__<references>.record_id`. Omitted for all other columns. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
 | `tables[].columns[].history_tracked` | boolean | optional | SCD class of a value-carrying column: `true` = type-2 (priors recoverable from the `history` table), `false` = type-1 (current value only). Present on records-category `prop__<name>` columns and presentation-property columns; omitted on structural, fixed-table, membership, and `presentation_id` columns. See § Column temporal semantics. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
 | `tables[].columns[].temporal_class` | enum | optional | Point-in-time semantics of a value-carrying column: `"constant"`, `"tracked"`, or `"slice_only"`. Answers *"can I ask what this column's value was at time T?"*. Carried on **exactly** the columns that carry `history_tracked` — a column carries one iff it carries the other. See § Column temporal semantics. |
-| `tables[].columns[].unique_within` | enum | optional | Uniqueness scope of a `presentation_id` column's non-NULL values: `"emit"` (distinct across every row of the table) or `"branch"` (distinct among rows sharing a `fork_path`). Derived by the producer from the kind's declared minting strategies, never author-asserted. Omitted when no uniqueness guarantee is derivable — absence is "no claim", not "not unique". Only ever present on `presentation_id` columns. See § `presentation_id` key declaration. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
-| `tables[].columns[].branch_stable` | boolean | optional | Whether the same record carries the same non-NULL `presentation_id` value on every branch where it appears — the cross-branch counterfactual join key. Present on exactly the `presentation_id` columns that carry `slice_stable` (always written as a pair). See § `presentation_id` key declaration. |
-| `tables[].columns[].slice_stable` | boolean | optional | Whether a record keeps its non-NULL `presentation_id` value across emits produced from the same producing run and the same producer configuration, regardless of slice or branch selection. Present on exactly the `presentation_id` columns that carry `branch_stable` (always written as a pair). See § `presentation_id` key declaration. |
 | `tables[].rows` | integer | yes | Row count of the table. |
 
-The fields above are the *required* shape at `base_format_version: 6`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 6` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
+The fields above are the *required* shape at `base_format_version: 7`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 7` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
 
 ### Branch enumeration and runtime anchor
 
@@ -376,7 +374,7 @@ The block is a nested object `{<kind>: {<property>: [<option>, ...]}}`:
 Closed domains are fixed at run initialization and persisted with the run, so
 every emit derived from the same persisted run carries the
 same registry across `slice_at` choices. Adding
-`enum_domains` is a version-compatible extension at `base_format_version: 6`:
+`enum_domains` is a version-compatible extension at `base_format_version: 7`:
 a reader that does not recognize the key ignores it (unknown top-level fields
 MAY warn but MUST NOT fail). Downstream tools that route per-sub-type read
 `enum_domains[<kind>][<kind>_type]` as the authoritative declared key set.
@@ -431,7 +429,7 @@ actor sub-types, never narrowed to those surviving a slice — this is what keep
 the block slice-stable.
 
 Adding `record_roles` is a version-compatible extension at
-`base_format_version: 6`: it is an optional top-level field a reader that does
+`base_format_version: 7`: it is an optional top-level field a reader that does
 not recognize it ignores (unknown top-level fields MAY warn but MUST NOT fail).
 A generic exporter branches on `record_roles` with no hard-coded kind→role map.
 
@@ -526,7 +524,7 @@ exactly this one column. C14 references this carve-out.
 The declared partition and the kind's structural properties are both fixed at
 run initialization and persisted with the run, so every emit derived from the
 same persisted run carries the same per-kind entry across `slice_at` choices. Adding `sub_type_columns` is a version-compatible
-extension at `base_format_version: 6`: an optional top-level field a reader
+extension at `base_format_version: 7`: an optional top-level field a reader
 that does not recognize it ignores (unknown top-level fields MAY warn but MUST
 NOT fail). Consumers gate on presence and fall back to union-schema behavior
 when absent.
@@ -584,11 +582,11 @@ a record property's value or a presentation value:
 `presentation_id` is an identity mint, minted once per record and never
 re-minted; it carries neither attribute (an identity column has no temporal
 semantics) — its identity-column analogue is the key declaration
-(§ `presentation_id` key declaration). A presentation property bound to a `tracked` source is itself
+(§ The `presentation_keys` block). A presentation property bound to a `tracked` source is itself
 `tracked` — it is re-minted at each change instant of its source, and those mints
 are appended to the `history` table.
 
-**Coverage.** A `base_format_version: 6` emit carries both attributes on every
+**Coverage.** A `base_format_version: 7` emit carries both attributes on every
 records-category `prop__<name>` column, and on every presentation-property column.
 
 **All-or-none across an emit's `prop__` columns.** A producer that emits column
@@ -602,7 +600,7 @@ emit derived from the same persisted run carries the same pair for a given colum
 across `slice_at` choices — matching how `enum_domains` and `pinned_ids` are
 run-level.
 
-**Reader contract.** A reader gating on `base_format_version: 6` reads
+**Reader contract.** A reader gating on `base_format_version: 7` reads
 `temporal_class` directly. On a v4 emit the attribute is **absent and the class is
 unknown**; the reader falls back to `history_tracked` inference and inherits its
 false-negative tail — and cannot distinguish `constant` from `slice_only` at all,
@@ -612,42 +610,126 @@ Read both from the sidecar: neither is recoverable from raw scenario YAML,
 because the bits are partly synthesized at schema assembly and recovering them
 would require re-running that assembly.
 
-### `presentation_id` key declaration (`unique_within`, `branch_stable`, `slice_stable`)
+### The `presentation_keys` block
 
-Three optional attributes on a `presentation_id` column descriptor, declaring
-the key properties the producer's minting-strategy choice fixed — whether the
-column can serve as a union key, a cross-branch join key, or an
-incremental-re-export key. Like `temporal_class`, the declaration is **derived
-by the producer, never author-asserted**.
+Optional top-level registry declaring the key properties of every
+`presentation_id` minting declaration — keyed by kind, with one entry per
+**minting declaration**: per sub-type for partitioned kinds (under
+`sub_types`), a single `key` entry for flat kinds. Each entry carries three
+key-property scalars scoped to that partition plus a derived **key-space
+identity**; a partitioned kind additionally carries a **kind-level rollup**
+(the whole-column claim). Field shapes: `flat_presentation_keys` /
+`partitioned_presentation_keys` in `base-format.schema.json`. Like
+`temporal_class`, the block is **derived by the producer from the declared
+minting strategies, never author-asserted and never data-consulted** — a
+partition with zero rows in the emit still has its entry.
 
-All guarantees range over **non-NULL** cells; a NULL cell keeps its existing
-reading (the row's sub-type mints no id — structurally inapplicable).
+It gives a consumer the static facts to (a) key a single sub-type's rows
+extracted to their own table, (b) decide whether several sub-types can share
+one `presentation_id`-keyed table — a subset question no per-kind scalar can
+answer — and (c) read NULL semantics per partition without probing data.
 
-| Attribute | Value | Consumer may rely on |
+**Membership.** A kind K appears in `presentation_keys` **iff** `records__K`
+carries a `presentation_id` column. A sub-type appears in `sub_types` iff its
+declaration mints cells. Entry shape agrees with the discriminator:
+`sub_types` iff the kind carries a synthesized discriminator domain in
+`enum_domains`, `key` otherwise — the shape *is* the grammar discriminator.
+Kind keys and `sub_types` keys are sorted lexicographically; `sub_types` keys
+are a subset of the kind's discriminator domain in `enum_domains`.
+
+**Non-NULL totality.** Presence of a `sub_types` entry for S claims every row
+of sub-type S carries a non-NULL `presentation_id`; equivalently, a
+`presentation_id` cell is NULL ⟺ the row's sub-type is absent from
+`sub_types` — never partial within a declared sub-type. A flat kind's `key`
+entry claims the whole table non-NULL.
+
+**Entry fields.** All claims range over that partition's cells (total
+non-NULL per the claim above):
+
+| Field | Value | Consumer may rely on |
 |---|---|---|
-| `unique_within` | `"emit"` | Non-NULL values are distinct across every row of the table — a table-wide key even in a multi-branch emit. Implies branch-scope uniqueness. |
-| `unique_within` | `"branch"` | Non-NULL values are distinct among rows sharing a `fork_path`; `(fork_path, presentation_id)` is a table-wide key. Whether the same record repeats its value across branches is `branch_stable`'s claim, not this attribute's. |
-| `unique_within` | absent | No uniqueness claim. Consumer validates against data or keys on `record_id`. |
-| `branch_stable` | `true` | The same record carries the same non-NULL value on every branch where it appears — the cross-branch counterfactual join key. |
-| `branch_stable` | `false` | The same record may carry different values on different branches. |
+| `unique_within` | `"emit"` | Values distinct across every row of the table — a table-wide key. Implies branch-scope uniqueness. |
+| `unique_within` | `"branch"` | Values distinct among rows sharing a `fork_path`; `(fork_path, presentation_id)` keys the partition. |
+| `branch_stable` | `true` | The same record carries the same value on every branch where it appears — the cross-branch counterfactual join key. |
 | `slice_stable` | `true` | Across emits produced from the same producing run and the same producer configuration, a record keeps its value regardless of slice or branch selection — incremental re-export cannot renumber. |
-| `slice_stable` | `false` | Values depend on the emitted row set; two emits of overlapping scope may disagree. |
+| `key_space` | object | The declaration's key-space identity, input to the union-safety algebra below. `class` is `"counter"` (per-declaration counter over the emitted row set), `"record_index"` (pure function of the kind's dense per-branch record index), `"uuid"` (per-record draw), or `"record_id"` (record id verbatim). Digit-rendered classes (`counter` / `record_index`) carry `prefix` and `width`; unprefixed strategies carry `prefix: ""`, `width: 0`. |
 
-**Pairing.** `branch_stable` and `slice_stable` are written as a pair (both
-present or, on a pre-feature emit, both absent); `unique_within` presence is
-independent of the pair.
+`unique_within` and the stability pair are fully determined by
+`key_space.class` (`counter` → `"emit"`/`false`/`false`; every other class →
+`"branch"`/`true`/`true`). Both are written anyway: the scalars are the
+claims consumers read directly; the key space feeds the combination algebra.
+The redundancy is a checkable coupling, not two sources of truth.
 
-**Absence.** A pre-feature emit carries none of the three; readers treat
-absence as "no claim" and fall back to out-of-band knowledge. Presence is
-self-describing — per § Format versioning these are version-compatible
-optional column attributes, no bump.
+**Union-safety algebra (normative).** Two key spaces are **union-safe** iff a
+value collision is impossible given only the declarations. The algebra is
+defined over entries of **one kind** only — the `record_index` and
+`record_id` spaces are kind-scoped (two kinds' index ranges and id sequences
+overlap), so the block makes no cross-kind claim.
 
-**The declaration describes the emit as produced.** A tool that intentionally
+| Pair | Union-safe | Why |
+|---|---|---|
+| `record_index` × `record_index`, identical `prefix` and `width` | ✓ | One shared injective space — sub-types draw disjoint values from the kind's single dense per-branch index |
+| `uuid` × `uuid` | ✓ | Independent per-record draws keyed on distinct record ids |
+| `record_id` × `record_id` | ✓ | The record id is unique across the kind's records |
+| Digit-rendered × digit-rendered (any `counter` / `record_index` mix) with **incomparable prefixes** | ✓ | Rendered strings can never be equal (see rule below); width overflow included |
+| Digit-rendered × digit-rendered with comparable prefixes (incl. equal prefixes, except the identical-`record_index` row above) | ✗ | `A-` / `A-1` collide via overflow; two counters with equal prefixes always collide |
+| `uuid` × any digit-rendered or `record_id` space | ✗ | Conservative — no proof the rendered forms are disjoint |
+| `record_id` × any digit-rendered space | ✗ | Record-id strings are opaque — may collide with rendered digits |
+
+*Prefix incomparability.* Digit-rendered spaces mint `prefix + digits`
+(padded to `width`, widening past it on overflow — the digit part has
+unbounded length and may carry leading zeros). Prefixes P₁, P₂ are
+**comparable** (unsafe) iff one equals the other plus a possibly-empty digit
+string — so equal prefixes are comparable. Otherwise incomparable: `P₁ + d₁`
+and `P₂ + d₂` can never be equal, because string equality would force the
+longer prefix to extend the shorter by digits. `WARD_` / `THTR_`
+incomparable (safe); `A-` / `A-1` comparable (unsafe); `""` / `X_`
+incomparable (safe); `""` / `"1"` comparable (unsafe). `width` never rescues
+comparability: padding produces leading zeros and overflow removes any
+length bound, so only the prefix relation matters.
+
+**Combined-set properties.** For any pairwise union-safe set of one kind's
+entries, the union of their cells satisfies:
+
+| Set composition | Union `unique_within` | Union `branch_stable` / `slice_stable` |
+|---|---|---|
+| All counter-class | `"emit"` | `false` / `false` |
+| All stable-class | `"branch"` | `true` / `true` |
+| Mixed | `"branch"` (stable members repeat values across branches, so never emit-wide) | `false` / `false` |
+
+If any pair is not union-safe, the union carries no uniqueness claim; its
+stability pair is `true`/`true` iff every member is stable-class.
+
+**Kind rollup.** A partitioned kind's rollup fields are exactly this rule
+applied to the full entry set: `unique_within` written only when derivable
+(any-pair-unsafe → omitted, "no claim"), the stability pair always written.
+A singleton set's rollup equals its one entry's scalars. Flat kinds write no
+rollup — `key` *is* the whole-column claim.
+
+**Consumer rules.**
+
+1. **Split.** A partition's rows extracted to their own table are
+   `presentation_id`-keyed per that entry's `unique_within` scope (every
+   entry has one). NULL handling is trivial: a declared partition has no
+   NULLs.
+2. **Combine.** Partitions of one kind may share one `presentation_id`-keyed
+   table iff their entries are pairwise union-safe; the combined column's
+   properties follow the combined-set table. Cross-kind unions carry no
+   claim — a consumer combining kinds keys on `(kind, presentation_id)` or
+   on record identity instead.
+3. **Whole table.** Read the kind rollup (partitioned) or `key` (flat).
+   Absence of rollup `unique_within` is "no claim", not "not unique" — the
+   consumer falls back to validating against data or keying on `record_id`.
+
+**Absence.** A pre-`presentation_keys` emit (base_format_version ≤ 6)
+carries no block; readers treat absence as "no claims" and fall back to
+out-of-band knowledge, as with every optional registry.
+
+**The block describes the emit as produced.** A tool that intentionally
 duplicates or mutates rows downstream may falsify it — the same class of
 semantic non-conformance as breaking C6/C7 — which is precisely what makes
-the declaration a useful validation target. A consumer MAY validate the
-claims against data; the contract does not oblige it to (the C-set is
-unchanged).
+the block a useful validation target. A consumer MAY validate the claims
+against data; the contract does not oblige it to.
 
 ### What the sidecar does *not* carry
 
@@ -695,6 +777,8 @@ A base-layer emit is conformant iff all of the following hold. The procedure is 
 load base.json
 validate against base-format.schema.json (the schema matching base_format_version)
 ```
+
+The schema validates *required shape*, not closed shape: its top level and the column object permit unknown members (`additionalProperties: true`), so a sidecar carrying a newer same-version optional field or column attribute still validates against an older revision of the v7 schema. Unknown members fall under the § Field semantics rule — a reader MAY warn but MUST NOT fail.
 
 ### C2. DuckDB catalog matches the sidecar
 
@@ -921,7 +1005,7 @@ A reference Python conformance check, `check_published_conformance.py`, ships in
 |---|---|---|
 | `base_format_version` | `base.json` | Required tables change, fixed-table column lists change, sidecar schema changes |
 
-**Current version = 6.** This document defines v6. A version bump implies one of:
+**Current version = 7.** This document defines v7. A version bump implies one of:
 - The required-tables set changed (added/removed/renamed tables)
 - A fixed-table required-column list changed
 - The sidecar schema gained a new *required* top-level field
@@ -936,9 +1020,9 @@ The `3 → 4` bump is forced by the `created_sim_time` lifecycle column inserted
 
 Adding a *new optional* column group is **not** a version bump as long as prior-version readers continue to read prior-version sidecars correctly — column presence is already self-describing.
 
-The same rule applies to **new optional top-level sidecar fields** (the `record_roles` registry, a pin-identity surface, a future cross-emit linkage block). Their presence is self-describing — a reader gating on `base_format_version` ignores unknown top-level fields per § Field semantics ("MAY warn but MUST NOT fail"). Adding such a field is a version-compatible extension, not a bump. A bump is required only when a prior-version reader could mis-interpret the sidecar.
+The same rule applies to **new optional top-level sidecar fields** (the `record_roles` registry, a pin-identity surface, a future cross-emit linkage block). Their presence is self-describing — a reader gating on `base_format_version` ignores unknown top-level fields per § Field semantics ("MAY warn but MUST NOT fail"). Adding such a field is a version-compatible extension, not a bump. A bump is required only when a prior-version reader could mis-interpret the sidecar. The schema makes this path real: its top level permits unknown fields (`additionalProperties: true`), so the new field ships as a schema *revision* within the same version — the revised schema defines the field, and a reader holding a prior revision still validates the sidecar (C1 checks required shape, not closed shape).
 
-It applies equally to a **new optional attribute on a column object** (`references`, `history_tracked`, the `presentation_id` key-declaration attributes `unique_within` / `branch_stable` / `slice_stable`): presence is self-describing, the column object's `required` set (`["name", "type"]`) is unaffected, and a prior-version reader ignores the attribute. Adding one is a version-compatible extension, not a bump.
+It applies equally to a **new optional attribute on a column object** (`references`, `history_tracked`): presence is self-describing, the column object's `required` set (`["name", "type"]`) is unaffected, and a prior-version reader ignores the attribute. Adding one is a version-compatible extension, not a bump. The column object is likewise open in the schema (`additionalProperties: true`).
 
 The `4 → 5` bump is therefore **not** forced by the `temporal_class` column attribute — under the rule above that attribute alone would have been version-compatible. It is forced by the **strengthened normative guarantee** that ships with it: the creation seed became unconditional, so a consumer must be able to distinguish
 
@@ -950,6 +1034,8 @@ A v4 reader applying v4's inference to a v5 emit is not wrong-but-safe; a v5 rea
 **Absent-field semantics for v4 emits:** temporal class is *unknown*. A reader falls back to `history_tracked` inference and inherits its documented false-negative tail.
 
 The `5 → 6` bump is forced by two new required columns on every `records__<kind>` table: `record_index` (position 7, every kind) and `ref_index__<name>` (immediately following each reference-typed property's `prop__<name>` column) — a fixed records-prefix and interleaved-block shape a v5 reader keying on the prior positions cannot interpret correctly, and C5's amended positional check. Both are identity columns (§ Dense record index): neither carries `temporal_class` nor `history_tracked`.
+
+The `6 → 7` bump is forced by moving the `presentation_id` key claims from the column descriptor to the top-level `presentation_keys` block: v6's optional column attributes `unique_within` / `branch_stable` / `slice_stable` do not exist at v7 — an existing field's semantics changed. The block alone would have been a version-compatible optional extension, but a same-version reader looking for key claims on the column descriptor would silently conclude "no claim" for a kind whose claims moved to the block.
 
 A reader MUST gate on `base_format_version` and refuse to interpret an unknown version. No auto-upgrade.
 

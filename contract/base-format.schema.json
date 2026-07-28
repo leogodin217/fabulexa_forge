@@ -1,16 +1,16 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fabulexa.example/schemas/base-format-v6.schema.json",
+  "$id": "https://fabulexa.example/schemas/base-format-v7.schema.json",
   "title": "Base Format Sidecar (base.json)",
   "description": "Sidecar manifest enumerating the branches and tables present in a base-layer emit's run.duckdb. Defined by base-format.md, beside this schema.",
   "type": "object",
-  "additionalProperties": false,
+  "additionalProperties": true,
   "required": ["base_format_version", "branches", "tables"],
   "properties": {
     "base_format_version": {
       "type": "integer",
-      "description": "Format version. v6 = 6. Reader gates on this; unknown versions must be rejected.",
-      "const": 6
+      "description": "Format version. v7 = 7. Reader gates on this; unknown versions must be rejected.",
+      "const": 7
     },
     "branches": {
       "type": "array",
@@ -46,6 +46,10 @@
     "sub_type_columns": {
       "$ref": "#/$defs/sub_type_columns",
       "description": "Per-sub-type declared-column partition for author-declared (schemas:) kinds. Present only when at least one partitioned kind's records table survives in this emit; omitted entirely otherwise."
+    },
+    "presentation_keys": {
+      "$ref": "#/$defs/presentation_keys",
+      "description": "Per-kind key claims and key-space identity for presentation_id columns, derived from the kind's declared minting strategies (never author-asserted). Present only when at least one kind's presentation_id column mints; omitted entirely otherwise. Keys sorted lexicographically."
     }
   },
   "$defs": {
@@ -230,7 +234,7 @@
     },
     "column": {
       "type": "object",
-      "additionalProperties": false,
+      "additionalProperties": true,
       "required": ["name", "type"],
       "properties": {
         "name": {
@@ -255,25 +259,122 @@
         },
         "history_tracked": {
           "type": "boolean",
-          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 6 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
+          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 7 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
         },
         "temporal_class": {
           "type": "string",
           "enum": ["constant", "tracked", "slice_only"],
           "description": "Point-in-time semantics for records-category prop__<name> columns, derived by the producer from the property's declared schema (never author-declared). 'constant' = value never changes after creation; 'tracked' = value may change and every change is captured in the history table; 'slice_only' = value may change but changes are not captured in history (only the value as of the export slice is knowable). Present on exactly the same columns as history_tracked ('tracked' implies history_tracked: true, 'slice_only' implies history_tracked: false); a column carries history_tracked iff it carries temporal_class. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
+        }
+      }
+    },
+    "presentation_keys": {
+      "type": "object",
+      "description": "Nested {<kind>: <flat_presentation_keys> | <partitioned_presentation_keys>}. One entry per kind whose presentation_id column mints; keys sorted lexicographically.",
+      "minProperties": 1,
+      "additionalProperties": {
+        "oneOf": [
+          {"$ref": "#/$defs/flat_presentation_keys"},
+          {"$ref": "#/$defs/partitioned_presentation_keys"}
+        ]
+      }
+    },
+    "key_space": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class"],
+      "properties": {
+        "class": {
+          "type": "string",
+          "enum": ["counter", "record_index", "uuid", "record_id"],
+          "description": "Key-space identity class of the minting declaration: 'counter' = per-declaration monotonic counter; 'record_index' = the parent row's record_index rendered verbatim or with a fixed prefix; 'uuid' = per-record RNG-minted UUID v4; 'record_id' = the row's own record id inherited verbatim."
+        },
+        "prefix": {
+          "type": "string",
+          "description": "Rendering prefix for digit-rendered classes ('counter' / 'record_index'); '' for the unprefixed (sequential / global) forms. Present iff class is digit-rendered."
+        },
+        "width": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-pad width for digit-rendered classes; 0 for the unprefixed (sequential / global) forms. Present iff class is digit-rendered."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {"class": {"enum": ["counter", "record_index"]}}
+          },
+          "then": {
+            "required": ["prefix", "width"]
+          },
+          "else": {
+            "not": {"required": ["prefix", "width"]}
+          }
+        }
+      ]
+    },
+    "partition_key": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unique_within", "branch_stable", "slice_stable", "key_space"],
+      "description": "One minting declaration's key claims, scoped to its partition.",
+      "properties": {
+        "unique_within": {
+          "type": "string",
+          "enum": ["emit", "branch"],
+          "description": "Uniqueness scope of this declaration's non-NULL values. 'emit' = distinct across every row of the table, even in a multi-branch emit; 'branch' = distinct among rows sharing a fork_path. Always present at partition scope (unlike the kind rollup, where the claim can be absent)."
+        },
+        "branch_stable": {
+          "type": "boolean",
+          "description": "Whether the same record carries the same non-NULL value on every branch where it appears -- the cross-branch counterfactual join key. Present as a pair with slice_stable."
+        },
+        "slice_stable": {
+          "type": "boolean",
+          "description": "Whether a record keeps its non-NULL value across emits produced from the same producing run and the same producer configuration, regardless of slice or branch selection. Present as a pair with branch_stable."
+        },
+        "key_space": {
+          "$ref": "#/$defs/key_space",
+          "description": "This declaration's key-space identity."
+        }
+      }
+    },
+    "flat_presentation_keys": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key"],
+      "description": "A flat kind's block entry: the single declaration's claims.",
+      "properties": {
+        "key": {
+          "$ref": "#/$defs/partition_key"
+        }
+      }
+    },
+    "partitioned_presentation_keys": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sub_types", "branch_stable", "slice_stable"],
+      "description": "A partitioned kind's block entry: per-sub-type claims plus a whole-column rollup.",
+      "properties": {
+        "sub_types": {
+          "type": "object",
+          "description": "Per-sub-type key claims, keyed by declared sub-type name (sorted lexicographically). One entry per sub-type whose declared strategy mints (inherit sub-types included); zero-row partitions included; sub-types with no declaration are absent.",
+          "minProperties": 1,
+          "additionalProperties": {
+            "$ref": "#/$defs/partition_key"
+          }
         },
         "unique_within": {
           "type": "string",
           "enum": ["emit", "branch"],
-          "description": "Uniqueness scope of the non-NULL presentation_id values, derived by the producer from the kind's declared minting strategies (never author-asserted). 'emit' = distinct across every row of the table, even in a multi-branch emit; 'branch' = distinct among rows sharing a fork_path, making (fork_path, presentation_id) a table-wide key. Omitted when no uniqueness guarantee is derivable -- absence is 'no claim', not 'not unique'. Only ever present on presentation_id columns."
+          "description": "Whole-column uniqueness rollup, derived from the union-safety algebra applied pairwise over the kind's entries. Omitted entirely when the algebra derives no claim -- absence is 'no claim', not 'not unique'."
         },
         "branch_stable": {
           "type": "boolean",
-          "description": "Whether the same record carries the same non-NULL presentation_id value on every branch where it appears -- the cross-branch counterfactual join key. Derived, never author-asserted. Present on exactly the presentation_id columns that carry slice_stable (the two are always written as a pair)."
+          "description": "Whole-column rollup: true iff every entry is stable-class, regardless of union safety."
         },
         "slice_stable": {
           "type": "boolean",
-          "description": "Whether a record keeps its non-NULL presentation_id value across emits produced from the same producing run and the same producer configuration, regardless of slice or branch selection -- incremental re-export cannot renumber. Derived, never author-asserted. Present on exactly the presentation_id columns that carry branch_stable (the two are always written as a pair)."
+          "description": "Whole-column rollup: equals branch_stable."
         }
       }
     }
