@@ -146,7 +146,7 @@
     },
     "sub_type_columns": {
       "type": "object",
-      "description": "Nested {<kind>: {<sub_type>: [<column-name>, ...]}}. Keys at both levels sorted lexicographically. Per sub-type, the list of materialized column names (prop__<name>, plus ref_index__<name> for reference-typed properties) declared by that sub-type, in the kind's union column order. May be an empty array for a sub-type whose declared properties are all collection-struct (the key is kept, never dropped).",
+      "description": "Nested {<kind>: {<sub_type>: [<column-name>, ...]}}. Keys at both levels sorted lexicographically. Per sub-type, the list of materialized column names (prop__<name>, plus ref_index__<name> for reference-typed properties; on a projected emit also presentation_id, prepended for every sub-type that declares an id strategy) declared by that sub-type, in the kind's union column order. May be an empty array for a sub-type whose declared properties are all collection-struct (the key is kept, never dropped).",
       "minProperties": 1,
       "additionalProperties": {
         "type": "object",
@@ -261,6 +261,19 @@
           "type": "string",
           "enum": ["constant", "tracked", "slice_only"],
           "description": "Point-in-time semantics for records-category prop__<name> columns, derived by the producer from the property's declared schema (never author-declared). 'constant' = value never changes after creation; 'tracked' = value may change and every change is captured in the history table; 'slice_only' = value may change but changes are not captured in history (only the value as of the export slice is knowable). Present on exactly the same columns as history_tracked ('tracked' implies history_tracked: true, 'slice_only' implies history_tracked: false); a column carries history_tracked iff it carries temporal_class. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
+        },
+        "unique_within": {
+          "type": "string",
+          "enum": ["emit", "branch"],
+          "description": "Uniqueness scope of the non-NULL presentation_id values, derived by the producer from the kind's declared minting strategies (never author-asserted). 'emit' = distinct across every row of the table, even in a multi-branch emit; 'branch' = distinct among rows sharing a fork_path, making (fork_path, presentation_id) a table-wide key. Omitted when no uniqueness guarantee is derivable -- absence is 'no claim', not 'not unique'. Only ever present on presentation_id columns."
+        },
+        "branch_stable": {
+          "type": "boolean",
+          "description": "Whether the same record carries the same non-NULL presentation_id value on every branch where it appears -- the cross-branch counterfactual join key. Derived, never author-asserted. Present on exactly the presentation_id columns that carry slice_stable (the two are always written as a pair)."
+        },
+        "slice_stable": {
+          "type": "boolean",
+          "description": "Whether a record keeps its non-NULL presentation_id value across emits produced from the same producing run and the same producer configuration, regardless of slice or branch selection -- incremental re-export cannot renumber. Derived, never author-asserted. Present on exactly the presentation_id columns that carry branch_stable (the two are always written as a pair)."
         }
       }
     }
