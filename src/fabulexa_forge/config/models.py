@@ -520,9 +520,10 @@ class SourceConfig(StrictBaseModel):
     rename: list[RenameEntry] | None = None
     """Per-table output-name overrides."""
     change_delivery: Literal["changelog", "snapshot"] = "changelog"
-    """How change-log-genre kinds deliver: the wide CDC table (default), or periodic
-    full-table snapshots at each window horizon. `snapshot` requires a windowed
-    invocation. Participates in the incremental fingerprint."""
+    """How change-log-genre kinds deliver: the wide CDC table (default), or
+    full-table snapshots — one per window horizon under a windowed invocation,
+    one at the tape's end in a full export. Participates in the incremental
+    fingerprint."""
 
     @model_validator(mode="after")
     def at_least_one_field(self) -> Self:
