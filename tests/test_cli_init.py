@@ -179,6 +179,7 @@ def _base_sidecar(
     record_roles: dict[str, object] | None,
     enum_domains: dict[str, dict[str, list[str]]] | None = None,
     sub_type_columns: dict[str, dict[str, list[str]]] | None = None,
+    presentation_keys: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build a minimal sidecar dict with optional record_roles/enum_domains/partition."""
     result: dict[str, object] = {
@@ -191,6 +192,8 @@ def _base_sidecar(
         result["enum_domains"] = enum_domains
     if sub_type_columns is not None:
         result["sub_type_columns"] = sub_type_columns
+    if presentation_keys is not None:
+        result["presentation_keys"] = presentation_keys
     return result
 
 
@@ -1012,3 +1015,253 @@ def test_output_deterministic_across_two_runs(tmp_path: Path) -> None:
     cmd_init(emit_dir, out1)
     cmd_init(emit_dir, out2)
     assert out1.read_text(encoding="utf-8") == out2.read_text(encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Tests: presentation_id natural-key advisory comment
+# ---------------------------------------------------------------------------
+
+#: A flat kind's whole-column claim: unique within branch (mirrors the
+#: phase-3 demo's `patient`).
+_LOCATION_PRESENTATION_KEYS: dict[str, object] = {
+    "location": {
+        "key": {
+            "unique_within": "branch",
+            "branch_stable": True,
+            "slice_stable": True,
+            "key_space": {"class": "record_index", "prefix": "", "width": 4},
+        }
+    }
+}
+
+#: `actor`'s sub_types (`driver`/`bus`) with distinct, non-comparable
+#: record_index prefixes — pairwise union-safe, so the algebra derives a
+#: rollup claim matching the declared one (mirrors phase-1's ward/actor).
+_ACTOR_PRESENTATION_KEYS_CLAIMED: dict[str, object] = {
+    "actor": {
+        "sub_types": {
+            "driver": {
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+                "key_space": {"class": "record_index", "prefix": "DRV_", "width": 4},
+            },
+            "bus": {
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+                "key_space": {"class": "record_index", "prefix": "BUS_", "width": 4},
+            },
+        },
+        "unique_within": "branch",
+        "branch_stable": True,
+        "slice_stable": True,
+    }
+}
+
+#: `actor`'s sub_types sharing an empty counter prefix — NOT pairwise
+#: union-safe, so the algebra derives no claim (mirrors phase-3's `doctor`).
+_ACTOR_PRESENTATION_KEYS_UNCLAIMED: dict[str, object] = {
+    "actor": {
+        "sub_types": {
+            "driver": {
+                "unique_within": "emit",
+                "branch_stable": False,
+                "slice_stable": False,
+                "key_space": {"class": "counter", "prefix": "", "width": 3},
+            },
+            "bus": {
+                "unique_within": "emit",
+                "branch_stable": False,
+                "slice_stable": False,
+                "key_space": {"class": "counter", "prefix": "", "width": 3},
+            },
+        },
+        "branch_stable": False,
+        "slice_stable": False,
+    }
+}
+
+#: A flat kind's entry whose scalars disagree with its `key_space.class`
+#: (counter expects unique_within='emit', branch_stable=False,
+#: slice_stable=False) — incoherent per the scalar-key-space coupling clause.
+_LOCATION_PRESENTATION_KEYS_INCOHERENT: dict[str, object] = {
+    "location": {
+        "key": {
+            "unique_within": "branch",
+            "branch_stable": True,
+            "slice_stable": True,
+            "key_space": {"class": "counter", "prefix": "", "width": 3},
+        }
+    }
+}
+
+#: `_LOCATION_COLUMNS` plus a `presentation_id` column — the advisory-comment
+#: tests need a claimable kind (`Sidecar.presentation_keys()` requires the
+#: claimed kind's records table to carry `presentation_id`).
+_PID_LOCATION_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "BIGINT"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+]
+
+#: `_ACTOR_COLUMNS` plus a `presentation_id` column (positioned right after
+#: `record_id`, matching the records-shape taxonomy), same reason.
+_PID_ACTOR_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "BIGINT"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {"name": "prop__actor_type", "type": "VARCHAR"},
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+
+def build_flat_dim_emit_with_presentation_id(
+    tmp_path: Path, presentation_keys: dict[str, object] | None
+) -> Path:
+    """Build a bare-string dimension kind ('location') carrying a
+    `presentation_id` column, for advisory-comment tests."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__location", _PID_LOCATION_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "loc1", 101, 10, True, 10, 0],
+    )
+    conn.close()
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[
+                _table_spec(
+                    "records__location",
+                    "records",
+                    _PID_LOCATION_COLUMNS,
+                    1,
+                    record_kind="location",
+                ),
+            ],
+            record_roles={"location": "dimension"},
+            presentation_keys=presentation_keys,
+        ),
+    )
+    return tmp_path
+
+
+def build_object_valued_actor_emit_with_presentation_id(
+    tmp_path: Path, presentation_keys: dict[str, object] | None
+) -> Path:
+    """Build an object-valued actor:{driver: dimension, ride: fact, bus:
+    dimension} kind carrying a `presentation_id` column, for advisory-comment
+    tests."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__actor", _PID_ACTOR_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "a1", 201, 10, True, 10, 0, "driver", "Alice", "active"],
+    )
+    conn.close()
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[
+                _table_spec(
+                    "records__actor",
+                    "records",
+                    _PID_ACTOR_COLUMNS,
+                    1,
+                    record_kind="actor",
+                ),
+            ],
+            record_roles={
+                "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
+            },
+            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            presentation_keys=presentation_keys,
+        ),
+    )
+    return tmp_path
+
+
+def test_claimed_flat_kind_stub_carries_advisory_comment(tmp_path: Path) -> None:
+    """A flat kind's whole-column claim adds the presentation_id advisory
+    comment to its stub."""
+    emit_dir = build_flat_dim_emit_with_presentation_id(
+        tmp_path / "emit", _LOCATION_PRESENTATION_KEYS
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "presentation_id` a natural key for 'location'" in content
+    assert "unique within branch" in content
+
+
+def test_partitioned_kind_with_rollup_claim_carries_advisory_comment(
+    tmp_path: Path,
+) -> None:
+    """A partitioned kind's rollup with a non-None unique_within adds the
+    advisory comment to its stub(s)."""
+    emit_dir = build_object_valued_actor_emit_with_presentation_id(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_CLAIMED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "presentation_id` a natural key for 'actor'" in content
+    assert "unique within branch" in content
+
+
+def test_unclaimed_rollup_adds_no_advisory_comment(tmp_path: Path) -> None:
+    """A partitioned kind's rollup deriving no claim (unique_within None)
+    adds no advisory comment."""
+    emit_dir = build_object_valued_actor_emit_with_presentation_id(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_UNCLAIMED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "NOTE: the emit's presentation_keys block declares" not in content
+
+
+def test_absent_block_adds_no_advisory_comment(tmp_path: Path) -> None:
+    """No presentation_keys block at all adds no advisory comment."""
+    emit_dir = build_bare_dim_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "NOTE: the emit's presentation_keys block declares" not in content
+
+
+def test_incoherent_block_init_fails(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An incoherent presentation_keys block fails `init` with
+    PresentationKeysInvalidError, reported as ERROR: on stderr."""
+    emit_dir = build_flat_dim_emit_with_presentation_id(
+        tmp_path / "emit", _LOCATION_PRESENTATION_KEYS_INCOHERENT
+    )
+    out_path = tmp_path / "candidate.yaml"
+
+    exit_code = cmd_init(emit_dir, out_path)
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "ERROR:" in captured.err
+    assert "Traceback" not in captured.err

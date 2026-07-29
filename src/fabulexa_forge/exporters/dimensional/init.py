@@ -230,6 +230,7 @@ def _write_dim_scd2_stub(
     notice_sink: "NoticeSink",
     filter_line: str | None,
     owned_columns: frozenset[str] | None = None,
+    advisory_comment: str | None = None,
 ) -> None:
     """Write a SCD-2 dim table stub block.
 
@@ -255,6 +256,9 @@ def _write_dim_scd2_stub(
         owned_columns: The sub-type's declared columns for pruning, or None to
             propose the full union (bare-string kinds, or emits without the
             `sub_type_columns` field).
+        advisory_comment: The `presentation_id` natural-key advisory comment
+            line for this kind, or None when the block carries no whole-table
+            claim.
     """
     tracked_cols = _get_tracked_columns(kind, all_tables)
     all_cols = _get_records_columns(kind, all_tables)
@@ -268,6 +272,8 @@ def _write_dim_scd2_stub(
     if filter_line is not None:
         w(filter_line)
     w("      key: [id, valid_from]")
+    if advisory_comment is not None:
+        w(advisory_comment)
     w("      columns:")
     w("        - {name: id, from: record_id}")
     for col in all_cols:
@@ -301,6 +307,7 @@ def _write_dim_type1_stub(
     kind: str,
     name: str,
     filter_line: str | None = None,
+    advisory_comment: str | None = None,
 ) -> None:
     """Write a SCD-1 dim table stub block.
 
@@ -309,6 +316,9 @@ def _write_dim_type1_stub(
         kind: The record kind name.
         name: The proposed output table name.
         filter_line: Optional filter YAML line to include in source, or None.
+        advisory_comment: The `presentation_id` natural-key advisory comment
+            line for this kind, or None when the block carries no whole-table
+            claim.
     """
     w(f"    - name: {name}")
     w("      role: dim  # proposal: dimension kind")
@@ -319,6 +329,8 @@ def _write_dim_type1_stub(
     if filter_line is not None:
         w(filter_line)
     w("      key: [id]")
+    if advisory_comment is not None:
+        w(advisory_comment)
     w("      columns:")
     w("        - {name: id, from: record_id}")
     w(
@@ -335,6 +347,7 @@ def _write_fact_stub(
     all_tables: tuple[TableSpec, ...],
     filter_line: str | None = None,
     owned_columns: frozenset[str] | None = None,
+    advisory_comment: str | None = None,
 ) -> None:
     """Write a fact table stub block with FK-candidate comments.
 
@@ -352,6 +365,9 @@ def _write_fact_stub(
         owned_columns: The sub-type's declared columns for pruning, or None to
             list the full union (bare-string kinds, or emits without the
             `sub_type_columns` field).
+        advisory_comment: The `presentation_id` natural-key advisory comment
+            line for this kind, or None when the block carries no whole-table
+            claim.
     """
     discriminator = f"prop__{kind}_type"
     w(f"    - name: {name}")
@@ -362,6 +378,8 @@ def _write_fact_stub(
     if filter_line is not None:
         w(filter_line)
     w("      key: [id]")
+    if advisory_comment is not None:
+        w(advisory_comment)
     w("      columns:")
     w("        - {name: id, from: record_id}")
     for tbl in all_tables:
@@ -380,6 +398,40 @@ def _write_fact_stub(
                     )
     w("        # Add more columns from prop__* here")
     w("")
+
+
+def _presentation_id_advisory_comment(sidecar: "Sidecar", kind: str) -> str | None:
+    """The advisory comment naming `presentation_id` as a kind's natural key.
+
+    Consulted once per proposed kind: a flat kind's `key` entry, or a
+    partitioned kind's rollup with a non-None `unique_within`, both declare a
+    whole-table uniqueness claim over `presentation_id` (`Sidecar.
+    presentation_keys().whole_table_claim`). An absent block, a kind absent
+    from the block, or a no-claim rollup yield no comment.
+
+    Args:
+        sidecar: The open emit's sidecar (claims via
+            `sidecar.presentation_keys()` — strict-on-read applies).
+        kind: The record kind under proposal.
+
+    Returns:
+        A single advisory comment line, or None when no whole-table claim holds.
+
+    Raises:
+        PresentationKeysInvalidError: The block is present and incoherent
+            (propagated from the accessor).
+    """
+    presentation_keys = sidecar.presentation_keys()
+    if presentation_keys is None or kind not in presentation_keys.kinds():
+        return None
+    claim = presentation_keys.whole_table_claim(kind)
+    if claim.unique_within is None:
+        return None
+    return (
+        "      # NOTE: the emit's presentation_keys block declares"
+        f" `presentation_id` a natural key for '{kind}',"
+        f" unique within {claim.unique_within}"
+    )
 
 
 def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
@@ -421,6 +473,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     w("  tables:")
 
     for kind in record_roles.kinds():
+        advisory_comment = _presentation_id_advisory_comment(sidecar, kind)
         if record_roles.is_subtyped(kind):
             # Object-valued kind: split per declared sub-type
             has_tracked = _columns_have_history_tracked(kind, all_tables)
@@ -445,12 +498,25 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                             notice_sink,
                             filter_line,
                             owned_columns=owned,
+                            advisory_comment=advisory_comment,
                         )
                     else:
-                        _write_dim_type1_stub(w, kind, name, filter_line)
+                        _write_dim_type1_stub(
+                            w,
+                            kind,
+                            name,
+                            filter_line,
+                            advisory_comment=advisory_comment,
+                        )
                 else:
                     _write_fact_stub(
-                        w, kind, name, all_tables, filter_line, owned_columns=owned
+                        w,
+                        kind,
+                        name,
+                        all_tables,
+                        filter_line,
+                        owned_columns=owned,
+                        advisory_comment=advisory_comment,
                     )
         else:
             # Bare-string kind: single role
@@ -466,11 +532,20 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                         " (history_tracked columns detected) ---"
                     )
                     _write_dim_scd2_stub(
-                        w, kind, f"dim_{kind}", all_tables, sidecar, notice_sink, None
+                        w,
+                        kind,
+                        f"dim_{kind}",
+                        all_tables,
+                        sidecar,
+                        notice_sink,
+                        None,
+                        advisory_comment=advisory_comment,
                     )
                 else:
                     w(f"    # --- Type-1 dim: {kind} ---")
-                    _write_dim_type1_stub(w, kind, f"dim_{kind}")
+                    _write_dim_type1_stub(
+                        w, kind, f"dim_{kind}", advisory_comment=advisory_comment
+                    )
             else:
                 # Fact: modelling-discriminator path (SELECT DISTINCT observed values)
                 if has_discriminator:
@@ -485,17 +560,34 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                                 "  # SELECT DISTINCT observed value"
                             )
                             _write_fact_stub(
-                                w, kind, f"fact_{kind}_{val}", all_tables, filter_line
+                                w,
+                                kind,
+                                f"fact_{kind}_{val}",
+                                all_tables,
+                                filter_line,
+                                advisory_comment=advisory_comment,
                             )
                     else:
                         w(
                             f"    # --- fact: {kind}"
                             " (discriminator, no observed values) ---"
                         )
-                        _write_fact_stub(w, kind, f"fact_{kind}", all_tables)
+                        _write_fact_stub(
+                            w,
+                            kind,
+                            f"fact_{kind}",
+                            all_tables,
+                            advisory_comment=advisory_comment,
+                        )
                 else:
                     w(f"    # --- fact: {kind} ---")
-                    _write_fact_stub(w, kind, f"fact_{kind}", all_tables)
+                    _write_fact_stub(
+                        w,
+                        kind,
+                        f"fact_{kind}",
+                        all_tables,
+                        advisory_comment=advisory_comment,
+                    )
 
         # Membership FK candidates for this kind
         for mem_kind, mem_prop, elem_cols in membership_info:
@@ -539,6 +631,15 @@ def generate_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     traversal, RNG, or clock participates — output is a pure function of
     (emit, code version).
 
+    New behavior: when the sidecar's `presentation_keys` block carries a
+    whole-table claim for a proposed kind (a flat `key` entry, or a
+    partitioned kind's rollup with a non-None `unique_within`), the kind's
+    stub gains one advisory comment naming `presentation_id` as the
+    contract-declared natural key and its scope. A kind absent from the
+    block, an absent block, or a no-claim rollup adds no comment. The block
+    is consulted via `Sidecar.presentation_keys()` and shares its
+    strict-on-read behavior.
+
     Args:
         emit: The open emit. Its sidecar must carry `record_roles`.
         notice_sink: Receiver for proposal notices.
@@ -547,12 +648,15 @@ def generate_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
         A YAML string: a commented candidate `mode: dimensional` config. One
         table stub per dimension/fact kind (per declared sub-type for the
         object-valued kind), with SCD-2 window columns where `history_tracked`
-        applies, FK-candidate comments per reference column, and membership-FK
-        candidate comments for kinds that own a membership table. No `exclude`
-        block is proposed.
+        applies, FK-candidate comments per reference column, membership-FK
+        candidate comments for kinds that own a membership table, and the
+        `presentation_id` natural-key advisory comment where the block claims
+        it. No `exclude` block is proposed.
 
     Raises:
         InitRequiresRecordRoles: The sidecar omits `record_roles`.
+        PresentationKeysInvalidError: The sidecar's `presentation_keys` block
+            is present and incoherent.
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """

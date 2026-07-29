@@ -31,6 +31,6 @@ phases:
     name: "Source mode declare_keys"
     demo: "docs/sprints/presentation-keys/demos/phase_4_source_declare_keys.py"
   5:
-    status: pending
+    status: complete
     name: "Incremental notice + init advisory"
     demo: "docs/sprints/presentation-keys/demos/phase_5_incremental_init.py"
