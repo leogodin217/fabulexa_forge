@@ -33,22 +33,10 @@ from fabulexa_forge.exporters.base.plan import build_base_plan, resolve_base_tab
 from fabulexa_forge.exporters.base.renders import build_base_render_sql
 from fabulexa_forge.exporters.query_spec import (
     QuerySpec,
+    declare_keys_active,
     keys_not_declarable_csv_notice,
     write_query_specs,
 )
-
-
-def _declare_keys_enabled(config: "ExportConfig") -> bool:
-    """Whether the base section's `declare_keys` is on.
-
-    Args:
-        config: The validated export config.
-
-    Returns:
-        True iff `config.base` is set and `declare_keys` is True — absent or
-        False is off, mirroring `slice_at`'s semantic-default posture.
-    """
-    return config.base is not None and config.base.declare_keys is True
 
 
 def _resolve_horizon_ns(config: "ExportConfig", window: "Window | None") -> int | None:
@@ -121,7 +109,7 @@ def build_base_query_specs(
     write_mode: Literal["create", "replace"] = (
         "replace" if window is not None else "create"
     )
-    declare_keys = _declare_keys_enabled(config)
+    declare_keys = declare_keys_active(config)
 
     return [
         QuerySpec(
@@ -183,6 +171,6 @@ def export_base(
         TableNotFoundError: A declared `records__<kind>` table is absent.
     """
     specs = build_base_query_specs(emit, config, anchor, None, notice_sink)
-    if _declare_keys_enabled(config) and fmt == "csv":
+    if declare_keys_active(config) and fmt == "csv":
         notice_sink(keys_not_declarable_csv_notice())
     return write_query_specs(emit, specs, out, fmt)

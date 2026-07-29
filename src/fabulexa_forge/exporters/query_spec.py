@@ -20,6 +20,7 @@ from fabulexa_forge.exporters.notices import Notice
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.reader.emit import Emit
 
 
@@ -83,6 +84,28 @@ def keys_not_declarable_csv_notice() -> Notice:
             " invocation"
         ),
     )
+
+
+def declare_keys_active(config: "ExportConfig") -> bool:
+    """Whether the config's mode section has `declare_keys` on.
+
+    Dispatches on `config.mode` to the matching section — dimensional carries
+    no `declare_keys` field, so it is always off. Absent section or absent/
+    False `declare_keys` is off: `declare_keys` is never invented, only read
+    from config. Shared by the base engine, source engine, and incremental
+    driver so all three read the same semantic-default posture.
+
+    Args:
+        config: The validated export config.
+
+    Returns:
+        True iff the mode-matching section is present and declare_keys is True.
+    """
+    if config.mode == "base":
+        return config.base is not None and config.base.declare_keys is True
+    if config.mode == "source":
+        return config.source is not None and config.source.declare_keys is True
+    return False
 
 
 def query_spec_output_name(spec: QuerySpec) -> str:

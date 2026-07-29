@@ -501,6 +501,193 @@ def test_clause_g_rollup_wrongly_present_unique_within() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Defensive shape guards (JSON-Schema-invalid raw reaching the strict parser)
+# ---------------------------------------------------------------------------
+
+
+def test_guard_kind_entry_not_an_object() -> None:
+    """A block entry that is not an object (bypassing JSON Schema)."""
+    raw = _raw_sidecar(
+        [_records_table("ward", presentation_id=True)],
+        presentation_keys={"ward": "not-an-object"},
+    )
+    with pytest.raises(PresentationKeysInvalidError, match="entry is not an object"):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+def test_guard_key_space_not_an_object() -> None:
+    """key_space is not an object."""
+    raw = _raw_sidecar(
+        [_records_table("ward", presentation_id=True)],
+        presentation_keys={
+            "ward": {
+                "key": {
+                    "unique_within": "emit",
+                    "branch_stable": False,
+                    "slice_stable": False,
+                    "key_space": "not-an-object",
+                }
+            }
+        },
+    )
+    with pytest.raises(
+        PresentationKeysInvalidError, match="key_space is missing or not an object"
+    ):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+def test_guard_key_space_class_outside_enum() -> None:
+    """key_space.class outside the four-member enum."""
+    raw = _raw_sidecar(
+        [_records_table("ward", presentation_id=True)],
+        presentation_keys={
+            "ward": {
+                "key": _raw_partition_key("emit", False, False, _raw_key_space("bogus"))
+            }
+        },
+    )
+    with pytest.raises(PresentationKeysInvalidError, match="is not one of"):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+def test_guard_key_space_prefix_width_wrong_type() -> None:
+    """prefix/width present but wrong type on a digit-rendered class."""
+    raw = _raw_sidecar(
+        [_records_table("ward", presentation_id=True)],
+        presentation_keys={
+            "ward": {
+                "key": _raw_partition_key(
+                    "emit",
+                    False,
+                    False,
+                    {"class": "counter", "prefix": 123, "width": "abc"},
+                )
+            }
+        },
+    )
+    with pytest.raises(
+        PresentationKeysInvalidError, match="prefix/width must be a string/integer"
+    ):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+def test_guard_partition_key_entry_not_an_object() -> None:
+    """A `key`/sub_types member value that is not an object."""
+    raw = _raw_sidecar(
+        [_records_table("ward", presentation_id=True)],
+        presentation_keys={"ward": {"key": "not-an-object"}},
+    )
+    with pytest.raises(PresentationKeysInvalidError, match="entry is not an object"):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+def test_guard_partition_key_scalars_missing_or_mistyped() -> None:
+    """unique_within/branch_stable/slice_stable missing or mistyped."""
+    raw = _raw_sidecar(
+        [_records_table("ward", presentation_id=True)],
+        presentation_keys={
+            "ward": {
+                "key": {
+                    "unique_within": "emit",
+                    "branch_stable": "not-a-bool",
+                    "slice_stable": False,
+                    "key_space": _raw_key_space("counter", prefix="", width=0),
+                }
+            }
+        },
+    )
+    with pytest.raises(
+        PresentationKeysInvalidError,
+        match="unique_within/branch_stable/slice_stable missing or mistyped",
+    ):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+def test_guard_rollup_unique_within_outside_enum() -> None:
+    """rollup.unique_within present but outside {emit, branch}."""
+    raw = _raw_sidecar(
+        [_records_table("actor", presentation_id=True)],
+        presentation_keys={
+            "actor": {
+                "sub_types": {
+                    "patient": _raw_record_index_key(prefix="PAT_", width=4),
+                    "staff": _raw_record_index_key(prefix="STAFF_", width=4),
+                },
+                "unique_within": "bogus",
+                "branch_stable": True,
+                "slice_stable": True,
+            }
+        },
+        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+    )
+    with pytest.raises(PresentationKeysInvalidError, match="rollup unique_within"):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+def test_guard_rollup_stability_missing_or_mistyped() -> None:
+    """rollup.branch_stable/slice_stable missing or mistyped."""
+    raw = _raw_sidecar(
+        [_records_table("actor", presentation_id=True)],
+        presentation_keys={
+            "actor": {
+                "sub_types": {
+                    "patient": _raw_record_index_key(prefix="PAT_", width=4),
+                    "staff": _raw_record_index_key(prefix="STAFF_", width=4),
+                },
+                "unique_within": "branch",
+                "branch_stable": "not-a-bool",
+                "slice_stable": True,
+            }
+        },
+        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+    )
+    with pytest.raises(
+        PresentationKeysInvalidError, match="rollup branch_stable/slice_stable"
+    ):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+def test_guard_sub_types_not_an_object() -> None:
+    """sub_types present but not an object."""
+    raw = _raw_sidecar(
+        [_records_table("actor", presentation_id=True)],
+        presentation_keys={
+            "actor": {
+                "sub_types": "not-an-object",
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+            }
+        },
+        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+    )
+    with pytest.raises(
+        PresentationKeysInvalidError, match="sub_types must be a non-empty object"
+    ):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+def test_guard_sub_types_empty_object() -> None:
+    """sub_types present but empty."""
+    raw = _raw_sidecar(
+        [_records_table("actor", presentation_id=True)],
+        presentation_keys={
+            "actor": {
+                "sub_types": {},
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+            }
+        },
+        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+    )
+    with pytest.raises(
+        PresentationKeysInvalidError, match="sub_types must be a non-empty object"
+    ):
+        Sidecar.from_raw(raw).presentation_keys()
+
+
+# ---------------------------------------------------------------------------
 # Laziness
 # ---------------------------------------------------------------------------
 
@@ -581,6 +768,18 @@ def test_incoherent_block_parses_at_construction_without_raising() -> None:
             _ks("counter", prefix="WARD_", width=3),
             False,
             id="record_id_x_digit_rendered",
+        ),
+        pytest.param(
+            _ks("counter", prefix="A-1", width=0),
+            _ks("counter", prefix="A-", width=0),
+            False,
+            id="comparable_prefixes_longer_first",
+        ),
+        pytest.param(
+            _ks("counter", prefix="X_", width=0),
+            _ks("counter", prefix="", width=0),
+            True,
+            id="incomparable_prefixes_longer_first",
         ),
     ],
 )
