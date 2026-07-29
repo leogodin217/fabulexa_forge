@@ -2,7 +2,7 @@ sprint: presentation-keys
 parent_branch: data_qa
 baseline_sha: b94b8eedac004ea55a8188a54705dc8338110371
 started: 2026-07-28
-current_phase: 1
+current_phase: 2
 capabilities:
   - reader: [presentation-keys view, union-safety algebra, strict accessor]
   - exporters-shared: [TableKeys, QuerySpec.keys, DuckDB constraint path]
@@ -15,7 +15,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Reader — typed view, strict accessor, union algebra"
     demo: "docs/sprints/presentation-keys/demos/phase_1_reader_view.py"
   2:
