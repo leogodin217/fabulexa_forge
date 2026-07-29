@@ -1,0 +1,40 @@
+# ExportConfig — retail (TechMart) bundle, source mode (operational OLTP tables)
+# ============================================================
+# `fabulexa-forge export docs/examples/retail/bundle docs/examples/retail/source.yaml`
+#
+# Source mode classifies every table into a genre from record_roles ×
+# temporal_class, with NO author declaration of genre. TRACKED-NESS DOMINATES:
+# any kind carrying a class-`tracked` prop exports as a wide CDC CHANGE-LOG
+# table (op / changed_at / id / after-image cols) regardless of its warehouse
+# role. Retail's classification:
+#   - actor            -> CHANGE-LOG (prop__total_purchases is tracked). AND
+#                         record_roles.actor is an OBJECT {customer, ops}, so
+#                         it SUB-TYPE-SPLITS into two change-log tables named
+#                         after the sub-types: `customer` and `ops`. The
+#                         actor_type discriminator column is dropped from each
+#                         (constant within the table, recoverable from its name).
+#   - entity           -> CHANGE-LOG (prop__status / prop__error_rate tracked).
+#                         record_roles.entity is a bare "dimension" string (NOT
+#                         an object), so entity does NOT sub-type-split in source
+#                         — products and infrastructure land in one change-log
+#                         table. (Contrast stream.yaml, whose sub-typing follows
+#                         the entity_type enum-domain, not record_roles.)
+#   - journey_instance -> CHANGE-LOG (prop__current_state tracked).
+#   - tick_decision    -> TRANSACTION (a fact kind with no tracked prop): the
+#                         immutable customer-action funnel events.
+#   - membership__tick_decision__bindings -> JUNCTION (interval) table: which
+#                         product each customer action was bound to.
+#
+# No kinds excluded — retail has no simulation-mechanism kind to drop (see
+# base.yaml; `tick_decision` is real event data here, and there is no `queue`).
+#
+# Source is the first mode that REQUIRES a resolved wallclock anchor (change-log
+# `changed_at` and junction `joined_at`/`left_at` are real TIMESTAMPs). No
+# rebase block is given, so the anchor falls back to the sidecar `runtime`
+# (start 2022-03-01, UTC) — the emit's own clock. Uncomment `rebase:` to override.
+
+mode: source
+
+# rebase:
+#   base_date: 2022-03-01
+#   timezone: UTC

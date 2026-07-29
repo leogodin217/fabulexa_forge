@@ -269,7 +269,9 @@ def build_reference_path_sql(
             (lookup) on the terminal table.
 
     Returns:
-        A complete SELECT producing (record_id, resolved) ordered by record_id.
+        A complete SELECT producing (record_id, resolved). No ORDER BY is
+        declared — a join relation is deterministic as a set and is consumed
+        through a LEFT JOIN, never read ordered.
 
     Raises:
         ExportError: terminal_projection is neither 'record_id' nor a

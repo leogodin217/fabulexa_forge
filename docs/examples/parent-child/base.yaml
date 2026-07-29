@@ -1,0 +1,40 @@
+# ExportConfig — parent-child bundle, base mode (flat current-state dump)
+# ============================================================
+# `fabulexa-forge export docs/examples/parent-child/bundle docs/examples/parent-child/base.yaml`
+#
+# parent-child is the smallest fixture — a deliberately minimal example for
+# UNDERSTANDING the bundle shape, not a domain showcase. It carries three
+# domain kinds and no simulation-mechanism kinds (no tick_decision, no queue),
+# so the base mode's faithful flat dump needs no author-declared exclusions.
+# (Author exclusions are the only thing being waived here: `slice_only` columns
+# are ALWAYS auto-omitted with a `slice-only-column-omitted` notice, whatever the
+# author excludes or does not exclude.) The kinds:
+#   actor (member)     — the child records.
+#   entity             — the parent groups.
+#   journey_instance   — the tiny journey spine (current_state tracked).
+#
+# One flat table per kind, reconstructed at the tape's end; `record_id` -> `id`.
+# The bare `mode: base` (no `base:` section) is the complete config. This is the
+# clearest way to see exactly what the bundle contains.
+#
+# The membership join in the OUTPUT. Base emits the STATE_AT_COLUMNS prefix
+# (`record_id` -> `id`, `created_sim_time`, `active`, `deactivated_at`) plus one
+# `prop__<p>` per surviving property — it carries no `record_index` and no
+# `ref_index__*` surrogate columns, in any mode. So the one join the exported
+# tables support is the reference property itself:
+#     actor.prop__group  ->  entity.id
+# On this bundle that resolves cleanly: 32 members, 29 with a group (0 dangling)
+# and 3 honest NULLs — the group-less `solo_arrivals` stream. The `entity.id`
+# values are the record ids as-is: '0'..'4' for the five groups that exist from
+# the start, and hex digests for the four mid-run `group_arrivals`, so the join
+# key is visibly an opaque string, which is the point of the fixture.
+#
+# Timestamps: this emit's sidecar carries NO `runtime` anchor and there is no
+# `rebase:` block, so no effective anchor resolves and the lifecycle columns
+# (`created_sim_time`, `deactivated_at`) stay raw sim-time ns as BIGINT. That is
+# the contrast case — see docs/examples/ride-sharing-marketplace/base.yaml, whose
+# sidecar DOES carry an anchor and whose same two columns land as TIMESTAMP. Add
+# a `rebase:` block here to supply an origin instant and zone and get wallclock
+# dates out of this bundle.
+
+mode: base

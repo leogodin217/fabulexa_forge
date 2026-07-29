@@ -121,6 +121,35 @@ def test_below_floor_sidecar_raises_structure_error(tmp_path: Path) -> None:
         open_emit(tmp_path)
 
 
+def test_out_of_set_category_raises_structure_error_not_conformance(
+    tmp_path: Path,
+) -> None:
+    """An emit whose sidecar carries an out-of-set table category refuses at
+    open with SidecarStructureError — the reclassified path; `validate` never
+    reaches C1 for this case.
+    """
+    import duckdb
+
+    sidecar: dict[str, object] = {
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+        "tables": [
+            {
+                "name": "firings",
+                "category": "bogus",
+                "columns": [{"name": "fork_path", "type": "VARCHAR"}],
+                "rows": 0,
+            }
+        ],
+    }
+    (tmp_path / "base.json").write_text(json.dumps(sidecar), encoding="utf-8")
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.close()
+    with pytest.raises(SidecarStructureError, match="bogus"):
+        open_emit(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # RunDatabaseError for garbage DB bytes
 # ---------------------------------------------------------------------------

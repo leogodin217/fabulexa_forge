@@ -100,8 +100,14 @@ Each mode reads the same emit and writes a different target shape.
 - ✓ **base** *(Stage 3)* — flat single-branch projection: one table per records kind,
   one row per record, every tracked property carrying its reconstituted value. No
   genre trichotomy and no classification — every records kind yields exactly one
-  table; membership, junction, and fact tables are never emitted. It composes the
-  shipped state-at derivation as its *whole* engine (no new point-in-time
+  table; membership, junction, and fact tables are never emitted. Each table presents
+  both encodings of every identity: an integer `<kind>_key` surrogate first (the
+  record's `record_index`), the opaque `id` beside it, and after each reference
+  property's id column a `<p>_key` carrying the target's index — re-derived at the
+  table's own horizon, never read from the emitted `ref_index__` column, and NULL for a
+  reference that resolves to nothing. It composes the
+  shipped state-at derivation for values and the record-index derivation for keys as its
+  *whole* engine (no new point-in-time
   reconstruction path) at one of three horizons: the tape's end by default (current
   state, via the end-of-tape entry point), an inclusive `slice_at: T` point-in-time
   horizon for a full export, or each window's horizon under an incremental
@@ -110,7 +116,8 @@ Each mode reads the same emit and writes a different target shape.
   `slice-only-column-omitted` notice (the source-style auto-projection posture; the
   sub-typed-discriminator carve-out honored, a `rename` naming an omitted column
   errors). Operational presentation defaults (prefix-stripped table names,
-  `record_id` → `id`) apply, overridable via `exclude`/`rename`; a name collision
+  `record_id` → `id`, `<kind>_key` / `<p>_key` for the two key families) apply,
+  overridable via `exclude`/`rename` keyed on the contract identity; a name collision
   fails fast. Data columns cast back from the state-at codec VARCHAR to their
   declared sidecar types, so the table is typed, not all-string. The wallclock
   anchor is **optional** — absent one, lifecycle timestamps stay raw sim-time ns

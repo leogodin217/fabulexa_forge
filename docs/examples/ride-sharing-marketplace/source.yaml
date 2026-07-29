@@ -1,0 +1,29 @@
+# ExportConfig — ride-sharing marketplace, source mode (operational OLTP tables)
+# ============================================================
+# `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/source.yaml`
+#
+# Source mode classifies every table into a genre from record_roles ×
+# temporal_class, with NO author declaration of genre:
+#   - tracked kinds (a class-`tracked` prop) -> wide CDC CHANGE-LOG tables
+#     (op / changed_at / id / after-image cols). Tracked here: actor (status,
+#     zone, ride_count, loyalty_band, session_earnings), entity (demand_pressure,
+#     supply_pressure — the surge signals), journey_instance (current_state).
+#   - untracked fact kinds -> TRANSACTION tables: pairing (the rider<->driver
+#     match records).
+#   - untracked dimension kinds -> REFERENCE tables (none here — every dim kind
+#     carries a tracked prop, so entity + journey_instance land as change logs).
+#
+# Source is the first mode that REQUIRES a resolved wallclock anchor (change-log
+# `changed_at` is a real TIMESTAMP). No rebase block is given, so the anchor
+# falls back to the sidecar `runtime` — the emit's own clock. Uncomment
+# `rebase:` to override origin/zone.
+#
+# Like base, this bundle declares NO mechanism kinds (no tick_decision, no
+# queue) — every kind is operational domain data. So source takes a bare
+# `mode: source` — no `exclude:`.
+
+mode: source
+
+# rebase:
+#   base_date: 2024-01-01
+#   timezone: America/New_York

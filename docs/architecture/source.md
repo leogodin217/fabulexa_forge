@@ -318,9 +318,15 @@ the snapshot render — § Snapshot delivery), never in the CDC change-log table
 
 Payload columns keep their sidecar DuckDB types untouched: the mode cannot know a
 `BIGINT` property is a duration or a count, so it renders only the *structural*
-sim-time columns (`created_sim_time`, `deactivated_at`, `last_mutation_sim_time`,
-`joined_sim_time`, `left_sim_time`, `event_sim_time`) as wallclock. A time-valued
-property column is the author's to interpret downstream.
+sim-time columns as wallclock. A time-valued property column is the author's to
+interpret downstream. Which structural columns those are is the reader's answer,
+not source's — the records and junction renders read the instant-carrying columns
+of their table category off the structural-temporal surface
+([`reader.md`](reader.md) § The structural-temporal surface), giving
+`created_sim_time`, `deactivated_at`, `last_mutation_sim_time` for records and
+`joined_sim_time`, `left_sim_time` for a junction, plus the change-log fold's own
+`event_sim_time`. The *names* those instants take in output — the `created_at` /
+`deactivated_at` / `updated_at` map above — are source's presentation policy.
 
 **Collision policy.** After defaults and renames resolve: two output tables with one
 name, or two columns of one table with one name, is `SourceNameCollision` — an

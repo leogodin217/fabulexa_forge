@@ -14,18 +14,27 @@ import csv
 from pathlib import Path
 
 import duckdb
-from _support.notices import discard_notice_sink
+from _support.duckdb_introspect import constraint_types
+from _support.notices import RecordingNoticeSink, discard_notice_sink
 
 from fabulexa_forge.config.models import BaseConfig, ExportConfig
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.exporters.base.engine import build_base_query_specs, export_base
 from fabulexa_forge.exporters.base.plan import build_base_plan
 from fabulexa_forge.exporters.base.renders import build_base_render_sql
-from fabulexa_forge.exporters.query_spec import QuerySpec
+from fabulexa_forge.exporters.query_spec import (
+    NOTICE_KEYS_NOT_DECLARABLE_CSV,
+    QuerySpec,
+)
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.reader.emit import open_emit
 
-from ._base_fixtures import DAY_NS, build_base_test_emit, build_multi_kind_base_emit
+from ._base_fixtures import (
+    DAY_NS,
+    build_base_keys_emit,
+    build_base_test_emit,
+    build_multi_kind_base_emit,
+)
 
 _BASE_CONFIG = ExportConfig(mode="base")
 
@@ -221,3 +230,153 @@ def test_export_base_csv_writes_one_file_per_kind(tmp_path: Path) -> None:
     with csv_path.open(newline="", encoding="utf-8") as fh:
         data_rows = list(csv.reader(fh))[1:]  # drop the header row
     assert len(data_rows) == 3
+
+
+# ---------------------------------------------------------------------------
+# declare_keys
+# ---------------------------------------------------------------------------
+
+
+def test_build_base_query_specs_declare_keys_absent_all_unkeyed(
+    tmp_path: Path,
+) -> None:
+    """declare_keys absent -> every spec's keys is None."""
+    emit_dir = build_base_keys_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        specs = build_base_query_specs(
+            emit, _BASE_CONFIG, None, None, notice_sink=discard_notice_sink
+        )
+    assert specs
+    assert all(spec.keys is None for spec in specs)
+
+
+def test_build_base_query_specs_declare_keys_false_all_unkeyed(
+    tmp_path: Path,
+) -> None:
+    """declare_keys: false -> every spec's keys is None, same as absent."""
+    emit_dir = build_base_keys_emit(tmp_path)
+    config = ExportConfig(mode="base", base=BaseConfig(declare_keys=False))
+    with open_emit(emit_dir) as emit:
+        specs = build_base_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+    assert specs
+    assert all(spec.keys is None for spec in specs)
+
+
+def test_build_base_query_specs_declare_keys_true_every_spec_keyed(
+    tmp_path: Path,
+) -> None:
+    """declare_keys: true -> every spec carries resolved keys (claimed or
+    identity-only)."""
+    emit_dir = build_base_keys_emit(tmp_path)
+    config = ExportConfig(mode="base", base=BaseConfig(declare_keys=True))
+    with open_emit(emit_dir) as emit:
+        specs = build_base_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+    by_table = {spec.table_name: spec for spec in specs}
+    assert by_table["patient"].keys is not None
+    assert by_table["patient"].keys.unique == (("id",), ("presentation_id",))
+    assert by_table["doctor"].keys is not None
+    assert by_table["doctor"].keys.unique == (("id",),)
+
+
+def test_build_base_query_specs_declare_keys_windowed_matches_full(
+    tmp_path: Path,
+) -> None:
+    """A windowed compile's declared keys equal the full-export declaration."""
+    emit_dir = build_base_keys_emit(tmp_path)
+    config = ExportConfig(mode="base", base=BaseConfig(declare_keys=True))
+    window = Window(index=0, start_ns=0, end_ns=3 * DAY_NS, label="w0")
+    with open_emit(emit_dir) as emit:
+        full_specs = build_base_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+        windowed_specs = build_base_query_specs(
+            emit, config, None, window, notice_sink=discard_notice_sink
+        )
+    full_keys = {s.table_name: s.keys for s in full_specs}
+    windowed_keys = {s.table_name: s.keys for s in windowed_specs}
+    assert full_keys == windowed_keys
+
+
+def test_build_base_query_specs_declare_keys_true_resolves_under_csv(
+    tmp_path: Path,
+) -> None:
+    """Keys are still resolved at compile under a CSV-destined config —
+    resolution and the strict accessor run regardless of fmt."""
+    emit_dir = build_base_keys_emit(tmp_path)
+    config = ExportConfig(mode="base", base=BaseConfig(declare_keys=True))
+    with open_emit(emit_dir) as emit:
+        specs = build_base_query_specs(
+            emit, config, None, None, notice_sink=discard_notice_sink
+        )
+    assert all(spec.keys is not None for spec in specs)
+
+
+def test_export_base_csv_declare_keys_emits_one_notice_before_data(
+    tmp_path: Path,
+) -> None:
+    """export_base CSV + declare_keys -> exactly one keys-not-declarable-csv
+    notice, and the data is written unaffected."""
+    emit_dir = build_base_keys_emit(tmp_path)
+    out_dir = tmp_path / "csv_out"
+    out_dir.mkdir()
+    config = ExportConfig(mode="base", base=BaseConfig(declare_keys=True))
+    sink = RecordingNoticeSink()
+    with open_emit(emit_dir) as emit:
+        row_counts = export_base(emit, config, out_dir, "csv", None, notice_sink=sink)
+
+    assert row_counts == {"patient": 1, "doctor": 1}
+    codes = [n.code for n in sink.notices]
+    assert codes.count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
+    assert (out_dir / "patient.csv").exists()
+    assert (out_dir / "doctor.csv").exists()
+
+
+def test_export_base_duckdb_declare_keys_emits_no_csv_notice(tmp_path: Path) -> None:
+    """export_base DuckDB + declare_keys -> no keys-not-declarable-csv notice."""
+    emit_dir = build_base_keys_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+    config = ExportConfig(mode="base", base=BaseConfig(declare_keys=True))
+    sink = RecordingNoticeSink()
+    with open_emit(emit_dir) as emit:
+        export_base(emit, config, out_path, "duckdb", None, notice_sink=sink)
+
+    codes = [n.code for n in sink.notices]
+    assert NOTICE_KEYS_NOT_DECLARABLE_CSV not in codes
+
+
+def _unique_constraint_columns(out_path: Path, table_name: str) -> list[list[str]]:
+    """The column lists of every declared UNIQUE constraint on a table
+    (excludes the PRIMARY KEY's own implicit UNIQUE row)."""
+    conn = duckdb.connect(str(out_path), read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT constraint_column_names FROM duckdb_constraints()"
+            " WHERE table_name = ? AND constraint_type = 'UNIQUE'",
+            [table_name],
+        ).fetchall()
+    finally:
+        conn.close()
+    return [list(row[0]) for row in rows]
+
+
+def test_export_base_duckdb_declare_keys_carries_constraints(tmp_path: Path) -> None:
+    """An end-to-end DuckDB export carries the resolved constraints: a claimed
+    kind's UNIQUE constraint names presentation_id, an unclaimed one declares
+    no presentation_id UNIQUE."""
+    emit_dir = build_base_keys_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+    config = ExportConfig(mode="base", base=BaseConfig(declare_keys=True))
+    with open_emit(emit_dir) as emit:
+        export_base(
+            emit, config, out_path, "duckdb", None, notice_sink=discard_notice_sink
+        )
+
+    assert "PRIMARY KEY" in constraint_types(out_path, "patient")
+    assert ["presentation_id"] in _unique_constraint_columns(out_path, "patient")
+
+    assert "PRIMARY KEY" in constraint_types(out_path, "doctor")
+    assert ["presentation_id"] not in _unique_constraint_columns(out_path, "doctor")

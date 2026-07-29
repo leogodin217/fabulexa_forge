@@ -25,8 +25,16 @@ from fabulexa_forge.errors import (
     SourceSubtypesUndeclared,
     SourceUnclassifiedColumn,
 )
-from fabulexa_forge.exporters.source.plan import build_source_plan
-from fabulexa_forge.reader.errors import TemporalClassUnavailableError
+from fabulexa_forge.exporters.query_spec import TableKeys
+from fabulexa_forge.exporters.source.plan import (
+    SourceTableSpec,
+    build_source_plan,
+    resolve_source_table_keys,
+)
+from fabulexa_forge.reader.errors import (
+    PresentationKeysInvalidError,
+    TemporalClassUnavailableError,
+)
 from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar
 
 # ---------------------------------------------------------------------------
@@ -125,6 +133,7 @@ def _sidecar(
     tables: list[dict[str, object]],
     record_roles: dict[str, object] | None = None,
     enum_domains: dict[str, object] | None = None,
+    presentation_keys: dict[str, object] | None = None,
 ) -> Sidecar:
     """Build a Sidecar directly from a raw base.json-shaped mapping."""
     raw: dict[str, object] = {
@@ -136,7 +145,36 @@ def _sidecar(
         raw["record_roles"] = record_roles
     if enum_domains is not None:
         raw["enum_domains"] = enum_domains
+    if presentation_keys is not None:
+        raw["presentation_keys"] = presentation_keys
     return Sidecar.from_raw(raw)
+
+
+def _raw_key_space(
+    space_class: str, *, prefix: str = "", width: int = 0
+) -> dict[str, object]:
+    """A raw key_space object of the given digit-rendered class."""
+    return {"class": space_class, "prefix": prefix, "width": width}
+
+
+def _raw_counter_key() -> dict[str, object]:
+    """A conformant counter-class raw partition_key (emit/false/false)."""
+    return {
+        "unique_within": "emit",
+        "branch_stable": False,
+        "slice_stable": False,
+        "key_space": _raw_key_space("counter", width=3),
+    }
+
+
+def _raw_record_index_key() -> dict[str, object]:
+    """A conformant record_index-class raw partition_key (branch/true/true)."""
+    return {
+        "unique_within": "branch",
+        "branch_stable": True,
+        "slice_stable": True,
+        "key_space": _raw_key_space("record_index", width=4),
+    }
 
 
 def _spanning_sidecar() -> Sidecar:
@@ -1455,3 +1493,227 @@ def test_collision_check_ignores_omitted_column() -> None:
     col_map = dict(plan[0].columns)
     assert "prop__id" not in col_map
     assert col_map["record_id"] == "id"
+
+
+# ---------------------------------------------------------------------------
+# resolve_source_table_keys
+# ---------------------------------------------------------------------------
+
+
+def _changelog_kind_sidecar(
+    presentation_id: bool = False,
+    presentation_keys: dict[str, object] | None = None,
+) -> Sidecar:
+    """A sidecar with one tracked (changelog-genre) kind, 'visit'."""
+    visit_table = _records_table(
+        "visit",
+        [_col("prop__status", history_tracked=True, temporal_class="tracked")],
+        presentation_id=presentation_id,
+    )
+    return _sidecar(
+        tables=[visit_table], record_roles={}, presentation_keys=presentation_keys
+    )
+
+
+def _junction_sidecar() -> Sidecar:
+    """A sidecar with one changelog kind owning one junction table."""
+    visit_table = _records_table(
+        "visit",
+        [_col("prop__status", history_tracked=True, temporal_class="tracked")],
+    )
+    team_membership = _membership_table(
+        "visit",
+        "team",
+        [
+            _col("elem__role_name"),
+            _col("member__actor__kind"),
+            _col("member__actor__id"),
+        ],
+    )
+    return _sidecar(tables=[visit_table, team_membership], record_roles={})
+
+
+def _reference_kind_sidecar(
+    presentation_id: bool = False,
+    presentation_keys: dict[str, object] | None = None,
+) -> Sidecar:
+    """A sidecar with one untracked, unsplit dimension-role kind, 'location'."""
+    location_table = _records_table(
+        "location",
+        [_col("prop__name", history_tracked=False, temporal_class="constant")],
+        presentation_id=presentation_id,
+    )
+    return _sidecar(
+        tables=[location_table],
+        record_roles={"location": "dimension"},
+        presentation_keys=presentation_keys,
+    )
+
+
+def _split_actor_sidecar(
+    presentation_keys: dict[str, object] | None = None,
+) -> Sidecar:
+    """A sidecar with one untracked, sub-typed object-registry kind, 'actor',
+    splitting into consultant (dimension) / nurse (fact), presentation_id
+    carried."""
+    actor_table = _records_table(
+        "actor",
+        [_col("prop__actor_type", history_tracked=False, temporal_class="constant")],
+        presentation_id=True,
+    )
+    return _sidecar(
+        tables=[actor_table],
+        record_roles={"actor": {"consultant": "dimension", "nurse": "fact"}},
+        enum_domains={"actor": {"actor_type": ["consultant", "nurse"]}},
+        presentation_keys=presentation_keys,
+    )
+
+
+def _spec_for(
+    sidecar: Sidecar, config: SourceConfig | None, source_table: str
+) -> SourceTableSpec:
+    """Build the plan and return the resolved spec reading `source_table`."""
+    plan = build_source_plan(sidecar, config, notice_sink=discard_notice_sink)
+    return next(s for s in plan if s.source_table == source_table)
+
+
+def test_resolve_source_table_keys_junction_none() -> None:
+    """A junction unit declares no keys, whatever change_delivery."""
+    sidecar = _junction_sidecar()
+    spec = _spec_for(sidecar, None, "membership__visit__team")
+    assert resolve_source_table_keys(sidecar, spec, "changelog") is None
+    assert resolve_source_table_keys(sidecar, spec, "snapshot") is None
+
+
+def test_resolve_source_table_keys_changelog_under_changelog_delivery_none() -> None:
+    """A changelog-genre unit under change_delivery: changelog declares no
+    keys — multiple rows per record, no honest key post-render."""
+    sidecar = _changelog_kind_sidecar()
+    spec = _spec_for(sidecar, None, "records__visit")
+    assert resolve_source_table_keys(sidecar, spec, "changelog") is None
+
+
+def test_resolve_source_table_keys_changelog_under_snapshot_delivery_claimed() -> None:
+    """A changelog-genre unit under change_delivery: snapshot, whole-table
+    claim held: PK id, unique presentation_id."""
+    sidecar = _changelog_kind_sidecar(
+        presentation_id=True,
+        presentation_keys={"visit": {"key": _raw_counter_key()}},
+    )
+    spec = _spec_for(sidecar, None, "records__visit")
+    keys = resolve_source_table_keys(sidecar, spec, "snapshot")
+    assert keys == TableKeys(primary_key=("id",), unique=(("presentation_id",),))
+
+
+def test_resolve_source_table_keys_changelog_under_snapshot_delivery_unclaimed() -> (
+    None
+):
+    """A changelog-genre unit under change_delivery: snapshot, no claim:
+    identity keys only."""
+    sidecar = _changelog_kind_sidecar(presentation_id=True)
+    spec = _spec_for(sidecar, None, "records__visit")
+    keys = resolve_source_table_keys(sidecar, spec, "snapshot")
+    assert keys == TableKeys(primary_key=("id",), unique=())
+
+
+def test_resolve_source_table_keys_unsplit_reference_claimed() -> None:
+    """An unsplit reference unit with a whole-table claim: PK id, unique
+    presentation_id."""
+    sidecar = _reference_kind_sidecar(
+        presentation_id=True,
+        presentation_keys={"location": {"key": _raw_counter_key()}},
+    )
+    spec = _spec_for(sidecar, None, "records__location")
+    keys = resolve_source_table_keys(sidecar, spec, "changelog")
+    assert keys == TableKeys(primary_key=("id",), unique=(("presentation_id",),))
+
+
+def test_resolve_source_table_keys_unsplit_reference_unclaimed() -> None:
+    """An unsplit reference unit with no claim declares identity keys only."""
+    sidecar = _reference_kind_sidecar(presentation_id=True)
+    spec = _spec_for(sidecar, None, "records__location")
+    keys = resolve_source_table_keys(sidecar, spec, "changelog")
+    assert keys == TableKeys(primary_key=("id",), unique=())
+
+
+def test_resolve_source_table_keys_renamed_columns_resolve_to_output_names() -> None:
+    """A rename entry's post-rename names appear in the resolved keys."""
+    sidecar = _reference_kind_sidecar(
+        presentation_id=True,
+        presentation_keys={"location": {"key": _raw_counter_key()}},
+    )
+    config = SourceConfig(
+        rename=[
+            RenameEntry(
+                table="records__location",
+                columns={"record_id": "loc_id", "presentation_id": "code"},
+            )
+        ]
+    )
+    spec = _spec_for(sidecar, config, "records__location")
+    keys = resolve_source_table_keys(sidecar, spec, "changelog")
+    assert keys == TableKeys(primary_key=("loc_id",), unique=(("code",),))
+
+
+def test_resolve_source_table_keys_split_unit_key_for_present() -> None:
+    """A split unit whose sub_type is declared in the block: PK id, unique
+    presentation_id — presence is the claim."""
+    sidecar = _split_actor_sidecar(
+        presentation_keys={
+            "actor": {
+                "sub_types": {"consultant": _raw_record_index_key()},
+                "branch_stable": True,
+                "slice_stable": True,
+                "unique_within": "branch",
+            }
+        }
+    )
+    consultant_spec = next(
+        s
+        for s in build_source_plan(sidecar, None, notice_sink=discard_notice_sink)
+        if s.sub_type == "consultant"
+    )
+    keys = resolve_source_table_keys(sidecar, consultant_spec, "changelog")
+    assert keys == TableKeys(primary_key=("id",), unique=(("presentation_id",),))
+
+
+def test_resolve_source_table_keys_split_unit_key_for_absent() -> None:
+    """A split unit whose sub_type is absent from the block: identity keys
+    only, even though the kind carries a partitioned entry."""
+    sidecar = _split_actor_sidecar(
+        presentation_keys={
+            "actor": {
+                "sub_types": {"consultant": _raw_record_index_key()},
+                "branch_stable": True,
+                "slice_stable": True,
+                "unique_within": "branch",
+            }
+        }
+    )
+    nurse_spec = next(
+        s
+        for s in build_source_plan(sidecar, None, notice_sink=discard_notice_sink)
+        if s.sub_type == "nurse"
+    )
+    keys = resolve_source_table_keys(sidecar, nurse_spec, "changelog")
+    assert keys == TableKeys(primary_key=("id",), unique=())
+
+
+def test_resolve_source_table_keys_block_absent_identity_only() -> None:
+    """No presentation_keys block at all -> identity keys only."""
+    sidecar = _reference_kind_sidecar(presentation_id=False)
+    spec = _spec_for(sidecar, None, "records__location")
+    keys = resolve_source_table_keys(sidecar, spec, "changelog")
+    assert keys == TableKeys(primary_key=("id",), unique=())
+
+
+def test_resolve_source_table_keys_incoherent_block_raises() -> None:
+    """An incoherent presentation_keys block raises at plan time, propagated
+    from the strict accessor."""
+    sidecar = _reference_kind_sidecar(
+        presentation_id=True,
+        presentation_keys={"ghost": {"key": _raw_counter_key()}},
+    )
+    spec = _spec_for(sidecar, None, "records__location")
+    with pytest.raises(PresentationKeysInvalidError):
+        resolve_source_table_keys(sidecar, spec, "changelog")

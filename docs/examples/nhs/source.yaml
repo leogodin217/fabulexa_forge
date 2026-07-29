@@ -1,0 +1,40 @@
+# ExportConfig — NHS bundle, source mode (operational OLTP tables)
+# ============================================================
+# `fabulexa-forge export docs/examples/nhs/bundle docs/examples/nhs/source.yaml`
+#
+# Source mode classifies every table into a genre from record_roles ×
+# temporal_class, with NO author declaration of genre:
+#   - tracked kinds (a class-`tracked` prop) -> wide CDC CHANGE-LOG tables
+#     (op / changed_at / id / after-image cols). NHS tracked kinds: actor
+#     (status, hai_status, admission_count, ...), journey_instance
+#     (current_state), diary (next_opening), resource (allocated), booking
+#     (status).
+#   - untracked dimension kinds -> REFERENCE tables (entity: wards, theatres,
+#     diagnostics, procedures, meds).
+#   - untracked fact kinds -> TRANSACTION tables.
+#   - membership__resource__holders -> a JUNCTION (interval) table.
+#
+# Source is the first mode that REQUIRES a resolved wallclock anchor (change-log
+# `changed_at` is a real TIMESTAMP). No rebase block is given, so the anchor
+# falls back to the sidecar `runtime` (start 2023-01-01, UTC) — the emit's own
+# clock. Uncomment `rebase:` to override origin/zone.
+#
+# Same two mechanism kinds excluded as base/dimensional (see base.yaml). In
+# source, excluding `tick_decision` also drops the membership table it owns
+# (tick_decision__bindings) — a junction without its owner is not operational.
+#
+# `exclude` drops KINDS. Columns are dropped independently of it: a non-exempt
+# `temporal_class: slice_only` column is ALWAYS auto-omitted with a notice,
+# whatever this config says — here booking.attended_at,
+# journey_instance.state_entry_time / complete / bound_roles / output_roles, and
+# resource.queue. The export's `notice:` lines are the authoritative list.
+
+mode: source
+
+source:
+  exclude:
+    kinds: [tick_decision, queue]
+
+# rebase:
+#   base_date: 2023-01-01
+#   timezone: Europe/London

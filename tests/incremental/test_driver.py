@@ -10,7 +10,7 @@ from typing import Literal
 
 import duckdb
 import pytest
-from _support.notices import discard_notice_sink
+from _support.notices import RecordingNoticeSink, discard_notice_sink
 from _support.sidecar_builder import identity_column, write_emit
 
 from exporters.base._base_fixtures import DAY_NS as _BASE_DAY_NS
@@ -29,6 +29,7 @@ from fabulexa_forge.errors import (
     IncrementalFingerprintMismatch,
     IncrementalRangeTargetExists,
 )
+from fabulexa_forge.exporters.query_spec import NOTICE_KEYS_NOT_DECLARABLE_CSV
 from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
     Cursor,
@@ -1298,6 +1299,255 @@ def test_base_mode_config_no_longer_reaches_dimensional_branch(tmp_path: Path) -
     assert outcome.status == "emitted"
     assert outcome.window is not None
     assert outcome.window.index == 0
+
+
+# ---------------------------------------------------------------------------
+# declare_keys: the CSV notice (base and source mode), windowed DuckDB
+# constraints across windows, and a falsifying window's atomic rollback.
+# ---------------------------------------------------------------------------
+
+_KEYED_PATIENT_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "BIGINT"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+]
+
+#: A flat kind's key claim: unique within the branch — a plain
+#: record_index-class declaration (mirrors the phase-3 demo's `patient`).
+_KEYED_PATIENT_PRESENTATION_KEYS: dict[str, object] = {
+    "key": {
+        "unique_within": "branch",
+        "branch_stable": True,
+        "slice_stable": True,
+        "key_space": {"class": "record_index", "prefix": "", "width": 4},
+    }
+}
+
+
+def _build_keyed_base_emit(
+    tmp_path: Path,
+    *,
+    rows: list[tuple[str, int, int]],
+    slice_at: int,
+) -> Path:
+    """Build a base-mode emit: one `patient` kind claiming `presentation_id`
+    unique-within-branch.
+
+    Args:
+        tmp_path: Directory for the emit artifacts.
+        rows: (record_id, presentation_id, created_sim_time) triples, in
+            record_index order.
+        slice_at: The branch's slice_at value.
+
+    Returns:
+        The emit directory.
+    """
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    conn = duckdb.connect(str(emit_dir / "run.duckdb"))
+    col_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _KEYED_PATIENT_COLUMNS)
+    conn.execute(f'CREATE TABLE "records__patient" ({col_ddl})')
+    for record_index, (record_id, presentation_id, created_sim_time) in enumerate(rows):
+        conn.execute(
+            'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+            [
+                "trunk",
+                record_id,
+                presentation_id,
+                created_sim_time,
+                True,
+                created_sim_time,
+                record_index,
+            ],
+        )
+    history_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _HISTORY_COLUMNS)
+    conn.execute(f'CREATE TABLE "history" ({history_ddl})')
+    conn.close()
+
+    write_emit(
+        emit_dir,
+        tables=[
+            {
+                "name": "records__patient",
+                "category": "records",
+                "record_kind": "patient",
+                "columns": _KEYED_PATIENT_COLUMNS,
+                "rows": len(rows),
+            },
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": _HISTORY_COLUMNS,
+                "rows": 0,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": slice_at}],
+        extra={"presentation_keys": {"patient": _KEYED_PATIENT_PRESENTATION_KEYS}},
+    )
+    return emit_dir
+
+
+def _base_config_declare_keys(sim_period_ns: int, declare_keys: bool) -> ExportConfig:
+    """Build a mode='base' config with `declare_keys` and a sim-time-regime
+    incremental block."""
+    return ExportConfig.model_validate(
+        {
+            "mode": "base",
+            "base": {"declare_keys": declare_keys},
+            "incremental": {"sim_period_ns": sim_period_ns},
+        }
+    )
+
+
+def _duckdb_constraint_columns(
+    db_path: Path, table_name: str
+) -> list[tuple[str, tuple]]:
+    """Return (constraint_type, constraint_column_names) pairs for a table."""
+    conn = duckdb.connect(str(db_path), read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT constraint_type, constraint_column_names"
+            " FROM duckdb_constraints() WHERE table_name = ?",
+            [table_name],
+        ).fetchall()
+    finally:
+        conn.close()
+    return [(str(r[0]), tuple(r[1])) for r in rows]
+
+
+def test_declare_keys_csv_notice_base_mode_once_per_invocation(tmp_path: Path) -> None:
+    """CSV + base-mode declare_keys: exactly one keys-not-declarable-csv
+    notice per --next invocation, re-emitted on the second drip."""
+    emit_dir = _build_keyed_base_emit(
+        tmp_path, rows=[("p001", 101, 0), ("p002", 102, 0)], slice_at=1000
+    )
+    config = _base_config_declare_keys(sim_period_ns=500, declare_keys=True)
+    out = tmp_path / "drops"
+
+    with open_emit(emit_dir) as emit:
+        sink1 = RecordingNoticeSink()
+        export_incremental_next(emit, config, out, "csv", None, notice_sink=sink1)
+        codes1 = [n.code for n in sink1.notices]
+        assert codes1.count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
+
+        sink2 = RecordingNoticeSink()
+        export_incremental_next(emit, config, out, "csv", None, notice_sink=sink2)
+        codes2 = [n.code for n in sink2.notices]
+        assert codes2.count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
+
+
+def test_declare_keys_csv_notice_source_mode_once_per_invocation(
+    tmp_path: Path,
+) -> None:
+    """CSV + source-mode declare_keys: exactly one keys-not-declarable-csv
+    notice per --next invocation."""
+    emit_dir = build_source_test_emit(tmp_path)
+    config = _source_config(source={"declare_keys": True})
+    out = tmp_path / "drops"
+
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        sink = RecordingNoticeSink()
+        export_incremental_next(emit, config, out, "csv", anchor, notice_sink=sink)
+
+    assert [n.code for n in sink.notices].count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
+
+
+def test_windowed_duckdb_declare_keys_constraints_carried_across_windows(
+    tmp_path: Path,
+) -> None:
+    """Windowed DuckDB + declare_keys: window 1 creates the table with the
+    declared constraints (no CSV notice); window 2's replace preserves them,
+    with row growth from a patient created between the two horizons."""
+    emit_dir = _build_keyed_base_emit(
+        tmp_path,
+        rows=[("p001", 101, 0), ("p002", 102, 0), ("p003", 103, 150)],
+        slice_at=150,
+    )
+    config = _base_config_declare_keys(sim_period_ns=100, declare_keys=True)
+    out = tmp_path / "wh.duckdb"
+
+    with open_emit(emit_dir) as emit:
+        sink1 = RecordingNoticeSink()
+        outcome1 = export_incremental_next(emit, config, out, "duckdb", None, sink1)
+        assert outcome1.status == "emitted"
+        assert outcome1.row_counts == {"patient": 2}
+        assert NOTICE_KEYS_NOT_DECLARABLE_CSV not in [n.code for n in sink1.notices]
+
+        constraints_after_1 = _duckdb_constraint_columns(out, "patient")
+        assert ("PRIMARY KEY", ("patient_key",)) in constraints_after_1
+        assert ("UNIQUE", ("id",)) in constraints_after_1
+        assert ("UNIQUE", ("presentation_id",)) in constraints_after_1
+
+        sink2 = RecordingNoticeSink()
+        outcome2 = export_incremental_next(emit, config, out, "duckdb", None, sink2)
+        assert outcome2.status == "emitted"
+        assert outcome2.row_counts == {"patient": 3}
+
+        constraints_after_2 = _duckdb_constraint_columns(out, "patient")
+        assert constraints_after_2 == constraints_after_1
+
+
+def test_windowed_duckdb_declare_keys_falsifying_window_rolls_back(
+    tmp_path: Path,
+) -> None:
+    """A window whose data falsifies a declared key raises ExportRuntimeError
+    and leaves the warehouse (rows, _export_windows, cursor) exactly as
+    before."""
+    emit_dir = _build_keyed_base_emit(
+        tmp_path,
+        # p003 duplicates p001's presentation_id, created after window 0's
+        # horizon so it only appears in window 1's snapshot.
+        rows=[("p001", 101, 0), ("p002", 102, 0), ("p003", 101, 150)],
+        slice_at=150,
+    )
+    config = _base_config_declare_keys(sim_period_ns=100, declare_keys=True)
+    out = tmp_path / "wh.duckdb"
+
+    with open_emit(emit_dir) as emit:
+        export_incremental_next(emit, config, out, "duckdb", None, discard_notice_sink)
+
+        with pytest.raises(ExportRuntimeError):
+            export_incremental_next(
+                emit, config, out, "duckdb", None, discard_notice_sink
+            )
+
+    conn = duckdb.connect(str(out), read_only=True)
+    try:
+        patient_rows = conn.execute("SELECT COUNT(*) FROM patient").fetchone()
+        window_rows = conn.execute("SELECT COUNT(*) FROM _export_windows").fetchone()
+    finally:
+        conn.close()
+    assert patient_rows is not None and int(patient_rows[0]) == 2
+    assert window_rows is not None and int(window_rows[0]) == 1
+
+    cursor = read_cursor(out, "duckdb", window_zero_label="")
+    assert cursor is not None and cursor.next_window_index == 1
+
+
+def test_declare_keys_fingerprint_mismatch_on_flip(tmp_path: Path) -> None:
+    """Flipping `declare_keys` mid-drip changes the config fingerprint and
+    refuses per the existing mismatch rule."""
+    emit_dir = _build_keyed_base_emit(
+        tmp_path, rows=[("p001", 101, 0), ("p002", 102, 0)], slice_at=1000
+    )
+    config = _base_config_declare_keys(sim_period_ns=500, declare_keys=True)
+    out = tmp_path / "wh.duckdb"
+
+    with open_emit(emit_dir) as emit:
+        export_incremental_next(emit, config, out, "duckdb", None, discard_notice_sink)
+
+    flipped = _base_config_declare_keys(sim_period_ns=500, declare_keys=False)
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(IncrementalFingerprintMismatch):
+            export_incremental_next(
+                emit, flipped, out, "duckdb", None, discard_notice_sink
+            )
 
 
 # ---------------------------------------------------------------------------

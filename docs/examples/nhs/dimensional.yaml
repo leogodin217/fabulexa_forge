@@ -1,0 +1,197 @@
+# ExportConfig — NHS bundle, dimensional mode (star schema)
+# ============================================================
+# `fabulexa-forge export docs/examples/nhs/bundle docs/examples/nhs/dimensional.yaml`
+#
+# Adapted from `fabulexa-forge init docs/examples/nhs/bundle`, then curated
+# against the atlas. Curation decisions (the author judgment init can't make):
+#
+#   DROPPED  tick_decision (fact) + queue (dim) — simulation-mechanism kinds,
+#            not clinical data. init proposed a fact_tick_decision and an
+#            attribute-less dim_queue; both are engine bookkeeping, so they and
+#            their membership tables are excluded from the star entirely.
+#   DIM->T1  resource: init proposed SCD-2 because `allocated` (consultants
+#            currently busy) is history-tracked. That is operational STATE, not
+#            a slowly-changing dimension attribute — dropped, and the dim is
+#            Type-1 constant reference data (capacity, grade, specialty).
+#   DIM->T1  entity: reference data (wards/theatres/diagnostics/procedures/
+#            meds) — all columns constant. init over-proposed SCD-2 on a
+#            presentation `name`; Type-1 is correct. Kept as one conformed
+#            dimension with `entity_type` as the discriminator attribute. (It
+#            is polymorphic — a per-entity_type split into dim_ward/dim_theatre/
+#            ... is possible, but the sidecar carries no sub_type_columns, so the
+#            column->sub-type mapping would be author guesswork; left conformed.)
+#   FACT     booking: the one real clinical fact (appointment bookings). Filled
+#            in its columns + two reference FKs (subject->patient, diary->book)
+#            that init left as commented stubs.
+#
+# SCD-2 dims kept where a genuine attribute versions over time: actor (patient
+# clinical flags), diary (next_opening drift), journey_instance (current_state).
+#
+# Not every column below is an author choice. `temporal_class: slice_only`
+# columns cannot be projected in any mode — base/source omit them with a notice;
+# dimensional, where the author names columns, REFUSES the config outright. That
+# is why booking.attended_at is absent from fact_booking, and why
+# journey_instance.state_entry_time / complete / bound_roles / output_roles and
+# resource.queue are absent from their dims.
+#
+# Timestamps: no `rebase:` block, so the effective anchor is the sidecar's own
+# `runtime` (2023-01-01T00:00 UTC). Framework/lifecycle sim-time columns render
+# wallclock through it; domain `prop__` columns stay raw BIGINT sim-time ns
+# unless explicitly rendered with `derived: {timestamp: ...}` (see fact_booking).
+
+mode: dimensional
+
+dimensional:
+  tables:
+    # --- dim: actor (patient) — SCD-2, clinical flags version over time ---
+    - name: dim_actor
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: default}
+      key: [id, valid_from]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: gender_code, from: prop__gender_code}
+        - {name: imd_decile, from: prop__imd_decile}
+        - {name: primary_condition, from: prop__primary_condition}
+        - {name: pathway_type, from: prop__pathway_type}
+        - {name: admission_disposition, from: prop__admission_disposition}
+        - {name: status, from: prop__status}
+        - {name: admission_count, from: prop__admission_count}
+        - {name: ethnic_category, from: prop__ethnic_category}
+        - {name: comorbidity_count, from: prop__comorbidity_count}
+        - {name: frailty_band, from: prop__frailty_band}
+        - {name: gp_practice_code, from: prop__gp_practice_code}
+        - {name: surgical_referred, from: prop__surgical_referred}
+        - {name: cancer_referred, from: prop__cancer_referred}
+        - {name: diagnostic_required, from: prop__diagnostic_required}
+        - {name: outpatient_diagnostic_required, from: prop__outpatient_diagnostic_required}
+        - {name: diagnostic_test_type, from: prop__diagnostic_test_type}
+        - {name: suspicious_finding, from: prop__suspicious_finding}
+        - {name: surgical_indicated, from: prop__surgical_indicated}
+        - {name: procedure_code, from: prop__procedure_code}
+        - {name: readmission_risk, from: prop__readmission_risk}
+        - {name: fft_outcome, from: prop__fft_outcome}
+        - {name: fft_invited, from: prop__fft_invited}
+        - {name: hai_status, from: prop__hai_status}
+        - {name: full_name, from: prop__full_name}
+        - {name: birth_date, from: prop__birth_date}
+        - {name: valid_from, derived: {scd_window: valid_from}}
+        - {name: valid_to, derived: {scd_window: valid_to}}
+
+    # --- dim: diary (clinic/theatre appointment books) — SCD-2 (next_opening drifts) ---
+    - name: dim_diary
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: diary
+      key: [id, valid_from]
+      columns:
+        - {name: id, from: record_id}
+        - {name: diary_type, from: prop__diary_type}
+        - {name: main_specialty, from: prop__main_specialty}
+        - {name: slot_interval, from: prop__slot_interval}
+        - {name: horizon, from: prop__horizon}
+        - {name: min_lead, from: prop__min_lead}
+        - {name: booking_discipline, from: prop__booking_discipline}
+        - {name: on_overflow, from: prop__on_overflow}
+        - {name: no_show_rate, from: prop__no_show_rate}
+        - {name: window, from: prop__window}
+        - {name: next_opening, from: prop__next_opening}
+        - {name: valid_from, derived: {scd_window: valid_from}}
+        - {name: valid_to, derived: {scd_window: valid_to}}
+
+    # --- dim: entity (wards/theatres/diagnostics/procedures/meds) — Type-1 reference ---
+    - name: dim_entity
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: entity
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: entity_type, from: prop__entity_type}
+        - {name: entity_code, from: prop__entity_code}
+        - {name: name, from: prop__name}
+        - {name: main_specialty, from: prop__main_specialty}
+        - {name: ward_type, from: prop__ward_type}
+        - {name: total_beds, from: prop__total_beds}
+        - {name: cost_per_bed_day, from: prop__cost_per_bed_day}
+        - {name: site_code, from: prop__site_code}
+        - {name: theatre_specialty, from: prop__theatre_specialty}
+        - {name: sessions_per_day, from: prop__sessions_per_day}
+        - {name: test_type, from: prop__test_type}
+        - {name: turnaround_days, from: prop__turnaround_days}
+        - {name: cost, from: prop__cost}
+        - {name: hrg_code, from: prop__hrg_code}
+        - {name: tariff, from: prop__tariff}
+        - {name: complexity, from: prop__complexity}
+        - {name: specialty_group, from: prop__specialty_group}
+        - {name: drug_class, from: prop__drug_class}
+
+    # --- dim: journey_instance (care-pathway episodes) — SCD-2 on current_state ---
+    - name: dim_journey_instance
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: journey_instance
+      key: [id, valid_from]
+      columns:
+        - {name: id, from: record_id}
+        - {name: actor, from: prop__actor}
+        - {name: journey_type, from: prop__journey_type}
+        - {name: current_state, from: prop__current_state}
+        - {name: valid_from, derived: {scd_window: valid_from}}
+        - {name: valid_to, derived: {scd_window: valid_to}}
+
+    # --- dim: resource (consultants) — Type-1 reference (allocated=state, dropped) ---
+    - name: dim_resource
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: resource
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: capacity, from: prop__capacity}
+        - {name: entity_code, from: prop__entity_code}
+        - {name: main_specialty, from: prop__main_specialty}
+        - {name: grade, from: prop__grade}
+        - {name: quality_rating, from: prop__quality_rating}
+        - {name: resource_type, from: prop__resource_type}
+
+    # --- fact: booking (appointment bookings) — grain: one booking ---
+    - name: fact_booking
+      role: fact
+      source:
+        grain: records
+        kind: booking
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: patient_id, fk: {to: dim_actor, via: reference}}
+        - {name: diary_id, fk: {to: dim_diary, via: reference}}
+        # Event time as an anchored wallclock TIMESTAMP, so the fact is
+        # point-in-time joinable against the SCD-2 dims, whose valid_from /
+        # valid_to are TIMESTAMP too:
+        #   JOIN dim_actor d ON f.patient_id = d.id
+        #                   AND f.requested_at >= d.valid_from
+        #                   AND f.requested_at <  d.valid_to
+        # Projecting the raw BIGINT sim-time ns here instead would make that
+        # comparison type-incompatible and fan the fact out across versions.
+        - {name: requested_at, derived: {timestamp: {source: prop__requested_at}}}
+        - {name: opening_at, derived: {timestamp: {source: prop__opening_at}}}
+        # The raw sim-time ns kept alongside, under distinct names.
+        - {name: requested_at_ns, from: prop__requested_at}
+        - {name: opening_at_ns, from: prop__opening_at}
+        - {name: status, from: prop__status}

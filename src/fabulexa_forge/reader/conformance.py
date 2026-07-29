@@ -672,9 +672,13 @@ def _check_c6(emit: "Emit") -> CheckResult:
     """C6: history-tracked property round-trip.
 
     For every (fork_path, kind, record_id, property) series in history, the latest
-    pre-slice history.value equals to_csv_text(records__<kind>.prop__<property>) at
-    the same (fork_path, record_id). "Latest pre-slice" is bounded by
-    BranchEntry.slice_at, not MAX(sim_time).
+    pre-slice history.value decodes to the same Python value as
+    records__<kind>.prop__<property> at the same (fork_path, record_id). "Latest
+    pre-slice" is bounded by BranchEntry.slice_at, not MAX(sim_time). NULL is a
+    legal history-entry value (a never-supplied tracked property reads NULL in its
+    genesis row and its records cell alike), so NULL history.value against a NULL
+    records cell is conformant; NULL against a non-NULL cell, or vice versa, is a
+    round-trip mismatch.
 
     Resolved set-based: one window+join query per distinct (kind, property)
     series-class (not two queries per series), with the codec applied in Python so
@@ -782,6 +786,9 @@ def _check_c6(emit: "Emit") -> CheckResult:
             f"  SELECT h.fork_path AS fp, h.record_id AS rid, h.value AS val, "
             f"         ROW_NUMBER() OVER ("
             f"           PARTITION BY h.fork_path, h.record_id "
+            # DuckDB's default null ordering for DESC is NULLS LAST, so among rows
+            # tied on sim_time a non-NULL value always outranks a NULL one — the
+            # tie-break stays deterministic even when one of the tied values is NULL.
             f"           ORDER BY h.sim_time DESC, h.value DESC"
             f"         ) AS rn "
             f"  FROM history h "
@@ -798,7 +805,7 @@ def _check_c6(emit: "Emit") -> CheckResult:
         for row in rows:
             fork_path = str(row[0])
             record_id = str(row[1])
-            history_value = str(row[2])
+            history_value = row[2]
             rec_record_id = row[3]
             cell_value = row[4]
 
@@ -810,14 +817,31 @@ def _check_c6(emit: "Emit") -> CheckResult:
                 )
                 continue
 
+            if history_value is None and cell_value is None:
+                # Decoded-value equality: NULL history against a NULL records cell
+                # is the NULL-against-NULL case the contract's Cross-table
+                # round-trip section calls out — a never-supplied tracked property
+                # reads NULL in its genesis row and its records cell alike. Pass.
+                continue
+
+            if history_value is None:
+                # NULL latest history.value against a non-NULL records cell: the
+                # decoded values differ (NULL != cell_value).
+                encoded_cell = to_csv_text(cell_value, prop_col_type)
+                messages.append(
+                    f"C6: round-trip mismatch for "
+                    f"(fork_path={fork_path!r}, kind={kind!r}, "
+                    f"record_id={record_id!r}, property={prop!r}): "
+                    f"history.value is NULL != encoded={encoded_cell!r}"
+                )
+                continue
+
             if cell_value is None:
-                # A tracked property backed by a history series but whose current
-                # records cell is NULL cannot round-trip to the series' (non-NULL)
-                # latest value: it is a C6 failure, not a codec error. Report it
-                # directly rather than encode NULL — to_csv_text has no NULL form for
-                # BIGINT/DOUBLE and would raise. A conformant emit never reaches here
-                # (a series implies a non-NULL current value); only an already-broken
-                # emit — e.g. a corrupter's missing-value defect — does.
+                # A tracked property backed by a non-NULL history series but whose
+                # current records cell is NULL cannot round-trip: it is a C6
+                # failure, not a codec error. Report it directly rather than
+                # encode NULL — to_csv_text has no NULL form for BIGINT/DOUBLE
+                # and would raise.
                 messages.append(
                     f"C6: round-trip mismatch for "
                     f"(fork_path={fork_path!r}, kind={kind!r}, "
@@ -1831,9 +1855,10 @@ def _check_c14_kind(
     Asserts (for kind K): the entry's sub-type keys equal the declared
     '<K>_type' domain; the union of its per-sub-type column lists equals the
     kind's value columns (those carrying the temporal pair) minus the
-    discriminator prop__<K>_type, plus each reference-typed value column's
-    ref_index__ sibling; and per sub-type each reference pair (prop__<n>,
-    ref_index__<n>) is listed together or not at all.
+    discriminator prop__<K>_type, plus presentation_id when records__K carries
+    that column, plus each reference-typed value column's ref_index__ sibling;
+    and per sub-type each reference pair (prop__<n>, ref_index__<n>) is listed
+    together or not at all.
 
     Args:
         kind: The partitioned records kind.
@@ -1854,11 +1879,15 @@ def _check_c14_kind(
             f"{disc_key!r} domain {sorted(declared_sub_types)!r}"
         )
 
-    # V = value columns (those carrying the temporal pair) minus the discriminator.
+    # V = value columns (those carrying the temporal pair) minus the discriminator,
+    # plus presentation_id when records__K carries that column (it has no
+    # ref_index__ sibling and sits outside the pair-integrity rule).
     value_cols = {
         col.name for col in table_spec.columns if col.history_tracked is not None
     }
     v = value_cols - {discriminator}
+    if any(col.name == "presentation_id" for col in table_spec.columns):
+        v = v | {"presentation_id"}
     # X = ref_index siblings of the reference-typed value columns in V.
     x: set[str] = set()
     ref_props: set[str] = set()
@@ -1912,7 +1941,8 @@ def _check_c14(emit: "Emit") -> CheckResult:
       enum_domains registry carries a '<kind>_type' discriminator.
     - Per kind, the sub-type keys equal the declared '<kind>_type' domain.
     - Per kind, the union of the per-sub-type lists equals the value columns
-      (those carrying the temporal pair) minus prop__<kind>_type, plus each
+      (those carrying the temporal pair) minus prop__<kind>_type, plus
+      presentation_id when records__<kind> carries that column, plus each
       reference-typed value column's ref_index__ sibling.
     - Per sub-type, a reference column and its ref_index sibling are listed
       together or not at all.

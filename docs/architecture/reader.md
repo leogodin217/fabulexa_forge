@@ -30,7 +30,7 @@ open_emit(emit_dir)
 |---|---|
 | [`emit.py`](../../src/fabulexa_forge/reader/emit.py) | `open_emit`, the `Emit` handle (`query` row-tuples, `query_arrow` columnar, `close`, context manager), the read-only DuckDB open |
 | [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) | `Sidecar` and its frozen descriptors `ColumnSpec` / `TableSpec` / `BranchEntry` / `RuntimeAnchor`; the typed `RecordRoles` registry view + `Sidecar.record_roles()`; the per-column temporal pair — the `history_tracked` flag + `history_tracked_available()`, the `TemporalClass` literal, and the `Sidecar.temporal_class()` accessor (the single narrowing point); the version gate + structural floor (`Sidecar.from_raw`) |
-| [`records_columns.py`](../../src/fabulexa_forge/reader/records_columns.py) | The records-column taxonomy — `records_column_role`, `ref_index_sibling`, `REF_INDEX_PREFIX`: the one classifier every records-column consumer reads through (§ The records-column taxonomy) |
+| [`records_columns.py`](../../src/fabulexa_forge/reader/records_columns.py) | The records-column taxonomy — `records_column_role`, `ref_index_sibling`, `REF_INDEX_PREFIX`: the one classifier every records-column consumer reads through (§ The records-column taxonomy). The structural-temporal surface — `StructuralInstant`, `structural_instant_columns`, `records_structural_column_is_mutable`: the one answer to which structural columns carry a sim-time instant and which may change after creation (§ The structural-temporal surface) |
 | [`relations.py`](../../src/fabulexa_forge/reader/relations.py) | The faithful-read SQL builders (`build_records_relation_sql`, `build_history_relation_sql`, `build_membership_relation_sql`) and the faithful introspection helper `distinct_prop_values` — the reader's compose-time surface, the sole faithful namer of base tables |
 | [`errors.py`](../../src/fabulexa_forge/reader/errors.py) | The reader error hierarchy — operational/structural failures only |
 
@@ -54,9 +54,12 @@ open_emit(emit_dir)
 `open_emit` performs the version gate and a structural parse only; it does **not**
 run conformance. The split is load-bearing: a non-conformant emit must still *open*
 so that `validate` can report which check it fails. A sidecar can open successfully
-and still be non-conformant — an empty `columns` array, a `"bogus"` category, or a
-phantom `prop__` column all open cleanly and are diagnosed by C1/C2/C5. This is the
-room the negative fixtures need.
+and still be non-conformant — an empty `columns` array or a phantom `prop__` column
+opens cleanly and is diagnosed by C1/C2/C5. This is the room the negative fixtures
+need.
+
+A table's `category` is the one *value* the floor admits against a closed set
+rather than deferring to conformance (§ The structural-temporal surface).
 
 The open sequence and what each step rejects is the [Validation Rules](#validation-rules)
 table below. Two ordering guarantees are normative:
@@ -144,6 +147,77 @@ attributes and no `references` annotation of their own (see
 [`bundle.md`](bundle.md) § The dense record index); `ColumnSpec`'s optional
 fields already express them by absence. Signatures and the `ValueError`
 contract are the definitions in
+[`records_columns.py`](../../src/fabulexa_forge/reader/records_columns.py).
+
+### The structural-temporal surface
+
+The sidecar declares every column's name and type, and for `prop__` columns its
+temporal pair. It declares nothing about the **structural** columns' temporal
+meaning: whether `created_sim_time` carries an instant, whether `deactivated_at`
+may change after a record is created. Those facts are pinned by the contract, by
+name and position, and are not machine-readable from the emit. The reader owns
+them, in the same shape as the records-column taxonomy — pure, name-based, no
+sidecar and no DuckDB read, and loud on anything it does not recognise.
+
+The surface answers two questions and no others.
+
+**Which structural columns carry a sim-time instant, and which instant each
+names.** The vocabulary is closed and derives from the contract's column
+definitions:
+
+| Category | Column | Instant | Nullable |
+|---|---|---|---|
+| `records` | `created_sim_time` | `created` | no |
+| `records` | `deactivated_at` | `closed` | yes |
+| `records` | `last_mutation_sim_time` | `last_touched` | no |
+| `fixed` | `sim_time` | `changed` | no |
+| `membership` | `joined_sim_time` | `joined` | no |
+| `membership` | `left_sim_time` | `left` | yes |
+
+A structural column absent from this table carries no instant. A `prop__` column
+may hold a time-valued payload, but that is a declared property with a sidecar
+type, not a structural instant, and is outside the surface.
+
+**Which records structural columns may change after the record is created** —
+the fact the incremental export needs to decide whether a column is safe to read
+once and treat as settled. `active`, `deactivated_at`, and
+`last_mutation_sim_time` may change; `created_sim_time`, `fork_path`,
+`record_id`, `record_index`, and `presentation_id` are set once.
+
+The mutability domain is closed, and covers the structural half only. A
+`prop__<name>` column's mutability is a sidecar question answered by its temporal
+pair (§ Per-column temporal semantics); a `ref_index__<name>` column tracks its
+sibling `prop__<name>` and resolves through the sibling's sidecar answer. "Structural"
+is defined against the taxonomy's families: `identity`, `presentation`, and
+`lifecycle`, minus the ref-index prefix. Because the taxonomy classifies
+`ref_index__<name>` as `identity`, family alone does not isolate it, so a caller
+needing both halves dispatches on family *plus* the ref-index prefix rule —
+`payload` to the sidecar, an `identity` name matching the prefix to its sibling's
+sidecar answer, everything else in `identity` / `presentation` / `lifecycle` to
+this surface. Neither half subsumes the other.
+
+The two loud conditions differ in kind, and so do their signals:
+
+- **An unrecognised table category raises.** The category set is closed,
+  contract-pinned, and admitted when the sidecar is read, so a value outside it is
+  a programming error rather than emit data.
+- **A structural name outside the pinned records set raises** when asked for
+  mutability. The open name space is the taxonomy's to classify and the caller
+  dispatches through it first. A `prop__` or `ref_index__` question belongs to the
+  sidecar; a name the contract does not pin has no mutability answer at all, so a
+  quiet "immutable" would state a fact the contract does not hold.
+- **A structural column carrying no instant is an ordinary answer**, not a raise.
+  The column-name space is open — every `prop__<name>` lives in it — so absence is
+  a result the caller interprets.
+
+The instant vocabulary is presentation-free: no output name appears in it. Which
+real-world name an instant takes in an output is each mode's presentation policy —
+source renders operational names, base keeps structural names under its own
+minimal default, dimensional is author-verbatim. One set of contract facts carries
+three naming policies.
+
+Signatures, the `ValueError` contracts, and the pinned mappings are the
+definitions in
 [`records_columns.py`](../../src/fabulexa_forge/reader/records_columns.py).
 
 ### The record-role registry overlays roles on discovered kinds
@@ -393,6 +467,16 @@ imposes no implicit ordering.
    nothing else; a kind's `record_roles` warehouse role never affects whether it is
    sub-typed. The accessor is total — `()` is the not-sub-typed verdict, never an
    exception.
+7. **One owner of the structural-temporal facts.** Exactly one module answers
+   "does this structural column carry an instant, and which one" and "may this
+   records structural column change after creation". A mode that needs either
+   answer reads it from the reader; a mode holding a private copy is a defect.
+8. **The instant vocabulary is presentation-free.** No output name appears in it;
+   naming belongs to the mode that renders the column.
+9. **Only the contract's three table categories are admitted.** An unrecognised
+   `category` is refused when the sidecar is read, so no consumer ever sees one —
+   which is what makes an unrecognised category at the structural-temporal surface
+   a caller error rather than emit data.
 
 ## Validation Rules
 
@@ -403,7 +487,7 @@ imposes no implicit ordering.
 | 1. Locate | `emit_dir`, `run.duckdb`, or `base.json` missing | `EmitNotFoundError` |
 | 2. JSON parse | `base.json` is not valid JSON | `SidecarParseError` |
 | 3. Version gate | `base_format_version` is a present integer ≠ `SUPPORTED_BASE_FORMAT_VERSION` | `UnsupportedBaseFormatVersionError(found_version=…)` — no auto-upgrade |
-| 4. Structural floor | `base_format_version` absent or non-integer; or a required floor field absent/mis-typed (branches a non-empty list; tables a list; each table has `name`/`category`/`columns`/`rows`; each column object has `name`/`type`; each branch has `fork_path`/`parent`/`slice_at`, `parent` present and `str` or `null`) | `SidecarStructureError` |
+| 4. Structural floor | `base_format_version` absent or non-integer; or a required floor field absent/mis-typed (branches a non-empty list; tables a list; each table has `name`/`category`/`columns`/`rows`; each column object has `name`/`type`; each branch has `fork_path`/`parent`/`slice_at`, `parent` present and `str` or `null`); or a table's `category` is outside `{fixed, records, membership}` | `SidecarStructureError` |
 | 5. Open DuckDB | `run.duckdb` present but not a readable DuckDB database | `RunDatabaseError` |
 | else | all of the above pass | an open `Emit` |
 
@@ -447,6 +531,37 @@ never reader errors — they are failing `CheckResult`s (see
   `query`, while output writing is writer-side. Keeping Arrow purely writer-side is
   impossible under reader-first — the writer would have no sanctioned way to read the
   input columnar.
+- **One owner for facts the sidecar does not carry.** The contract's structural
+  temporal facts are real and fixed, but invisible to the emit, so every consumer
+  needing one would otherwise encode it at the point of use — and independent
+  encodings of "which records structural columns hold an instant" drift apart, each
+  narrowing for a local reason no other site knows about. The failure is not
+  hypothetical: a records-grain fact could not render its own birth instant, because
+  the timestamp allowlist admitted only `last_mutation_sim_time` while the raw
+  projection surface admitted all three, so the two surfaces disagreed. For a
+  short-lived record — created, then deactivated, with no writes between — that
+  reachable instant is the *close* time on every row, leaving the natural event time
+  with no expression and no effective-dated join against an SCD-2 dimension. One
+  reader-owned answer is what keeps the surfaces from diverging again.
+- **The instant is a contract fact; the name is presentation.** Which instant a
+  column carries is pinned by the contract and belongs in the reader. Which
+  real-world name that instant takes in an output is a mode's policy, and belongs to
+  the mode. Splitting them is what lets three different naming policies rest on one
+  set of facts instead of three privately-maintained ones.
+- **Naming a column list in code is correct for a pinned prefix.** The prohibition
+  on hard-coding column lists exists because the *variable tail* of a table is
+  producer-extensible; it has no force against the structural prefix, which the
+  contract pins by name and position and conformance checks. The structural-temporal
+  mappings and the table-category set restate the vendored schema deliberately, and
+  are the same hardcoding class as the conformance checks' pinned column lists.
+- **Category is the one value narrowed at parse.** The sidecar reader's posture is
+  otherwise permissive — parse structurally, diagnose values in `validate` — and this
+  one field departs from it. The structural-temporal surface raises on an
+  unrecognised category as a *caller* error, and that signal is honest only if no
+  emit-supplied category can reach a consumer unvalidated. The narrowing moves the
+  diagnosis of an out-of-set category from a C1 `CheckResult` to the structural
+  floor; it does not remove it, and it matches the observable behavior of a *missing*
+  category.
 - **Exposing `pinned_ids` / `enum_domains` / `runtime` as typed accessors.** These are
   the reader's named deliverables, and `pinned_ids` is a conformance input (C9 reads
   it). Fixing them as typed accessors gives exporters a stable reader surface to build
@@ -484,6 +599,15 @@ What the reader deliberately does not own:
 - **Conformance assessment.** The reader *opens*; assessing whether an emit conforms
   (C1–C14) is [`conformance.md`](conformance.md)'s surface, which reads through the
   `Emit` this reader produces.
+- **Presentation-column detection.** The reader classifies columns by contract
+  family, never by origin. The emit carries no marker distinguishing a
+  producer-minted column from an author-declared one, and no inference recovers one
+  reliably, so the reader offers no such distinction for a consumer to lean on.
+- **Record-kind archetypes.** The reader says which instant a structural column
+  carries, never which instant a given output *should* mean. Whether a fact's event
+  time is its creation or its close is the author's modelling decision (Principle
+  #7); classifying kinds into archetypes to guess it would invent a mapping the
+  author must specify.
 - **Class policy.** The reader *resolves* a column's class; what a consumer does with
   it is that consumer's contract. The genre predicate that consults the class is the
   source exporter's ([`source.md`](source.md)); a policy that refuses or omits a

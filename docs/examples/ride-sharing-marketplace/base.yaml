@@ -1,0 +1,46 @@
+# ExportConfig — ride-sharing marketplace, base mode (flat current-state dump)
+# ============================================================
+# `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/base.yaml`
+#
+# Base mode reconstructs one flat table per records kind at the tape's end:
+# every tracked property (actor.status, actor.zone, entity.demand_pressure,
+# journey_instance.current_state, ...) carries its LATEST history value. No
+# genre split, no sub-type split, no FK joins — the faithful "current state of
+# every record" landing shape. Each table is the lifecycle prefix (`record_id`
+# presented as `id`, then `created_sim_time`, `active`, `deactivated_at`), then
+# `presentation_id` where the kind carries one, then one presentation-verbatim
+# `prop__<p>` per surviving property. Base emits no surrogate/bookkeeping
+# columns: `fork_path`, `record_index`, `ref_index__*` and
+# `last_mutation_sim_time` are not in the output, so a reference joins on the
+# `prop__` value (e.g. actor.prop__zone -> entity.id), never on an index.
+#
+# This marketplace is the CLEAN example: it declares NO simulation-mechanism
+# kinds — no tick_decision rule-firing log, no internal queue. Every kind is
+# domain data:
+#   actor  — riders + drivers, merged on one table (actor_type discriminator)
+#   entity — zone_market records (the spatial grain + surge pressure signals)
+#   journey_instance — the trip / driver-session lifecycles
+#   pairing — the rider<->driver match records (the two-sided-market centerpiece)
+# So there is no KIND to drop. Base takes a bare `mode: base` — no `exclude:`.
+#
+# Dropping no kind is not the same as dropping no column. A non-exempt
+# `temporal_class: slice_only` column is ALWAYS auto-omitted with a
+# `slice-only-column-omitted` notice, in every mode, whatever this config does or
+# does not exclude — the omission is not an author choice and cannot be waived.
+# Here that removes journey_instance.prop__state_entry_time and
+# journey_instance.prop__complete. Watch the export's `notice:` lines for the
+# authoritative list.
+#
+# Anchor: a `rebase:` block is optional for base — omitted here, but this emit's
+# sidecar CARRIES a `runtime` anchor (2026-01-09T00:00:00 UTC), so the effective
+# anchor resolves from the sidecar and the framework/LIFECYCLE columns
+# (`created_sim_time`, `deactivated_at`) land as wallclock TIMESTAMPs, NOT raw
+# sim-time ns. Domain `prop__*` columns are presentation-verbatim and are never
+# anchored — they stay in whatever units the scenario wrote them (after the
+# slice_only omission above, this bundle has no sim-time-valued `prop__` column
+# left in the base output). Add a `rebase:` block (see source.yaml) only to
+# override that origin instant or timezone; an emit with NO sidecar anchor and no
+# `rebase:` is the case where lifecycle columns stay raw BIGINT ns — see
+# docs/examples/parent-child/base.yaml for that contrast.
+
+mode: base

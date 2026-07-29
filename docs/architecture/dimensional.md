@@ -159,7 +159,7 @@ dim's `record_id`.
 
 | `grain` | Projectable columns (`from` / `correlation`) |
 |---|---|
-| `records` | `fork_path`, `record_id`, `active`, `deactivated_at`, `last_mutation_sim_time`; every `prop__<p>` of the kind |
+| `records` | `fork_path`, `record_id`, `presentation_id` (when the emit carries one), `created_sim_time`, `active`, `deactivated_at`, `last_mutation_sim_time`, `record_index`; every `prop__<p>` of the kind, and the `ref_index__<p>` sibling of each reference-typed property |
 | `history_point` | `fork_path`, `kind`, `record_id`, `property`, `sim_time`, `value` |
 | `history_interval` | the `history_point` surface **plus** the virtual `lead_sim_time` (the engine's `LEAD(sim_time)` interval end; `NULL` on a series' last row) |
 | `membership` | `fork_path`, `record_id`, `joined_sim_time`, `left_sim_time`; every `elem__<f>` element-field column; each reference field's `member__<f>__kind` / `member__<f>__id` pair |
@@ -167,6 +167,19 @@ dim's `record_id`.
 `lead_sim_time` is the only virtual (non-sidecar) entry; every other column is one the
 sidecar lists for that grain's table. A `from:` naming anything outside its grain's
 surface is a `ProjectionColumnExists` failure.
+
+**The surface is sidecar-resolved, not a fixed list.** Each row above spells out the
+shape the base-format contract guarantees for that grain, but the check itself is
+"does the sidecar declare this column on the grain's table?" — so identity and
+lifecycle columns project like any other, and a producer's additional columns (e.g.
+opt-in provenance) become projectable without a change here. Read the emit's sidecar,
+not this table, for what a *particular* emit offers.
+
+**Projecting a column is not the same as anchoring on it.** A column being projectable
+via `from:` does not make it a legal `derived: {timestamp: {source: ...}}` source: the
+timestamp-source set is a separate, narrower per-grain set (§ Timestamp source and the
+runtime anchor). The two surfaces genuinely differ — an author who can read a column
+raw may still be refused when asking to render it as wallclock.
 
 ### Role and SCD class
 
@@ -385,13 +398,30 @@ clean `ExportError`, never a raw SQL failure.
 
 ### Timestamp source and the runtime anchor
 
+A grain's timestamp sources are the instant-carrying structural columns of the
+grain's table category, resolved through the reader's structural-temporal surface
+([`reader.md`](reader.md) § The structural-temporal surface), plus the grain's
+virtual interval-end column where it defines one. The category mapping and the one
+virtual column are dimensional's own — both are dimensional concepts the contract
+does not define — but which structural columns carry an instant is never restated
+here.
+
 | `timestamp.source` | Availability |
 |---|---|
-| `last_mutation_sim_time` | Always present on `records` grains (default choice) |
+| `created_sim_time` | `records` grain — the record's birth instant |
+| `deactivated_at` | `records` grain — the record's close instant; `NULL` for a still-active row, which propagates to a `NULL` timestamp |
+| `last_mutation_sim_time` | `records` grain — the record's last-touched instant |
 | `prop__<t>` | A time-valued property column |
 | `sim_time` | The `history`-grain change time (the interval **start** on `history_interval`) |
-| `lead_sim_time` | `history_interval` grain only — the `LEAD(sim_time)` interval end; `NULL` on a series' last interval (open-ended), mirroring SCD-2 `valid_to` |
+| `lead_sim_time` | `history_interval` grain only — the `LEAD(sim_time)` interval end; `NULL` on a series' last interval (open-ended), mirroring SCD-2 `valid_to`. The one virtual (non-contract) source |
 | `joined_sim_time` / `left_sim_time` | `membership` grain only — the binding interval's join / leave time (`left_sim_time` `NULL` while still bound) |
+
+All three records instants render through one path: the renderer qualifies whatever
+column it is given and hands it to the anchor renderer, so each renders through the
+same expression and each falls back to the raw nanosecond integer when no anchor
+resolves. A `NULL` `deactivated_at` renders as a `NULL` timestamp rather than an
+error — the honest rendering, since the record has not closed, and the same
+treatment the membership grain gives a `NULL` `left_sim_time`.
 
 `derived: timestamp` renders through the resolved `EffectiveAnchor` — the one
 wallclock anchor `cmd_export` resolves for the invocation (see
@@ -673,7 +703,7 @@ error message. The remaining business rules run against the sidecar in
 | `DiscriminatorValueObserved` | A records `filter` value is among the kind's observed `enum_domains` values for that property (a notice, not an error — a declared-but-unobserved value yields an empty table; emitted as a `discriminator-value-unobserved` [`Notice`](notices.md) through the caller's sink). A property absent from `enum_domains` (e.g. a modelling discriminator like `decision_type`) carries no observed-value set, so its filter is not checked |
 | `SliceOnlyColumnRefused` | No config-referenced value-read resolves to a non-exempt `temporal_class: slice_only` column ([`slice-only.md`](slice-only.md)). The surface list is exhaustive over the grammar: `from`, `correlation`, records `filter` keys, `value_map.from`, `derived: timestamp` `source`, `derived: elapsed` `correlate_on` / `start_source` / `end_source` / `other_where` keys, `fk via: reference` resolved-path hop columns (the check runs over the hops the resolution actually traverses), `fk via: membership` `member_path` hop columns and `as_of`. (`lookup` reads are `LookupColumnSafety`'s. Membership element predicates and history-grain scoping are outside the population — those columns carry no class.) Always-on, full export included |
 | `OrdinalRefsSiblings` | `ordinal.partition_by` / `order_by` name sibling output columns of the same table |
-| `TimestampSourceAvailable` | Each `derived: timestamp`'s `source` is available on the table's grain (§ Timestamp source) |
+| `TimestampSourceAvailable` | Each `derived: timestamp`'s `source` is available on the table's grain: an instant-carrying structural column of the grain's table category (resolved through the reader's structural-temporal surface, not a private list), the grain's virtual interval-end column where the grain defines one, or a `prop__<name>` present on the grain's projectable surface (§ Timestamp source) |
 | `Scd2NeedsHistory` | An `scd: type2` table declares a `valid_from` `scd_window` column in `key`, the emit carries the `history_tracked` flag, and the kind has at least one tracked column (flag-authoritative; a tracked-but-unchanged column qualifies). A flag-absent emit is refused — re-emit with `history_tracked` — never reconstructed by `history`-table inference |
 | `LookupColumnSafety` | A `lookup` column resolves and reads only temporally exact data: the terminal `records__<kind>` table and its `prop__<property>` exist; a unique reference path resolves from the anchor kind to `to` (or the `path` hint validates hop-by-hop); the terminal property plus every traversed hop column are `temporal_class: constant` (the exempt discriminator excepted, any class — § Lookup); a zero-hop self lookup is not on a `records` grain (redundant with `from`); and the table is not `scd: type2` (the SCD-2 wide builder does not project lookup columns) |
 | `ExcludedKindNotSourced` | No declared table sources an `exclude.kinds` kind |

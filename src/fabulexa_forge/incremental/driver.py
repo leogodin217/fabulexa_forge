@@ -26,7 +26,11 @@ from fabulexa_forge.errors import (
     IncrementalFingerprintMismatch,
     IncrementalRangeTargetExists,
 )
-from fabulexa_forge.exporters.query_spec import query_spec_output_name
+from fabulexa_forge.exporters.query_spec import (
+    declare_keys_active,
+    keys_not_declarable_csv_notice,
+    query_spec_output_name,
+)
 from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
     Cursor,
@@ -145,7 +149,10 @@ def export_window(
 
     One invocation compiles exactly once — an explicit --from/--to range is
     a single range-window — so every plan notice reaches notice_sink once,
-    with no forwarding or dedup logic.
+    with no forwarding or dedup logic. When the mode section in play has
+    `declare_keys` on and fmt is 'csv', `keys_not_declarable_csv_notice()`
+    is emitted here, once, before any data is written — never in the
+    compiles, the dispatch, or the writers.
 
     Args:
         emit: The open emit.
@@ -198,6 +205,9 @@ def export_window(
         specs = build_query_specs(
             emit, config.dimensional, anchor, window, notice_sink, base_relations=None
         )
+
+    if fmt == "csv" and declare_keys_active(config):
+        notice_sink(keys_not_declarable_csv_notice())
 
     if fmt == "duckdb":
         return write_duckdb_window(emit, specs, out, window, fingerprint)

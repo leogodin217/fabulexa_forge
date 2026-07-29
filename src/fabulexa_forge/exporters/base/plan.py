@@ -5,17 +5,19 @@ resolution.
 read beyond the sidecar. It applies, in order: (1) enumeration of every
 records-category kind in the sidecar (base classifies nothing — no genre
 trichotomy, no sub-type split); (2) `exclude`; (3) operational presentation
-defaults (prefix-stripped table name, `record_id -> id`); (4) `rename`; (5) the
-collision and reserved-name checks. See
+defaults (prefix-stripped table name, `record_id -> id`, `record_index ->
+<kind>_key`, and per surviving reference edge `ref_index__<p> -> <p>_key`);
+(4) `rename`; (5) the collision and reserved-name checks. See
 `docs/architecture/base.md` for the semantics this module implements
 (no horizon here — render.py's concern).
 
 Layer-direction invariant: imports only the reader, the derivations layer
 (the state-at derivation's column order / presentation-id helpers),
 fabulexa_forge.errors, the mode-neutral reserved_names, notices (for
-`Notice`, and `NoticeSink` TYPE_CHECKING-only), and slice_only modules,
-config.models (TYPE_CHECKING only), and stdlib. Never imports
-exporters.dimensional.*, exporters.source.*, or exporters.streaming.*.
+`Notice`, and `NoticeSink` TYPE_CHECKING-only), the mode-neutral query_spec
+module (for `TableKeys`), and slice_only modules, config.models
+(TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.*,
+exporters.source.*, or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -40,6 +42,7 @@ from fabulexa_forge.errors import (
     ExportError,
 )
 from fabulexa_forge.exporters.notices import Notice
+from fabulexa_forge.exporters.query_spec import TableKeys
 from fabulexa_forge.exporters.reserved_names import (
     RESERVED_PRESENTATION_COLUMN_NAME,
     is_reserved_column_name,
@@ -52,6 +55,27 @@ _PROP_PREFIX = "prop__"
 
 #: The `records__<kind>` name prefix stripped for base's default table name.
 _RECORDS_PREFIX = "records__"
+
+
+@dataclass(frozen=True)
+class ReferenceKey:
+    """One surviving reference property's index-space edge, resolved at plan time.
+
+    Present only for edges that yield a key column in this emit: a property
+    omitted by the `slice_only` policy, or one whose target kind has no records
+    table, produces no entry.
+    """
+
+    property_name: str
+    """The bare property name — the edge key's default output name stem."""
+    target_kind: str
+    """The referenced records kind, from the property's sidecar `references`."""
+
+
+#: Emitted when a reference property's target kind has no records table in the
+#: emit, so no index-space key column can be produced for that edge. The
+#: id-space column is unaffected.
+NOTICE_REFERENCE_KEY_TARGET_ABSENT = "reference-key-target-absent"
 
 
 @dataclass(frozen=True)
@@ -68,9 +92,14 @@ class BaseTableSpec:
     has_presentation_id: bool
     """Whether the kind carries presentation_id — drives base's own projection and
     rename of that column in the wrapper (the state-at builder decides for itself)."""
+    reference_keys: tuple[ReferenceKey, ...]
+    """Surviving reference edges that yield a key column, in sidecar
+    column-declaration order of their `prop__<p>` columns. Empty when the kind
+    has no reference property, or none that survives."""
     column_renames: "Mapping[str, str]"
-    """State-at column identity -> output name; includes the `record_id -> id`
-    default unless a `rename` entry overrides it."""
+    """State-at column identity -> output name; includes the `record_id -> id`,
+    `record_index -> <kind>_key`, and one `ref_index__<p> -> <p>_key` per
+    `reference_keys` entry defaults, each overridable by a `rename` entry."""
 
 
 @dataclass(frozen=True)
@@ -233,6 +262,109 @@ def _state_at_identities(properties: frozenset[str], has_pid: bool) -> tuple[str
 
 
 # ---------------------------------------------------------------------------
+# Reference-edge resolution
+# ---------------------------------------------------------------------------
+
+
+def _known_records_tables(sidecar: "Sidecar") -> frozenset[str]:
+    """The `records__<kind>` table names present in the sidecar.
+
+    The domain a reference property's target kind is checked against to
+    decide whether its edge key can be produced in this emit.
+
+    Args:
+        sidecar: The open emit's sidecar.
+
+    Returns:
+        Every records-category table name in the sidecar.
+    """
+    return frozenset(
+        table.name for table in sidecar.tables() if table.category == "records"
+    )
+
+
+def _reference_key_target_absent_notice(
+    kind: str, property_name: str, target_kind: str
+) -> Notice:
+    """Build the 'reference-key-target-absent' notice for one kind x property.
+
+    Args:
+        kind: The record kind owning the reference property.
+        property_name: The bare reference property name.
+        target_kind: The property's referenced kind, absent from the sidecar.
+
+    Returns:
+        The rendered Notice, naming the kind, the property, and the absent
+        target kind.
+    """
+    return Notice(
+        code=NOTICE_REFERENCE_KEY_TARGET_ABSENT,
+        message=(
+            f"kind '{kind}': property '{property_name}' references kind"
+            f" '{target_kind}', which has no records table in this emit;"
+            " no key column produced for this edge"
+        ),
+    )
+
+
+def _resolve_reference_keys(
+    sidecar: "Sidecar",
+    kind: str,
+    properties: frozenset[str],
+    known_records_tables: frozenset[str],
+    notice_sink: "NoticeSink",
+) -> tuple[ReferenceKey, ...]:
+    """Resolve one kind's surviving reference properties to `ReferenceKey` entries.
+
+    Walks `records__<kind>`'s `prop__` columns in sidecar declaration order,
+    selecting those in the kind's surviving property set that carry a sidecar
+    `references` annotation. A property whose target kind has no records table
+    in the sidecar yields no entry and one `reference-key-target-absent`
+    notice instead (the id-space column is unaffected).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The record kind.
+        properties: The kind's surviving bare property names (post `slice_only`).
+        known_records_tables: Every `records__<kind>` table name in the sidecar.
+        notice_sink: Receiver for `reference-key-target-absent` notices.
+
+    Returns:
+        `ReferenceKey` entries, in sidecar `prop__` column-declaration order.
+    """
+    table = f"{_RECORDS_PREFIX}{kind}"
+    keys: list[ReferenceKey] = []
+    for col in sidecar.columns(table):
+        if not col.name.startswith(_PROP_PREFIX) or col.references is None:
+            continue
+        prop = col.name[len(_PROP_PREFIX) :]
+        if prop not in properties:
+            continue
+        target_kind = col.references
+        if f"{_RECORDS_PREFIX}{target_kind}" not in known_records_tables:
+            notice_sink(_reference_key_target_absent_notice(kind, prop, target_kind))
+            continue
+        keys.append(ReferenceKey(property_name=prop, target_kind=target_kind))
+    return tuple(keys)
+
+
+def _key_identities(reference_keys: tuple[ReferenceKey, ...]) -> tuple[str, ...]:
+    """The record-index rename/output identities a kind's table carries.
+
+    Args:
+        reference_keys: The kind's resolved surviving reference edges.
+
+    Returns:
+        `record_index`, then one `ref_index__<p>` per reference key, in
+        `reference_keys` order.
+    """
+    return (
+        "record_index",
+        *(f"ref_index__{rk.property_name}" for rk in reference_keys),
+    )
+
+
+# ---------------------------------------------------------------------------
 # rename resolution
 # ---------------------------------------------------------------------------
 
@@ -256,11 +388,32 @@ def _slice_only_omission_notice(kind: str, column_name: str) -> Notice:
     )
 
 
+def _default_column_renames(
+    kind: str, reference_keys: tuple[ReferenceKey, ...]
+) -> dict[str, str]:
+    """The kind's default column-rename map, before any `rename` entry override.
+
+    Args:
+        kind: The record kind (drives the self key's default name).
+        reference_keys: The kind's resolved surviving reference edges (drive
+            each edge key's default name).
+
+    Returns:
+        `record_id -> id`, `record_index -> <kind>_key`, and one
+        `ref_index__<p> -> <p>_key` per reference key.
+    """
+    renames = {"record_id": "id", "record_index": f"{kind}_key"}
+    for rk in reference_keys:
+        renames[f"ref_index__{rk.property_name}"] = f"{rk.property_name}_key"
+    return renames
+
+
 def _resolve_naming(
     kind: str,
     matched_entry: "RenameEntry | None",
     valid_identities: frozenset[str],
     omitted: frozenset[str],
+    reference_keys: tuple[ReferenceKey, ...],
 ) -> tuple[str, dict[str, str]]:
     """Resolve one kind's output table name and column-rename map.
 
@@ -268,19 +421,25 @@ def _resolve_naming(
         kind: The record kind (its default table name).
         matched_entry: The rename entry targeting this kind's `records__<kind>`
             table, or None when unrenamed.
-        valid_identities: The kind's full state-at column identity set (§
-            `_state_at_identities`), against which a `columns` key is checked.
-        omitted: The kind's `slice_only`-omitted prop__ column names.
+        valid_identities: The kind's full state-at + key column identity set
+            (§ `_state_at_identities`, § `_key_identities`), against which a
+            `columns` key is checked.
+        omitted: The kind's `slice_only`-omitted identities — `prop__` column
+            names and their `ref_index__` shadow identities.
+        reference_keys: The kind's resolved surviving reference edges, driving
+            the edge-key rename defaults.
 
     Returns:
         The resolved output table name and the column-rename map (always
-        carrying `record_id -> id`, overridable).
+        carrying the `record_id -> id`, `record_index -> <kind>_key`, and
+        per-edge `ref_index__<p> -> <p>_key` defaults, each overridable).
 
     Raises:
         BaseRenameSliceOnly: A `columns` key names an omitted `slice_only` column.
-        BaseRenameUnresolved: A `columns` key is not a state-at column identity.
+        BaseRenameUnresolved: A `columns` key is not a state-at or key column
+            identity.
     """
-    column_renames: dict[str, str] = {"record_id": "id"}
+    column_renames = _default_column_renames(kind, reference_keys)
     if matched_entry is None:
         return kind, column_renames
 
@@ -312,22 +471,24 @@ def _resolve_specs(
     """Resolve every surviving kind's default naming, then apply matching
     rename entries.
 
-    The emission point for `slice-only-column-omitted`: per kind, computes the
-    omitted set and emits one notice per kind x column, kind order then
-    sidecar column order, before rename resolution and spec assembly.
+    The emission point for `slice-only-column-omitted` and
+    `reference-key-target-absent`: per kind, computes the omitted set and the
+    resolved reference keys and emits their notices, kind order then sidecar
+    column order, before rename resolution and spec assembly.
 
     Args:
         sidecar: The open emit's sidecar.
         kinds: The classified, exclude-filtered kinds.
         rename: The base.rename entries, or None.
-        notice_sink: Receiver for slice-only-column-omitted notices.
+        notice_sink: Receiver for slice-only-column-omitted and
+            reference-key-target-absent notices.
 
     Returns:
         One BaseTableSpec per kind, in kind order.
 
     Raises:
         BaseRenameSliceOnly: A rename entry's columns key names a
-            policy-omitted slice_only column.
+            policy-omitted slice_only column or its ref_index__ shadow.
         BaseRenameUnresolved: A rename entry's table does not match any
             surviving kind, or one of its columns keys is unresolved.
         TemporalClassUnavailableError: Propagated from the omitted-column scan.
@@ -337,6 +498,8 @@ def _resolve_specs(
         for entry in rename:
             rename_by_table[entry.table] = entry
 
+    known_records_tables = _known_records_tables(sidecar)
+
     matched_tables: set[str] = set()
     specs: list[BaseTableSpec] = []
     for kind in kinds:
@@ -345,16 +508,28 @@ def _resolve_specs(
         for column_name in omitted_names:
             notice_sink(_slice_only_omission_notice(kind, column_name))
         omitted = frozenset(omitted_names)
+        omitted_ref_index_shadow = frozenset(
+            f"ref_index__{name[len(_PROP_PREFIX) :]}" for name in omitted
+        )
 
         properties = _surviving_properties(sidecar, kind)
         has_pid = has_presentation_id(sidecar, kind)
-        valid_identities = frozenset(_state_at_identities(properties, has_pid))
+        reference_keys = _resolve_reference_keys(
+            sidecar, kind, properties, known_records_tables, notice_sink
+        )
+        valid_identities = frozenset(
+            _state_at_identities(properties, has_pid)
+        ) | frozenset(_key_identities(reference_keys))
 
         matched_entry = rename_by_table.get(table)
         if matched_entry is not None:
             matched_tables.add(table)
         name, column_renames = _resolve_naming(
-            kind, matched_entry, valid_identities, omitted
+            kind,
+            matched_entry,
+            valid_identities,
+            omitted | omitted_ref_index_shadow,
+            reference_keys,
         )
 
         specs.append(
@@ -363,6 +538,7 @@ def _resolve_specs(
                 table_name=name,
                 properties=properties,
                 has_presentation_id=has_pid,
+                reference_keys=reference_keys,
                 column_renames=column_renames,
             )
         )
@@ -390,11 +566,13 @@ def _output_columns(spec: BaseTableSpec) -> tuple[str, ...]:
         spec: The resolved output table spec.
 
     Returns:
-        One output name per state-at identity the kind carries, with
-        `spec.column_renames` applied (falling back to the raw identity name
-        when unrenamed).
+        One output name per state-at identity the kind carries, then one per
+        key identity (§ `_key_identities`), with `spec.column_renames` applied
+        (falling back to the raw identity name when unrenamed).
     """
-    identities = _state_at_identities(spec.properties, spec.has_presentation_id)
+    identities = _state_at_identities(
+        spec.properties, spec.has_presentation_id
+    ) + _key_identities(spec.reference_keys)
     return tuple(spec.column_renames.get(identity, identity) for identity in identities)
 
 
@@ -465,6 +643,57 @@ def _check_reserved_names(specs: tuple[BaseTableSpec, ...]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Key resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_base_table_keys(
+    sidecar: "Sidecar",
+    spec: BaseTableSpec,
+) -> TableKeys:
+    """Resolve one base flat table's declared keys from the sidecar alone.
+
+    Pure plan-time resolution (design doc § Key resolution per output table,
+    'base' row); the engine calls it only when `declare_keys` is on. The
+    primary key is the record-index self key's post-`rename` output name
+    (`column_renames['record_index']`); `unique` always contains the
+    record-id column's output name (`column_renames['record_id']`), plus the
+    `presentation_id` column's output name iff the block claims whole-column
+    uniqueness for the kind: a flat kind's `key` entry (every entry carries a
+    `unique_within`), or a partitioned kind's rollup with a non-None
+    `unique_within`. A kind absent from the block, or an absent block,
+    yields identity keys only. `unique_within` scope ('emit' vs 'branch') is
+    not surfaced — both are table-wide under the single-branch guard.
+
+    Args:
+        sidecar: The open emit's sidecar (claims read via
+            `sidecar.presentation_keys()` — strict-on-read applies).
+        spec: The resolved table spec (post-rename names in
+            `spec.column_renames`).
+
+    Returns:
+        The table's declared keys (never None — the base primary key is a
+        contract guarantee, claim or no claim).
+
+    Raises:
+        PresentationKeysInvalidError: The sidecar block is present and
+            incoherent (propagated from the accessor; plan-time, before any
+            output).
+    """
+    primary_key = (spec.column_renames["record_index"],)
+    unique: list[tuple[str, ...]] = [(spec.column_renames["record_id"],)]
+
+    presentation_keys = sidecar.presentation_keys()
+    if presentation_keys is not None and spec.kind in presentation_keys.kinds():
+        claim = presentation_keys.whole_table_claim(spec.kind)
+        if claim.unique_within is not None:
+            pid_out = spec.column_renames.get("presentation_id", "presentation_id")
+            unique.append((pid_out,))
+
+    return TableKeys(primary_key=primary_key, unique=tuple(unique))
+
+
+# ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 
@@ -482,27 +711,36 @@ def build_base_plan(
     Classifies nothing and reshapes nothing — every non-excluded records kind
     yields exactly one table whose columns are the kind's STATE_AT_COLUMNS with
     `slice_only` properties omitted (one `slice-only-column-omitted` notice each,
-    the discriminator carved out) and presentation names applied. Time selection
-    (end-of-tape vs a horizon) is supplied at render, not here, so the plan is
-    identical for a full, a sliced, and a windowed export.
+    the discriminator carved out) and presentation names applied. Also resolves
+    each kind's surviving reference properties (a `prop__<p>` carrying a sidecar
+    `references` annotation) to `ReferenceKey` entries; a property whose target
+    kind has no records table in the sidecar yields no entry and one
+    `reference-key-target-absent` notice instead (the id-space column is
+    unaffected). Time selection (end-of-tape vs a horizon) is supplied at
+    render, not here, so the plan is identical for a full, a sliced, and a
+    windowed export.
 
     Args:
         sidecar: The reader's narrowing view of `base.json`; source of kinds,
             declared property order, `temporal_class`, and `subtype_values`.
         config: The `base` section, or None for a bare current-state dump.
-        notice_sink: Required caller-supplied sink for omission notices.
+        notice_sink: Required caller-supplied sink for omission and
+            reference-key-target-absent notices.
 
     Returns:
         A `BasePlan`: one `BaseTableSpec` per surviving kind (output name, bare
-        property set, presentation_id flag, column-rename map), ready for
-        `build_base_render_sql` to render at a caller-chosen horizon. Column
-        emission order is fixed (STATE_AT_COLUMNS prefix, presentation_id, then
-        `prop__<p>` in sidecar declaration order), so it is derived, not stored.
+        property set, presentation_id flag, reference keys, column-rename map),
+        ready for `build_base_render_sql` to render at a caller-chosen horizon.
+        Column emission order is fixed (STATE_AT_COLUMNS prefix, presentation_id,
+        then `prop__<p>` in sidecar declaration order, key columns interleaved at
+        render), so it is derived, not stored.
 
     Raises:
-        BaseRenameSliceOnly: A `rename` entry names an omitted `slice_only` column.
+        BaseRenameSliceOnly: A `rename` entry names an omitted `slice_only`
+            column or its `ref_index__` shadow identity.
         BaseRenameUnresolved: A `rename` entry's `table` is not a surviving
-            `records__<kind>`, or a `columns` key is not a state-at column identity.
+            `records__<kind>`, or a `columns` key is not a state-at or key
+            column identity this emit actually produces.
         BaseExcludeUnresolved: An `exclude.kinds`/`exclude.tables` entry matches
             nothing base emits.
         BaseNameCollision: Two output tables, or two columns of one output table,

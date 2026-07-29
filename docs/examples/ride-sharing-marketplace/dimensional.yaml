@@ -1,0 +1,190 @@
+# ExportConfig — ride-sharing marketplace, dimensional mode (star schema)
+# ============================================================
+# `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/dimensional.yaml`
+#
+# Adapted from `fabulexa-forge init docs/examples/ride-sharing-marketplace/bundle`,
+# then curated against the atlas. This is a TWO-SIDED COUPLED MARKET, so the
+# star reflects both sides and the match that joins them. Curation decisions
+# (the author judgment init can't make):
+#
+#   SPLIT    actor -> fact_driver + fact_rider. record_roles declares actor a
+#            MERGED two-sided fact ({driver: fact, rider: fact}); the two sides
+#            share one wide records table keyed by the `actor_type` discriminator.
+#            Each side is its own fact, filtered on prop__actor_type, carrying
+#            only its own attributes (driver: strategy/vehicle/session_earnings;
+#            rider: propensity/loyalty_band/ride_count/contact). init proposed
+#            fact_actor_driver / fact_actor_rider with empty column lists — filled
+#            here and renamed to the market's own terms.
+#   DIM->T1  entity (zone_market): init proposed SCD-2 because demand_pressure /
+#            supply_pressure are history-tracked. Those are the per-zone surge
+#            SIGNAL — operational state that changes every tick, not a slowly-
+#            changing descriptive attribute. Dropped from the star (they live in
+#            source/stream); the zone dim is Type-1 constant reference data
+#            (name, selection weights, place). Mirrors the nhs resource.allocated
+#            judgment.
+#   FACT     pairing: the rider<->driver match record — the distinctive join of
+#            this marketplace. Kept as fact_pairing, carrying BOTH sides via its
+#            contract-true reference edges (requester->rider, counterpart->driver).
+#            fk: targets must be dimensions and both actor sides are facts, so the
+#            edges ride as plain record_id columns that join to fact_rider.id /
+#            fact_driver.id.
+#   DROPPED  journey_instance.bound_roles / output_roles — internal coupling
+#            bookkeeping (no references), opaque, not surfaced. That is the only
+#            AUTHOR drop. state_entry_time / complete are temporal_class:
+#            slice_only and are ALWAYS auto-omitted with a
+#            `slice-only-column-omitted` notice (not an error), in every mode,
+#            whatever this config declares — so they are simply not nameable
+#            here.
+#
+# SCD-2 dims kept where a genuine attribute versions over time: journey_instance
+# (current_state — the trip/session FSM). All FK targets are declared before the
+# facts that reference them.
+#
+# Timestamps: this emit's sidecar carries a `runtime` anchor (2026-01-09T00:00:00
+# UTC) and there is no `rebase:` override, so every `derived: {timestamp: ...}`
+# column below renders wallclock through that anchor. dim_journey_instance's
+# scd_window valid_from / valid_to are TIMESTAMP for the same reason, so each
+# fact carries an anchored `state_as_of` TIMESTAMP built from the grain record's
+# `last_mutation_sim_time` — the instant the row's state was last written. That
+# makes the facts point-in-time joinable against the SCD-2 dim:
+#   JOIN dim_journey_instance d ON f.id = d.actor
+#                              AND f.state_as_of >= d.valid_from
+#                              AND (d.valid_to IS NULL OR f.state_as_of < d.valid_to)
+# Projecting a raw BIGINT sim-time ns instead would make that comparison
+# type-incompatible and fan the fact out across every version.
+# (`last_mutation_sim_time` is the only sim-time column the `records` grain
+# exposes — see docs/architecture/dimensional.md § Projectable columns per grain.)
+
+mode: dimensional
+
+dimensional:
+  tables:
+    # --- dim: entity (zone_market) — Type-1 reference (pressure signals dropped) ---
+    - name: dim_entity
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: entity
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: entity_type, from: prop__entity_type}
+        - {name: name, from: prop__name}
+        - {name: origin_weight, from: prop__origin_weight}
+        - {name: dest_weight, from: prop__dest_weight}
+        - {name: base_weight, from: prop__base_weight}
+        - {name: place_city, from: prop__place_city}
+        - {name: place_subdivision, from: prop__place_subdivision}
+        - {name: place_postal_code, from: prop__place_postal_code}
+        - {name: place_area_code, from: prop__place_area_code}
+
+    # --- dim: journey_instance (trip / driver-session lifecycles) — SCD-2 on current_state ---
+    - name: dim_journey_instance
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: journey_instance
+      key: [id, valid_from]
+      columns:
+        - {name: id, from: record_id}
+        - {name: actor, from: prop__actor}          # references actor (a fact) -> plain col, not FK
+        - {name: journey_type, from: prop__journey_type}
+        - {name: current_state, from: prop__current_state}
+        - {name: valid_from, derived: {scd_window: valid_from}}
+        - {name: valid_to, derived: {scd_window: valid_to}}
+
+    # --- fact: driver (supply side) — actor sub-type split on actor_type ---
+    - name: fact_driver
+      role: fact
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: driver}          # keep only driver records
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: status, from: prop__status}
+        - {name: strategy, from: prop__strategy}
+        # Source column is prop__session_earnings, but the value is NOT money: it
+        # is a BIGINT counter 0..10 that the atlas describes as "credited as it
+        # completes rides" and that history shows advancing 0,1,2,... by exactly
+        # one per completed trip. Renamed so the output name matches the value;
+        # the value itself is projected verbatim.
+        - {name: session_rides_completed, from: prop__session_earnings}
+        - {name: driver_id, from: prop__driver_id}
+        - {name: full_name, from: prop__full_name}
+        - {name: vehicle_make, from: prop__vehicle_make}
+        - {name: vehicle_model, from: prop__vehicle_model}
+        - {name: vehicle_year, from: prop__vehicle_year}
+        - {name: vehicle_color, from: prop__vehicle_color}
+        - {name: license_plate, from: prop__license_plate}
+        # two references to entity -> path disambiguates current zone vs home base
+        - {name: zone_id, fk: {to: dim_entity, via: reference, path: [prop__zone]}}
+        - {name: base_zone_id, fk: {to: dim_entity, via: reference, path: [prop__base_zone]}}
+        # Anchored wallclock instant this driver row's state was last written —
+        # the effective date for point-in-time joins (see header).
+        - {name: state_as_of, derived: {timestamp: {source: last_mutation_sim_time}}}
+
+    # --- fact: rider (demand side) — actor sub-type split on actor_type ---
+    - name: fact_rider
+      role: fact
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: rider}           # keep only rider records
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        - {name: presentation_id, from: presentation_id}
+        - {name: status, from: prop__status}
+        - {name: propensity, from: prop__propensity}
+        - {name: ride_count, from: prop__ride_count}
+        - {name: loyalty_band, from: prop__loyalty_band}
+        - {name: account_id, from: prop__account_id}
+        - {name: first_name, from: prop__first_name}
+        - {name: last_name, from: prop__last_name}
+        - {name: email, from: prop__email}
+        - {name: phone, from: prop__phone}
+        - {name: date_of_birth, from: prop__date_of_birth}
+        - {name: home_street, from: prop__home_street}
+        - {name: home_state, from: prop__home_state}
+        - {name: home_place_city, from: prop__home_place_city}
+        - {name: home_place_subdivision, from: prop__home_place_subdivision}
+        - {name: home_place_postal_code, from: prop__home_place_postal_code}
+        - {name: home_place_area_code, from: prop__home_place_area_code}
+        - {name: payment_card, from: prop__payment_card}
+        - {name: app_user_agent, from: prop__app_user_agent}
+        # two references to entity -> path disambiguates current zone vs destination
+        - {name: zone_id, fk: {to: dim_entity, via: reference, path: [prop__zone]}}
+        - {name: dest_zone_id, fk: {to: dim_entity, via: reference, path: [prop__dest_zone]}}
+        # Anchored wallclock instant this rider row's state was last written —
+        # the effective date for point-in-time joins (see header).
+        - {name: state_as_of, derived: {timestamp: {source: last_mutation_sim_time}}}
+
+    # --- fact: pairing (rider<->driver match) — grain: one match ---
+    - name: fact_pairing
+      role: fact
+      source:
+        grain: records
+        kind: pairing
+      key: [id]
+      columns:
+        - {name: id, from: record_id}
+        # Both sides of the match. An fk: target must be a DIMENSION; the two
+        # actor sides are FACTS (sub-type split), so these ride as plain
+        # reference columns carrying the matched record_id — join rider_id ->
+        # fact_rider.id and driver_id -> fact_driver.id.
+        - {name: rider_id, from: prop__requester}      # references actor (always a rider)
+        - {name: driver_id, from: prop__counterpart}   # references actor (always a driver)
+        - {name: match_type, from: prop__match_type}
+        # Anchored wallclock instant this match row was last written — the
+        # effective date for point-in-time joins (see header). Every pairing here
+        # is deactivated, and for all 5109 rows last_mutation_sim_time equals
+        # deactivated_at, so on this fact `state_as_of` is the instant the match
+        # closed. `created_sim_time` (the instant it opened) is not projectable on
+        # the `records` grain, so the match's open instant is not available here.
+        - {name: state_as_of, derived: {timestamp: {source: last_mutation_sim_time}}}

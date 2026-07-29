@@ -5,6 +5,9 @@ second mode (source) can compile to the same writer-ready shape without
 importing across mode boundaries (exporters.source must never import
 exporters.dimensional, or vice versa). `write_query_specs` is the shared
 full-export write dispatch every mode's `export_*` entry point calls.
+`keys_not_declarable_csv_notice` is the shared notice the base and source
+full-export entry paths, and the incremental driver, all emit identically
+when `declare_keys` meets a CSV target.
 """
 
 from __future__ import annotations
@@ -12,10 +15,31 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
+from fabulexa_forge.exporters.notices import Notice
+
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.reader.emit import Emit
+
+
+@dataclass(frozen=True)
+class TableKeys:
+    """Declared key metadata for one compiled output table.
+
+    Column names are post-`rename` output names. Carried by `QuerySpec`;
+    materialized as constraints by the DuckDB writer, reported as
+    undeliverable by the CSV dispatch.
+
+    A table with nothing to declare carries `QuerySpec.keys = None`, never
+    an empty `TableKeys`: every constructed instance has a non-empty
+    `primary_key` (the resolution table always yields one), while `unique`
+    may be empty (no block claim → identity keys only).
+    """
+
+    primary_key: tuple[str, ...]
+    unique: tuple[tuple[str, ...], ...]
 
 
 @dataclass(frozen=True)
@@ -33,6 +57,55 @@ class QuerySpec:
     write_mode: Literal["create", "append", "replace"]
     view_name: str | None
     view_sql: str | None
+    keys: TableKeys | None = None
+
+
+NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"
+"""The notice code 'keys-not-declarable-csv'."""
+
+
+def keys_not_declarable_csv_notice() -> Notice:
+    """The one notice a declare_keys-under-CSV invocation emits.
+
+    Shared by the base and source full-export entry paths and the incremental
+    driver so all three emit an identical, deterministic message: CSV carries
+    no constraint surface, the data is unchanged, and the declaration is
+    dropped for this invocation.
+
+    Returns:
+        A Notice with code NOTICE_KEYS_NOT_DECLARABLE_CSV and a fully
+        rendered, self-contained message.
+    """
+    return Notice(
+        code=NOTICE_KEYS_NOT_DECLARABLE_CSV,
+        message=(
+            "declare_keys is on, but CSV carries no constraint surface: the"
+            " data is unchanged, and the key declaration is dropped for this"
+            " invocation"
+        ),
+    )
+
+
+def declare_keys_active(config: "ExportConfig") -> bool:
+    """Whether the config's mode section has `declare_keys` on.
+
+    Dispatches on `config.mode` to the matching section — dimensional carries
+    no `declare_keys` field, so it is always off. Absent section or absent/
+    False `declare_keys` is off: `declare_keys` is never invented, only read
+    from config. Shared by the base engine, source engine, and incremental
+    driver so all three read the same semantic-default posture.
+
+    Args:
+        config: The validated export config.
+
+    Returns:
+        True iff the mode-matching section is present and declare_keys is True.
+    """
+    if config.mode == "base":
+        return config.base is not None and config.base.declare_keys is True
+    if config.mode == "source":
+        return config.source is not None and config.source.declare_keys is True
+    return False
 
 
 def query_spec_output_name(spec: QuerySpec) -> str:
@@ -88,7 +161,8 @@ def write_query_specs(
     if fmt == "duckdb":
         from fabulexa_forge.writers.duckdb import write_duckdb
 
-        return write_duckdb(emit, queries, out)
+        keys = {spec.table_name: spec.keys for spec in specs if spec.keys is not None}
+        return write_duckdb(emit, queries, out, keys)
 
     from fabulexa_forge.writers.csv import write_csv
 

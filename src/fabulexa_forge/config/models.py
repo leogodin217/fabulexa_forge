@@ -520,13 +520,21 @@ class SourceConfig(StrictBaseModel):
     rename: list[RenameEntry] | None = None
     """Per-table output-name overrides."""
     change_delivery: Literal["changelog", "snapshot"] = "changelog"
-    """How change-log-genre kinds deliver: the wide CDC table (default), or periodic
-    full-table snapshots at each window horizon. `snapshot` requires a windowed
-    invocation. Participates in the incremental fingerprint."""
+    """How change-log-genre kinds deliver: the wide CDC table (default), or
+    full-table snapshots — one per window horizon under a windowed invocation,
+    one at the tape's end in a full export. Participates in the incremental
+    fingerprint."""
+    declare_keys: bool | None = None
+    """Emit declared key constraints (PK/UNIQUE) for the DuckDB writer,
+    resolved from the sidecar's presentation_keys registry. Absent or False
+    -> off (a semantic default 'off', mirroring `slice_at` — not an invented
+    mapping value). Ignored under CSV: a keys-not-declarable-csv notice is
+    emitted instead."""
 
     @model_validator(mode="after")
     def at_least_one_field(self) -> Self:
-        """A present `source` section sets at least one of exclude / rename.
+        """A present `source` section sets at least one of exclude / rename /
+        declare_keys.
 
         Raises:
             ValueError: No field was explicitly set (source: {} is not
@@ -534,8 +542,8 @@ class SourceConfig(StrictBaseModel):
         """
         if not self.model_fields_set:
             raise ValueError(
-                "source section must set at least one of exclude / rename"
-                " (an empty source: {} block is not meaningful;"
+                "source section must set at least one of exclude / rename /"
+                " declare_keys (an empty source: {} block is not meaningful;"
                 " omit the section for a bare full dump)"
             )
         return self
@@ -577,19 +585,26 @@ class BaseConfig(StrictBaseModel):
     slice_at: int | None = None
     """Inclusive point-in-time horizon (sim-time ns). Absent -> tape's end.
     Mutually exclusive with `incremental` (enforced on ExportConfig)."""
+    declare_keys: bool | None = None
+    """Emit declared key constraints (PK/UNIQUE) for the DuckDB writer,
+    resolved from the sidecar's presentation_keys registry. Absent or False
+    -> off (a semantic default 'off', mirroring `slice_at` — not an invented
+    mapping value). Ignored under CSV: a keys-not-declarable-csv notice is
+    emitted instead."""
 
     @model_validator(mode="after")
     def at_least_one_field(self) -> Self:
-        """A present `base` section sets at least one of exclude/rename/slice_at.
+        """A present `base` section sets at least one of
+        exclude/rename/slice_at/declare_keys.
 
         Raises:
             ValueError: An empty `base: {}` block; omit the section instead.
         """
         if not self.model_fields_set:
             raise ValueError(
-                "base section must set at least one of exclude / rename / slice_at"
-                " (an empty base: {} block is not meaningful;"
-                " omit the section for a bare current-state dump)"
+                "base section must set at least one of exclude / rename /"
+                " slice_at / declare_keys (an empty base: {} block is not"
+                " meaningful; omit the section for a bare current-state dump)"
             )
         return self
 

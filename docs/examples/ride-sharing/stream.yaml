@@ -19,6 +19,6 @@ content: state-changes
 
 kinds:
   - kind: actor
-    properties: [status, surge_tier]
+    properties: [status]
   - kind: journey_instance
-    properties: [current_state, complete]
+    properties: [current_state]

@@ -1,8 +1,9 @@
 """The truncated-tape surface: relation builders and sidecar view for T.
 
-Four relation builders (history, membership, records, and the records builder's
-ref_index__ re-derivation) and one sidecar view presenting the emit as if its
-slice ended at `at_sim_time` (inclusive). Each builder returns a complete
+Three relation builders (history, membership, records — the last re-deriving
+each ref_index__ column as part of its recipe) and one sidecar view presenting
+the emit as if its slice ended at `at_sim_time` (inclusive). Each builder
+returns a complete
 SELECT that replaces its base table inside a mode's full-export compile
 (§ Shaped state, docs/architecture/pending/playback.md); totality over
 structurally-conformant input holds as for the folds. Unlike the folds' point-
@@ -457,6 +458,7 @@ def build_truncated_sidecar(sidecar: Sidecar) -> Sidecar:
     new_tables = tuple(
         _truncate_table_columns(sidecar, table) for table in sidecar.tables()
     )
+    presentation_keys_raw = sidecar.raw.get("presentation_keys")
     return Sidecar(
         raw=sidecar.raw,
         base_format_version=sidecar.base_format_version,
@@ -467,4 +469,7 @@ def build_truncated_sidecar(sidecar: Sidecar) -> Sidecar:
         enum_domains=sidecar.enum_domains(),
         record_roles=sidecar.record_roles(),
         sub_type_columns=sidecar.sub_type_columns(),
+        presentation_keys_raw=(
+            presentation_keys_raw if isinstance(presentation_keys_raw, dict) else None
+        ),
     )

@@ -112,6 +112,13 @@ must *agree* is stronger than a shared import that cannot disagree (see Rational
 decode direction is documented as the reader's contract — see [`reader.md`](reader.md)
 § Typed `prop__` columns.
 
+NULL is decoded-value equality's edge case, handled before the codec runs: a
+never-supplied tracked property reads NULL in its genesis `history.value` and in its
+`records__` cell alike (contract § Cross-table round-trip), so latest-pre-slice NULL
+against a NULL records cell passes without invoking `to_csv_text` (there is no NULL
+form to encode). NULL against a non-NULL cell, or a non-NULL series value against a
+NULL cell, is a round-trip mismatch — the decoded values differ.
+
 ### C1 and the unknown-top-level carve-out
 
 C1 validates `Sidecar.raw` against the vendored JSON Schema. The vendored contract
@@ -129,6 +136,14 @@ rejected by this reader.
 `record_roles` is a *known* top-level property of the vendored schema, so C1
 validates it directly and it never reaches the carve-out. The carve-out governs only
 genuinely unknown future top-level fields.
+
+C1's schema check carries a `category` enum clause that no emit reaches: a table
+`category` outside `{fixed, records, membership}` refuses at the reader's structural
+floor, so such an emit never opens and `validate` surfaces the sidecar-parse refusal
+instead of a `CheckResult` — the same observable behavior as a *missing* `category`
+([`reader.md`](reader.md) § The structural-temporal surface). C1 validates against the
+vendored schema with that clause intact; the diagnosis of an out-of-set category
+simply sits at the structural floor rather than in conformance.
 
 The mechanism, kept as a normative algorithm:
 
@@ -159,7 +174,7 @@ direct validation of the unmodified schema and drops step 1.
 | C3 | Required tables present; table names well-formed per category | `history` is the only required fixed-category table; `records__<kind>` and `membership__<kind>__<property>` name composition matches `record_kind`/`property`. A required-but-`None` `record_kind`/`property` is a name-composition mismatch → C3 fails |
 | C4 | `history` cols 1–6 match the spec exactly (names + types + order) | vs the pinned spec (PS) — the single place spec column lists are restated, solely to check |
 | C5 | `records__K`: cols 1–2 are `(fork_path, record_id)`; an optional `presentation_id` at col 3; the 4-col lifecycle prefix `(created_sim_time, active, deactivated_at, last_mutation_sim_time)` at its (possibly shifted) position; `record_index` (`BIGINT`) immediately after; then, per scalar property in declaration order, `prop__<name>` followed immediately by `ref_index__<name>` iff that property's sidecar entry carries `references` (§ C5 — the records layout) | categorized *shape* of the sidecar `ColumnSpec` list, classified through the reader's records-column taxonomy; declaration order is the producer's guarantee carried by the catalog order, not independently re-derived; C2 is the sole carrier of catalog↔sidecar agreement |
-| C6 | history-tracked property round-trip, **exhaustively** | driven by `history`: for every `(fork_path, kind, record_id, property)` series, the latest pre-slice `history.value` text == `to_csv_text(records cell)` at the same `(fork_path, record_id)`. "Latest pre-slice" = greatest `sim_time` `≤` `BranchEntry.slice_at` (sidecar-sourced, **not** `MAX(sim_time)`). A prop column outside `{BIGINT,DOUBLE,BOOLEAN,VARCHAR}` is not text-round-trippable → recorded in `skips`. Exhaustive, not sampled, so the determinism invariant holds without inventing a sample size |
+| C6 | history-tracked property round-trip, **exhaustively** | driven by `history`: for every `(fork_path, kind, record_id, property)` series, the latest pre-slice `history.value` decodes to the same value as the records cell at the same `(fork_path, record_id)` — text-compared via `to_csv_text(records cell)` when both are non-NULL; NULL against NULL passes (a never-supplied tracked property), NULL against non-NULL (either direction) fails. "Latest pre-slice" = greatest `sim_time` `≤` `BranchEntry.slice_at` (sidecar-sourced, **not** `MAX(sim_time)`). A prop column outside `{BIGINT,DOUBLE,BOOLEAN,VARCHAR}` is not text-round-trippable → recorded in `skips`. Exhaustive, not sampled, so the determinism invariant holds without inventing a sample size |
 | C7 | NULL all-or-none on column groups | `records__K.deactivated_at` NULL iff `active`; each membership reference pair `(member__f__kind, member__f__id)` all-NULL or all-non-NULL |
 | C8 | Exactly one branch, and the single distinct `fork_path` across all tables equals that branch's | `branches` has exactly one entry; the union of distinct `fork_path` per table equals the single sidecar `fork_path`; `parent` is **not** constrained |
 | C9 | If `pinned_ids` present: each `(kind,label,id)` resolves to exactly one row per `(id × fork_path present in that table)` | exhaustive over `pinned_ids`; per-branch quantifier. An absent `records__<kind>` for a pinned kind is a C9 *failure* — a pin must resolve |
@@ -167,7 +182,7 @@ direct validation of the unmodified schema and drops step 1.
 | C11 | `history_tracked` validity, **bidirectional** (semantic check, classed with C6/C7/C10) | Forward clause: for each distinct `(kind, property)` pair in `history`, the `prop__<property>` column on `records__<kind>` must carry `history_tracked == true` in the sidecar. Converse clause: for each `records__<kind>` with at least one row, each `prop__` column flagged `history_tracked: true` has at least one `history` row for `(kind, property)` — zero rows violates the unconditional creation seed (see [`bundle.md`](bundle.md) § Column temporal classes). The converse consults only flagged columns whose declared type is round-trippable (`{BIGINT, DOUBLE, BOOLEAN, VARCHAR}`, the same gate C6 uses — collection-struct properties emit membership tables, not `history` rows); the forward clause needs no gate. Skips when no records-category `prop__` column carries `history_tracked`; iterates in sorted order for deterministic messages |
 | C12 | Record-role registry consistency (semantic check, classed with C6/C7/C9/C10/C11) | every emitted records-category kind appears in `record_roles`; every role value is in `{"dimension","fact"}`; every distinct `prop__actor_type` in `records__actor` data is declared in `record_roles["actor"]`. Coverage, not exactness — the `actor` object MAY declare unused sub-types. Skips when `record_roles` is absent (below) |
 | C13 | Temporal-class consistency: the attribute pairing, the enum, the implications, and the genesis row (below) | Structural clauses over every records-category `prop__` column: `history_tracked` present **iff** `temporal_class` present; a present class is one of the three declared values; `tracked` implies flag `true`; `slice_only` implies flag `false`. Semantic clause: every flagged property of every record has its genesis `history` row at that record's own `created_sim_time` — **exhaustive** where the published procedure samples up to ten records. Skips on the same guard as C11 |
-| C14 | Sub-type column partition consistency (semantic check, classed with C6/C7/C9–C13) | **Sidecar-only, no data query.** Skips when `sub_type_columns` is absent; a present `sub_type_columns` with `enum_domains` absent is a *failure*, not a skip (the `<kind>_type` domain defines the partitioned-kind set). Asserts: the partition's kinds are exactly the records kinds carrying a `<kind>_type` discriminator in `enum_domains`; per kind, the sub-type keys equal that declared domain; per kind, the union of the per-sub-type lists equals the value columns (those carrying the temporal pair) minus `prop__<kind>_type`, plus each reference-typed value column's `ref_index__` sibling; per sub-type, a reference column and its `ref_index__` sibling are listed together or not at all. The discriminator carries the temporal pair yet is excluded by the carve-out |
+| C14 | Sub-type column partition consistency (semantic check, classed with C6/C7/C9–C13) | **Sidecar-only, no data query.** Skips when `sub_type_columns` is absent; a present `sub_type_columns` with `enum_domains` absent is a *failure*, not a skip (the `<kind>_type` domain defines the partitioned-kind set). Asserts: the partition's kinds are exactly the records kinds carrying a `<kind>_type` discriminator in `enum_domains`; per kind, the sub-type keys equal that declared domain; per kind, the union of the per-sub-type lists equals the value columns (those carrying the temporal pair) minus `prop__<kind>_type`, plus `presentation_id` when `records__<kind>` carries that column, plus each reference-typed value column's `ref_index__` sibling; per sub-type, a reference column and its `ref_index__` sibling are listed together or not at all. The discriminator carries the temporal pair yet is excluded by the carve-out; `presentation_id` carries neither and is admitted by column presence alone — the union clause requires only attribution to *some* sub-type, never which one |
 
 The full algorithms are the check functions in
 [`conformance.py`](../../src/fabulexa_forge/reader/conformance.py); the negative- and
@@ -395,6 +410,12 @@ a scenario. `fabulexa-forge validate` is its only user surface.
   producer's deeper QA guarantees remain out of scope.
 - **Decode direction of the codec.** Conformance needs the *encode* direction only;
   the per-type decode contract is the reader's — see [`reader.md`](reader.md).
+- **The pinned structural column lists are literal here.** Elsewhere a consumer
+  needing a structural-column fact reads the reader's surface rather than restating
+  one ([`reader.md`](reader.md) § The structural-temporal surface). C5's lists are the
+  exception, and must remain so: they *are* the check that the contract's structural
+  prefix is present and correctly ordered, so expressing them in terms of a shared
+  surface derived from the same contract would make the check test itself.
 
 ## Related
 

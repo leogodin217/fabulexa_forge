@@ -7,11 +7,18 @@ column families (`design doc § Semantics — the records-column taxonomy`);
 every other name is a no-role condition every caller must treat as loud
 (conformance records a C5 failure; the source exporter raises
 `SourceUnclassifiedColumn`) — never a silent fall-through.
+
+Also owns the structural-temporal surface (`structural_instant_columns`,
+`records_structural_column_is_mutable`): which structural columns of a table
+category carry a sim-time instant, and which records structural columns may
+change after creation. Both are pure and emit-independent — contract facts,
+not presentation — and loud on anything outside their closed domains (design
+doc § The structural-temporal surface).
 """
 
 from __future__ import annotations
 
-from typing import Final, Literal
+from typing import Final, Literal, Mapping
 
 RecordsColumnRole = Literal["identity", "presentation", "lifecycle", "payload"]
 
@@ -90,3 +97,115 @@ def ref_index_sibling(prop_column_name: str) -> str:
             " requires a records payload column name"
         )
     return REF_INDEX_PREFIX + prop_column_name[len(_PROP_PREFIX) :]
+
+
+StructuralInstant = Literal[
+    "created", "closed", "last_touched", "changed", "joined", "left"
+]
+"""The closed six-member instant vocabulary a structural column may name.
+
+Presentation-free: no output name appears in it. The vocabulary derives from
+the contract's column definitions (design doc § The structural-temporal
+surface), not from any particular emit.
+"""
+
+#: The structural columns of each table category that carry a sim-time
+#: instant, and the instant each names (design doc § The structural-temporal
+#: surface). Contract-pinned, the same hardcoding class as the pinned
+#: column lists — restates the vendored schema, never derived from an emit.
+_STRUCTURAL_INSTANT_COLUMNS_BY_CATEGORY: Final[
+    Mapping[str, Mapping[str, StructuralInstant]]
+] = {
+    "records": {
+        "created_sim_time": "created",
+        "deactivated_at": "closed",
+        "last_mutation_sim_time": "last_touched",
+    },
+    "fixed": {
+        "sim_time": "changed",
+    },
+    "membership": {
+        "joined_sim_time": "joined",
+        "left_sim_time": "left",
+    },
+}
+
+#: Records structural columns whose value the producer may change after
+#: creation (design doc § The structural-temporal surface).
+_MUTABLE_RECORDS_STRUCTURAL_NAMES: Final[frozenset[str]] = frozenset(
+    {"active", "deactivated_at", "last_mutation_sim_time"}
+)
+
+#: Records structural columns the contract pins as set once at creation.
+_SET_ONCE_RECORDS_STRUCTURAL_NAMES: Final[frozenset[str]] = frozenset(
+    {"created_sim_time", "fork_path", "record_id", "record_index", "presentation_id"}
+)
+
+
+def structural_instant_columns(category: str) -> Mapping[str, StructuralInstant]:
+    """
+    The structural columns of a table category that carry a sim-time instant.
+
+    Pure and emit-independent: the mapping is a property of the contract's
+    pinned column layout for the category, not of any particular emit. A
+    category's mapping is the same for every emit at the supported format
+    version. Columns absent from the returned mapping carry no instant.
+
+    Args:
+        category: The sidecar table category — "fixed", "records", or
+            "membership".
+
+    Returns:
+        Column name to the instant it names, for every instant-carrying
+        structural column of the category. Empty for a category that pins
+        none.
+
+    Raises:
+        ValueError: `category` is not a recognised table category. The
+            category set is closed and validated when the sidecar is read, so
+            an unrecognised value is a caller error, never emit data.
+    """
+    try:
+        return _STRUCTURAL_INSTANT_COLUMNS_BY_CATEGORY[category]
+    except KeyError:
+        raise ValueError(f"'{category}' is not a recognised table category") from None
+
+
+def records_structural_column_is_mutable(name: str) -> bool:
+    """
+    Whether a records-table structural column's value may change after the
+    record is created.
+
+    Answers the structural half of temporal mutability only, over a closed
+    domain: the contract's pinned records structural columns. A
+    `prop__<name>` column's mutability is declared per-emit by its sidecar
+    temporal pair and is not answered here; a `ref_index__<name>` column
+    tracks its sibling `prop__<name>` and follows the sibling's answer. A
+    caller needing both halves classifies through the records-column
+    taxonomy first — routing by family plus the taxonomy's ref-index
+    prefix rule, since `ref_index__<name>` classifies as `identity` — and
+    asks each half in turn.
+
+    Args:
+        name: A records structural column name — one the records-column
+            taxonomy classifies as `identity` (excluding the ref-index
+            prefix), `presentation`, or `lifecycle`.
+
+    Returns:
+        True when the column is one whose value the producer may change
+        after creation; False when the contract pins it as set once.
+
+    Raises:
+        ValueError: `name` is not a records structural column — a
+            `prop__<name>`, a `ref_index__<name>`, or a name the contract
+            does not pin. The structural set is closed; mutability of the
+            open remainder is either the sidecar's question (`prop__`,
+            `ref_index__`) or nowhere guaranteed (a producer-added column),
+            so a silent False would state a fact the contract does not
+            hold.
+    """
+    if name in _MUTABLE_RECORDS_STRUCTURAL_NAMES:
+        return True
+    if name in _SET_ONCE_RECORDS_STRUCTURAL_NAMES:
+        return False
+    raise ValueError(f"'{name}' is not a records structural column")

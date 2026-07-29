@@ -132,6 +132,38 @@ def test_two_rename_entries_different_tables_valid() -> None:
 
 
 # ---------------------------------------------------------------------------
+# declare_keys
+# ---------------------------------------------------------------------------
+
+
+def test_declare_keys_true_alone_is_valid_section() -> None:
+    """base: {declare_keys: true} alone is a valid, non-empty section."""
+    cfg = BaseConfig.model_validate({"declare_keys": True})
+    assert cfg.declare_keys is True
+
+
+def test_declare_keys_false_behaves_as_absent() -> None:
+    """base: {declare_keys: false} loads; declare_keys reads False, same
+    off-posture as the field being absent — the config layer stores the
+    author's explicit value verbatim, the engine's off/on decision is a
+    separate concern."""
+    cfg = BaseConfig.model_validate({"declare_keys": False})
+    assert cfg.declare_keys is False
+
+
+def test_declare_keys_non_bool_rejected() -> None:
+    """base: {declare_keys: [...]} (not a bool) is rejected."""
+    with pytest.raises(ValidationError):
+        BaseConfig.model_validate({"declare_keys": []})
+
+
+def test_empty_base_block_error_names_declare_keys() -> None:
+    """The at-least-one-field error message names declare_keys."""
+    with pytest.raises(ValidationError, match="declare_keys"):
+        BaseConfig.model_validate({})
+
+
+# ---------------------------------------------------------------------------
 # mode_section_matches — base arm
 # ---------------------------------------------------------------------------
 

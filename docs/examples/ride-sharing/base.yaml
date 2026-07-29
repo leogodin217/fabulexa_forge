@@ -1,0 +1,54 @@
+# ExportConfig — ride-sharing bundle, base mode (flat current-state dump)
+# ============================================================
+# `fabulexa-forge export docs/examples/ride-sharing/bundle docs/examples/ride-sharing/base.yaml`
+#
+# Base mode reconstructs one flat table per records kind at the tape's end:
+# every tracked property (actor.status, journey_instance.current_state,
+# resource.allocated) carries its LATEST history value. No genre split, no
+# sub-type split, no FK joins — the faithful "current state of every record"
+# landing shape. `record_id` presents as `id`; every other column is
+# presentation-verbatim.
+#
+# The only author decision here is which kinds to drop. We exclude the two
+# simulation-MECHANISM kinds — they are engine bookkeeping, not marketplace data:
+#   tick_decision — the engine's per-tick matching-decision log (decision_type,
+#                   context). An audit trail of the simulator, not the trust. It
+#                   is not even a declared type in the atlas.
+#   queue         — the single internal shared-fleet wait queue (discipline,
+#                   on_full, region). The wait it models is domain-real, but the
+#                   queue RECORD itself carries no marketplace-meaningful
+#                   attributes — it is the mechanism, not the data.
+# Everything domain-meaningful survives: actor (trips), entity (riders + zones),
+# journey_instance (trip lifecycles), resource (drivers).
+#
+# Two things this config does NOT control, both worth knowing before you read the
+# output:
+#
+#   TIMESTAMPS  No `rebase:` block is declared here, but the lifecycle columns
+#               still land as wallclock TIMESTAMPs, not raw ns: this bundle's
+#               sidecar carries a `runtime` anchor (2026-01-05T00:00:00 UTC), and
+#               base renders through the *effective* anchor — the `rebase:` block
+#               when one is given, else the sidecar's `runtime`, else nothing. So
+#               `created_sim_time` and `deactivated_at` come out TIMESTAMP.
+#               Only the framework/lifecycle columns rebase; domain `prop__`
+#               columns are presentation-verbatim at their declared sidecar type,
+#               so a sim-time-valued property stays a raw ns BIGINT. Add a
+#               `rebase:` block (see source.yaml) only to OVERRIDE the origin or
+#               zone; it is not what turns timestamps on here.
+#
+#   SLICE_ONLY  `exclude` drops whole KINDS / output TABLES — base has no
+#               author-facing column drop at all. Columns still go missing, and
+#               the reason is policy, not this config: every non-exempt
+#               `temporal_class: slice_only` column is auto-omitted export-wide,
+#               with a notice, independently of whatever `exclude` declares (and
+#               naming one in `rename` is an error, since the column is gone). Its
+#               past is unknowable, so base will not present it. In this bundle
+#               that drops actor.surge_tier, journey_instance's state_entry_time /
+#               complete / bound_roles, and resource.queue — nothing below needs
+#               to (or can) name them, and their absence is not a bug.
+
+mode: base
+
+base:
+  exclude:
+    kinds: [tick_decision, queue]

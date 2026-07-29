@@ -2,6 +2,7 @@ tables:
   patient:
     columns:
       [
+        patient_key,
         id,
         created_sim_time,
         active,
@@ -9,8 +10,11 @@ tables:
         prop__status,
         prop__name,
         prop__doctor_id,
+        doctor_id_key,
         prop__primary_staff_id,
+        primary_staff_id_key,
         prop__backup_staff_id,
+        backup_staff_id_key,
       ]
     row_count: 2
     contains_rows:
@@ -22,14 +26,22 @@ tables:
         prop__status: discharged
         prop__name: Alice
   doctor:
-    columns: [id, created_sim_time, active, deactivated_at, prop__name]
+    columns: [doctor_key, id, created_sim_time, active, deactivated_at, prop__name]
     row_count: 1
   staff:
     columns:
-      [id, created_sim_time, active, deactivated_at, prop__name, prop__staff_type]
+      [
+        staff_key,
+        id,
+        created_sim_time,
+        active,
+        deactivated_at,
+        prop__name,
+        prop__staff_type,
+      ]
     row_count: 2
   admission:
-    columns: [id, created_sim_time, active, deactivated_at, prop__ward]
+    columns: [admission_key, id, created_sim_time, active, deactivated_at, prop__ward]
     row_count: 2
     contains_rows:
       # a002 was deactivated@2*DAY (2024-01-03) — visible verbatim at the
@@ -39,7 +51,7 @@ tables:
         active: false
         deactivated_at: 2024-01-03 00:00:00
   queue:
-    columns: [id, created_sim_time, active, deactivated_at, prop__name]
+    columns: [queue_key, id, created_sim_time, active, deactivated_at, prop__name]
     row_count: 1
     contains_rows:
       - id: q001

@@ -206,6 +206,35 @@ them.
 
 ---
 
+## What may be inferred
+
+The section above lists what an emit promises. This is the converse rule, and it
+is the one worth internalising: **when the emit cannot answer a distinction a
+design depends on, refuse and say why — never infer.**
+
+The failure mode has a name — *a locally-valid inference standing in for a fact
+the contract does not carry.* Two instances, both real, both caught only by a QA
+round rather than by review:
+
+- `last_mutation_sim_time` read as a record's event time. True for a write-once
+  record; for anything that closes it silently becomes the *close* time.
+- `(history_tracked: true, temporal_class: constant)` read as a marker for a
+  producer-minted presentation column. True of every example emit anyone had
+  inspected; guaranteed by nothing. One author writing an immutable tracked
+  property breaks it, with no conformance failure and no signal.
+
+Both held across the entire available corpus, and both held for no stated
+reason. **Passing the fixtures is not evidence; a contract sentence is.** An
+inference that is true everywhere you can see and promised nowhere is a latent
+defect with a QA round's delay on it.
+
+`slice_only` is the contract's own expression of this rule: the class exists so a
+consumer refuses a point-in-time question rather than answering it with the slice
+value. Generalise that posture — it is cheaper to be loudly unable than quietly
+wrong.
+
+---
+
 ## Column temporal classes and the genesis guarantee
 
 Every value-carrying `prop__<name>` column on a records-category table declares a
@@ -273,6 +302,58 @@ the sidecar. Temporal realism — calendars, business hours, intra-day arrival
 shaping — was applied upstream during simulation and is already encoded in the
 offsets. A consumer rebases time; it never re-shapes it.
 
+### Which columns carry an instant
+
+`sim_time` appears under several names, one set per table genre. Each names a
+*different* instant, and the difference is load-bearing: picking the wrong one is
+the most common way an otherwise-faithful export becomes untrue.
+
+| Column | Table | The instant it names | Nullable |
+|---|---|---|---|
+| `created_sim_time` | `records__<kind>` | the record came into existence; set once, unchanged by any later property write or deactivation | no |
+| `deactivated_at` | `records__<kind>` | the record closed; NULL iff `active` (C7) | yes |
+| `last_mutation_sim_time` | `records__<kind>` | the record's most recent content change of any kind — creation, a property write, or the deactivation flip | no |
+| `sim_time` | `history` | a property changed | no |
+| `joined_sim_time` / `left_sim_time` | `membership__<K>__<p>` | a member joined / left; `left_sim_time` NULL while still present at the slice | no / yes |
+
+**A record is not an event.** `records__<kind>` is a snapshot carrying a lifecycle
+*interval* — `[created_sim_time, deactivated_at)` — not a point. A "records-grain
+fact" is a consumer collapsing that interval to a point, and *which* endpoint it
+collapses to is a modelling decision the emit cannot make for the author
+(Principle #7). The exporter's job is to make every endpoint reachable, never to
+elect one.
+
+**`last_mutation_sim_time` is a high-water mark, not an event time.** It is the
+only one of the three whose meaning varies row to row within a single table:
+creation on a never-touched record, a property write on the next, a deactivation
+on the next. It answers *when was this row last touched* and nothing else. That
+is a real and useful column — it is `updated_at`, and a soft-delete bumps
+`updated_at` in a production system too — but it is not a fact's timestamp.
+
+The three records-table instants correspond to what an operational system calls
+them:
+
+| Base layer | What a real system calls it | Answers |
+|---|---|---|
+| `created_sim_time` | `created_at` | when the row was inserted |
+| `deactivated_at` | `closed_at` / `ended_at` | when the row was closed |
+| `last_mutation_sim_time` | `updated_at` | when the row was last touched |
+
+This mapping is the *meaning*, not a mandated vocabulary: each mode owns its own
+presentation names, and an author may override them.
+
+**A realistic name obliges a realistic value.** Naming an output column
+`occurred_at` while it carries a raw nanosecond offset is worse than leaving it
+`created_sim_time` — the name promises a timestamp and the value is an integer.
+Renaming an instant to a wallclock name obliges resolving the anchor.
+
+**`created_sim_time = 0` means "present at the origin".** Records materialized
+from the scenario before any firing carry `0`, so they render at the anchor's
+origin instant — a seeded catalog lands as one pile at `runtime.start_datetime`.
+That is the convention rather than a defect, and it reads correctly for a
+population that pre-existed the simulated window. The vendored contract does not
+currently state it; treat this paragraph as observed, not normative.
+
 ---
 
 ## Forks and branches
@@ -319,10 +400,24 @@ separate emit:
   other tracked value.
 
 There is no separate "projected emit", no sidecar `projection` block, and no
-emit-level projection flag: presentation, when present, is just more
-records-table columns the reader surfaces like any other. An exporter that wants
-none reads only the mechanism columns; the contract never forces a presentation
-column into an output.
+emit-level projection flag: presentation is just more records-table columns the
+reader surfaces like any other. An exporter that wants none reads only the
+mechanism columns; the contract never forces a presentation column into an
+output.
+
+**Presentation is present, and unlabelled — by design.** Every emit reaching this
+package has been through the upstream projection step (a sanitised emit is only
+produced from a projected source), so presentation values are always somewhere in
+the emit, though whether a *given* kind carries them is per-kind. What the emit
+does **not** carry is any marker of which columns they are: the sanitising step
+keeps the minted values and drops every trace of their being minted, deliberately,
+so the dataset reads as production data rather than as simulator output. There is
+consequently no sidecar answer to "did the author declare this column, or did the
+producer mint it", and no reliable inference that recovers one (§ What may be
+inferred). This costs less than it appears to: a minted `prop__email` and an
+authored `prop__income` are both simply columns, usable when useful, and the
+export decision that actually matters — what to *call* them in the output — is the
+author's either way.
 
 ---
 

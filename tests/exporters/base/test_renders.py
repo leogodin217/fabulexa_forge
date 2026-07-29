@@ -34,10 +34,13 @@ from fabulexa_forge.reader.emit import Emit, open_emit
 
 from ._base_fixtures import DAY_NS, build_base_test_emit
 
-# Fixed emission order for the fixture's default (unrenamed) plan: STATE_AT_COLUMNS
-# (record_id -> id), presentation_id, then prop__<p> in sidecar declaration order
-# (prop__status, prop__age).
+# Fixed emission order for the fixture's default (unrenamed) plan: the self key
+# (record_index -> patient_key; the fixture's `patient` kind has no reference
+# property, so no edge key appears), STATE_AT_COLUMNS (record_id -> id),
+# presentation_id, then prop__<p> in sidecar declaration order (prop__status,
+# prop__age).
 _COLUMN_ORDER = (
+    "patient_key",
     "id",
     "created_sim_time",
     "active",
@@ -240,6 +243,7 @@ def test_empty_property_set_renders_identity_and_lifecycle_only(
             emit.sidecar, fork_path, narrowed_spec, anchor, None
         )
         rows = emit.query(sql, ())
-    # id, created_sim_time, active, deactivated_at, presentation_id — no prop__.
-    assert all(len(row) == 5 for row in rows)
+    # patient_key, id, created_sim_time, active, deactivated_at,
+    # presentation_id — no prop__.
+    assert all(len(row) == 6 for row in rows)
     assert "prop__" not in sql

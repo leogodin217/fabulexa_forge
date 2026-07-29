@@ -194,6 +194,7 @@ def _sidecar(
         enum_domains=enum_domains or {},
         record_roles=record_roles,
         sub_type_columns=None,
+        presentation_keys_raw=None,
     )
 
 

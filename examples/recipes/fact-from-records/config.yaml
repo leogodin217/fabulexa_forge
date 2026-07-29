@@ -1,0 +1,50 @@
+# Recipe: fact-from-records
+# ============================================================
+# Demonstrates a records-grain fact carrying its own structural instants:
+# birth (created_sim_time), close (deactivated_at), and last-touch
+# (last_mutation_sim_time) — each rendered as a wallclock TIMESTAMP through
+# the effective anchor via `derived: timestamp`. Before this recipe's
+# sprint, only last_mutation_sim_time was an accepted records-grain
+# timestamp source; created_sim_time / deactivated_at now widen the
+# allowlist.
+#
+# A records-grain fact reads directly from records__<kind>, one row per
+# record — no history, no membership. `deactivated_at` is NULL for a
+# record that has never been deactivated; the timestamp render carries
+# that NULL through, never fabricating a close instant.
+#
+# Fixture world (recipe emit):
+#   records__admission — identity + lifecycle kind, no history tracking:
+#     a001: created@1*DAY (2024-01-02), still active -> deactivated_at NULL
+#     a002: created@1*DAY (2024-01-02), closed@2*DAY (2024-01-03)
+#
+# Output:
+#   fact_admission_event — one row per admission record (2 rows total)
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_admission_event
+      role: fact
+      source:
+        grain: records
+        kind: admission
+      key: [admission_id]
+      columns:
+        - name: admission_id
+          from: record_id
+        - name: ward
+          from: prop__ward
+        - name: admitted_at
+          derived:
+            timestamp:
+              source: created_sim_time
+        - name: discharged_at
+          derived:
+            timestamp:
+              source: deactivated_at
+        - name: last_touched_at
+          derived:
+            timestamp:
+              source: last_mutation_sim_time
