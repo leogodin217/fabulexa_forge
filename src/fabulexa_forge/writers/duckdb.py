@@ -9,9 +9,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     import duckdb as duckdb_mod
 
-    from fabulexa_forge.exporters.query_spec import QuerySpec
+    from fabulexa_forge.exporters.query_spec import QuerySpec, TableKeys
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
 
@@ -26,30 +28,37 @@ def write_duckdb(
     emit: "Emit",
     queries: dict[str, str],
     output_path: Path,
+    keys: "Mapping[str, TableKeys]",
 ) -> dict[str, int]:
-    """Materialize each query and write it to a new DuckDB file (Arrow path).
+    """Materialize each query into a new DuckDB file, declaring keys.
 
-    For each query, `emit.query_arrow(sql, ())` yields a typed Arrow table; the
-    writer registers it on a **fresh output** connection (`duckdb.connect(output_path)`
-    — the writer owns this output DB; the input emit stays read-only and
-    untouched) and runs CREATE TABLE AS. The Arrow path is deliberate: it
-    sidesteps the all-null-object-column register failure (NULL-pad columns
-    arrive already CAST to VARCHAR, so even an all-NULL column is typed, not an
-    untyped object column). A zero-row result still carries its typed Arrow
-    schema, so an empty grain yields an **empty typed table**, never a dropped
-    one.
+    Unchanged Arrow materialization path. A table named in `keys` is created
+    with explicit column DDL (names/types transcribed from its Arrow
+    schema) plus the declared PRIMARY KEY / UNIQUE constraints, then loaded
+    by insert; a table absent from `keys` keeps the CREATE TABLE AS path.
+    An empty mapping reproduces today's behavior exactly.
 
     Args:
         emit: The open (read-only) emit; queried via Emit.query_arrow.
         queries: Mapping of output table name -> SELECT SQL.
         output_path: Output .duckdb file path to create.
+        keys: Declared keys per table name; tables without declarations are
+            simply absent. Names must be a subset of `queries`' names.
 
     Returns:
         Mapping of every table name -> row count (0 for an empty table).
 
     Raises:
-        ExportRuntimeError: DuckDB creation or table copy fails.
+        ExportRuntimeError: DuckDB creation or table load fails — including
+            a declared-constraint violation, reported naming the table.
+        ValueError: `keys` names a table absent from `queries`.
     """
+    unknown = set(keys) - set(queries)
+    if unknown:
+        raise ValueError(
+            f"write_duckdb: keys names table(s) absent from queries: {sorted(unknown)}"
+        )
+
     import duckdb
 
     try:
@@ -63,18 +72,19 @@ def write_duckdb(
     try:
         for table_name, sql in queries.items():
             try:
-                arrow_table = emit.query_arrow(sql, ())
-                out_conn.register("_arrow_src", arrow_table)
-                out_conn.execute(
-                    f"CREATE TABLE {quote_identifier(table_name)}"
-                    " AS SELECT * FROM _arrow_src"
-                )
-                out_conn.unregister("_arrow_src")
+                table_keys = keys.get(table_name)
+                if table_keys is not None:
+                    row_counts[table_name] = _create_keyed_table_from_arrow(
+                        out_conn, emit, table_name, sql, table_keys
+                    )
+                else:
+                    row_counts[table_name] = _create_table_from_arrow(
+                        out_conn, emit, table_name, sql
+                    )
             except Exception as exc:
                 raise ExportRuntimeError(
                     f"failed to write table '{table_name}' to {output_path}: {exc}"
                 ) from exc
-            row_counts[table_name] = arrow_table.num_rows
     finally:
         out_conn.close()
 
@@ -131,6 +141,60 @@ def _create_table_from_arrow(
     return int(arrow_table.num_rows)
 
 
+def _describe_arrow_columns(
+    conn: "duckdb_mod.DuckDBPyConnection", registered_name: str
+) -> list[tuple[str, str]]:
+    """Return (column_name, duckdb_type) pairs for a registered Arrow relation.
+
+    Reads DuckDB's own `DESCRIBE` output — the type strings are DuckDB's,
+    never re-derived from the Arrow schema by hand.
+    """
+    rows = conn.execute(f"DESCRIBE {quote_identifier(registered_name)}").fetchall()
+    return [(str(row[0]), str(row[1])) for row in rows]
+
+
+def _quoted_column_list(columns: tuple[str, ...]) -> str:
+    """Render a tuple of column names as a comma-separated quoted list."""
+    return ", ".join(quote_identifier(column) for column in columns)
+
+
+def _key_constraint_clauses(keys: "TableKeys") -> list[str]:
+    """Render `TableKeys` as CREATE TABLE constraint clauses."""
+    clauses = [f"PRIMARY KEY ({_quoted_column_list(keys.primary_key)})"]
+    clauses.extend(f"UNIQUE ({_quoted_column_list(cols)})" for cols in keys.unique)
+    return clauses
+
+
+def _create_keyed_table_from_arrow(
+    conn: "duckdb_mod.DuckDBPyConnection",
+    emit: "Emit",
+    table_name: str,
+    sql: str,
+    keys: "TableKeys",
+) -> int:
+    """Create *table_name* with explicit column DDL plus declared constraints.
+
+    Column names/types are transcribed from the Arrow result's DuckDB
+    schema; the row data is then loaded by insert. Returns the number of
+    rows loaded.
+    """
+    arrow_table = emit.query_arrow(sql, ())
+    conn.register("_arrow_src", arrow_table)
+    try:
+        columns = _describe_arrow_columns(conn, "_arrow_src")
+        column_defs = [
+            f"{quote_identifier(name)} {column_type}" for name, column_type in columns
+        ]
+        ddl = ", ".join(column_defs + _key_constraint_clauses(keys))
+        conn.execute(f"CREATE TABLE {quote_identifier(table_name)} ({ddl})")
+        conn.execute(
+            f"INSERT INTO {quote_identifier(table_name)} SELECT * FROM _arrow_src"
+        )
+    finally:
+        conn.unregister("_arrow_src")
+    return int(arrow_table.num_rows)
+
+
 def _append_rows_from_arrow(
     conn: "duckdb_mod.DuckDBPyConnection",
     emit: "Emit",
@@ -179,6 +243,10 @@ def _apply_spec(
     exists = _table_exists(conn, spec.table_name)
 
     if not exists or spec.write_mode == "create":
+        if spec.keys is not None:
+            return _create_keyed_table_from_arrow(
+                conn, emit, spec.table_name, spec.sql, spec.keys
+            )
         return _create_table_from_arrow(conn, emit, spec.table_name, spec.sql)
     if spec.write_mode == "append":
         return _append_rows_from_arrow(conn, emit, spec.table_name, spec.sql)

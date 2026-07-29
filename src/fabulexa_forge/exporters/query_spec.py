@@ -19,6 +19,24 @@ if TYPE_CHECKING:
 
 
 @dataclass(frozen=True)
+class TableKeys:
+    """Declared key metadata for one compiled output table.
+
+    Column names are post-`rename` output names. Carried by `QuerySpec`;
+    materialized as constraints by the DuckDB writer, reported as
+    undeliverable by the CSV dispatch.
+
+    A table with nothing to declare carries `QuerySpec.keys = None`, never
+    an empty `TableKeys`: every constructed instance has a non-empty
+    `primary_key` (the resolution table always yields one), while `unique`
+    may be empty (no block claim → identity keys only).
+    """
+
+    primary_key: tuple[str, ...]
+    unique: tuple[tuple[str, ...], ...]
+
+
+@dataclass(frozen=True)
 class QuerySpec:
     """A compiled output table: name, SELECT, write mode, optional view pair.
 
@@ -33,6 +51,7 @@ class QuerySpec:
     write_mode: Literal["create", "append", "replace"]
     view_name: str | None
     view_sql: str | None
+    keys: TableKeys | None = None
 
 
 def query_spec_output_name(spec: QuerySpec) -> str:
@@ -88,7 +107,8 @@ def write_query_specs(
     if fmt == "duckdb":
         from fabulexa_forge.writers.duckdb import write_duckdb
 
-        return write_duckdb(emit, queries, out)
+        keys = {spec.table_name: spec.keys for spec in specs if spec.keys is not None}
+        return write_duckdb(emit, queries, out, keys)
 
     from fabulexa_forge.writers.csv import write_csv
 

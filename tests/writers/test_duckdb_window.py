@@ -11,10 +11,12 @@ Verifies:
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 import duckdb
 import pytest
+from _support.duckdb_introspect import constraint_types
 from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, write_emit
 
@@ -27,7 +29,7 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import ExportRuntimeError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
-from fabulexa_forge.exporters.query_spec import QuerySpec
+from fabulexa_forge.exporters.query_spec import QuerySpec, TableKeys
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.reader.emit import open_emit
 from fabulexa_forge.writers.duckdb import write_duckdb_window
@@ -228,6 +230,16 @@ def _fact_dim_config() -> DimensionalConfig:
 
 def _make_window(start_ns: int, end_ns: int, index: int = 0) -> Window:
     return Window(index=index, start_ns=start_ns, end_ns=end_ns, label=f"w{index}")
+
+
+def _with_keys(
+    specs: list[QuerySpec], table_name: str, keys: TableKeys
+) -> list[QuerySpec]:
+    """Return `specs` with `keys` attached to the spec named `table_name`."""
+    return [
+        replace(spec, keys=keys) if spec.table_name == table_name else spec
+        for spec in specs
+    ]
 
 
 def _read_table(db_path: Path, table: str) -> list[tuple[object, ...]]:
@@ -665,3 +677,77 @@ def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:
 
     # After 2 windows, snapshot should show 3 total entities
     assert result1["dim_entity"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Tests: keyed create-if-missing path
+# ---------------------------------------------------------------------------
+
+
+def test_keyed_first_window_creates_constraints_second_window_preserves(
+    tmp_path: Path,
+) -> None:
+    """First window with a keyed replace-class spec creates the table with
+    declared constraints; a later window's replace preserves them."""
+    emit_dir = _build_fact_emit(tmp_path)
+    out_path = tmp_path / "warehouse.duckdb"
+    w0 = _make_window(0, 15, index=0)
+    w1 = _make_window(15, 35, index=1)
+    keys = TableKeys(primary_key=("id",), unique=())
+
+    with open_emit(emit_dir) as emit:
+        specs0 = _with_keys(
+            build_query_specs(
+                emit,
+                _fact_dim_config(),
+                None,
+                w0,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
+            ),
+            "dim_entity",
+            keys,
+        )
+        write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
+        assert "PRIMARY KEY" in constraint_types(out_path, "dim_entity")
+
+        specs1 = _with_keys(
+            build_query_specs(
+                emit,
+                _fact_dim_config(),
+                None,
+                w1,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
+            ),
+            "dim_entity",
+            keys,
+        )
+        result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
+
+    assert result1["dim_entity"] == 3
+    assert "PRIMARY KEY" in constraint_types(out_path, "dim_entity")
+
+
+def test_keyed_first_window_violation_rolls_back(tmp_path: Path) -> None:
+    """A constraint violation on the first (create) window raises and rolls
+    back — no table, no bookkeeping row survives."""
+    emit_dir = _build_fact_emit(tmp_path)
+    out_path = tmp_path / "warehouse.duckdb"
+    w0 = _make_window(0, 15, index=0)
+
+    keyed_spec = QuerySpec(
+        table_name="dim_entity",
+        sql="SELECT 'x' AS id, 'dup1' AS name UNION ALL SELECT 'x' AS id, 'dup2' AS name",
+        write_mode="replace",
+        view_name=None,
+        view_sql=None,
+        keys=TableKeys(primary_key=("id",), unique=()),
+    )
+
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(ExportRuntimeError):
+            write_duckdb_window(emit, [keyed_spec], out_path, w0, fingerprint="fp")
+
+    assert not _table_exists_in_db(out_path, "dim_entity")
+    assert not _table_exists_in_db(out_path, "_export_windows")
