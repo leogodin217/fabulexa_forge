@@ -35,12 +35,27 @@ DuckDB serialization contracts — column typing, newline handling, and the wind
 DuckDB append path used by incremental export — are documented with their consumer
 in [`dimensional.md`](dimensional.md).
 
+The DuckDB writer has a keyed creation path: a table whose caller declares keys
+(`write_duckdb`'s `keys` mapping of [`TableKeys`](../../src/fabulexa_forge/exporters/query_spec.py);
+`QuerySpec.keys` through the shared dispatch) is created with explicit column DDL —
+names and types transcribed from the materialized Arrow schema, so the writer stays
+schema-ignorant — plus the declared `PRIMARY KEY` / `UNIQUE` constraints, then
+loaded by insert. A table without declarations keeps the `CREATE TABLE AS` path
+byte-for-byte. A constraint violation during load is a loud `ExportRuntimeError`
+naming the table; a `keys` entry naming a table absent from `queries` is a
+`ValueError` (a caller bug). The windowed path reads `spec.keys` on its
+create-if-missing branch only — constraints created at the first window persist,
+and DuckDB enforces them on every later insert. Which tables declare which keys is
+the caller's decision, never the writer's ([`declared-keys.md`](declared-keys.md)).
+
 ## Invariants
 
 1. **Determinism.** Same relation → byte-identical CSV file; identical DuckDB query
    results.
 2. **Generic.** A writer holds no mode or schema knowledge; it serializes whatever
-   relation it is handed.
+   relation it is handed. The keyed creation path preserves this: the writer
+   transcribes column DDL from the relation's own Arrow schema and consumes
+   declared keys — it never decides them.
 
 ## Boundaries
 
@@ -53,6 +68,7 @@ in [`dimensional.md`](dimensional.md).
 | Document | Why |
 |---|---|
 | [`dimensional.md`](dimensional.md) | The CSV / DuckDB writers' serialization contract and their consumer. |
+| [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability that feeds the DuckDB keyed creation path. |
 | [`reader.md`](reader.md) | `Emit.query_arrow` — the one materialization path every writer uses. |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap. |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles, the isolation boundary, vocabulary. |

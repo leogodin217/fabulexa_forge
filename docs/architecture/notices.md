@@ -41,6 +41,7 @@ tests in [`tests/exporters/test_notices.py`](../../tests/exporters/test_notices.
 | `slice-only-column-omitted` | source plan (per unit × column), base plan (per kind × column), `init` (per kind × column) | A `slice_only` column was dropped from an auto-projected surface (see [`slice-only.md`](slice-only.md)) |
 | `discriminator-value-unobserved` | dimensional validation | A records `filter` value is not among the kind's observed `enum_domains` values; the table will be empty |
 | `reference-key-target-absent` | base plan (per kind × property) | A reference property's target kind has no records table in the emit, so no index-space key column is produced for that edge; the id-space column is unaffected (see [`base.md`](base.md) § Record-index key columns) |
+| `keys-not-declarable-csv` | base / source full-export entry path, each incremental driver invocation (once per invocation, before data) | `declare_keys` met a resolved `csv` format: the data is identical and the key declaration undeliverable — CSV carries no constraint surface (see [`declared-keys.md`](declared-keys.md)) |
 
 ## Invariants
 
@@ -71,4 +72,5 @@ tests in [`tests/exporters/test_notices.py`](../../tests/exporters/test_notices.
 | [`dimensional.md`](dimensional.md) | Emits `discriminator-value-unobserved`; `init` emits skip notices |
 | [`source.md`](source.md) | Emits `slice-only-column-omitted` per unit × column |
 | [`base.md`](base.md) | Emits `slice-only-column-omitted` per kind × column and `reference-key-target-absent` per kind × property |
+| [`declared-keys.md`](declared-keys.md) | The capability whose CSV posture `keys-not-declarable-csv` reports |
 | [`incremental.md`](incremental.md) | Threads the sink through windowed compiles |

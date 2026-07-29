@@ -617,6 +617,16 @@ reachable by explicit author projection: identity columns are neither proposed
 nor specially forbidden in author config — a base column named explicitly
 projects faithfully, as any base value does.
 
+**The natural-key advisory.** When the emit's `presentation_keys` block carries a
+whole-table claim for a proposed kind (a flat `key` entry, or a partitioned
+rollup with a `unique_within`), the kind's stub carries one comment naming
+`presentation_id` as the contract-declared natural key and its scope. No claim,
+no comment — and no config grammar change: the advisory is a comment, never a
+field. `init` consults the reader's strict accessor and shares its
+strict-on-read behavior — an incoherent present block refuses `init` too
+([`reader.md`](reader.md) § The presentation-keys registry is strict on read,
+[`declared-keys.md`](declared-keys.md)).
+
 `init` is a pure function of `(emit, code version)`: kind and sub-type order come from the
 registry's lexicographic key order, the fact fan-out from the reader's `SELECT DISTINCT`
 native-type order; no topology traversal, RNG, or clock participates.

@@ -29,7 +29,7 @@ open_emit(emit_dir)
 | Module | Owns |
 |---|---|
 | [`emit.py`](../../src/fabulexa_forge/reader/emit.py) | `open_emit`, the `Emit` handle (`query` row-tuples, `query_arrow` columnar, `close`, context manager), the read-only DuckDB open |
-| [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) | `Sidecar` and its frozen descriptors `ColumnSpec` / `TableSpec` / `BranchEntry` / `RuntimeAnchor`; the typed `RecordRoles` registry view + `Sidecar.record_roles()`; the per-column temporal pair — the `history_tracked` flag + `history_tracked_available()`, the `TemporalClass` literal, and the `Sidecar.temporal_class()` accessor (the single narrowing point); the version gate + structural floor (`Sidecar.from_raw`) |
+| [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) | `Sidecar` and its frozen descriptors `ColumnSpec` / `TableSpec` / `BranchEntry` / `RuntimeAnchor`; the typed `RecordRoles` registry view + `Sidecar.record_roles()`; the typed `PresentationKeys` registry view (`KeySpace` / `PartitionKey` / `WholeColumnClaim`) + `Sidecar.presentation_keys()` and the union-safety algebra (`union_safe`, `combined_claim`); the per-column temporal pair — the `history_tracked` flag + `history_tracked_available()`, the `TemporalClass` literal, and the `Sidecar.temporal_class()` accessor (the single narrowing point); the version gate + structural floor (`Sidecar.from_raw`) |
 | [`records_columns.py`](../../src/fabulexa_forge/reader/records_columns.py) | The records-column taxonomy — `records_column_role`, `ref_index_sibling`, `REF_INDEX_PREFIX`: the one classifier every records-column consumer reads through (§ The records-column taxonomy). The structural-temporal surface — `StructuralInstant`, `structural_instant_columns`, `records_structural_column_is_mutable`: the one answer to which structural columns carry a sim-time instant and which may change after creation (§ The structural-temporal surface) |
 | [`relations.py`](../../src/fabulexa_forge/reader/relations.py) | The faithful-read SQL builders (`build_records_relation_sql`, `build_history_relation_sql`, `build_membership_relation_sql`) and the faithful introspection helper `distinct_prop_values` — the reader's compose-time surface, the sole faithful namer of base tables |
 | [`errors.py`](../../src/fabulexa_forge/reader/errors.py) | The reader error hierarchy — operational/structural failures only |
@@ -276,6 +276,57 @@ accessors — suits a caller that asks for every selected kind, most of which ar
 legitimately not sub-typed. The signature is the definition in
 [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py).
 
+### The presentation-keys registry is strict on read
+
+`Sidecar.presentation_keys()` exposes the optional `presentation_keys` block —
+per kind, per minting declaration, the statically-derived key properties of the
+kind's `presentation_id` column (`unique_within` scope, `branch_stable` /
+`slice_stable`, and a `key_space` identity), plus a kind-level rollup for
+partitioned kinds — as a typed `PresentationKeys` view, or `None` when the
+sidecar carries no `presentation_keys` key ("no claims", the same absence
+posture as the sibling registries). The view is a verbatim carry: nothing is
+inferred, nothing re-derived from data, entry order is the sidecar's
+(contract-guaranteed lexicographic). A partitioned kind's declared sub-type set
+is never narrowed to sub-types with surviving rows (slice-stable, matching
+`sub_type_columns`).
+
+Unlike the sibling registries, the parse is **strict**: construction (lazy, on
+first call) verifies the block's normative consistency rules, and a present but
+incoherent block raises `PresentationKeysInvalidError` rather than yielding
+claims a consumer would key on. Each clause names the kind (and sub-type) that
+violates it:
+
+| Clause | Rule |
+|---|---|
+| Kind membership (both directions) | A kind appears in the block **iff** its declared `records__<kind>` table carries a `presentation_id` column |
+| Entry shape | `sub_types` entry iff the kind carries a synthesized `<kind>_type` discriminator domain in `enum_domains`; `key` entry iff not |
+| Sub-type domain | `sub_types` keys ⊆ the kind's discriminator domain |
+| Scalar–key-space coupling | `unique_within` and the stability pair equal the values `key_space.class` determines (`counter` → `emit`/`false`/`false`; every other class → `branch`/`true`/`true`) |
+| Key-space shape | `prefix`/`width` present iff the class is digit-rendered (`counter`/`record_index`) |
+| Rollup consistency | A partitioned kind's rollup equals `combined_claim` over its entries (including an omitted `unique_within` exactly when the algebra derives no claim) |
+
+An error is raised only when the block is *present and incoherent*; absence
+never raises. Because construction is lazy, a defective block surfaces exactly
+on the paths that consult claims — the `declare_keys` capability and dimensional
+`init` ([`declared-keys.md`](declared-keys.md)) — never on an export that
+ignores them.
+
+Beside the view, `union_safe` and `combined_claim` implement the contract's
+normative union-safety algebra verbatim — pairwise safety over `key_space`
+identities (identical-`prefix`/`width` `record_index` pairs safe; `uuid`×`uuid`
+safe; `record_id`×`record_id` safe; digit-rendered pairs safe iff prefixes
+incomparable, where P₁, P₂ are comparable iff one equals the other plus a
+possibly-empty digit string; every cross-family pair unsafe) and the
+combined-set derivation (all-counter → `emit`/`false`/`false`; all-stable →
+`branch`/`true`/`true`; mixed → `branch`/`false`/`false`; any-pair-unsafe → no
+uniqueness claim, stability pair `true`/`true` iff every member stable). They
+are kind-scoped, as the contract scopes them; no cross-kind call is meaningful
+and none is provided. Their one consumer inside the reader is the
+rollup-consistency clause; they are public because they state
+contract-normative behavior tests must exercise directly. The method signatures
+and their `KeyError`/`ValueError` contract are the definitions in
+[`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py).
+
 ### Typed `prop__` columns and DuckDB read-back
 
 `records__<kind>.prop__<name>` columns are read directly — there is no JSON blob to
@@ -477,6 +528,11 @@ imposes no implicit ordering.
    `category` is refused when the sidecar is read, so no consumer ever sees one —
    which is what makes an unrecognised category at the structural-temporal surface
    a caller error rather than emit data.
+10. **Presentation-key claims are verbatim and coherent-or-refused.** The
+    `PresentationKeys` view carries the block exactly as the sidecar declares it —
+    nothing inferred, nothing narrowed to surviving rows — and an incoherent
+    present block raises `PresentationKeysInvalidError` at the accessor rather
+    than yielding a silently-mended view. Absence is "no claims", never an error.
 
 ## Validation Rules
 
@@ -496,6 +552,12 @@ The reader error hierarchy is operational/structural only; the definitions and t
 [`errors.py`](../../src/fabulexa_forge/reader/errors.py). Conformance *failures* are
 never reader errors — they are failing `CheckResult`s (see
 [`conformance.md`](conformance.md)).
+
+One rule runs after open time: `Sidecar.presentation_keys()` verifies the block's
+six coherence clauses lazily, on first call, raising `PresentationKeysInvalidError`
+(a `ReaderError`) naming the kind, sub-type, and violated clause (§ The
+presentation-keys registry is strict on read). A defective block therefore fails
+the claim-consuming call, never the open.
 
 ## Rationale
 
@@ -562,6 +624,14 @@ never reader errors — they are failing `CheckResult`s (see
   diagnosis of an out-of-set category from a C1 `CheckResult` to the structural
   floor; it does not remove it, and it matches the observable behavior of a *missing*
   category.
+- **Strict on read where no conformance check owns the diagnosis.** The sibling
+  registry views (`record_roles`, `sub_type_columns`) parse leniently because
+  C12/C14 own their diagnosis; no check owns the `presentation_keys` block's
+  semantic rules — conformance is the published C1–C14, reimplemented verbatim,
+  and forge does not invent a C15 — and a silently-mended block would feed wrong
+  keys to a consumer building a merge or join key on them. So the accessor
+  refuses instead, placing enforcement at the moment claims are about to be
+  used: a defective block fails exactly the claim-consuming paths and no others.
 - **Exposing `pinned_ids` / `enum_domains` / `runtime` as typed accessors.** These are
   the reader's named deliverables, and `pinned_ids` is a conformance input (C9 reads
   it). Fixing them as typed accessors gives exporters a stable reader surface to build
@@ -608,6 +678,12 @@ What the reader deliberately does not own:
   time is its creation or its close is the author's modelling decision (Principle
   #7); classifying kinds into archetypes to guess it would invent a mapping the
   author must specify.
+- **Key declaration policy.** The reader exposes the claims and the algebra;
+  whether and how an export turns them into declared constraints — the
+  `declare_keys` capability, its per-table resolution rules, and the writer
+  materialization — is [`declared-keys.md`](declared-keys.md)'s contract. The
+  reader validates claims against the sidecar's own registries, never against
+  data.
 - **Class policy.** The reader *resolves* a column's class; what a consumer does with
   it is that consumer's contract. The genre predicate that consults the class is the
   source exporter's ([`source.md`](source.md)); a policy that refuses or omits a
@@ -624,6 +700,7 @@ What the reader deliberately does not own:
 | [`derivations.md`](derivations.md) | The interpretive layer that composes the faithful-read builders — the home for reads that reconstruct versions or resolve references |
 | [`dimensional.md`](dimensional.md) | The first reshaping consumer — uses `query_arrow`, the `history_tracked` flag, and the faithful-read builders |
 | [`corrupters.md`](corrupters.md) | The base-emit-writing consumer — materializes every table via `query_arrow`, reads column metadata and reference targets from the `Sidecar`, and reuses the single-branch guard |
+| [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability — the consumer the strict `presentation_keys` accessor and the union-safety algebra exist for |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored input contract the reader adapts to (sidecar shape, table categories, type mapping) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |

@@ -408,6 +408,13 @@ shape.
 any data is written. The key columns add no config fields: they are the capability, and a
 toggle for a demand nobody has expressed is scaffolding (Principle #8).
 
+`declare_keys` (`BaseConfig`, optional boolean, no cross-field rule) is the one
+key-*declaration* config field: opt-in declared key metadata on every flat table —
+the `<kind>_key` primary key, `id` uniqueness, and `presentation_id` uniqueness
+where the sidecar's `presentation_keys` block claims it — materialized as DuckDB
+constraints. The resolution rules, writer semantics, CSV posture, and incremental
+gating are owned by [`declared-keys.md`](declared-keys.md).
+
 ## Rationale
 
 - **Direct-horizon over compile-indirection.** Base's shape *is* state-at, so the
@@ -465,6 +472,7 @@ toggle for a demand nobody has expressed is scaffolding (Principle #8).
 | [`derivations.md`](derivations.md) | The state-at and record-index residents base composes as its whole engine — values from the first, key columns from the second |
 | [`source.md`](source.md) | Snapshot delivery (the same state-at composition), the presentation-name posture, and the `slice_only` omission shape base shares |
 | [`slice-only.md`](slice-only.md) · [`notices.md`](notices.md) | The reused omission policy and the channel its notices flow through |
+| [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — declared primary-key / uniqueness constraints on base's flat tables |
 | [`playback.md`](playback.md) | Shaped state and the bridging theorem that make direct-horizon equivalent |
 | [`anchor.md`](anchor.md) · [`incremental.md`](incremental.md) | The shared wallclock renderer and the window/cursor/fingerprint driver base wires into |
 | [`corrupters.md`](corrupters.md) | The corrupt → base composition — a base export over a corrupted emit surfaces declared defects unchanged |

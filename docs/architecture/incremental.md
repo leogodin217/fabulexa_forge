@@ -170,6 +170,17 @@ snapshot is therefore the deliberate choice — every column value is still hori
 (the gate admits only temporally constant sources), so the snapshot is wider than a
 real nightly extract, never wrong, and FK-safe at every horizon.
 
+Under `declare_keys` (base and source), the windowed compile resolves declared
+keys exactly as the full export does and sets them on each window's `QuerySpec`;
+the windowed DuckDB writer applies them at first-window table creation only,
+where the write regime preserves the constraint across windows — replace-class
+tables trivially, append-class transaction tables because a row lands in exactly
+one window and is final. A false claim surfaces as a rolled-back window under
+the writer's transaction rule, and `keys-not-declarable-csv` re-emits per driver
+invocation like any compile notice. The per-regime table and rationale are
+[`declared-keys.md`](declared-keys.md) § Incremental interplay; `declare_keys`
+participates in the config fingerprint exactly as any other config field does.
+
 This per-table-class window-membership contract — the window keys, the per-class
 behavior, the type-1 row-membership carve-out, and the windowed-grain rejection —
 is also the playback seam's tier-2 `window` contract, promoted verbatim from
@@ -438,5 +449,6 @@ usage error on stderr, exit 1, before the emit opens).
 | [`source.md`](source.md) | The other mode the driver wraps — per-genre window membership, junction extract-on-change, snapshot delivery |
 | [`playback.md`](playback.md) | The seam that promotes this driver's per-table-class window-membership rules to its tier-2 `window` contract |
 | [`anchor.md`](anchor.md) | The single `EffectiveAnchor` calendar windows resolve through |
+| [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability and its per-write-regime window gating |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface the driver reads through |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored contract carrying the relied-on `last_mutation_sim_time` / `slice_at` guarantees |

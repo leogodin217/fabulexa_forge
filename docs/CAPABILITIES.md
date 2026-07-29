@@ -88,6 +88,13 @@ See [`architecture/reader.md`](architecture/reader.md) and
   columns each sub-type of a sub-typed kind declares — the NULL-disambiguation surface
   (structurally-inapplicable vs value-absent). C14 verifies its consistency; `init`
   reads it to prune per-sub-type column proposals.
+- ✓ **Presentation-keys accessor** — `Sidecar.presentation_keys()` exposes the optional
+  `presentation_keys` block as a typed `PresentationKeys` view (or `None` when absent —
+  "no claims"), strict on read: a present-but-incoherent block raises
+  `PresentationKeysInvalidError` rather than yielding claims a consumer would key on.
+  Beside it, the contract's union-safety algebra (`union_safe`, `combined_claim`) as
+  pure, kind-scoped functions. See [`architecture/reader.md`](architecture/reader.md)
+  § The presentation-keys registry is strict on read.
 
 ---
 
@@ -221,6 +228,15 @@ Each mode reads the same emit and writes a different target shape.
   notice (source renders, base's flat projection, `init` proposals); `lookup` regated to
   `temporal_class: constant`; one mechanical carve-out for the sub-typed
   discriminator. See [`architecture/slice-only.md`](architecture/slice-only.md).
+- ✓ **Declared keys** *(post-Stage 4)* — opt-in `declare_keys` on the base and source
+  modes: each output table declares a record-identity primary key plus
+  `presentation_id` uniqueness exactly where the sidecar's `presentation_keys` block
+  claims it; DuckDB materializes real `PRIMARY KEY` / `UNIQUE` constraints (full and
+  windowed export alike), CSV records the undeliverable declaration with a
+  `keys-not-declarable-csv` notice, and dimensional `init` annotates its stubs with
+  the claimed natural key. Off by default — output byte-identical; claims are never
+  validated against data. See
+  [`architecture/declared-keys.md`](architecture/declared-keys.md).
 - ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
   through a required caller-supplied sink; CLI renders one line per notice to stderr,
   off stdout. See [`architecture/notices.md`](architecture/notices.md).

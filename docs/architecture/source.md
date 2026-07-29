@@ -594,6 +594,14 @@ funnel.
 | Reserved-name check (`exporters/reserved_names.py` + `exporters/source/plan.py`, raised as `ExportError`) | No resolved output **table** name collides with the bookkeeping names or reserved suffixes, and no resolved output **column** name is `last_mutation_sim_time` (the presentation-name posture — § Presentation-name posture) — checked at plan build over all output names, so a full export and a later `--next` on the same target agree | — |
 | Single-branch guard (`derivations/guard.py`, cross-mode) | Exactly one branch | — |
 
+`declare_keys` (`SourceConfig`, optional boolean, no cross-field rule) is the
+opt-in key-declaration capability: reference, transaction, and snapshot tables
+declare an `id` primary key plus `presentation_id` uniqueness per the whole-kind
+claim (unsplit kinds) or the per-sub-type entry (split units); change-log
+(`changelog` delivery) and junction tables declare nothing. The per-genre
+resolution rules, writer semantics, CSV posture, and incremental gating are
+owned by [`declared-keys.md`](declared-keys.md).
+
 ## Rationale
 
 - **Tracked-ness dominates classification.** A kind with any class-`tracked`
@@ -695,6 +703,7 @@ funnel.
 | [`anchor.md`](anchor.md) | The effective-anchor resolution source requires — its first mandatory consumer |
 | [`corrupters.md`](corrupters.md) | The corrupt → source composition — a source export over a corrupted emit surfaces declared defects unchanged |
 | [`writers.md`](writers.md) | The CSV / DuckDB adapters source shares with every mode |
+| [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — per-genre declared primary-key / uniqueness constraints |
 | [`config-docstrings.md`](config-docstrings.md) | The docstring convention `SourceConfig` / `RenameEntry` follow |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Source-mode feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |
