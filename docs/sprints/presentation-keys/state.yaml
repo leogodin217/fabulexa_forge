@@ -2,7 +2,7 @@ sprint: presentation-keys
 parent_branch: data_qa
 baseline_sha: b94b8eedac004ea55a8188a54705dc8338110371
 started: 2026-07-28
-current_phase: 3
+current_phase: 4
 capabilities:
   - reader: [presentation-keys view, union-safety algebra, strict accessor]
   - exporters-shared: [TableKeys, QuerySpec.keys, DuckDB constraint path]
@@ -23,7 +23,7 @@ phases:
     name: "Shared shape + DuckDB writer constraint path"
     demo: "docs/sprints/presentation-keys/demos/phase_2_writer_constraints.py"
   3:
-    status: pending
+    status: complete
     name: "Base mode declare_keys"
     demo: "docs/sprints/presentation-keys/demos/phase_3_base_declare_keys.py"
   4:
