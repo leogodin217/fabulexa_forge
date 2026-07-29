@@ -669,6 +669,7 @@ def _conflict_sidecar(
         enum_domains={},
         record_roles=record_roles,
         sub_type_columns=None,
+        presentation_keys_raw=None,
     )
 
 

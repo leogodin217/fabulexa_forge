@@ -48,6 +48,14 @@ class ColumnNotFoundError(ReaderError):
     """A named column is not declared on the named table."""
 
 
+class PresentationKeysInvalidError(ReaderError):
+    """The sidecar's presentation_keys block is present but incoherent.
+
+    Raised by Sidecar.presentation_keys() naming the kind (and sub-type)
+    and the violated clause. Absence of the block never raises.
+    """
+
+
 class TemporalClassUnavailableError(ReaderError):
     """A column whose point-in-time class is required has no usable one.
 

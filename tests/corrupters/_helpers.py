@@ -168,6 +168,7 @@ def sidecar(
         enum_domains=enum_domains or {},
         record_roles=None,
         sub_type_columns=None,
+        presentation_keys_raw=None,
     )
 
 

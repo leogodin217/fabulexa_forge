@@ -6,12 +6,14 @@ mapping. Pure Python — no files, no DuckDB.
 
 from __future__ import annotations
 
+import itertools
 from dataclasses import dataclass
-from typing import Literal, Mapping, cast
+from typing import Literal, Mapping, Sequence, cast
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.errors import (
     ColumnNotFoundError,
+    PresentationKeysInvalidError,
     SidecarStructureError,
     TableNotFoundError,
     TemporalClassUnavailableError,
@@ -511,6 +513,611 @@ def _parse_sub_type_columns(raw: object) -> SubTypeColumns | None:
     return SubTypeColumns(_partition=partition)
 
 
+def _discriminator_domain(
+    enum_domains: Mapping[str, Mapping[str, tuple[str, ...]]], kind: str
+) -> tuple[str, ...]:
+    """The declared `<kind>_type` discriminator domain for `kind`, or `()`.
+
+    Shared by `Sidecar.subtype_values` and the `presentation_keys` builder so
+    the two consult one lookup rule (`enum_domains[kind][f"{kind}_type"]`),
+    never two.
+
+    Args:
+        enum_domains: The sidecar's parsed enum_domains registry.
+        kind: A records-category kind name.
+
+    Returns:
+        The declared sub-type values, or `()` when `kind` carries no
+        `<kind>_type` entry.
+    """
+    kind_domains = enum_domains.get(kind)
+    if kind_domains is None:
+        return ()
+    return kind_domains.get(f"{kind}_type", ())
+
+
+@dataclass(frozen=True)
+class KeySpace:
+    """A minting declaration's key-space identity, verbatim from the sidecar.
+
+    `space_class` carries the sidecar field `class` (a Python keyword).
+    `prefix` and `width` are present iff the class is digit-rendered
+    ('counter' / 'record_index') — the contract's presence rule, mirrored as
+    None-ness rather than sentinel values.
+    """
+
+    space_class: Literal["counter", "record_index", "uuid", "record_id"]
+    prefix: str | None
+    width: int | None
+
+
+@dataclass(frozen=True)
+class PartitionKey:
+    """One minting declaration's key claims, scoped to its partition.
+
+    All claims range over the partition's cells, which the contract declares
+    total non-NULL (a declared partition has no NULL `presentation_id`).
+    """
+
+    unique_within: Literal["emit", "branch"]
+    branch_stable: bool
+    slice_stable: bool
+    key_space: KeySpace
+
+
+@dataclass(frozen=True)
+class WholeColumnClaim:
+    """A whole-column key claim: a kind rollup, or an algebra-derived union.
+
+    unique_within is None when no uniqueness claim is derivable — "no
+    claim", never "not unique".
+    """
+
+    unique_within: Literal["emit", "branch"] | None
+    branch_stable: bool
+    slice_stable: bool
+
+
+@dataclass(frozen=True)
+class _KindEntry:
+    """One kind's parsed, coherent presentation_keys entry.
+
+    Exactly one of (`key`) or (`sub_types`, `rollup`) is populated —
+    `key` for a flat kind, the pair for a partitioned kind — mirroring the
+    sidecar's own flat/partitioned grammar discriminator.
+    """
+
+    key: PartitionKey | None
+    sub_types: Mapping[str, PartitionKey] | None
+    rollup: WholeColumnClaim | None
+
+
+@dataclass(frozen=True)
+class PresentationKeys:
+    """Typed view of the sidecar `presentation_keys` registry.
+
+    Verbatim carry of the per-kind key-claim block: per minting declaration
+    (per sub-type for partitioned kinds, a single entry for flat kinds), the
+    key scalars and key-space identity, plus the kind rollup for partitioned
+    kinds. Constructed only from a coherent block — `Sidecar.
+    presentation_keys()` raises rather than yield an incoherent view. Built
+    from the sidecar; never re-exported from a producer type.
+    """
+
+    _entries: Mapping[str, _KindEntry]
+
+    def kinds(self) -> tuple[str, ...]:
+        """The kinds carrying claims, in sidecar (lexicographic) order.
+
+        Returns:
+            Kind names, verbatim order.
+        """
+        return tuple(self._entries.keys())
+
+    def is_partitioned(self, kind: str) -> bool:
+        """Whether a kind's entry is per-sub-type (`sub_types`) or flat (`key`).
+
+        Args:
+            kind: A kind present in the block.
+
+        Returns:
+            True iff the kind's entry carries `sub_types`.
+
+        Raises:
+            KeyError: `kind` is not in the block.
+        """
+        return self._entries[kind].sub_types is not None
+
+    def key(self, kind: str) -> PartitionKey:
+        """A flat kind's single declaration — the whole-column claim.
+
+        Args:
+            kind: A kind present in the block.
+
+        Returns:
+            The `key` entry's claims.
+
+        Raises:
+            KeyError: `kind` is not in the block.
+            ValueError: `kind` is partitioned (read `key_for` / rollup
+                instead).
+        """
+        entry = self._entries[kind]
+        if entry.key is None:
+            raise ValueError(
+                f"kind '{kind}' is partitioned; use key_for / whole_table_claim "
+                "instead of key"
+            )
+        return entry.key
+
+    def sub_types(self, kind: str) -> tuple[str, ...]:
+        """A partitioned kind's declared (minting) sub-types, sidecar order.
+
+        Every sub-type whose declaration mints, zero-row partitions included;
+        never narrowed to sub-types with surviving rows.
+
+        Args:
+            kind: A kind present in the block.
+
+        Returns:
+            Sub-type names, verbatim order.
+
+        Raises:
+            KeyError: `kind` is not in the block.
+            ValueError: `kind` is flat and has no enumerable sub-types.
+        """
+        entry = self._entries[kind]
+        if entry.sub_types is None:
+            raise ValueError(f"kind '{kind}' is flat; it has no enumerable sub-types")
+        return tuple(entry.sub_types.keys())
+
+    def key_for(self, kind: str, sub_type: str) -> PartitionKey:
+        """A partitioned kind's per-sub-type declaration.
+
+        Presence is itself a claim: every row of this sub-type carries a
+        non-NULL `presentation_id`.
+
+        Args:
+            kind: A kind present in the block.
+            sub_type: A declared sub-type of `kind`.
+
+        Returns:
+            That sub-type's claims.
+
+        Raises:
+            KeyError: `kind` is not in the block, or `sub_type` is not among
+                its declared entries (an undeclared sub-type mints nothing —
+                its cells are NULL, and it carries no claims).
+            ValueError: `kind` is flat.
+        """
+        entry = self._entries[kind]
+        if entry.sub_types is None:
+            raise ValueError(f"kind '{kind}' is flat; use key instead of key_for")
+        return entry.sub_types[sub_type]
+
+    def whole_table_claim(self, kind: str) -> WholeColumnClaim:
+        """The whole-column claim for a kind, whatever its entry shape.
+
+        The one method a consumer keying a whole-kind table reads: a flat
+        kind's `key` scalars, a partitioned kind's rollup.
+
+        Args:
+            kind: A kind present in the block.
+
+        Returns:
+            The whole-column claim; `unique_within` None when the rollup
+            derives no claim.
+
+        Raises:
+            KeyError: `kind` is not in the block.
+        """
+        entry = self._entries[kind]
+        if entry.key is not None:
+            return WholeColumnClaim(
+                unique_within=entry.key.unique_within,
+                branch_stable=entry.key.branch_stable,
+                slice_stable=entry.key.slice_stable,
+            )
+        assert entry.rollup is not None  # a partitioned entry always carries a rollup
+        return entry.rollup
+
+
+_KEY_SPACE_CLASSES: frozenset[str] = frozenset(
+    {"counter", "record_index", "uuid", "record_id"}
+)
+_DIGIT_RENDERED_CLASSES: frozenset[str] = frozenset({"counter", "record_index"})
+
+#: Scalars `key_space.class` determines: (unique_within, branch_stable, slice_stable).
+_EXPECTED_SCALARS: Mapping[str, tuple[Literal["emit", "branch"], bool, bool]] = {
+    "counter": ("emit", False, False),
+    "record_index": ("branch", True, True),
+    "uuid": ("branch", True, True),
+    "record_id": ("branch", True, True),
+}
+
+
+def _digit_suffix_extends(shorter: str, longer: str) -> bool:
+    """Whether `longer` equals `shorter` plus a possibly-empty digit string."""
+    if not longer.startswith(shorter):
+        return False
+    remainder = longer[len(shorter) :]
+    return remainder == "" or remainder.isdigit()
+
+
+def _prefixes_comparable(prefix_a: str, prefix_b: str) -> bool:
+    """Whether two digit-rendered prefixes are comparable (contract § algebra).
+
+    Comparable iff one equals the other plus a possibly-empty digit string —
+    so equal prefixes are comparable. Comparable prefixes make the pair
+    union-unsafe.
+    """
+    if len(prefix_a) <= len(prefix_b):
+        return _digit_suffix_extends(prefix_a, prefix_b)
+    return _digit_suffix_extends(prefix_b, prefix_a)
+
+
+def union_safe(
+    a: KeySpace,
+    b: KeySpace,
+) -> bool:
+    """Whether two key spaces of one kind are union-safe.
+
+    The contract's normative pairwise algebra: a value collision must be
+    impossible given only the declarations. Kind-scoped — callers must not
+    pass entries of different kinds (the spaces make no cross-kind claim,
+    and the function cannot detect the misuse).
+
+    Args:
+        a: One declaration's key space.
+        b: Another declaration's key space, same kind.
+
+    Returns:
+        True iff the pair is union-safe per the contract's table (shared
+        injective `record_index` space; independent `uuid` draws; verbatim
+        `record_id`; digit-rendered pairs with incomparable prefixes).
+    """
+    if (
+        a.space_class == "record_index"
+        and b.space_class == "record_index"
+        and a.prefix == b.prefix
+        and a.width == b.width
+    ):
+        return True
+    if a.space_class == "uuid" and b.space_class == "uuid":
+        return True
+    if a.space_class == "record_id" and b.space_class == "record_id":
+        return True
+    if (
+        a.space_class in _DIGIT_RENDERED_CLASSES
+        and b.space_class in _DIGIT_RENDERED_CLASSES
+    ):
+        assert a.prefix is not None and b.prefix is not None
+        return not _prefixes_comparable(a.prefix, b.prefix)
+    return False
+
+
+def combined_claim(
+    entries: Sequence[PartitionKey],
+) -> WholeColumnClaim:
+    """The whole-column claim for a union of one kind's partitions.
+
+    The contract's combined-set derivation: pairwise-unsafe sets carry no
+    uniqueness claim; otherwise all-counter → 'emit', all-stable →
+    'branch', mixed → 'branch'; the stability pair is true/true iff every
+    member is stable-class. A singleton set's claim equals its entry's
+    scalars.
+
+    Args:
+        entries: One kind's declarations (any subset, one or more).
+
+    Returns:
+        The union's claim.
+
+    Raises:
+        ValueError: `entries` is empty — an empty union has no claim to
+            state and a caller reaching it holds a logic error.
+    """
+    if not entries:
+        raise ValueError("combined_claim requires at least one entry")
+    if len(entries) == 1:
+        only = entries[0]
+        return WholeColumnClaim(
+            unique_within=only.unique_within,
+            branch_stable=only.branch_stable,
+            slice_stable=only.slice_stable,
+        )
+    all_stable = all(entry.branch_stable for entry in entries)
+    all_counter = all(not entry.branch_stable for entry in entries)
+    pairwise_safe = all(
+        union_safe(x.key_space, y.key_space)
+        for x, y in itertools.combinations(entries, 2)
+    )
+    if not pairwise_safe:
+        return WholeColumnClaim(
+            unique_within=None, branch_stable=all_stable, slice_stable=all_stable
+        )
+    if all_counter:
+        return WholeColumnClaim(
+            unique_within="emit", branch_stable=False, slice_stable=False
+        )
+    if all_stable:
+        return WholeColumnClaim(
+            unique_within="branch", branch_stable=True, slice_stable=True
+        )
+    return WholeColumnClaim(
+        unique_within="branch", branch_stable=False, slice_stable=False
+    )
+
+
+def _parse_key_space(raw: object, context: str) -> KeySpace:
+    """Parse and validate one `key_space` object (clause f: key-space shape).
+
+    Args:
+        raw: The raw `key_space` value.
+        context: A description of the enclosing entry, for error messages.
+
+    Returns:
+        The parsed KeySpace.
+
+    Raises:
+        PresentationKeysInvalidError: `raw` is not an object, `class` is
+            outside the four-member enum, or `prefix`/`width` presence
+            disagrees with whether `class` is digit-rendered.
+    """
+    if not isinstance(raw, Mapping):
+        raise PresentationKeysInvalidError(
+            f"{context}: key_space is missing or not an object"
+        )
+    space_class_raw = raw.get("class")
+    if space_class_raw not in _KEY_SPACE_CLASSES:
+        raise PresentationKeysInvalidError(
+            f"{context}: key_space.class {space_class_raw!r} is not one of "
+            f"{sorted(_KEY_SPACE_CLASSES)} (clause: key-space shape)"
+        )
+    space_class = cast(
+        Literal["counter", "record_index", "uuid", "record_id"], space_class_raw
+    )
+    digit_rendered = space_class in _DIGIT_RENDERED_CLASSES
+    prefix_present = "prefix" in raw
+    width_present = "width" in raw
+    if digit_rendered != prefix_present or digit_rendered != width_present:
+        raise PresentationKeysInvalidError(
+            f"{context}: key_space.class {space_class!r} prefix/width presence "
+            f"must match digit-rendered={digit_rendered} (clause: key-space shape)"
+        )
+    if not digit_rendered:
+        return KeySpace(space_class=space_class, prefix=None, width=None)
+    prefix_raw = raw.get("prefix")
+    width_raw = raw.get("width")
+    if (
+        not isinstance(prefix_raw, str)
+        or not isinstance(width_raw, int)
+        or isinstance(width_raw, bool)
+    ):
+        raise PresentationKeysInvalidError(
+            f"{context}: key_space.prefix/width must be a string/integer "
+            "(clause: key-space shape)"
+        )
+    return KeySpace(space_class=space_class, prefix=prefix_raw, width=width_raw)
+
+
+def _parse_partition_key(raw: object, context: str) -> PartitionKey:
+    """Parse and validate one `partition_key` object.
+
+    Args:
+        raw: The raw partition-key value (a `key` entry or one `sub_types`
+            member).
+        context: A description of the enclosing entry, for error messages.
+
+    Returns:
+        The parsed PartitionKey.
+
+    Raises:
+        PresentationKeysInvalidError: `raw` is not an object, its scalars are
+            missing/mistyped, its key_space is invalid (clause f), or its
+            scalars disagree with `key_space.class` (clause e).
+    """
+    if not isinstance(raw, Mapping):
+        raise PresentationKeysInvalidError(f"{context}: entry is not an object")
+    key_space = _parse_key_space(raw.get("key_space"), context)
+    unique_within_raw = raw.get("unique_within")
+    branch_stable_raw = raw.get("branch_stable")
+    slice_stable_raw = raw.get("slice_stable")
+    if (
+        unique_within_raw not in ("emit", "branch")
+        or not isinstance(branch_stable_raw, bool)
+        or not isinstance(slice_stable_raw, bool)
+    ):
+        raise PresentationKeysInvalidError(
+            f"{context}: unique_within/branch_stable/slice_stable missing or mistyped"
+        )
+    actual = (unique_within_raw, branch_stable_raw, slice_stable_raw)
+    expected = _EXPECTED_SCALARS[key_space.space_class]
+    if actual != expected:
+        raise PresentationKeysInvalidError(
+            f"{context}: scalars {actual} inconsistent with key_space.class "
+            f"{key_space.space_class!r} (expected {expected}) "
+            "(clause: scalar-key-space coupling)"
+        )
+    return PartitionKey(
+        unique_within=cast(Literal["emit", "branch"], unique_within_raw),
+        branch_stable=branch_stable_raw,
+        slice_stable=slice_stable_raw,
+        key_space=key_space,
+    )
+
+
+def _parse_rollup_claim(
+    raw_entry: Mapping[str, object], context: str
+) -> WholeColumnClaim:
+    """Parse a partitioned kind's whole-column rollup.
+
+    Args:
+        raw_entry: The kind's raw block entry (carries `unique_within`
+            optionally, `branch_stable`/`slice_stable` required, alongside
+            `sub_types`).
+        context: A description of the kind, for error messages.
+
+    Returns:
+        The parsed rollup claim.
+
+    Raises:
+        PresentationKeysInvalidError: `unique_within` is present but outside
+            the two-member enum, or `branch_stable`/`slice_stable` is
+            missing or mistyped.
+    """
+    unique_within_present = "unique_within" in raw_entry
+    unique_within_raw = raw_entry.get("unique_within")
+    if unique_within_present and unique_within_raw not in ("emit", "branch"):
+        raise PresentationKeysInvalidError(
+            f"{context}: rollup unique_within {unique_within_raw!r} is invalid"
+        )
+    branch_stable_raw = raw_entry.get("branch_stable")
+    slice_stable_raw = raw_entry.get("slice_stable")
+    if not isinstance(branch_stable_raw, bool) or not isinstance(
+        slice_stable_raw, bool
+    ):
+        raise PresentationKeysInvalidError(
+            f"{context}: rollup branch_stable/slice_stable missing or mistyped"
+        )
+    unique_within = (
+        cast(Literal["emit", "branch"], unique_within_raw)
+        if unique_within_present
+        else None
+    )
+    return WholeColumnClaim(
+        unique_within=unique_within,
+        branch_stable=branch_stable_raw,
+        slice_stable=slice_stable_raw,
+    )
+
+
+def _parse_kind_entry(
+    kind: str,
+    raw_entry: object,
+    discriminator_domain: tuple[str, ...],
+) -> _KindEntry:
+    """Parse and validate one kind's presentation_keys entry.
+
+    Args:
+        kind: The kind name, for error messages.
+        raw_entry: The raw block entry for `kind`.
+        discriminator_domain: `kind`'s declared `<kind>_type` sub-type
+            domain; empty iff `kind` is flat.
+
+    Returns:
+        The parsed, coherent kind entry.
+
+    Raises:
+        PresentationKeysInvalidError: The entry is not an object, its shape
+            disagrees with the discriminator domain (clause c), a
+            `sub_types` key is outside the domain (clause d), a partition
+            key is malformed (clauses e/f), or the rollup disagrees with
+            `combined_claim` (clause g).
+    """
+    if not isinstance(raw_entry, Mapping):
+        raise PresentationKeysInvalidError(f"kind '{kind}': entry is not an object")
+    is_discriminated = bool(discriminator_domain)
+    has_key = "key" in raw_entry
+    has_sub_types = "sub_types" in raw_entry
+
+    if is_discriminated:
+        if has_key or not has_sub_types:
+            raise PresentationKeysInvalidError(
+                f"kind '{kind}': discriminator-bearing kind must carry a "
+                "sub_types entry, not key (clause: entry shape)"
+            )
+        sub_types_raw = raw_entry["sub_types"]
+        if not isinstance(sub_types_raw, Mapping) or not sub_types_raw:
+            raise PresentationKeysInvalidError(
+                f"kind '{kind}': sub_types must be a non-empty object"
+            )
+        domain = frozenset(discriminator_domain)
+        sub_entries: dict[str, PartitionKey] = {}
+        for sub_type, sub_raw in sub_types_raw.items():
+            if sub_type not in domain:
+                raise PresentationKeysInvalidError(
+                    f"kind '{kind}' sub_type '{sub_type}': not in the "
+                    "discriminator domain (clause: sub-type domain)"
+                )
+            sub_entries[sub_type] = _parse_partition_key(
+                sub_raw, f"kind '{kind}' sub_type '{sub_type}'"
+            )
+        rollup = _parse_rollup_claim(raw_entry, f"kind '{kind}'")
+        expected_rollup = combined_claim(tuple(sub_entries.values()))
+        if rollup != expected_rollup:
+            raise PresentationKeysInvalidError(
+                f"kind '{kind}': rollup {rollup} disagrees with the union "
+                f"algebra's {expected_rollup} (clause: rollup consistency)"
+            )
+        return _KindEntry(key=None, sub_types=sub_entries, rollup=rollup)
+
+    if has_sub_types or not has_key:
+        raise PresentationKeysInvalidError(
+            f"kind '{kind}': flat kind must carry a key entry, not sub_types "
+            "(clause: entry shape)"
+        )
+    key = _parse_partition_key(raw_entry["key"], f"kind '{kind}'")
+    return _KindEntry(key=key, sub_types=None, rollup=None)
+
+
+def _presentation_id_kinds(tables: tuple[TableSpec, ...]) -> frozenset[str]:
+    """The kinds whose `records__<kind>` table carries a `presentation_id` column."""
+    return frozenset(
+        table.record_kind
+        for table in tables
+        if table.category == "records"
+        and table.record_kind is not None
+        and any(col.name == "presentation_id" for col in table.columns)
+    )
+
+
+def _build_presentation_keys(
+    raw_block: Mapping[str, object],
+    tables: tuple[TableSpec, ...],
+    enum_domains: Mapping[str, Mapping[str, tuple[str, ...]]],
+) -> PresentationKeys:
+    """Strict-parse the sidecar `presentation_keys` block into a typed view.
+
+    Args:
+        raw_block: The raw `presentation_keys` mapping.
+        tables: The sidecar's parsed tables, for the membership clause.
+        enum_domains: The sidecar's parsed enum_domains registry, for the
+            entry-shape and sub-type-domain clauses.
+
+    Returns:
+        The coherent typed view.
+
+    Raises:
+        PresentationKeysInvalidError: Any of the six coherence clauses is
+            violated, naming the kind (and sub-type) and the clause.
+    """
+    presentation_id_kinds = _presentation_id_kinds(tables)
+    block_kinds = frozenset(raw_block.keys())
+
+    extra_in_block = sorted(block_kinds - presentation_id_kinds)
+    if extra_in_block:
+        kind = extra_in_block[0]
+        raise PresentationKeysInvalidError(
+            f"kind '{kind}': presentation_keys entry present but "
+            f"records__{kind} carries no presentation_id column "
+            "(clause: kind membership)"
+        )
+    missing_from_block = sorted(presentation_id_kinds - block_kinds)
+    if missing_from_block:
+        kind = missing_from_block[0]
+        raise PresentationKeysInvalidError(
+            f"kind '{kind}': records__{kind} carries a presentation_id column "
+            "but no presentation_keys entry (clause: kind membership)"
+        )
+
+    entries: dict[str, _KindEntry] = {}
+    for kind, raw_entry in raw_block.items():
+        domain = _discriminator_domain(enum_domains, kind)
+        entries[kind] = _parse_kind_entry(kind, raw_entry, domain)
+    return PresentationKeys(_entries=entries)
+
+
 class Sidecar:
     """Typed, read-only view of a base-layer emit's base.json.
 
@@ -528,6 +1135,7 @@ class Sidecar:
         enum_domains: Mapping[str, Mapping[str, tuple[str, ...]]],
         record_roles: RecordRoles | None,
         sub_type_columns: SubTypeColumns | None,
+        presentation_keys_raw: Mapping[str, object] | None,
     ) -> None:
         self._raw = raw
         self._base_format_version = base_format_version
@@ -538,6 +1146,7 @@ class Sidecar:
         self._enum_domains = enum_domains
         self._record_roles = record_roles
         self._sub_type_columns = sub_type_columns
+        self._presentation_keys_raw = presentation_keys_raw
 
     @classmethod
     def from_raw(cls, raw: Mapping[str, object]) -> "Sidecar":
@@ -617,6 +1226,12 @@ class Sidecar:
         enum_domains = _parse_enum_domains(raw.get("enum_domains"))
         record_roles = _parse_record_roles(raw.get("record_roles"))
         sub_type_columns = _parse_sub_type_columns(raw.get("sub_type_columns"))
+        presentation_keys_raw_untyped = raw.get("presentation_keys")
+        presentation_keys_raw: Mapping[str, object] | None = (
+            presentation_keys_raw_untyped
+            if isinstance(presentation_keys_raw_untyped, dict)
+            else None
+        )
 
         return cls(
             raw=raw,
@@ -628,6 +1243,7 @@ class Sidecar:
             enum_domains=enum_domains,
             record_roles=record_roles,
             sub_type_columns=sub_type_columns,
+            presentation_keys_raw=presentation_keys_raw,
         )
 
     @property
@@ -847,8 +1463,32 @@ class Sidecar:
             deliberate: routing asks this for every selected kind, and most kinds are
             legitimately not sub-typed.
         """
-        kind_domains = self._enum_domains.get(kind)
-        if kind_domains is None:
-            return ()
-        discriminator_key = f"{kind}_type"
-        return kind_domains.get(discriminator_key, ())
+        return _discriminator_domain(self._enum_domains, kind)
+
+    def presentation_keys(self) -> PresentationKeys | None:
+        """The sidecar `presentation_keys` registry as a typed view.
+
+        Method on `Sidecar`, sibling of `record_roles()` / `sub_type_columns()`.
+        Verbatim carry; nothing inferred. Unlike its siblings the parse is
+        strict: no conformance check owns this block's semantic rules, and a
+        mended block would feed wrong keys to consumers, so an incoherent
+        present block refuses rather than degrades.
+
+        Returns:
+            The typed view, or None when the sidecar carries no
+            `presentation_keys` key ("no claims").
+
+        Raises:
+            PresentationKeysInvalidError: The block is present and violates a
+                consistency clause (kind membership vs `presentation_id` column
+                presence, entry shape vs discriminator domain, sub-type keys
+                outside the domain, scalars inconsistent with `key_space.class`,
+                key-space presence-rule violation, or rollup inconsistent with
+                the union algebra) — the message names the kind, sub-type, and
+                clause.
+        """
+        if self._presentation_keys_raw is None:
+            return None
+        return _build_presentation_keys(
+            self._presentation_keys_raw, self._tables, self._enum_domains
+        )

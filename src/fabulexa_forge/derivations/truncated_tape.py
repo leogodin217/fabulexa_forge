@@ -458,6 +458,7 @@ def build_truncated_sidecar(sidecar: Sidecar) -> Sidecar:
     new_tables = tuple(
         _truncate_table_columns(sidecar, table) for table in sidecar.tables()
     )
+    presentation_keys_raw = sidecar.raw.get("presentation_keys")
     return Sidecar(
         raw=sidecar.raw,
         base_format_version=sidecar.base_format_version,
@@ -468,4 +469,7 @@ def build_truncated_sidecar(sidecar: Sidecar) -> Sidecar:
         enum_domains=sidecar.enum_domains(),
         record_roles=sidecar.record_roles(),
         sub_type_columns=sidecar.sub_type_columns(),
+        presentation_keys_raw=(
+            presentation_keys_raw if isinstance(presentation_keys_raw, dict) else None
+        ),
     )

@@ -12,6 +12,7 @@ from fabulexa_forge.reader.emit import Emit, open_emit
 from fabulexa_forge.reader.errors import (
     ColumnNotFoundError,
     EmitNotFoundError,
+    PresentationKeysInvalidError,
     ReaderError,
     RunDatabaseError,
     SidecarParseError,
@@ -38,12 +39,18 @@ from fabulexa_forge.reader.relations import (
 from fabulexa_forge.reader.sidecar import (
     BranchEntry,
     ColumnSpec,
+    KeySpace,
+    PartitionKey,
+    PresentationKeys,
     RecordRoles,
     RuntimeAnchor,
     Sidecar,
     SubTypeColumns,
     TableSpec,
     TemporalClass,
+    WholeColumnClaim,
+    combined_claim,
+    union_safe,
 )
 
 __all__ = [
@@ -54,6 +61,10 @@ __all__ = [
     "ConformanceReport",
     "Emit",
     "EmitNotFoundError",
+    "KeySpace",
+    "PartitionKey",
+    "PresentationKeys",
+    "PresentationKeysInvalidError",
     "ReaderError",
     "REF_INDEX_PREFIX",
     "RecordRoles",
@@ -70,9 +81,11 @@ __all__ = [
     "TemporalClass",
     "TemporalClassUnavailableError",
     "UnsupportedBaseFormatVersionError",
+    "WholeColumnClaim",
     "build_history_relation_sql",
     "build_membership_relation_sql",
     "build_records_relation_sql",
+    "combined_claim",
     "distinct_prop_values",
     "open_emit",
     "records_column_role",
@@ -80,5 +93,6 @@ __all__ = [
     "ref_index_sibling",
     "run_check",
     "structural_instant_columns",
+    "union_safe",
     "validate",
 ]
