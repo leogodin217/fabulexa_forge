@@ -828,6 +828,158 @@ def slice_only_horizon_window() -> Window:
     return Window(index=0, start_ns=0, end_ns=300 * _MS, label="w00000")
 
 
+_KEYS_VISIT_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "BIGINT"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+_KEYS_ACTOR_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "BIGINT"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+_KEYS_MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "member__actor__kind", "type": "VARCHAR"},
+    {"name": "member__actor__id", "type": "VARCHAR"},
+]
+
+
+def build_source_keys_emit(tmp_path: Path) -> Path:
+    """Build a `declare_keys` engine-test emit spanning changelog, split-unit,
+    and junction genres.
+
+    - records__visit: tracked (prop__status) -> changelog; carries a flat
+        whole-column presentation_keys claim; owns membership__visit__team
+        (junction, never keyed).
+    - records__actor: untracked, object-registry role -> splits into
+        consultant (dimension) / nurse (fact); the block declares only
+        `consultant`'s partition — presence is the claim, `nurse` gets
+        identity keys only.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__visit", _KEYS_VISIT_COLUMNS))
+    conn.execute(_create_ddl("records__actor", _KEYS_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_ddl("membership__visit__team", _KEYS_MEMBERSHIP_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__visit" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "v001", 1001, 100 * _MS, True, 100 * _MS, 0, "open"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "visit", "v001", "status", 100 * _MS, "open"],
+    )
+
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "act001", 2001, 70 * _MS, True, 70 * _MS, 0, "consultant"],
+    )
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "act002", 2002, 70 * _MS, True, 70 * _MS, 1, "nurse"],
+    )
+
+    conn.execute(
+        'INSERT INTO "membership__visit__team" VALUES (?, ?, ?, NULL, ?, ?)',
+        ["trunk", "v001", 100 * _MS, "actor", "act001"],
+    )
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__visit", "records", _KEYS_VISIT_COLUMNS, 1, record_kind="visit"
+            ),
+            _table_spec(
+                "records__actor", "records", _KEYS_ACTOR_COLUMNS, 2, record_kind="actor"
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
+            _table_spec(
+                "membership__visit__team",
+                "membership",
+                _KEYS_MEMBERSHIP_COLUMNS,
+                1,
+                record_kind="visit",
+                property_name="team",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra={
+            "record_roles": {"actor": {"consultant": "dimension", "nurse": "fact"}},
+            "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+            "presentation_keys": {
+                "visit": {
+                    "key": {
+                        "unique_within": "branch",
+                        "branch_stable": True,
+                        "slice_stable": True,
+                        "key_space": {
+                            "class": "record_index",
+                            "prefix": "",
+                            "width": 4,
+                        },
+                    }
+                },
+                "actor": {
+                    "sub_types": {
+                        "consultant": {
+                            "unique_within": "branch",
+                            "branch_stable": True,
+                            "slice_stable": True,
+                            "key_space": {
+                                "class": "record_index",
+                                "prefix": "",
+                                "width": 4,
+                            },
+                        }
+                    },
+                    "unique_within": "branch",
+                    "branch_stable": True,
+                    "slice_stable": True,
+                },
+            },
+        },
+    )
+    return tmp_path
+
+
 _SLICE_ONLY_ONLY_COLUMNS: list[dict[str, object]] = [
     identity_column("fork_path", "VARCHAR"),
     identity_column("record_id", "VARCHAR"),

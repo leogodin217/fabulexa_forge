@@ -16,13 +16,17 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from _support.notices import discard_notice_sink
+from _support.duckdb_introspect import constraint_types
+from _support.notices import RecordingNoticeSink, discard_notice_sink
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import ExportConfig, SourceConfig
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import SourceAnchorRequired
-from fabulexa_forge.exporters.query_spec import QuerySpec
+from fabulexa_forge.exporters.query_spec import (
+    NOTICE_KEYS_NOT_DECLARABLE_CSV,
+    QuerySpec,
+)
 from fabulexa_forge.exporters.source.engine import (
     build_source_query_specs,
     export_source,
@@ -38,6 +42,7 @@ from ._source_fixtures import (
     build_empty_source_emit,
     build_presentation_constant_source_emit,
     build_presentation_reclassified_source_emit,
+    build_source_keys_emit,
     build_source_test_emit,
     build_windowed_source_test_emit,
     windowed_test_windows,
@@ -387,3 +392,200 @@ def test_constant_presentation_column_exports_as_reference(tmp_path: Path) -> No
         header = next(csv.reader(f))
     assert "op" not in header
     assert "created_at" in header
+
+
+# ---------------------------------------------------------------------------
+# declare_keys
+# ---------------------------------------------------------------------------
+
+_KEYS_CONFIG = ExportConfig(mode="source", source=SourceConfig(declare_keys=True))
+_KEYS_SNAPSHOT_CONFIG = ExportConfig(
+    mode="source",
+    source=SourceConfig(declare_keys=True, change_delivery="snapshot"),
+)
+
+
+def test_build_source_query_specs_declare_keys_absent_all_unkeyed(
+    tmp_path: Path,
+) -> None:
+    """declare_keys absent -> every spec's keys is None."""
+    emit_dir = build_source_keys_emit(tmp_path)
+    config = ExportConfig(mode="source")
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        specs = build_source_query_specs(
+            emit,
+            config,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+    assert specs
+    assert all(spec.keys is None for spec in specs)
+
+
+def test_build_source_query_specs_declare_keys_false_all_unkeyed(
+    tmp_path: Path,
+) -> None:
+    """declare_keys: false -> every spec's keys is None, same as absent."""
+    emit_dir = build_source_keys_emit(tmp_path)
+    config = ExportConfig(mode="source", source=SourceConfig(declare_keys=False))
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        specs = build_source_query_specs(
+            emit,
+            config,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+    assert specs
+    assert all(spec.keys is None for spec in specs)
+
+
+def test_build_source_query_specs_declare_keys_per_genre(tmp_path: Path) -> None:
+    """declare_keys: true -> changelog/junction unkeyed; the claimed split
+    unit ('consultant') carries a presentation_id UNIQUE, the unclaimed one
+    ('nurse') identity keys only."""
+    emit_dir = build_source_keys_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        specs = build_source_query_specs(
+            emit,
+            _KEYS_CONFIG,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+    by_table = {spec.table_name: spec for spec in specs}
+    assert by_table["visit"].keys is None  # changelog under changelog delivery
+    assert by_table["visit_team"].keys is None  # junction
+    assert by_table["consultant"].keys is not None
+    assert by_table["consultant"].keys.unique == (("presentation_id",),)
+    assert by_table["nurse"].keys is not None
+    assert by_table["nurse"].keys.unique == ()
+
+
+def test_build_source_query_specs_declare_keys_snapshot_delivery_changelog_keyed(
+    tmp_path: Path,
+) -> None:
+    """declare_keys: true + change_delivery: snapshot -> the changelog-genre
+    table carries the whole-table-claimed keys."""
+    emit_dir = build_source_keys_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        specs = build_source_query_specs(
+            emit,
+            _KEYS_SNAPSHOT_CONFIG,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+    by_table = {spec.table_name: spec for spec in specs}
+    assert by_table["visit"].keys is not None
+    assert by_table["visit"].keys.unique == (("presentation_id",),)
+
+
+def test_build_source_query_specs_declare_keys_windowed_matches_full(
+    tmp_path: Path,
+) -> None:
+    """A windowed compile's declared keys equal the full-export declaration."""
+    emit_dir = build_source_keys_emit(tmp_path)
+    window, _, _ = windowed_test_windows()
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        full_specs = build_source_query_specs(
+            emit,
+            _KEYS_CONFIG,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        windowed_specs = build_source_query_specs(
+            emit,
+            _KEYS_CONFIG,
+            anchor,
+            window,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+    full_keys = {s.table_name: s.keys for s in full_specs}
+    windowed_keys = {s.table_name: s.keys for s in windowed_specs}
+    assert full_keys == windowed_keys
+
+
+def test_export_source_csv_declare_keys_emits_one_notice_before_data(
+    tmp_path: Path,
+) -> None:
+    """export_source CSV + declare_keys -> exactly one keys-not-declarable-csv
+    notice, and the data is written unaffected."""
+    emit_dir = build_source_keys_emit(tmp_path)
+    out_dir = tmp_path / "csv_out"
+    out_dir.mkdir()
+    sink = RecordingNoticeSink()
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        row_counts = export_source(
+            emit, _KEYS_CONFIG, out_dir, "csv", anchor, notice_sink=sink
+        )
+
+    assert row_counts["consultant"] == 1
+    codes = [n.code for n in sink.notices]
+    assert codes.count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
+
+
+def test_export_source_duckdb_declare_keys_emits_no_csv_notice(tmp_path: Path) -> None:
+    """export_source DuckDB + declare_keys -> no keys-not-declarable-csv notice."""
+    emit_dir = build_source_keys_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+    sink = RecordingNoticeSink()
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        export_source(emit, _KEYS_CONFIG, out_path, "duckdb", anchor, notice_sink=sink)
+
+    codes = [n.code for n in sink.notices]
+    assert NOTICE_KEYS_NOT_DECLARABLE_CSV not in codes
+
+
+def _unique_constraint_columns(out_path: Path, table_name: str) -> list[list[str]]:
+    """The column lists of every declared UNIQUE constraint on a table
+    (excludes the PRIMARY KEY's own implicit UNIQUE row)."""
+    conn = duckdb.connect(str(out_path), read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT constraint_column_names FROM duckdb_constraints()"
+            " WHERE table_name = ? AND constraint_type = 'UNIQUE'",
+            [table_name],
+        ).fetchall()
+    finally:
+        conn.close()
+    return [list(row[0]) for row in rows]
+
+
+def test_export_source_duckdb_declare_keys_carries_constraints(tmp_path: Path) -> None:
+    """An end-to-end DuckDB export carries the resolved constraints: the
+    claimed split unit's UNIQUE constraint names presentation_id, the
+    unclaimed one declares no presentation_id UNIQUE."""
+    emit_dir = build_source_keys_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        export_source(
+            emit,
+            _KEYS_CONFIG,
+            out_path,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+        )
+
+    assert "PRIMARY KEY" in constraint_types(out_path, "consultant")
+    assert ["presentation_id"] in _unique_constraint_columns(out_path, "consultant")
+
+    assert "PRIMARY KEY" in constraint_types(out_path, "nurse")
+    assert ["presentation_id"] not in _unique_constraint_columns(out_path, "nurse")

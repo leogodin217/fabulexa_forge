@@ -524,10 +524,17 @@ class SourceConfig(StrictBaseModel):
     full-table snapshots — one per window horizon under a windowed invocation,
     one at the tape's end in a full export. Participates in the incremental
     fingerprint."""
+    declare_keys: bool | None = None
+    """Emit declared key constraints (PK/UNIQUE) for the DuckDB writer,
+    resolved from the sidecar's presentation_keys registry. Absent or False
+    -> off (a semantic default 'off', mirroring `slice_at` — not an invented
+    mapping value). Ignored under CSV: a keys-not-declarable-csv notice is
+    emitted instead."""
 
     @model_validator(mode="after")
     def at_least_one_field(self) -> Self:
-        """A present `source` section sets at least one of exclude / rename.
+        """A present `source` section sets at least one of exclude / rename /
+        declare_keys.
 
         Raises:
             ValueError: No field was explicitly set (source: {} is not
@@ -535,8 +542,8 @@ class SourceConfig(StrictBaseModel):
         """
         if not self.model_fields_set:
             raise ValueError(
-                "source section must set at least one of exclude / rename"
-                " (an empty source: {} block is not meaningful;"
+                "source section must set at least one of exclude / rename /"
+                " declare_keys (an empty source: {} block is not meaningful;"
                 " omit the section for a bare full dump)"
             )
         return self

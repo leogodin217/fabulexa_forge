@@ -13,10 +13,11 @@ implements (no incremental window — window membership is renders.py's concern)
 Layer-direction invariant: imports only the reader, the derivations layer
 (the row-state-events fold's column-naming helper and the state-at
 derivation's column order / property-partition helpers), fabulexa_forge.errors,
-the mode-neutral reserved_names, notices (for `Notice`, and `NoticeSink`
-TYPE_CHECKING-only), and slice_only modules, the sibling source.columns
-module, config.models (TYPE_CHECKING only), and stdlib. Never imports
-exporters.dimensional.* or exporters.streaming.*.
+the mode-neutral reserved_names and query_spec (for `TableKeys`) modules,
+notices (for `Notice`, and `NoticeSink` TYPE_CHECKING-only), and slice_only
+modules, the sibling source.columns module, config.models (TYPE_CHECKING
+only), and stdlib. Never imports exporters.dimensional.* or
+exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -27,7 +28,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from fabulexa_forge.config.models import ExcludeDecl, RenameEntry, SourceConfig
     from fabulexa_forge.exporters.notices import NoticeSink
-    from fabulexa_forge.reader.sidecar import RecordRoles, Sidecar
+    from fabulexa_forge.reader.sidecar import PresentationKeys, RecordRoles, Sidecar
 
 from fabulexa_forge.derivations.properties import has_presentation_id
 from fabulexa_forge.derivations.row_state_events import resolve_stream_columns
@@ -45,6 +46,7 @@ from fabulexa_forge.errors import (
     SourceUnclassifiedColumn,
 )
 from fabulexa_forge.exporters.notices import Notice
+from fabulexa_forge.exporters.query_spec import TableKeys
 from fabulexa_forge.exporters.reserved_names import (
     RESERVED_PRESENTATION_COLUMN_NAME,
     is_reserved_column_name,
@@ -53,6 +55,9 @@ from fabulexa_forge.exporters.reserved_names import (
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, _scalar_properties
 from fabulexa_forge.reader.records_columns import records_column_role
+
+#: The `records__<kind>` name prefix, stripped to recover a records unit's kind.
+_RECORDS_TABLE_PREFIX = "records__"
 
 #: Prefixes/suffixes the presentation-default renamer strips or recognizes.
 _ELEM_PREFIX = "elem__"
@@ -891,6 +896,134 @@ def _check_reserved_names(specs: tuple[SourceTableSpec, ...]) -> None:
                     f"table '{spec.name}': column '{out}' is reserved under"
                     " incremental export"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Key resolution
+# ---------------------------------------------------------------------------
+
+
+def _kind_from_records_table(source_table: str) -> str:
+    """Recover a records unit's kind from its `records__<kind>` source table name.
+
+    Args:
+        source_table: A `SourceTableSpec.source_table` of genre 'changelog',
+            'reference', or 'transaction' — never 'junction'.
+
+    Returns:
+        The bare kind name.
+    """
+    return source_table[len(_RECORDS_TABLE_PREFIX) :]
+
+
+def _whole_table_claimed(
+    presentation_keys: "PresentationKeys | None", kind: str
+) -> bool:
+    """Whether `kind` carries a whole-column presentation_id uniqueness claim.
+
+    Args:
+        presentation_keys: The sidecar's parsed claims view, or None when the
+            block is absent.
+        kind: The record kind.
+
+    Returns:
+        True iff the block carries an entry for `kind` whose whole-table claim
+        (a flat kind's `key`, or a partitioned kind's rollup) derives a
+        non-None `unique_within`.
+    """
+    if presentation_keys is None or kind not in presentation_keys.kinds():
+        return False
+    return presentation_keys.whole_table_claim(kind).unique_within is not None
+
+
+def _sub_type_claimed(
+    presentation_keys: "PresentationKeys | None", kind: str, sub_type: str
+) -> bool:
+    """Whether a partitioned kind's `sub_type` entry is declared — its presence
+    is the claim.
+
+    Args:
+        presentation_keys: The sidecar's parsed claims view, or None when the
+            block is absent.
+        kind: The record kind.
+        sub_type: The split unit's discriminator value.
+
+    Returns:
+        True iff the block declares `kind`'s partitioned entry and it carries
+        a `sub_type` sub-entry.
+    """
+    if presentation_keys is None:
+        return False
+    try:
+        presentation_keys.key_for(kind, sub_type)
+    except KeyError:
+        return False
+    return True
+
+
+def resolve_source_table_keys(
+    sidecar: "Sidecar",
+    spec: SourceTableSpec,
+    change_delivery: Literal["changelog", "snapshot"],
+) -> TableKeys | None:
+    """Resolve one source output table's declared keys, or None for its genre.
+
+    Pure plan-time resolution (design doc § Key resolution per output table,
+    'source' rows); the engine calls it only when `declare_keys` is on. Genre
+    rule:
+
+    - junction → None (membership rows carry no claimed key).
+    - changelog genre under `change_delivery: 'changelog'` → None (multiple
+      rows per record; no honest key exists post-render).
+    - changelog genre under `change_delivery: 'snapshot'` → whole-table rule
+      (one row per record at the horizon; tracked kinds never sub-type
+      split).
+    - reference / transaction, unsplit (`spec.sub_type is None`) → primary
+      key on the record-identity (`id`) column's output name; unique on
+      `presentation_id`'s output name iff the whole-table claim holds (flat
+      `key` entry, or partitioned rollup with non-None `unique_within`).
+    - reference / transaction, split unit (`spec.sub_type` set) → primary
+      key on `id`; unique on `presentation_id` iff `key_for(kind, sub_type)`
+      exists — the entry's presence is the claim.
+
+    Output names are read from `spec.columns` (source → output pairs), so
+    renames are honored. A kind absent from the block declares identity keys
+    only.
+
+    Args:
+        sidecar: The open emit's sidecar (claims via
+            `sidecar.presentation_keys()` — strict-on-read applies).
+        spec: The resolved output table spec.
+        change_delivery: The mode's change-log delivery, deciding the
+            changelog-genre rule.
+
+    Returns:
+        The table's declared keys, or None when the genre declares nothing.
+
+    Raises:
+        PresentationKeysInvalidError: The block is present and incoherent
+            (propagated; plan-time, before any output).
+    """
+    if spec.genre == "junction":
+        return None
+    if spec.genre == "changelog" and change_delivery == "changelog":
+        return None
+
+    columns = dict(spec.columns)
+    id_output = columns["record_id"]
+    pid_output = columns.get("presentation_id")
+    kind = _kind_from_records_table(spec.source_table)
+    presentation_keys = sidecar.presentation_keys()
+
+    if spec.sub_type is None:
+        claimed = _whole_table_claimed(presentation_keys, kind)
+    else:
+        claimed = _sub_type_claimed(presentation_keys, kind, spec.sub_type)
+
+    unique: tuple[tuple[str, ...], ...] = (
+        ((pid_output,),) if claimed and pid_output is not None else ()
+    )
+    return TableKeys(primary_key=(id_output,), unique=unique)
 
 
 # ---------------------------------------------------------------------------

@@ -218,6 +218,47 @@ def test_change_delivery_unknown_value_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# declare_keys (SourceConfig)
+# ---------------------------------------------------------------------------
+
+
+def test_declare_keys_true_alone_is_valid_section() -> None:
+    """source: {declare_keys: true} alone is a valid, non-empty section."""
+    cfg = SourceConfig.model_validate({"declare_keys": True})
+    assert cfg.declare_keys is True
+
+
+def test_declare_keys_false_behaves_as_absent() -> None:
+    """source: {declare_keys: false} loads; declare_keys reads False, same
+    off-posture as the field being absent — the config layer stores the
+    author's explicit value verbatim, the engine's off/on decision is a
+    separate concern."""
+    cfg = SourceConfig.model_validate({"declare_keys": False})
+    assert cfg.declare_keys is False
+
+
+def test_declare_keys_non_bool_rejected() -> None:
+    """source: {declare_keys: [...]} (not a bool) is rejected."""
+    with pytest.raises(ValidationError):
+        SourceConfig.model_validate({"declare_keys": []})
+
+
+def test_empty_source_block_error_names_declare_keys() -> None:
+    """The at-least-one-field error message names declare_keys."""
+    with pytest.raises(ValidationError, match="declare_keys"):
+        SourceConfig.model_validate({})
+
+
+def test_declare_keys_composes_freely_with_change_delivery() -> None:
+    """declare_keys and change_delivery compose freely in one section."""
+    cfg = SourceConfig.model_validate(
+        {"declare_keys": True, "change_delivery": "snapshot"}
+    )
+    assert cfg.declare_keys is True
+    assert cfg.change_delivery == "snapshot"
+
+
+# ---------------------------------------------------------------------------
 # rebase / incremental remain valid siblings under mode: source
 # ---------------------------------------------------------------------------
 

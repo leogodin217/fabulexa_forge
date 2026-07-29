@@ -36,8 +36,15 @@ if TYPE_CHECKING:
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import SourceAnchorRequired
 from fabulexa_forge.exporters.base_relations import apply_base_relations
-from fabulexa_forge.exporters.query_spec import QuerySpec, write_query_specs
-from fabulexa_forge.exporters.source.plan import build_source_plan
+from fabulexa_forge.exporters.query_spec import (
+    QuerySpec,
+    keys_not_declarable_csv_notice,
+    write_query_specs,
+)
+from fabulexa_forge.exporters.source.plan import (
+    build_source_plan,
+    resolve_source_table_keys,
+)
 from fabulexa_forge.exporters.source.renders import (
     build_render_sql,
     build_snapshot_render_sql,
@@ -82,6 +89,19 @@ def _write_mode_for_genre(
     if genre == "changelog" and change_delivery == "snapshot":
         return "replace"
     return _WINDOWED_WRITE_MODE_BY_GENRE[genre]
+
+
+def _declare_keys_enabled(config: "ExportConfig") -> bool:
+    """Whether the source section's `declare_keys` is on.
+
+    Args:
+        config: The validated export config.
+
+    Returns:
+        True iff `config.source` is set and `declare_keys` is True — absent
+        or False is off, mirroring `slice_at`'s semantic-default posture.
+    """
+    return config.source is not None and config.source.declare_keys is True
 
 
 def _render_sql_for_spec(
@@ -145,6 +165,10 @@ def build_source_query_specs(
     a full snapshot per window), or at the tape's end when window=None (a full
     export, write_mode='create') — "the tape's end" realized structurally, no
     horizon ever computed (§ Shaped state, "One mode semantic, redefined").
+    When `config.source.declare_keys` is true, every spec's `keys` is
+    resolved via `resolve_source_table_keys` (format-agnostic — resolved
+    whatever `fmt`, and identically whether `window` is set or None);
+    otherwise every spec's `keys` is None.
 
     Args:
         emit: The open emit.
@@ -163,6 +187,8 @@ def build_source_query_specs(
         SourceAnchorRequired: anchor is None.
         ExportError: The single-branch guard or a source business rule fails
             (the SourceTableSpec resolution errors — § build_source_plan).
+        PresentationKeysInvalidError: `declare_keys` is true and the
+            sidecar's `presentation_keys` block is present and incoherent.
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """
@@ -176,6 +202,7 @@ def build_source_query_specs(
     change_delivery = (
         config.source.change_delivery if config.source is not None else "changelog"
     )
+    declare_keys = _declare_keys_enabled(config)
 
     return [
         QuerySpec(
@@ -189,6 +216,11 @@ def build_source_query_specs(
             write_mode=_write_mode_for_genre(table_spec.genre, window, change_delivery),
             view_name=None,
             view_sql=None,
+            keys=(
+                resolve_source_table_keys(sidecar, table_spec, change_delivery)
+                if declare_keys
+                else None
+            ),
         )
         for table_spec in table_specs
     ]
@@ -207,7 +239,11 @@ def export_source(
 
     Builds the full-export source query specs, threading notice_sink to the
     plan, flattens them to name->SQL, and dispatches to the writer selected
-    by fmt (mirroring export_dimensional's full-export path).
+    by fmt (mirroring export_dimensional's full-export path). When
+    `config.source.declare_keys` is true and `fmt == 'csv'`, emits
+    `keys_not_declarable_csv_notice()` to `notice_sink` once, before any data
+    is written — CSV carries no constraint surface, so the DuckDB-only
+    declaration is dropped for this invocation.
 
     Args:
         emit: The open emit.
@@ -219,7 +255,8 @@ def export_source(
             point.
         anchor: The resolved effective anchor. Source requires one; None
             raises.
-        notice_sink: Receiver for plan notices (slice-only-column-omitted).
+        notice_sink: Receiver for plan notices (slice-only-column-omitted,
+            keys-not-declarable-csv).
 
     Returns:
         Mapping of every output table name -> row count written (0-row tables
@@ -229,10 +266,14 @@ def export_source(
         SourceAnchorRequired: anchor is None.
         ExportError: The single-branch guard or a source business rule fails.
         ExportRuntimeError: A writer fails.
+        PresentationKeysInvalidError: `declare_keys` is true and the
+            sidecar's `presentation_keys` block is present and incoherent.
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """
     specs = build_source_query_specs(
         emit, config, anchor, None, notice_sink, base_relations=None
     )
+    if _declare_keys_enabled(config) and fmt == "csv":
+        notice_sink(keys_not_declarable_csv_notice())
     return write_query_specs(emit, specs, out, fmt)
