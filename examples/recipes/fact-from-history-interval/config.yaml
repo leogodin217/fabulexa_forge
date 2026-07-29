@@ -1,0 +1,54 @@
+# Recipe: fact-from-history-interval
+# ============================================================
+# Demonstrates how to build a fact table from a history_interval
+# grain — one row per state-OCCUPANCY INTERVAL, not per change event.
+#
+# Contrast with fact-from-history (history_point): the point grain emits
+# one row per change event, carrying only the instant the value was set.
+# The interval grain LEAD-windows the same series per record, so each row
+# carries the value TOGETHER WITH how long it held:
+#   sim_time       — when this value took effect (the interval start)
+#   lead_sim_time  — when the NEXT value took over (the interval end);
+#                    NULL on a series' last row — the value still holds at
+#                    the tape's end (an open interval, mirroring SCD-2's
+#                    NULL valid_to)
+# `lead_sim_time` is the grain's one VIRTUAL column — computed by the
+# engine, not read from the sidecar — and exists only on this grain. It is
+# also a legal `derived: {timestamp: ...}` source here (see the
+# derived-timestamp recipe for wallclock rendering).
+#
+# This is the time-in-state shape: length of stay by status, queue-phase
+# durations, SLA breaches — exited minus entered per row, no self-join.
+#
+# Fixture world (recipe emit):
+#   history — 4 rows of patient.status changes:
+#     patient p001: pending@1*DAY, active@2*DAY, discharged@3*DAY
+#     patient p002: pending@2*DAY (never changed again)
+#
+# Output:
+#   fact_status_interval — one row per status occupancy interval (4 rows):
+#     p001 pending    [1*DAY, 2*DAY)   held one day
+#     p001 active     [2*DAY, 3*DAY)   held one day
+#     p001 discharged [3*DAY, NULL)    still the status at tape's end
+#     p002 pending    [2*DAY, NULL)    still the status at tape's end
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_status_interval
+      role: fact
+      source:
+        grain: history_interval  # one row per (record_id, value-occupancy interval)
+        kind: patient
+        property: status         # the history series to interval-ize
+      key: [patient_id, interval_start]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: status_value
+          from: value
+        - name: interval_start
+          from: sim_time         # when this status took effect
+        - name: interval_end
+          from: lead_sim_time    # when the next status took over; NULL = open

@@ -1,0 +1,25 @@
+tables:
+  fact_status_interval:
+    columns: [patient_id, status_value, interval_start, interval_end]
+    row_count: 4
+    contains_rows:
+      # p001 pending held [1*DAY, 2*DAY) — closed by the 'active' change
+      - patient_id: p001
+        status_value: pending
+        interval_start: 86400000000000
+        interval_end: 172800000000000
+      # p001 active held [2*DAY, 3*DAY) — closed by the 'discharged' change
+      - patient_id: p001
+        status_value: active
+        interval_start: 172800000000000
+        interval_end: 259200000000000
+      # p001 discharged is the series' last row — open interval, NULL end
+      - patient_id: p001
+        status_value: discharged
+        interval_start: 259200000000000
+        interval_end: null
+      # p002 pending never changed — open interval from its only event
+      - patient_id: p002
+        status_value: pending
+        interval_start: 172800000000000
+        interval_end: null

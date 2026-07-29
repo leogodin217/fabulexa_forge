@@ -318,6 +318,7 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | Recipe | What it teaches |
 |---|---|
 | [`fact-from-history`](../../examples/recipes/fact-from-history/config.yaml) | Fact table from a `history_point` grain — one row per status-change event in the `history` table |
+| [`fact-from-history-interval`](../../examples/recipes/fact-from-history-interval/config.yaml) | Fact table from a `history_interval` grain — one row per state-occupancy interval; the virtual `lead_sim_time` interval end is `NULL` on a series' last (open) interval |
 | [`fact-from-membership`](../../examples/recipes/fact-from-membership/config.yaml) | Fact table from a `membership` grain — one row per membership binding; projects `record_id`, `joined_sim_time`, and `elem__*` slot columns |
 
 **Foreign keys & lookups**

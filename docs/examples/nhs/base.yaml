@@ -1,22 +1,29 @@
 # ExportConfig — NHS bundle, base mode (flat current-state dump)
 # ============================================================
-# `fabulexa-forge export docs/examples/nhs/bundle docs/examples/nhs/base.yaml`
+# `fabulexa-forge export docs/examples/nhs/bundle docs/examples/nhs/base.yaml <out> --fmt duckdb`
 #
 # Base mode reconstructs one flat table per records kind at the tape's end:
-# every tracked property (patient.status, resource.allocated, ...) carries its
-# LATEST history value. No genre split, no sub-type split, no FK joins — the
-# faithful "current state of every record" landing shape. `record_id` presents
-# as `id`; every other column is presentation-verbatim.
+# every tracked property (patient.status, consultant.allocated, ...) carries
+# its LATEST history value. No genre split, no sub-type split, no FK joins —
+# the faithful "current state of every record" landing shape. `record_id`
+# presents as `id`; every other column is presentation-verbatim unless renamed.
 #
-# The only author decision here is which kinds to drop. We exclude the two
-# simulation-MECHANISM kinds — they are engine bookkeeping, not clinical data:
-#   tick_decision — the engine's per-tick rule-firing log (decision_type,
-#                   context). An audit trail of the simulator, not the trust.
-#   queue         — an internal wait-queue mechanism record; carries no
-#                   domain-meaningful attributes.
-# Everything clinical survives: actor (patients), diary (clinic books), entity
-# (wards/theatres/diagnostics/procedures/meds), journey_instance (episodes),
-# resource (consultants), booking (appointments).
+# Author decisions here:
+#
+#   EXCLUDE  the two simulation-MECHANISM kinds — engine bookkeeping, not
+#            clinical data:
+#              tick_decision — the engine's per-tick rule-firing log.
+#              queue         — an internal wait-queue mechanism record.
+#   RENAME   engine-ontology kind names to the domain's:
+#              actor            -> patient
+#              resource         -> consultant
+#              journey_instance -> pathway_episode
+#            `booking` and `diary` keep their names — both are genuine NHS
+#            terms (e-RS booking, clinic diary). `entity` keeps its name too:
+#            it is a genuinely polymorphic catalogue (wards / theatres /
+#            diagnostics / procedures / medications behind `entity_type`), and
+#            base mode is one-table-per-kind — the per-sub-type split into
+#            domain tables is the dimensional config's job.
 #
 # Note this drops KINDS only. Columns are dropped too, but not by us: a
 # non-exempt `temporal_class: slice_only` column is ALWAYS auto-omitted with a
@@ -37,3 +44,7 @@ mode: base
 base:
   exclude:
     kinds: [tick_decision, queue]
+  rename:
+    - {table: records__actor, name: patient}
+    - {table: records__resource, name: consultant}
+    - {table: records__journey_instance, name: pathway_episode}
