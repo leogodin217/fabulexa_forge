@@ -361,6 +361,108 @@ def build_duplicated_target_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def build_base_keys_emit(tmp_path: Path) -> Path:
+    """Build a two-kind emit for `declare_keys` engine tests: `patient` carries
+    a flat whole-column presentation_keys claim, `doctor` carries a
+    partitioned entry whose rollup derives no claim (two counter-class
+    sub-types sharing an empty prefix — not pairwise union-safe) — declared
+    identity keys only despite carrying a `presentation_keys` entry.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__patient", _PATIENT_COLUMNS))
+    conn.execute(_create_ddl("records__doctor", _DOCTOR_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "p001", 1001, 0, True, 4 * DAY_NS, 0, "discharged", 30],
+    )
+    conn.execute(
+        'INSERT INTO "records__doctor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "d001", 2001, 0, True, 4 * DAY_NS, 0],
+    )
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            {
+                "name": "records__patient",
+                "category": "records",
+                "record_kind": "patient",
+                "columns": _PATIENT_COLUMNS,
+                "rows": 1,
+            },
+            {
+                "name": "records__doctor",
+                "category": "records",
+                "record_kind": "doctor",
+                "columns": _DOCTOR_COLUMNS,
+                "rows": 1,
+            },
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": _HISTORY_COLUMNS,
+                "rows": 0,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 5 * DAY_NS}],
+        extra={
+            "record_roles": {"patient": "dimension", "doctor": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+            "enum_domains": {"doctor": {"doctor_type": ["a", "b"]}},
+            "presentation_keys": {
+                "patient": {
+                    "key": {
+                        "unique_within": "branch",
+                        "branch_stable": True,
+                        "slice_stable": True,
+                        "key_space": {
+                            "class": "record_index",
+                            "prefix": "",
+                            "width": 4,
+                        },
+                    }
+                },
+                "doctor": {
+                    "sub_types": {
+                        "a": {
+                            "unique_within": "emit",
+                            "branch_stable": False,
+                            "slice_stable": False,
+                            "key_space": {"class": "counter", "prefix": "", "width": 3},
+                        },
+                        "b": {
+                            "unique_within": "emit",
+                            "branch_stable": False,
+                            "slice_stable": False,
+                            "key_space": {"class": "counter", "prefix": "", "width": 3},
+                        },
+                    },
+                    # unique_within omitted: both sub-types share an empty
+                    # counter prefix and are not pairwise union-safe.
+                    "branch_stable": False,
+                    "slice_stable": False,
+                },
+            },
+        },
+    )
+    return tmp_path
+
+
 def build_multi_kind_base_emit(tmp_path: Path) -> Path:
     """Build a two-kind emit: `patient` (the render fixture's 3 rows) declared
     first in sidecar order, `doctor` (zero rows) declared second.

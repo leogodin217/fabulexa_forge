@@ -29,9 +29,26 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
 
 from fabulexa_forge.derivations.guard import require_single_branch
-from fabulexa_forge.exporters.base.plan import build_base_plan
+from fabulexa_forge.exporters.base.plan import build_base_plan, resolve_base_table_keys
 from fabulexa_forge.exporters.base.renders import build_base_render_sql
-from fabulexa_forge.exporters.query_spec import QuerySpec, write_query_specs
+from fabulexa_forge.exporters.query_spec import (
+    QuerySpec,
+    keys_not_declarable_csv_notice,
+    write_query_specs,
+)
+
+
+def _declare_keys_enabled(config: "ExportConfig") -> bool:
+    """Whether the base section's `declare_keys` is on.
+
+    Args:
+        config: The validated export config.
+
+    Returns:
+        True iff `config.base` is set and `declare_keys` is True — absent or
+        False is off, mirroring `slice_at`'s semantic-default posture.
+    """
+    return config.base is not None and config.base.declare_keys is True
 
 
 def _resolve_horizon_ns(config: "ExportConfig", window: "Window | None") -> int | None:
@@ -71,7 +88,11 @@ def build_base_query_specs(
     end). Every base spec is view-less; `write_mode` is `'create'` for a full
     or sliced export and `'replace'` for a windowed snapshot — exactly
     source's snapshot delivery. `base_relations` is not a parameter: base
-    never uses the compile-indirection wrapping.
+    never uses the compile-indirection wrapping. When `config.base.
+    declare_keys` is true, every spec's `keys` is resolved via
+    `resolve_base_table_keys` (format-agnostic — resolved whatever `fmt`, and
+    identically whether `window` is set or None); otherwise every spec's
+    `keys` is None.
 
     Args:
         emit: The open emit.
@@ -88,6 +109,8 @@ def build_base_query_specs(
     Raises:
         ExportError: A base business rule fails (rename resolution or
             collision).
+        PresentationKeysInvalidError: `declare_keys` is true and the
+            sidecar's `presentation_keys` block is present and incoherent.
         TableNotFoundError: A declared `records__<kind>` table is absent.
     """
     sidecar = emit.sidecar
@@ -98,6 +121,7 @@ def build_base_query_specs(
     write_mode: Literal["create", "replace"] = (
         "replace" if window is not None else "create"
     )
+    declare_keys = _declare_keys_enabled(config)
 
     return [
         QuerySpec(
@@ -108,6 +132,7 @@ def build_base_query_specs(
             write_mode=write_mode,
             view_name=None,
             view_sql=None,
+            keys=resolve_base_table_keys(sidecar, table_spec) if declare_keys else None,
         )
         for table_spec in plan.tables
     ]
@@ -127,7 +152,11 @@ def export_base(
     Builds the full-export base query specs (window=None, so the horizon is
     `config.base.slice_at + 1` when set, else the tape's end), then dispatches
     to the fmt-selected writer via the shared `write_query_specs` — mirroring
-    `export_source`, minus the anchor requirement.
+    `export_source`, minus the anchor requirement. When `config.base.
+    declare_keys` is true and `fmt == 'csv'`, emits
+    `keys_not_declarable_csv_notice()` to `notice_sink` once, before any data
+    is written — CSV carries no constraint surface, so the DuckDB-only
+    declaration is dropped for this invocation.
 
     Args:
         emit: The open emit.
@@ -139,7 +168,8 @@ def export_base(
             point.
         anchor: The resolved effective anchor, or None. Base does NOT require
             one — None renders lifecycle timestamps as raw sim-time ns.
-        notice_sink: Receiver for plan notices (slice-only-column-omitted).
+        notice_sink: Receiver for plan notices (slice-only-column-omitted,
+            keys-not-declarable-csv).
 
     Returns:
         Mapping of every output table name -> row count written (0-row
@@ -148,7 +178,11 @@ def export_base(
     Raises:
         ExportError: The single-branch guard or a base business rule fails.
         ExportRuntimeError: A writer fails.
+        PresentationKeysInvalidError: `declare_keys` is true and the
+            sidecar's `presentation_keys` block is present and incoherent.
         TableNotFoundError: A declared `records__<kind>` table is absent.
     """
     specs = build_base_query_specs(emit, config, anchor, None, notice_sink)
+    if _declare_keys_enabled(config) and fmt == "csv":
+        notice_sink(keys_not_declarable_csv_notice())
     return write_query_specs(emit, specs, out, fmt)

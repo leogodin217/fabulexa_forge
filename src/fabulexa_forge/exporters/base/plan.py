@@ -14,9 +14,10 @@ defaults (prefix-stripped table name, `record_id -> id`, `record_index ->
 Layer-direction invariant: imports only the reader, the derivations layer
 (the state-at derivation's column order / presentation-id helpers),
 fabulexa_forge.errors, the mode-neutral reserved_names, notices (for
-`Notice`, and `NoticeSink` TYPE_CHECKING-only), and slice_only modules,
-config.models (TYPE_CHECKING only), and stdlib. Never imports
-exporters.dimensional.*, exporters.source.*, or exporters.streaming.*.
+`Notice`, and `NoticeSink` TYPE_CHECKING-only), the mode-neutral query_spec
+module (for `TableKeys`), and slice_only modules, config.models
+(TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.*,
+exporters.source.*, or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -41,6 +42,7 @@ from fabulexa_forge.errors import (
     ExportError,
 )
 from fabulexa_forge.exporters.notices import Notice
+from fabulexa_forge.exporters.query_spec import TableKeys
 from fabulexa_forge.exporters.reserved_names import (
     RESERVED_PRESENTATION_COLUMN_NAME,
     is_reserved_column_name,
@@ -638,6 +640,57 @@ def _check_reserved_names(specs: tuple[BaseTableSpec, ...]) -> None:
                     f"table '{spec.table_name}': column '{out}' is reserved"
                     " under incremental export"
                 )
+
+
+# ---------------------------------------------------------------------------
+# Key resolution
+# ---------------------------------------------------------------------------
+
+
+def resolve_base_table_keys(
+    sidecar: "Sidecar",
+    spec: BaseTableSpec,
+) -> TableKeys:
+    """Resolve one base flat table's declared keys from the sidecar alone.
+
+    Pure plan-time resolution (design doc § Key resolution per output table,
+    'base' row); the engine calls it only when `declare_keys` is on. The
+    primary key is the record-index self key's post-`rename` output name
+    (`column_renames['record_index']`); `unique` always contains the
+    record-id column's output name (`column_renames['record_id']`), plus the
+    `presentation_id` column's output name iff the block claims whole-column
+    uniqueness for the kind: a flat kind's `key` entry (every entry carries a
+    `unique_within`), or a partitioned kind's rollup with a non-None
+    `unique_within`. A kind absent from the block, or an absent block,
+    yields identity keys only. `unique_within` scope ('emit' vs 'branch') is
+    not surfaced — both are table-wide under the single-branch guard.
+
+    Args:
+        sidecar: The open emit's sidecar (claims read via
+            `sidecar.presentation_keys()` — strict-on-read applies).
+        spec: The resolved table spec (post-rename names in
+            `spec.column_renames`).
+
+    Returns:
+        The table's declared keys (never None — the base primary key is a
+        contract guarantee, claim or no claim).
+
+    Raises:
+        PresentationKeysInvalidError: The sidecar block is present and
+            incoherent (propagated from the accessor; plan-time, before any
+            output).
+    """
+    primary_key = (spec.column_renames["record_index"],)
+    unique: list[tuple[str, ...]] = [(spec.column_renames["record_id"],)]
+
+    presentation_keys = sidecar.presentation_keys()
+    if presentation_keys is not None and spec.kind in presentation_keys.kinds():
+        claim = presentation_keys.whole_table_claim(spec.kind)
+        if claim.unique_within is not None:
+            pid_out = spec.column_renames.get("presentation_id", "presentation_id")
+            unique.append((pid_out,))
+
+    return TableKeys(primary_key=primary_key, unique=tuple(unique))
 
 
 # ---------------------------------------------------------------------------

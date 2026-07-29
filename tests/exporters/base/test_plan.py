@@ -21,8 +21,12 @@ from fabulexa_forge.errors import (
 )
 from fabulexa_forge.exporters.base.plan import (
     NOTICE_REFERENCE_KEY_TARGET_ABSENT,
+    BaseTableSpec,
     build_base_plan,
+    resolve_base_table_keys,
 )
+from fabulexa_forge.exporters.query_spec import TableKeys
+from fabulexa_forge.reader.errors import PresentationKeysInvalidError
 from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
@@ -112,6 +116,7 @@ def _history_table() -> dict[str, object]:
 def _sidecar(
     tables: list[dict[str, object]],
     enum_domains: dict[str, object] | None = None,
+    presentation_keys: dict[str, object] | None = None,
 ) -> Sidecar:
     """Build a Sidecar directly from a raw base.json-shaped mapping."""
     raw: dict[str, object] = {
@@ -121,7 +126,36 @@ def _sidecar(
     }
     if enum_domains is not None:
         raw["enum_domains"] = enum_domains
+    if presentation_keys is not None:
+        raw["presentation_keys"] = presentation_keys
     return Sidecar.from_raw(raw)
+
+
+def _raw_key_space(
+    space_class: str, *, prefix: str = "", width: int = 0
+) -> dict[str, object]:
+    """A raw key_space object of the given digit-rendered class."""
+    return {"class": space_class, "prefix": prefix, "width": width}
+
+
+def _raw_counter_key(prefix: str = "") -> dict[str, object]:
+    """A conformant counter-class raw partition_key (emit/false/false)."""
+    return {
+        "unique_within": "emit",
+        "branch_stable": False,
+        "slice_stable": False,
+        "key_space": _raw_key_space("counter", prefix=prefix, width=3),
+    }
+
+
+def _raw_record_index_key() -> dict[str, object]:
+    """A conformant record_index-class raw partition_key (branch/true/true)."""
+    return {
+        "unique_within": "branch",
+        "branch_stable": True,
+        "slice_stable": True,
+        "key_space": _raw_key_space("record_index", width=4),
+    }
 
 
 def _spanning_sidecar() -> Sidecar:
@@ -711,3 +745,164 @@ def test_rename_record_index_to_reserved_name_raises_export_error() -> None:
     )
     with pytest.raises(ExportError):
         build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
+
+
+# ---------------------------------------------------------------------------
+# resolve_base_table_keys
+# ---------------------------------------------------------------------------
+
+
+def _ward_table(presentation_id: bool = True) -> dict[str, object]:
+    """A flat 'ward' kind carrying a constant property and presentation_id."""
+    return _records_table(
+        "ward",
+        [_col("prop__name", history_tracked=False, temporal_class="constant")],
+        presentation_id=presentation_id,
+    )
+
+
+def _claimed_flat_sidecar() -> Sidecar:
+    """A flat 'ward' kind carrying a whole-column presentation_keys claim."""
+    return _sidecar(
+        tables=[_ward_table()],
+        presentation_keys={"ward": {"key": _raw_counter_key()}},
+    )
+
+
+def _unclaimed_sidecar() -> Sidecar:
+    """A flat 'ward' kind with no presentation_keys block at all."""
+    return _sidecar(tables=[_ward_table(presentation_id=False)])
+
+
+def _claimed_partitioned_sidecar(with_unique_within: bool) -> Sidecar:
+    """A 'ward' kind carrying a partitioned presentation_keys entry (base
+    ignores the sub-type split; the rollup is what resolve_base_table_keys
+    consults).
+
+    `with_unique_within=True`: two record_index sub-types sharing a
+    prefix/width — pairwise union-safe, the algebra derives a 'branch' claim.
+    `with_unique_within=False`: two counter sub-types sharing an empty
+    prefix — not pairwise union-safe, the algebra derives no claim
+    (unique_within omitted, matching the algebra's None)."""
+    if with_unique_within:
+        rollup: dict[str, object] = {
+            "sub_types": {
+                "a": _raw_record_index_key(),
+                "b": _raw_record_index_key(),
+            },
+            "unique_within": "branch",
+            "branch_stable": True,
+            "slice_stable": True,
+        }
+    else:
+        rollup = {
+            "sub_types": {
+                "a": _raw_counter_key(),
+                "b": _raw_counter_key(),
+            },
+            "branch_stable": False,
+            "slice_stable": False,
+        }
+    return _sidecar(
+        tables=[_ward_table()],
+        presentation_keys={"ward": rollup},
+        enum_domains={"ward": {"ward_type": ["a", "b"]}},
+    )
+
+
+def _incoherent_sidecar() -> Sidecar:
+    """A presentation_keys block naming a kind absent from the sidecar's
+    presentation_id-carrying tables — refused at read time."""
+    return _sidecar(
+        tables=[_ward_table()],
+        presentation_keys={"ghost": {"key": _raw_counter_key()}},
+    )
+
+
+def _spec_for(sidecar: Sidecar, config: BaseConfig | None = None) -> BaseTableSpec:
+    """Build the sole BaseTableSpec of a single-kind sidecar's plan."""
+    plan = build_base_plan(sidecar, config, discard_notice_sink)
+    assert len(plan.tables) == 1
+    return plan.tables[0]
+
+
+def test_resolve_base_table_keys_flat_claimed_kind() -> None:
+    """A flat claimed kind: PK <kind>_key, unique id + presentation_id."""
+    sidecar = _claimed_flat_sidecar()
+    spec = _spec_for(sidecar)
+    keys = resolve_base_table_keys(sidecar, spec)
+    assert keys == TableKeys(
+        primary_key=("ward_key",),
+        unique=(("id",), ("presentation_id",)),
+    )
+
+
+def test_resolve_base_table_keys_renamed_columns_resolve_to_output_names() -> None:
+    """A rename entry's post-rename names appear in the resolved keys."""
+    sidecar = _claimed_flat_sidecar()
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__ward",
+                columns={"record_id": "ward_id", "presentation_id": "code"},
+            )
+        ]
+    )
+    spec = _spec_for(sidecar, config)
+    keys = resolve_base_table_keys(sidecar, spec)
+    assert keys == TableKeys(
+        primary_key=("ward_key",),
+        unique=(("ward_id",), ("code",)),
+    )
+
+
+def test_resolve_base_table_keys_partitioned_rollup_claim_declares_presentation_id() -> (
+    None
+):
+    """A partitioned kind's rollup with a non-None unique_within declares
+    presentation_id."""
+    sidecar = _claimed_partitioned_sidecar(with_unique_within=True)
+    spec = _spec_for(sidecar)
+    keys = resolve_base_table_keys(sidecar, spec)
+    assert keys == TableKeys(
+        primary_key=("ward_key",),
+        unique=(("id",), ("presentation_id",)),
+    )
+
+
+def test_resolve_base_table_keys_rollup_without_unique_within_not_declared() -> None:
+    """A rollup with no unique_within (no derivable claim) declares identity
+    keys only."""
+    sidecar = _claimed_partitioned_sidecar(with_unique_within=False)
+    spec = _spec_for(sidecar)
+    keys = resolve_base_table_keys(sidecar, spec)
+    assert keys == TableKeys(primary_key=("ward_key",), unique=(("id",),))
+
+
+def test_resolve_base_table_keys_kind_absent_from_block_identity_only() -> None:
+    """A kind absent from a present block declares identity keys only."""
+    sidecar = _sidecar(
+        tables=[_ward_table(), _records_table("bed", [])],
+        presentation_keys={"ward": {"key": _raw_counter_key()}},
+    )
+    plan = build_base_plan(sidecar, None, discard_notice_sink)
+    bed_spec = next(t for t in plan.tables if t.kind == "bed")
+    keys = resolve_base_table_keys(sidecar, bed_spec)
+    assert keys == TableKeys(primary_key=("bed_key",), unique=(("id",),))
+
+
+def test_resolve_base_table_keys_block_absent_identity_only() -> None:
+    """No presentation_keys block at all -> identity keys only."""
+    sidecar = _unclaimed_sidecar()
+    spec = _spec_for(sidecar)
+    keys = resolve_base_table_keys(sidecar, spec)
+    assert keys == TableKeys(primary_key=("ward_key",), unique=(("id",),))
+
+
+def test_resolve_base_table_keys_incoherent_block_raises() -> None:
+    """An incoherent presentation_keys block raises at plan time, propagated
+    from the strict accessor."""
+    sidecar = _incoherent_sidecar()
+    spec = _spec_for(sidecar)
+    with pytest.raises(PresentationKeysInvalidError):
+        resolve_base_table_keys(sidecar, spec)

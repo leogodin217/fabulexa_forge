@@ -5,12 +5,17 @@ second mode (source) can compile to the same writer-ready shape without
 importing across mode boundaries (exporters.source must never import
 exporters.dimensional, or vice versa). `write_query_specs` is the shared
 full-export write dispatch every mode's `export_*` entry point calls.
+`keys_not_declarable_csv_notice` is the shared notice the base and source
+full-export entry paths, and the incremental driver, all emit identically
+when `declare_keys` meets a CSV target.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
+
+from fabulexa_forge.exporters.notices import Notice
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -52,6 +57,32 @@ class QuerySpec:
     view_name: str | None
     view_sql: str | None
     keys: TableKeys | None = None
+
+
+NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"
+"""The notice code 'keys-not-declarable-csv'."""
+
+
+def keys_not_declarable_csv_notice() -> Notice:
+    """The one notice a declare_keys-under-CSV invocation emits.
+
+    Shared by the base and source full-export entry paths and the incremental
+    driver so all three emit an identical, deterministic message: CSV carries
+    no constraint surface, the data is unchanged, and the declaration is
+    dropped for this invocation.
+
+    Returns:
+        A Notice with code NOTICE_KEYS_NOT_DECLARABLE_CSV and a fully
+        rendered, self-contained message.
+    """
+    return Notice(
+        code=NOTICE_KEYS_NOT_DECLARABLE_CSV,
+        message=(
+            "declare_keys is on, but CSV carries no constraint surface: the"
+            " data is unchanged, and the key declaration is dropped for this"
+            " invocation"
+        ),
+    )
 
 
 def query_spec_output_name(spec: QuerySpec) -> str:
