@@ -1092,7 +1092,9 @@ def test_guard_restricted_to_own_population_spine_ignores_cross_population_dup(
             base_relations=None,
             election=resolve_election(emit.sidecar, {"entity": "presentation_id"}),
         )
-    assert any(spec.table_name == "fact_booking" for spec in specs)
+        fact_spec = next(s for s in specs if s.table_name == "fact_booking")
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+    assert list(zip(rows["booking_key"], rows["entity_id"])) == [("b1", "ALPHA_001")]
 
 
 def test_guard_catches_genuine_duplicate_within_population(tmp_path: Path) -> None:

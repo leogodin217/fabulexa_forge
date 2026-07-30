@@ -34,9 +34,11 @@ per-row). A spec with every surface at its default `record_id` composes
 byte-identical SQL — no join, no CASE.
 
 Layer-direction invariant: imports the reader, the derivations layer (the
-row-state-events fold, the state-at derivation, the record-index and
-presentation-key derivations), fabulexa_forge.anchor, fabulexa_forge._sql,
-the sibling source.columns and source.plan modules (the latter's
+row-state-events fold, the state-at derivation), the mode-neutral election
+module (the record-index / presentation-key horizon-dispatch helpers
+`_record_index_sql` / `_presentation_key_sql`, shared with base's renders —
+doc § module placement), fabulexa_forge.anchor, fabulexa_forge._sql, the
+sibling source.columns and source.plan modules (the latter's
 `_MEMBER_PREFIX` / `_MEMBER_ID_SUFFIX` name constants at runtime, mirroring
 base's runtime import of `_self_identity`; `SourceEdgeSurface` /
 `SourceTableSpec` TYPE_CHECKING only), config.models (TYPE_CHECKING only),
@@ -56,19 +58,12 @@ if TYPE_CHECKING:
 
 from fabulexa_forge._sql import _sql_literal
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
-from fabulexa_forge.derivations.presentation_key import (
-    build_presentation_key_at_end_sql,
-    build_presentation_key_at_sql,
-)
-from fabulexa_forge.derivations.record_index import (
-    build_record_index_at_end_sql,
-    build_record_index_at_sql,
-)
 from fabulexa_forge.derivations.row_state_events import build_row_state_events_sql
 from fabulexa_forge.derivations.state_at import (
     build_state_at_end_sql,
     build_state_at_sql,
 )
+from fabulexa_forge.exporters.election import _presentation_key_sql, _record_index_sql
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX
 from fabulexa_forge.exporters.source.plan import _MEMBER_ID_SUFFIX, _MEMBER_PREFIX
 from fabulexa_forge.reader.records_columns import structural_instant_columns
@@ -211,60 +206,6 @@ def _junction_masked_left_at_expr(
 
 #: The self-identity join's table alias (record_index or presentation_id).
 _SELF_IDENTITY_ALIAS = "_self_ident"
-
-
-def _record_index_sql(
-    sidecar: "Sidecar", fork_path: str, kind: str, horizon_ns: int | None
-) -> str:
-    """Compose the record-index resident for one kind at a render's horizon
-    selection — recomputed here (never re-derived from `plan.py`), so the
-    engine's guard call recomputes the identical string, per the sprint
-    contract's recompute-not-thread posture.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch, from `require_single_branch`.
-        kind: The record kind whose index relation to build.
-        horizon_ns: The exclusive horizon, or None for the tape's end.
-
-    Returns:
-        A complete SELECT producing `RECORD_INDEX_COLUMNS` for `kind`.
-
-    Raises:
-        TableNotFoundError: `records__<kind>` is absent (propagated).
-    """
-    return (
-        build_record_index_at_sql(sidecar, fork_path, kind, horizon_ns)
-        if horizon_ns is not None
-        else build_record_index_at_end_sql(sidecar, fork_path, kind)
-    )
-
-
-def _presentation_key_sql(
-    sidecar: "Sidecar", fork_path: str, kind: str, horizon_ns: int | None
-) -> str:
-    """Compose the presentation-key resident for one kind at a render's
-    horizon selection — `_record_index_sql`'s exact sibling.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch, from `require_single_branch`.
-        kind: The record kind whose presentation-key relation to build.
-        horizon_ns: The exclusive horizon, or None for the tape's end.
-
-    Returns:
-        A complete SELECT producing `PRESENTATION_KEY_COLUMNS` for `kind`.
-
-    Raises:
-        TableNotFoundError: `records__<kind>` is absent (propagated).
-        ExportError: `records__<kind>` declares no `presentation_id` column —
-            a caller gating error.
-    """
-    return (
-        build_presentation_key_at_sql(sidecar, fork_path, kind, horizon_ns)
-        if horizon_ns is not None
-        else build_presentation_key_at_end_sql(sidecar, fork_path, kind)
-    )
 
 
 def _population_case_expr(

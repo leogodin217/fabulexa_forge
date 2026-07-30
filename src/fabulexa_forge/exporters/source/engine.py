@@ -14,14 +14,14 @@ Under `change_delivery: snapshot` (Unit 3), a change-log-genre spec routes to
 state, "One mode semantic, redefined") rather than refusing.
 
 Layer-direction invariant: imports the reader, derivations.guard, the
-mode-neutral election module, the sibling source plan/renders modules
-(including two renders internals — the record-index / presentation-key
+mode-neutral election module (including its record-index / presentation-key
 horizon dispatchers `_record_index_sql` / `_presentation_key_sql` —
-recomputed here, not re-derived, to guard the exact relation the render
-embeds; both are pure functions of their arguments, so the two computations
-cannot disagree, per the sprint contract's recompute-not-thread posture),
-config.models and anchor (TYPE_CHECKING only where runtime use is not
-needed), errors, and the mode-neutral query_spec module. Never imports
+recomputed here, not re-derived from the sibling renders module, to guard
+the exact relation the render embeds; both are pure functions of their
+arguments, so the two computations cannot disagree, per the sprint
+contract's recompute-not-thread posture), the sibling source plan/renders
+modules, config.models and anchor (TYPE_CHECKING only where runtime use is
+not needed), errors, and the mode-neutral query_spec module. Never imports
 exporters.dimensional.* or exporters.streaming.*.
 """
 
@@ -45,6 +45,8 @@ from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import SourceAnchorRequired
 from fabulexa_forge.exporters.base_relations import apply_base_relations
 from fabulexa_forge.exporters.election import (
+    _presentation_key_sql,
+    _record_index_sql,
     build_population_spine_sql,
     check_elected_key_unique,
     resolve_election,
@@ -61,8 +63,6 @@ from fabulexa_forge.exporters.source.plan import (
     resolve_source_table_keys,
 )
 from fabulexa_forge.exporters.source.renders import (
-    _presentation_key_sql,
-    _record_index_sql,
     build_render_sql,
     build_snapshot_render_sql,
 )

@@ -37,3 +37,18 @@
 ## Recommendation
 
 **APPROVED-WITH-NOTES** — no blockers; four observations recorded across gates 2, 4, and 6. Mergeable. Fix-vs-accept on each observation is the user's call at the ACCEPT/FIX checkpoint.
+
+## Observation resolution
+
+The user elected to FIX. Outcome per observation:
+
+| # | Gate | Outcome |
+|---|---|---|
+| 1 | 2 (DRY) | **FIXED** — `_record_index_sql` / `_presentation_key_sql` moved into `exporters/election.py`; both mode render modules and both mode engines now import the one copy. Verified byte-identical pre-fix bodies, so the move adopted no variant behavior; render and guard still compose literally the same string. `dimensional/populations.py::dim_identity_relation_at_end_sql` checked and confirmed *not* a third copy (it dispatches on `surface`, not `horizon_ns`). |
+| 2 | 4 | **FIXED** — the guard-negative test now executes `fact_booking`'s rendered SQL and asserts the exact row `[("b1", "ALPHA_001")]`. |
+| 3 | 4 | **DISPUTED / left as-is** — the `assert x is not None` sites are mypy-strict `Optional` narrowing for `resolve_effective_anchor`, each followed by exact-value checks. Removing them fails typecheck; they are not weak assertions. |
+| 4 | 6 | **FIXED** — the three same-shape `# type: ignore[arg-type]` replaced with directly-typed `SourceDecl(...)` construction. |
+
+Fix review (2 cycles): cycle 1 returned REVISIONS NEEDED on one finding — `contracts.md`'s module-placement row for `election.py` did not list the `derivations` imports the move introduced, contradicting the layer-direction docstrings the fix itself wrote. Fixed by updating that row while preserving its "never a mode package" prohibition (the load-bearing part, which still holds). Canonical `docs/architecture/` was checked and carries no equivalent stale claim. Cycle 2: **APPROVED**.
+
+Post-fix gates: `make test` 4125 passed / 18 skipped; all 7 demos run twice, exit 0, byte-identical.

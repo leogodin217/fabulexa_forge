@@ -12,8 +12,10 @@ layering (`docs/sprints/key-election/contracts.md` § module placement).
 
 Layer-direction invariant: imports the reader (`Emit`, `Sidecar`,
 `reader.relations`, `KeySpace` / `union_safe`), `config.models` (`KeySurface`),
-`fabulexa_forge._sql`, and `fabulexa_forge.errors`. Never imports a mode
-package.
+`fabulexa_forge._sql`, `fabulexa_forge.errors`, and the derivations layer's
+record-index / presentation-key entry points (for the shared horizon-dispatch
+helpers `_record_index_sql` / `_presentation_key_sql`, below). Never imports a
+mode package.
 """
 
 from __future__ import annotations
@@ -27,6 +29,14 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import _sql_literal
+from fabulexa_forge.derivations.presentation_key import (
+    build_presentation_key_at_end_sql,
+    build_presentation_key_at_sql,
+)
+from fabulexa_forge.derivations.record_index import (
+    build_record_index_at_end_sql,
+    build_record_index_at_sql,
+)
 from fabulexa_forge.errors import (
     ElectedKeyDuplicate,
     ElectionKindUnknown,
@@ -577,6 +587,62 @@ def build_population_spine_sql(
         'SELECT "record_id" FROM ('
         f"{relation_sql}"
         f') AS "_spine" WHERE "_spine"."prop__{kind}_type" IN ({values})'
+    )
+
+
+def _record_index_sql(
+    sidecar: "Sidecar", fork_path: str, kind: str, horizon_ns: int | None
+) -> str:
+    """Compose the record-index resident for one kind at a render's horizon
+    selection. Shared by every mode's render module and recomputed by each
+    mode's engine to guard the exact relation the render embeds — the two
+    computations cannot disagree, being pure functions of their arguments
+    (`docs/sprints/key-election/contracts.md` § module placement).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        kind: The record kind whose index relation to build.
+        horizon_ns: The exclusive horizon, or None for the tape's end.
+
+    Returns:
+        A complete SELECT producing `RECORD_INDEX_COLUMNS` for `kind`.
+
+    Raises:
+        TableNotFoundError: `records__<kind>` is absent (propagated).
+    """
+    return (
+        build_record_index_at_sql(sidecar, fork_path, kind, horizon_ns)
+        if horizon_ns is not None
+        else build_record_index_at_end_sql(sidecar, fork_path, kind)
+    )
+
+
+def _presentation_key_sql(
+    sidecar: "Sidecar", fork_path: str, kind: str, horizon_ns: int | None
+) -> str:
+    """Compose the presentation-key resident for one kind at a render's
+    horizon selection — `_record_index_sql`'s exact sibling.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        kind: The record kind whose presentation-key relation to build.
+        horizon_ns: The exclusive horizon, or None for the tape's end.
+
+    Returns:
+        A complete SELECT producing `PRESENTATION_KEY_COLUMNS` for `kind`.
+
+    Raises:
+        TableNotFoundError: `records__<kind>` is absent (propagated).
+        ExportError: `records__<kind>` declares no `presentation_id` column
+            — a caller gating error (the election gates make it unreachable
+            from a gated plan).
+    """
+    return (
+        build_presentation_key_at_sql(sidecar, fork_path, kind, horizon_ns)
+        if horizon_ns is not None
+        else build_presentation_key_at_end_sql(sidecar, fork_path, kind)
     )
 
 

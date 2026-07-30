@@ -15,7 +15,7 @@ from __future__ import annotations
 import pytest
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_forge.config.models import ColumnDecl, TableDecl
+from fabulexa_forge.config.models import ColumnDecl, SourceDecl, TableDecl
 from fabulexa_forge.errors import ElectionInheritanceAmbiguous, ExportError
 from fabulexa_forge.exporters.dimensional.populations import (
     DimSourcePopulations,
@@ -234,7 +234,7 @@ class TestDimKeyProjectsSurface:
             name="dim_entity",
             role="dim",
             key=["code"],
-            source={"grain": "records", "kind": "entity"},  # type: ignore[arg-type]
+            source=SourceDecl(grain="records", kind="entity"),
             columns=[ColumnDecl(name="code", **{"from": "presentation_id"})],
         )
         assert dim_key_projects_surface(table_decl, "presentation_id") is True
@@ -245,7 +245,7 @@ class TestDimKeyProjectsSurface:
             name="dim_entity",
             role="dim",
             key=["record_id"],
-            source={"grain": "records", "kind": "entity"},  # type: ignore[arg-type]
+            source=SourceDecl(grain="records", kind="entity"),
             columns=[ColumnDecl(name="record_id", **{"from": "record_id"})],
         )
         assert dim_key_projects_surface(table_decl, "presentation_id") is False

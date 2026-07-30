@@ -12,15 +12,16 @@ source, `anchor=None` renders lifecycle timestamps as raw sim-time ns instead
 of raising.
 
 Layer-direction invariant: imports the reader (TYPE_CHECKING only), the
-derivations layer's single-branch guard, the mode-neutral election module,
-the sibling base plan/renders modules (including two renders internals — the
-record-index / presentation-key horizon dispatchers `_record_index_sql` /
-`_presentation_key_sql` — recomputed here, not re-derived, to guard the exact
-relation the render embeds; both are pure functions of their arguments, so
-the two computations cannot disagree, per the sprint contract's
-recompute-not-thread posture), config.models and anchor (TYPE_CHECKING only
-where runtime use is not needed), and the mode-neutral query_spec module.
-Never imports exporters.dimensional.* or exporters.source.*.
+derivations layer's single-branch guard, the mode-neutral election module
+(including its record-index / presentation-key horizon dispatchers
+`_record_index_sql` / `_presentation_key_sql` — recomputed here, not
+re-derived from the sibling renders module, to guard the exact relation the
+render embeds; both are pure functions of their arguments, so the two
+computations cannot disagree, per the sprint contract's recompute-not-thread
+posture), the sibling base plan/renders modules, config.models and anchor
+(TYPE_CHECKING only where runtime use is not needed), and the mode-neutral
+query_spec module. Never imports exporters.dimensional.* or
+exporters.source.*.
 """
 
 from __future__ import annotations
@@ -40,12 +41,10 @@ if TYPE_CHECKING:
 
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.exporters.base.plan import build_base_plan, resolve_base_table_keys
-from fabulexa_forge.exporters.base.renders import (
+from fabulexa_forge.exporters.base.renders import build_base_render_sql
+from fabulexa_forge.exporters.election import (
     _presentation_key_sql,
     _record_index_sql,
-    build_base_render_sql,
-)
-from fabulexa_forge.exporters.election import (
     build_population_spine_sql,
     check_elected_key_unique,
     resolve_election,

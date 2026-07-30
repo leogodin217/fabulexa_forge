@@ -27,11 +27,13 @@ never splits its own emitted tables). Every column is projected under
 
 Layer-direction invariant: imports the reader (the structural-temporal
 surface at runtime; `Sidecar` TYPE_CHECKING only), the derivations layer (the
-state-at, record-index, and presentation-key derivations),
-fabulexa_forge.anchor, fabulexa_forge._sql, the sibling base.plan module
-(`_self_identity` at runtime; `BaseTableSpec` / `ReferenceKey` TYPE_CHECKING
-only), and stdlib. Never imports exporters.dimensional.*, exporters.source.*,
-or exporters.streaming.*.
+state-at derivation), the mode-neutral election module (the record-index /
+presentation-key horizon-dispatch helpers `_record_index_sql` /
+`_presentation_key_sql`, shared with source's renders — doc § module
+placement), fabulexa_forge.anchor, fabulexa_forge._sql, the sibling base.plan
+module (`_self_identity` at runtime; `BaseTableSpec` / `ReferenceKey`
+TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.*,
+exporters.source.*, or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -46,20 +48,13 @@ if TYPE_CHECKING:
 
 from fabulexa_forge._sql import _sql_literal
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
-from fabulexa_forge.derivations.presentation_key import (
-    build_presentation_key_at_end_sql,
-    build_presentation_key_at_sql,
-)
-from fabulexa_forge.derivations.record_index import (
-    build_record_index_at_end_sql,
-    build_record_index_at_sql,
-)
 from fabulexa_forge.derivations.state_at import (
     STATE_AT_COLUMNS,
     build_state_at_end_sql,
     build_state_at_sql,
 )
 from fabulexa_forge.exporters.base.plan import _self_identity
+from fabulexa_forge.exporters.election import _presentation_key_sql, _record_index_sql
 from fabulexa_forge.reader.records_columns import structural_instant_columns
 from fabulexa_forge.reader.relations import build_records_relation_sql
 
@@ -165,60 +160,6 @@ def _edge_value_alias(property_name: str) -> str:
         A per-property alias, unique among a table's joins.
     """
     return f"_value_edge__{property_name}"
-
-
-def _record_index_sql(
-    sidecar: "Sidecar", fork_path: str, kind: str, horizon_ns: int | None
-) -> str:
-    """Compose the record-index resident for one kind at the render's horizon
-    selection — the same selection `build_base_render_sql` applies to state-at
-    (invariant 3: one horizon per table render).
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch, from `require_single_branch`.
-        kind: The record kind whose index relation to build.
-        horizon_ns: The exclusive horizon, or None for the tape's end.
-
-    Returns:
-        A complete SELECT producing `RECORD_INDEX_COLUMNS` for `kind`.
-
-    Raises:
-        TableNotFoundError: `records__<kind>` is absent (propagated).
-    """
-    return (
-        build_record_index_at_sql(sidecar, fork_path, kind, horizon_ns)
-        if horizon_ns is not None
-        else build_record_index_at_end_sql(sidecar, fork_path, kind)
-    )
-
-
-def _presentation_key_sql(
-    sidecar: "Sidecar", fork_path: str, kind: str, horizon_ns: int | None
-) -> str:
-    """Compose the presentation-key resident for one kind at the render's
-    horizon selection — `_record_index_sql`'s exact sibling.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch, from `require_single_branch`.
-        kind: The record kind whose presentation-key relation to build.
-        horizon_ns: The exclusive horizon, or None for the tape's end.
-
-    Returns:
-        A complete SELECT producing `PRESENTATION_KEY_COLUMNS` for `kind`.
-
-    Raises:
-        TableNotFoundError: `records__<kind>` is absent (propagated).
-        ExportError: `records__<kind>` declares no `presentation_id` column
-            — a caller gating error (the election gates make it unreachable
-            from a gated plan).
-    """
-    return (
-        build_presentation_key_at_sql(sidecar, fork_path, kind, horizon_ns)
-        if horizon_ns is not None
-        else build_presentation_key_at_end_sql(sidecar, fork_path, kind)
-    )
 
 
 def _mixed_edge_relation_sql(

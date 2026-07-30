@@ -21,6 +21,7 @@ failure via the presentation-key derivation.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from _support.notices import discard_notice_sink
@@ -368,22 +369,17 @@ def _dim(name: str, kind: str, cols: list[ColumnDecl]) -> TableDecl:
 
 def _fact(
     name: str,
-    grain: str,
+    grain: Literal["records", "history_point", "history_interval", "membership"],
     kind: str,
     cols: list[ColumnDecl],
     property: str | None = None,
     where: dict[str, str] | None = None,
 ) -> TableDecl:
-    src_kwargs: dict[str, object] = {"grain": grain, "kind": kind}
-    if property is not None:
-        src_kwargs["property"] = property
-    if where is not None:
-        src_kwargs["where"] = where
     return TableDecl(
         name=name,
         role="fact",
         key=["record_id"],
-        source=SourceDecl(**src_kwargs),  # type: ignore[arg-type]
+        source=SourceDecl(grain=grain, kind=kind, property=property, where=where),
         columns=cols,
     )
 
