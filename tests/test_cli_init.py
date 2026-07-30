@@ -25,6 +25,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_emit_sidecar
 
@@ -1201,17 +1202,19 @@ def build_object_valued_actor_emit_with_presentation_id(
     return tmp_path
 
 
-def test_claimed_flat_kind_stub_carries_advisory_comment(tmp_path: Path) -> None:
-    """A flat kind's whole-column claim adds the presentation_id advisory
-    comment to its stub."""
+def test_claimed_flat_kind_dim_key_subsumes_advisory_comment(tmp_path: Path) -> None:
+    """A flat kind's whole-column claim elects `presentation_id` (key election),
+    aligning the dim's id column and subsuming the advisory comment on that
+    stub — declared-key election supersedes the older advisory-only note."""
     emit_dir = build_flat_dim_emit_with_presentation_id(
         tmp_path / "emit", _LOCATION_PRESENTATION_KEYS
     )
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path)
     content = out_path.read_text(encoding="utf-8")
-    assert "presentation_id` a natural key for 'location'" in content
-    assert "unique within branch" in content
+    assert "{name: id, from: presentation_id}" in content
+    assert "keys:\n  location: presentation_id" in content
+    assert "presentation_id` a natural key for 'location'" not in content
 
 
 def test_partitioned_kind_with_rollup_claim_carries_advisory_comment(
@@ -1265,3 +1268,196 @@ def test_incoherent_block_init_fails(
     assert exit_code == 1
     assert "ERROR:" in captured.err
     assert "Traceback" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Tests: keys block proposal (key election)
+# ---------------------------------------------------------------------------
+
+#: `actor`'s sub_types with pairwise-safe, distinct prefixes covering every
+#: declared sub-type (driver/ride/bus) — the "all-agreeing map collapses to
+#: scalar" fixture.
+_ACTOR_PRESENTATION_KEYS_ALL_DECLARED: dict[str, object] = {
+    "actor": {
+        "sub_types": {
+            "driver": {
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+                "key_space": {"class": "record_index", "prefix": "DRV_", "width": 4},
+            },
+            "ride": {
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+                "key_space": {"class": "record_index", "prefix": "RID_", "width": 4},
+            },
+            "bus": {
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+                "key_space": {"class": "record_index", "prefix": "BUS_", "width": 4},
+            },
+        },
+        "unique_within": "branch",
+        "branch_stable": True,
+        "slice_stable": True,
+    }
+}
+
+#: A `booking` records table referencing `actor` — the self-gate needs a
+#: reference edge into the sub-typed kind to have anything to gate.
+_KEY_BOOKING_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("ref_index__actor_id", "BIGINT"),
+]
+
+
+def build_actor_with_referencing_booking_emit(
+    tmp_path: Path, presentation_keys: dict[str, object] | None
+) -> Path:
+    """`actor` (driver/ride/bus, object-valued) + `booking` (references
+    `actor`) — the self-gate needs this referencing edge to have anything to
+    gate `actor`'s election against."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__actor", _PID_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("records__booking", _KEY_BOOKING_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "a1", 201, 10, True, 10, 0, "driver", "Alice", "active"],
+    )
+    conn.execute(
+        'INSERT INTO "records__booking" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "b1", 20, True, 20, 0, "a1", 0],
+    )
+    conn.close()
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[
+                _table_spec(
+                    "records__actor",
+                    "records",
+                    _PID_ACTOR_COLUMNS,
+                    1,
+                    record_kind="actor",
+                ),
+                _table_spec(
+                    "records__booking",
+                    "records",
+                    _KEY_BOOKING_COLUMNS,
+                    1,
+                    record_kind="booking",
+                ),
+            ],
+            record_roles={
+                "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"},
+                "booking": "fact",
+            },
+            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            presentation_keys=presentation_keys,
+        ),
+    )
+    return tmp_path
+
+
+def _assert_proposal_passes_its_own_gates(out_path: Path, emit_dir: Path) -> None:
+    """Run the emitted candidate config back through `resolve_election` and
+    `validate_table` — a proposal must never fail the gates it was self-gated
+    against."""
+    from fabulexa_forge.config.loader import load_export_config
+    from fabulexa_forge.exporters.dimensional.validation import validate_table
+    from fabulexa_forge.exporters.election import resolve_election
+    from fabulexa_forge.reader.emit import open_emit
+
+    config = load_export_config(out_path)
+    assert config.dimensional is not None
+    with open_emit(emit_dir) as emit:
+        election = resolve_election(emit.sidecar, config.keys)
+        for table_decl in config.dimensional.tables:
+            validate_table(
+                table_decl,
+                config.dimensional,
+                emit.sidecar,
+                None,
+                discard_notice_sink,
+                election=election,
+            )
+
+
+def test_undeclared_kind_proposes_record_index_scalar(tmp_path: Path) -> None:
+    """A flat kind with no presentation_keys entry proposes the record_index
+    scalar."""
+    emit_dir = build_bare_dim_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "keys:\n  location: record_index\n" in content
+    assert "{name: id, from: record_index}" in content
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+def test_partial_declaration_proposes_per_sub_type_map(tmp_path: Path) -> None:
+    """Driver/bus declared with distinct, union-safe prefixes and ride
+    undeclared proposes the per-sub-type map with the record_index
+    fallback."""
+    emit_dir = build_object_valued_actor_emit_with_presentation_id(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_CLAIMED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert (
+        "keys:\n  actor:\n    driver: presentation_id\n    ride: record_index\n"
+        "    bus: presentation_id\n" in content
+    )
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+def test_all_agreeing_map_collapses_to_scalar(tmp_path: Path) -> None:
+    """Every declared sub-type electing presentation_id collapses the
+    per-sub-type map to the scalar."""
+    emit_dir = build_object_valued_actor_emit_with_presentation_id(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_ALL_DECLARED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "keys:\n  actor: presentation_id\n" in content
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+def test_self_gate_degrades_bare_counter_siblings_with_comment(tmp_path: Path) -> None:
+    """A referencing edge into actor's full domain, with driver/bus declared
+    on bare (comparable) counter prefixes, degrades actor to the uniform
+    record_index scalar — the keys: line names the forcing gate."""
+    emit_dir = build_actor_with_referencing_booking_emit(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_UNCLAIMED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "keys:\n  actor: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "{name: id, from: record_index}" in content
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+def test_fk_candidates_remain_target_key_free(tmp_path: Path) -> None:
+    """FK-candidate comments never carry target_key, regardless of election."""
+    emit_dir = build_actor_with_referencing_booking_emit(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_UNCLAIMED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert "FK candidate:" in content
+    assert "target_key" not in content
