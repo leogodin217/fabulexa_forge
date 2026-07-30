@@ -17,30 +17,60 @@ dispatches to it, not `build_render_sql`. Windowed, it reconstructs at
 reconstructs at the tape's end (`build_state_at_end_sql`) — "the tape's end"
 realized structurally, no horizon ever computed.
 
+Elected identity (`spec.identity_surface`) and edge (`spec.edge_surfaces`)
+columns are rendered via the record-index / presentation-key derivations,
+LEFT JOINed onto the genre's own relation, mirroring base's
+`_key_join_clauses` pattern: the self-identity join at the table's horizon
+(end-of-tape for reference/transaction/junction — these genres carry no
+value-reconstruction horizon of their own; `window.end_ns` when windowed,
+else end-of-tape, for a change-log kind — CDC fold or snapshot delivery
+alike, since the fold/state-at relation carries neither `record_index` nor a
+horizon-honest `presentation_id` on `d`/absent rows); one join per
+referencing column resolving a non-default surface, keyed on `record_id`
+(single target kind — a reference-annotated `prop__<p>` column or the
+junction owner column) or on `(member_kind, record_id)` via a `UNION ALL`
+across the admitted kind universe (a junction member column — member kind is
+per-row). A spec with every surface at its default `record_id` composes
+byte-identical SQL — no join, no CASE.
+
 Layer-direction invariant: imports the reader, the derivations layer (the
-row-state-events fold and the state-at derivation), fabulexa_forge.anchor,
-fabulexa_forge.errors, the sibling source.columns module, config.models / the
-source plan type (TYPE_CHECKING only), and stdlib. Never imports
-exporters.dimensional.* or exporters.streaming.*.
+row-state-events fold, the state-at derivation, the record-index and
+presentation-key derivations), fabulexa_forge.anchor, fabulexa_forge._sql,
+the sibling source.columns and source.plan modules (the latter's
+`_MEMBER_PREFIX` / `_MEMBER_ID_SUFFIX` name constants at runtime, mirroring
+base's runtime import of `_self_identity`; `SourceEdgeSurface` /
+`SourceTableSpec` TYPE_CHECKING only), config.models (TYPE_CHECKING only),
+and stdlib. Never imports exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.exporters.source.plan import SourceTableSpec
+    from fabulexa_forge.config.models import KeySurface
+    from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceTableSpec
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
+from fabulexa_forge._sql import _sql_literal
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
+from fabulexa_forge.derivations.presentation_key import (
+    build_presentation_key_at_end_sql,
+    build_presentation_key_at_sql,
+)
+from fabulexa_forge.derivations.record_index import (
+    build_record_index_at_end_sql,
+    build_record_index_at_sql,
+)
 from fabulexa_forge.derivations.row_state_events import build_row_state_events_sql
 from fabulexa_forge.derivations.state_at import (
     build_state_at_end_sql,
     build_state_at_sql,
 )
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX
+from fabulexa_forge.exporters.source.plan import _MEMBER_ID_SUFFIX, _MEMBER_PREFIX
 from fabulexa_forge.reader.records_columns import structural_instant_columns
 from fabulexa_forge.reader.relations import (
     build_membership_relation_sql,
@@ -175,6 +205,364 @@ def _junction_masked_left_at_expr(
     return render_anchor_timestamp_expr(anchor, masked_source, out)
 
 
+# ---------------------------------------------------------------------------
+# Key election: identity + edge joins
+# ---------------------------------------------------------------------------
+
+#: The self-identity join's table alias (record_index or presentation_id).
+_SELF_IDENTITY_ALIAS = "_self_ident"
+
+
+def _record_index_sql(
+    sidecar: "Sidecar", fork_path: str, kind: str, horizon_ns: int | None
+) -> str:
+    """Compose the record-index resident for one kind at a render's horizon
+    selection — recomputed here (never re-derived from `plan.py`), so the
+    engine's guard call recomputes the identical string, per the sprint
+    contract's recompute-not-thread posture.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        kind: The record kind whose index relation to build.
+        horizon_ns: The exclusive horizon, or None for the tape's end.
+
+    Returns:
+        A complete SELECT producing `RECORD_INDEX_COLUMNS` for `kind`.
+
+    Raises:
+        TableNotFoundError: `records__<kind>` is absent (propagated).
+    """
+    return (
+        build_record_index_at_sql(sidecar, fork_path, kind, horizon_ns)
+        if horizon_ns is not None
+        else build_record_index_at_end_sql(sidecar, fork_path, kind)
+    )
+
+
+def _presentation_key_sql(
+    sidecar: "Sidecar", fork_path: str, kind: str, horizon_ns: int | None
+) -> str:
+    """Compose the presentation-key resident for one kind at a render's
+    horizon selection — `_record_index_sql`'s exact sibling.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        kind: The record kind whose presentation-key relation to build.
+        horizon_ns: The exclusive horizon, or None for the tape's end.
+
+    Returns:
+        A complete SELECT producing `PRESENTATION_KEY_COLUMNS` for `kind`.
+
+    Raises:
+        TableNotFoundError: `records__<kind>` is absent (propagated).
+        ExportError: `records__<kind>` declares no `presentation_id` column —
+            a caller gating error.
+    """
+    return (
+        build_presentation_key_at_sql(sidecar, fork_path, kind, horizon_ns)
+        if horizon_ns is not None
+        else build_presentation_key_at_end_sql(sidecar, fork_path, kind)
+    )
+
+
+def _population_case_expr(
+    discriminator_expr: str,
+    per_population: "tuple[tuple[str | None, KeySurface], ...]",
+    exprs: "Mapping[KeySurface, str]",
+) -> str:
+    """Build the CASE-dispatch value expression choosing one population's
+    surface value.
+
+    A flat (single, `sub_type=None`) population needs no CASE — its lone
+    surface applies unconditionally (`election`'s per-row population
+    resolution reduces to a constant for a single-population set).
+
+    Args:
+        discriminator_expr: The qualified `prop__<kind>_type` expression
+            (e.g. `'"_rec"."prop__actor_type"'`) to dispatch on; unused for a
+            flat population.
+        per_population: The admitted kind's gated per-population election.
+        exprs: Surface -> the value expression to select for that surface.
+
+    Returns:
+        A bare SQL value expression (a CASE, or the single arm unconditionally).
+    """
+    if len(per_population) == 1 and per_population[0][0] is None:
+        return exprs[per_population[0][1]]
+    arms = []
+    for sub_type, surface in per_population:
+        assert sub_type is not None, "a multi-population set is always sub-typed"
+        arms.append(
+            f"WHEN {discriminator_expr} = {_sql_literal(sub_type)}"
+            f" THEN {exprs[surface]}"
+        )
+    return "CASE " + " ".join(arms) + " END"
+
+
+def _self_identity_join_clause(
+    sidecar: "Sidecar",
+    fork_path: str,
+    kind: str,
+    identity_surface: "KeySurface",
+    horizon_ns: int | None,
+    join_key_expr: str,
+) -> str:
+    """Build the self-identity LEFT JOIN clause, or '' under `record_id`
+    (byte-identical — no join).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        kind: The unit's record kind.
+        identity_surface: The unit's own resolved identity election.
+        horizon_ns: The render's horizon selection.
+        join_key_expr: The qualified `record_id` expression on the render's
+            own relation to join against (e.g. `'"_rec"."record_id"'`).
+
+    Returns:
+        The LEFT JOIN SQL fragment (leading space), or '' under `record_id`.
+    """
+    if identity_surface == "record_id":
+        return ""
+    relation_sql = (
+        _record_index_sql(sidecar, fork_path, kind, horizon_ns)
+        if identity_surface == "record_index"
+        else _presentation_key_sql(sidecar, fork_path, kind, horizon_ns)
+    )
+    return (
+        f' LEFT JOIN ({relation_sql}) AS "{_SELF_IDENTITY_ALIAS}"'
+        f' ON {join_key_expr} = "{_SELF_IDENTITY_ALIAS}"."record_id"'
+    )
+
+
+def _self_identity_value_expr(identity_surface: "KeySurface") -> str:
+    """The self-identity value expression, reading the join alias.
+
+    Args:
+        identity_surface: The unit's own resolved identity election; never
+            `record_id` (callers only invoke this under a non-default
+            election).
+
+    Returns:
+        The qualified value expression on `_SELF_IDENTITY_ALIAS`.
+    """
+    return f'"{_SELF_IDENTITY_ALIAS}"."{identity_surface}"'
+
+
+def _mixed_single_kind_relation_sql(
+    sidecar: "Sidecar",
+    fork_path: str,
+    kind: str,
+    horizon_ns: int | None,
+    per_population: "tuple[tuple[str | None, KeySurface], ...]",
+) -> str:
+    """Compose one `(record_id, rendered_value)` VARCHAR relation for one
+    kind's admitted populations — base's `_mixed_edge_relation_sql`
+    generalized to a possibly-flat kind (no CASE needed when unsplit).
+
+    Reads the per-row population from the target's own records-spine
+    discriminator (never a fold after-image, per the doc's per-row
+    resolution rule). A target absent from the target kind's own records
+    relation (dangled sentinel) has no row in this relation at all, so the
+    consuming LEFT JOIN yields NULL. Joins the record-index / presentation-key
+    residents only when `per_population` actually elects that surface
+    somewhere — a kind admitted only for its (possibly uniform) `record_id`
+    populations (e.g. every kind in a junction member field's universe that
+    the field's election never touches) needs neither, and a kind carrying
+    no `presentation_id` column at all must not have that relation composed.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        kind: The admitted kind.
+        horizon_ns: The render's horizon selection.
+        per_population: The kind's gated per-population election.
+
+    Returns:
+        A complete SELECT producing `(record_id, rendered_value)`, one row
+        per record of `kind`, `rendered_value` VARCHAR.
+
+    Raises:
+        TableNotFoundError: `records__<kind>` is absent (propagated).
+    """
+    surfaces = {surface for _, surface in per_population}
+    records_sql = build_records_relation_sql(sidecar, fork_path, kind, {})
+    discriminator_expr = f'"_rec"."{_PROP_PREFIX}{kind}_type"'
+    exprs: "Mapping[KeySurface, str]" = {
+        "record_id": 'CAST("_rec"."record_id" AS VARCHAR)',
+        "record_index": 'CAST("_idx"."record_index" AS VARCHAR)',
+        "presentation_id": 'CAST("_pid"."presentation_id" AS VARCHAR)',
+    }
+    value_sql = _population_case_expr(discriminator_expr, per_population, exprs)
+
+    joins = ""
+    if "record_index" in surfaces:
+        index_sql = _record_index_sql(sidecar, fork_path, kind, horizon_ns)
+        joins += (
+            f' LEFT JOIN ({index_sql}) AS "_idx"'
+            ' ON "_rec"."record_id" = "_idx"."record_id"'
+        )
+    if "presentation_id" in surfaces:
+        presentation_sql = _presentation_key_sql(sidecar, fork_path, kind, horizon_ns)
+        joins += (
+            f' LEFT JOIN ({presentation_sql}) AS "_pid"'
+            ' ON "_rec"."record_id" = "_pid"."record_id"'
+        )
+    return (
+        f'SELECT "_rec"."record_id" AS "record_id", {value_sql} AS "rendered_value"'
+        f' FROM ({records_sql}) AS "_rec"{joins}'
+    )
+
+
+def _edge_alias(source_column: str) -> str:
+    """The join alias for one referencing column's elected relation.
+
+    Args:
+        source_column: The referencing column's source identity.
+
+    Returns:
+        A per-column alias, unique among a table's joins.
+    """
+    return f"_edge__{source_column}"
+
+
+def _single_kind_edge_join_and_expr(
+    sidecar: "Sidecar",
+    fork_path: str,
+    edge: "SourceEdgeSurface",
+    horizon_ns: int | None,
+    join_key_expr: str,
+) -> tuple[str, str] | None:
+    """Resolve one single-target-kind referencing column's join + value expr.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        edge: The resolved edge (`len(edge.target_kinds) == 1`).
+        horizon_ns: The render's horizon selection.
+        join_key_expr: The qualified reference-column value expression on
+            the render's own relation to join against.
+
+    Returns:
+        None when every admitted population elects record_id (byte-identical
+        — no join, verbatim); else `(join clause, value expression)`.
+    """
+    kind, per_population = edge.per_kind_populations[0]
+    surfaces = {surface for _, surface in per_population}
+    alias = _edge_alias(edge.source_column)
+    if surfaces == {"record_id"}:
+        return None
+    if surfaces == {"record_index"}:
+        rel_sql = _record_index_sql(sidecar, fork_path, kind, horizon_ns)
+        join = (
+            f' LEFT JOIN ({rel_sql}) AS "{alias}"'
+            f' ON {join_key_expr} = "{alias}"."record_id"'
+        )
+        return join, f'"{alias}"."record_index"'
+    if surfaces == {"presentation_id"}:
+        rel_sql = _presentation_key_sql(sidecar, fork_path, kind, horizon_ns)
+        join = (
+            f' LEFT JOIN ({rel_sql}) AS "{alias}"'
+            f' ON {join_key_expr} = "{alias}"."record_id"'
+        )
+        return join, f'"{alias}"."presentation_id"'
+    rel_sql = _mixed_single_kind_relation_sql(
+        sidecar, fork_path, kind, horizon_ns, per_population
+    )
+    join = (
+        f' LEFT JOIN ({rel_sql}) AS "{alias}"'
+        f' ON {join_key_expr} = "{alias}"."record_id"'
+    )
+    return join, f'"{alias}"."rendered_value"'
+
+
+def _member_edge_join_and_expr(
+    sidecar: "Sidecar",
+    fork_path: str,
+    edge: "SourceEdgeSurface",
+    horizon_ns: int | None,
+    kind_col_expr: str,
+    id_col_expr: str,
+) -> tuple[str, str] | None:
+    """Resolve one junction member field's join + value expr, over the union
+    of every admitted kind's relation.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        edge: The resolved member-field edge (`len(edge.target_kinds) > 1`).
+        horizon_ns: The render's horizon selection.
+        kind_col_expr: The qualified `member__<f>__kind` expression on the
+            render's own relation.
+        id_col_expr: The qualified `member__<f>__id` expression on the
+            render's own relation.
+
+    Returns:
+        None when every admitted population, over every admitted kind,
+        elects record_id (byte-identical — no join, verbatim); else `(join
+        clause, value expression)`.
+    """
+    all_surfaces = {
+        surface
+        for _, per_population in edge.per_kind_populations
+        for _, surface in per_population
+    }
+    if all_surfaces == {"record_id"}:
+        return None
+    alias = _edge_alias(edge.source_column)
+    parts = []
+    for kind, per_population in edge.per_kind_populations:
+        rel_sql = _mixed_single_kind_relation_sql(
+            sidecar, fork_path, kind, horizon_ns, per_population
+        )
+        parts.append(
+            f'SELECT {_sql_literal(kind)} AS "kind", "record_id", "rendered_value"'
+            f' FROM ({rel_sql}) AS "_k"'
+        )
+    union_sql = " UNION ALL ".join(parts)
+    join = (
+        f' LEFT JOIN ({union_sql}) AS "{alias}"'
+        f' ON {kind_col_expr} = "{alias}"."kind"'
+        f' AND {id_col_expr} = "{alias}"."record_id"'
+    )
+    return join, f'"{alias}"."rendered_value"'
+
+
+def _resolve_edge_render(
+    sidecar: "Sidecar",
+    fork_path: str,
+    edge: "SourceEdgeSurface",
+    horizon_ns: int | None,
+    join_key_expr: str,
+    kind_col_expr: str | None,
+) -> tuple[str, str] | None:
+    """Dispatch one edge to its single-kind or member-field resolver.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        edge: The resolved edge.
+        horizon_ns: The render's horizon selection.
+        join_key_expr: The qualified reference/id-column expression on the
+            render's own relation.
+        kind_col_expr: The qualified `member__<f>__kind` expression, for a
+            member-field edge; None for a single-target-kind edge.
+
+    Returns:
+        None (byte-identical — no join) or `(join clause, value expression)`.
+    """
+    if len(edge.target_kinds) == 1:
+        return _single_kind_edge_join_and_expr(
+            sidecar, fork_path, edge, horizon_ns, join_key_expr
+        )
+    assert kind_col_expr is not None, "a member-field edge needs the kind column"
+    return _member_edge_join_and_expr(
+        sidecar, fork_path, edge, horizon_ns, kind_col_expr, join_key_expr
+    )
+
+
 def build_records_render_sql(
     sidecar: "Sidecar",
     fork_path: str,
@@ -192,7 +580,12 @@ def build_records_render_sql(
     rendering the structural sim-time columns wallclock. With a window:
     transaction filters to `last_mutation_sim_time` in `[window.start_ns,
     window.end_ns)` (append); reference carries no predicate — a full
-    current-state snapshot every window (replace).
+    current-state snapshot every window (replace). Neither genre carries a
+    value-reconstruction horizon of its own (the row is the record's current
+    state), so `spec.identity_surface` / `spec.edge_surfaces` joins always
+    compose at the tape's end (`horizon_ns=None`) — the doc's horizonless
+    rule. A spec with every surface at its default `record_id` composes
+    byte-identical SQL to today.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -216,17 +609,46 @@ def build_records_render_sql(
         sidecar, fork_path, kind, discriminator_filter
     )
 
-    select_list = ", ".join(
-        _render_wallclock_column(src, out, "_rec", anchor, _RECORDS_WALLCLOCK_COLUMNS)
-        for src, out in spec.columns
-    )
+    joins = [
+        _self_identity_join_clause(
+            sidecar, fork_path, kind, spec.identity_surface, None, '"_rec"."record_id"'
+        )
+    ]
+    edges_by_source = {edge.source_column: edge for edge in spec.edge_surfaces}
+    edge_exprs: dict[str, str] = {}
+    for src, edge in edges_by_source.items():
+        resolved = _resolve_edge_render(
+            sidecar, fork_path, edge, None, f'"_rec"."{src}"', None
+        )
+        if resolved is not None:
+            join_clause, value_expr = resolved
+            joins.append(join_clause)
+            edge_exprs[src] = value_expr
+
+    select_parts: list[str] = []
+    for src, out in spec.columns:
+        if src == spec.identity_surface and spec.identity_surface != "record_id":
+            select_parts.append(
+                f'{_self_identity_value_expr(spec.identity_surface)} AS "{out}"'
+            )
+        elif src in edge_exprs:
+            select_parts.append(f'{edge_exprs[src]} AS "{out}"')
+        else:
+            select_parts.append(
+                _render_wallclock_column(
+                    src, out, "_rec", anchor, _RECORDS_WALLCLOCK_COLUMNS
+                )
+            )
+    select_list = ", ".join(select_parts)
+    joins_sql = "".join(joins)
+
     where_clause = ""
     if window is not None and spec.genre == "transaction":
         where_clause = (
             f" WHERE {_half_open_predicate('_rec', 'last_mutation_sim_time', window)}"
         )
     return (
-        f'SELECT {select_list} FROM ({relation_sql}) AS "_rec"'
+        f'SELECT {select_list} FROM ({relation_sql}) AS "_rec"{joins_sql}'
         f"{where_clause}"
         ' ORDER BY "_rec"."created_sim_time", "_rec"."record_id"'
     )
@@ -272,9 +694,30 @@ def build_junction_render_sql(
         sidecar, fork_path, owner_kind, property_name, {}
     )
 
+    joins: list[str] = []
+    edge_exprs: dict[str, str] = {}
+    for edge in spec.edge_surfaces:
+        if edge.source_column == "record_id":
+            join_key_expr = '"_mem"."record_id"'
+            kind_col_expr = None
+        else:
+            field = edge.source_column[len(_MEMBER_PREFIX) : -len(_MEMBER_ID_SUFFIX)]
+            join_key_expr = f'"_mem"."member__{field}__id"'
+            kind_col_expr = f'"_mem"."member__{field}__kind"'
+        resolved = _resolve_edge_render(
+            sidecar, fork_path, edge, None, join_key_expr, kind_col_expr
+        )
+        if resolved is not None:
+            join_clause, value_expr = resolved
+            joins.append(join_clause)
+            edge_exprs[edge.source_column] = value_expr
+    joins_sql = "".join(joins)
+
     select_parts: list[str] = []
     for src, out in spec.columns:
-        if src == "left_sim_time" and window is not None:
+        if src in edge_exprs:
+            select_parts.append(f'{edge_exprs[src]} AS "{out}"')
+        elif src == "left_sim_time" and window is not None:
             select_parts.append(
                 _junction_masked_left_at_expr(src, out, "_mem", anchor, window)
             )
@@ -305,7 +748,7 @@ def build_junction_render_sql(
     )
 
     return (
-        f'SELECT {select_list} FROM ({relation_sql}) AS "_mem"'
+        f'SELECT {select_list} FROM ({relation_sql}) AS "_mem"{joins_sql}'
         f"{where_clause}"
         f" ORDER BY {', '.join(order_terms)}"
     )
@@ -329,7 +772,17 @@ def build_changelog_render_sql(
     `spec.columns`' prop__ sources — the pattern the snapshot render already
     uses — so a plan-narrowed (policy-omitted slice_only columns excluded)
     spec folds only the delivered properties; the row set (c/u/d and `seq`)
-    is unchanged by the narrowing (column-projection-only invariance).
+    is unchanged by the narrowing (column-projection-only invariance). Under a
+    non-`record_id` `spec.identity_surface`, a post-fold LEFT JOIN onto the
+    record-index / presentation-key derivation supersedes the fold's own
+    `record_id`/`presentation_id`-after-image slot — the doc's specific
+    called-out case: the after-image is `NULL` on a `d` row, but the join
+    lands on the records spine, where the value is populated (identity is
+    not an after-image). The join composes at `window.end_ns` when windowed,
+    else the tape's end — the doc's horizon-binding rule. `spec.edge_surfaces`
+    is always empty for a change-log spec — reference-valued `prop__<p>`
+    columns render verbatim regardless of election, per the doc's per-row
+    rendering table.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -350,18 +803,32 @@ def build_changelog_render_sql(
     )
     fold_sql = build_row_state_events_sql(sidecar, fork_path, kind, properties)
     col_types = _column_types(sidecar, spec.source_table)
+    horizon_ns = window.end_ns if window is not None else None
+
+    join_sql = _self_identity_join_clause(
+        sidecar,
+        fork_path,
+        kind,
+        spec.identity_surface,
+        horizon_ns,
+        '"_fold"."record_id"',
+    )
 
     select_parts: list[str] = []
     for src, out in spec.columns:
-        if src == "event_sim_time":
+        if src == spec.identity_surface and spec.identity_surface != "record_id":
+            select_parts.append(
+                f'{_self_identity_value_expr(spec.identity_surface)} AS "{out}"'
+            )
+        elif src == "event_sim_time":
             select_parts.append(
                 render_anchor_timestamp_expr(anchor, '"_fold"."event_sim_time"', out)
             )
         elif src in _CHANGELOG_VERBATIM_COLUMNS:
             select_parts.append(f'"_fold"."{src}" AS "{out}"')
         else:
-            # presentation_id or a prop__<p> payload column: the fold's
-            # after-image is codec VARCHAR; CAST back to the sidecar type.
+            # presentation_id (non-elected) or a prop__<p> payload column: the
+            # fold's after-image is codec VARCHAR; CAST back to the sidecar type.
             select_parts.append(f'CAST("_fold"."{src}" AS {col_types[src]}) AS "{out}"')
 
     select_list = ", ".join(select_parts)
@@ -371,7 +838,7 @@ def build_changelog_render_sql(
             f" WHERE {_half_open_predicate('_fold', 'event_sim_time', window)}"
         )
     return (
-        f'SELECT {select_list} FROM ({fold_sql}) AS "_fold"'
+        f'SELECT {select_list} FROM ({fold_sql}) AS "_fold"{join_sql}'
         f"{where_clause}"
         ' ORDER BY "_fold"."event_sim_time", "_fold"."event_class",'
         ' "_fold"."record_id"'
@@ -396,7 +863,12 @@ def build_snapshot_render_sql(
     documented deviations from the CDC render: no `updated_at` (there is no
     per-event timestamp to render), and `active` / `deactivated_at` are the
     derivation's own rendered columns rather than values read verbatim off the
-    source relation.
+    source relation. `spec.identity_surface` / `spec.edge_surfaces` joins
+    compose at the same horizon as the state-at reconstruction itself (the
+    doc's "same horizon as the table's value reconstruction" rule) — state-at
+    carries no `record_index` natively, so a non-`record_id` identity
+    election always needs the join here (unlike reference/transaction, whose
+    faithful read already carries it).
 
     Args:
         sidecar: The open emit's sidecar.
@@ -417,16 +889,45 @@ def build_snapshot_render_sql(
         for src, _ in spec.columns
         if src.startswith(_PROP_PREFIX)
     )
+    horizon_ns = window.end_ns if window is not None else None
     state_at_sql = (
-        build_state_at_sql(sidecar, fork_path, kind, properties, window.end_ns)
-        if window is not None
+        build_state_at_sql(sidecar, fork_path, kind, properties, horizon_ns)
+        if horizon_ns is not None
         else build_state_at_end_sql(sidecar, fork_path, kind, properties)
     )
     col_types = _column_types(sidecar, spec.source_table)
 
+    joins = [
+        _self_identity_join_clause(
+            sidecar,
+            fork_path,
+            kind,
+            spec.identity_surface,
+            horizon_ns,
+            '"_snap"."record_id"',
+        )
+    ]
+    edges_by_source = {edge.source_column: edge for edge in spec.edge_surfaces}
+    edge_exprs: dict[str, str] = {}
+    for src, edge in edges_by_source.items():
+        resolved = _resolve_edge_render(
+            sidecar, fork_path, edge, horizon_ns, f'"_snap"."{src}"', None
+        )
+        if resolved is not None:
+            join_clause, value_expr = resolved
+            joins.append(join_clause)
+            edge_exprs[src] = value_expr
+    joins_sql = "".join(joins)
+
     select_parts: list[str] = []
     for src, out in spec.columns:
-        if src in _SNAPSHOT_VERBATIM_COLUMNS:
+        if src == spec.identity_surface and spec.identity_surface != "record_id":
+            select_parts.append(
+                f'{_self_identity_value_expr(spec.identity_surface)} AS "{out}"'
+            )
+        elif src in edge_exprs:
+            select_parts.append(f'{edge_exprs[src]} AS "{out}"')
+        elif src in _SNAPSHOT_VERBATIM_COLUMNS:
             select_parts.append(f'"_snap"."{src}" AS "{out}"')
         elif src in _RECORDS_WALLCLOCK_COLUMNS:
             select_parts.append(
@@ -435,13 +936,13 @@ def build_snapshot_render_sql(
                 )
             )
         else:
-            # presentation_id or a prop__<p> payload column: the fold's
-            # after-image is codec VARCHAR; CAST back to the sidecar type.
+            # presentation_id (non-elected) or a prop__<p> payload column: the
+            # fold's after-image is codec VARCHAR; CAST back to the sidecar type.
             select_parts.append(f'CAST("_snap"."{src}" AS {col_types[src]}) AS "{out}"')
 
     select_list = ", ".join(select_parts)
     return (
-        f'SELECT {select_list} FROM ({state_at_sql}) AS "_snap"'
+        f'SELECT {select_list} FROM ({state_at_sql}) AS "_snap"{joins_sql}'
         ' ORDER BY "_snap"."created_sim_time", "_snap"."record_id"'
     )
 

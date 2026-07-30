@@ -1,20 +1,28 @@
 """Source export engine: build_source_query_specs, export_source.
 
-The source counterpart of the dimensional exporter's full-export path: builds
-the source plan (`exporters.source.plan.build_source_plan`), compiles one
-render per output table (`exporters.source.renders`), and dispatches to the
-fmt-selected writer via the shared `write_query_specs`. Optionally windowed
-(Unit 2): every spec is tagged its genre's write_mode. Under
-`change_delivery: snapshot` (Unit 3), a change-log-genre spec routes to
+The source counterpart of the dimensional exporter's full-export path:
+resolves the election (`exporters.election.resolve_election`), builds the
+source plan (`exporters.source.plan.build_source_plan`), compiles one render
+per output table (`exporters.source.renders`), guards every elected relation
+(`exporters.election.check_elected_key_unique`) before any writer runs, and
+dispatches to the fmt-selected writer via the shared `write_query_specs`.
+Optionally windowed (Unit 2): every spec is tagged its genre's write_mode.
+Under `change_delivery: snapshot` (Unit 3), a change-log-genre spec routes to
 `build_snapshot_render_sql` instead of the CDC render and is tagged
 `write_mode='replace'` when windowed, or `write_mode='create'` for a full
 (non-windowed) export — which reconstructs at the tape's end (§ Shaped
 state, "One mode semantic, redefined") rather than refusing.
 
-Layer-direction invariant: imports the reader, derivations.guard, the source
-plan/renders modules, config.models and anchor (TYPE_CHECKING only where
-runtime use is not needed), errors, and the mode-neutral query_spec module.
-Never imports exporters.dimensional.* or exporters.streaming.*.
+Layer-direction invariant: imports the reader, derivations.guard, the
+mode-neutral election module, the sibling source plan/renders modules
+(including two renders internals — the record-index / presentation-key
+horizon dispatchers `_record_index_sql` / `_presentation_key_sql` —
+recomputed here, not re-derived, to guard the exact relation the render
+embeds; both are pure functions of their arguments, so the two computations
+cannot disagree, per the sprint contract's recompute-not-thread posture),
+config.models and anchor (TYPE_CHECKING only where runtime use is not
+needed), errors, and the mode-neutral query_spec module. Never imports
+exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -28,7 +36,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.exporters.notices import NoticeSink
-    from fabulexa_forge.exporters.source.plan import SourceTableSpec
+    from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceTableSpec
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -36,6 +44,11 @@ if TYPE_CHECKING:
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import SourceAnchorRequired
 from fabulexa_forge.exporters.base_relations import apply_base_relations
+from fabulexa_forge.exporters.election import (
+    build_population_spine_sql,
+    check_elected_key_unique,
+    resolve_election,
+)
 from fabulexa_forge.exporters.query_spec import (
     QuerySpec,
     declare_keys_active,
@@ -43,12 +56,22 @@ from fabulexa_forge.exporters.query_spec import (
     write_query_specs,
 )
 from fabulexa_forge.exporters.source.plan import (
+    _kind_from_records_table,
     build_source_plan,
     resolve_source_table_keys,
 )
 from fabulexa_forge.exporters.source.renders import (
+    _presentation_key_sql,
+    _record_index_sql,
     build_render_sql,
     build_snapshot_render_sql,
+)
+
+#: The two non-record_id surfaces the guard covers, in a fixed order so a
+#: mixed edge's guard calls are deterministic across runs.
+_GUARD_SURFACES: tuple[Literal["record_index", "presentation_id"], ...] = (
+    "record_index",
+    "presentation_id",
 )
 
 _ANCHOR_REQUIRED_MESSAGE = (
@@ -124,6 +147,151 @@ def _render_sql_for_spec(
     return build_render_sql(sidecar, fork_path, table_spec, anchor, window)
 
 
+def _table_horizon(
+    genre: str,
+    window: "Window | None",
+) -> int | None:
+    """Resolve the horizon a table's identity/edge joins compose at.
+
+    Reference/transaction/junction genres carry no value-reconstruction
+    horizon of their own (the row is the record's current state) — always
+    the tape's end. A change-log genre spec (CDC fold or `snapshot`
+    delivery) composes at `window.end_ns` when windowed, else the tape's
+    end — the same horizon `renders.py` applies to the render's own joins.
+
+    Args:
+        genre: The resolved output table's genre.
+        window: The window to filter to, or None for the full export.
+
+    Returns:
+        The exclusive horizon, or None for the tape's end.
+    """
+    if genre == "changelog":
+        return window.end_ns if window is not None else None
+    return None
+
+
+def _guard_context_label(base_label: str, window: "Window | None") -> str:
+    """Suffix a guard's context label with the window display label, if any.
+
+    Args:
+        base_label: The table/column identity (e.g. `"orders.id"`).
+        window: The active window, or None for a full/sliced export.
+
+    Returns:
+        `base_label`, suffixed `" (<window.label>)"` under an incremental
+        invocation.
+    """
+    return base_label if window is None else f"{base_label} ({window.label})"
+
+
+def _guard_self_identity(
+    emit: "Emit",
+    sidecar: "Sidecar",
+    fork_path: str,
+    table_spec: "SourceTableSpec",
+    window: "Window | None",
+) -> None:
+    """Guard one table's self identity relation, when its election is non-`record_id`.
+
+    Junction genre's `identity_surface` is always `'record_id'` (no own
+    identity render), so this is a no-op there. A split unit's relation is
+    restricted to its own sub_type via the population spine when the kind
+    carries other sub-types (a proper subset); an unsplit unit's relation
+    draws from the kind's full domain — no spine.
+
+    Args:
+        emit: The open emit.
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        table_spec: The resolved output table.
+        window: The active window, or None for a full/sliced export.
+
+    Raises:
+        ElectedKeyDuplicate: The elected self identity is not a bijection on
+            record_id over its consumed set.
+    """
+    surface = table_spec.identity_surface
+    if surface == "record_id":
+        return
+    kind = _kind_from_records_table(table_spec.source_table)
+    horizon_ns = _table_horizon(table_spec.genre, window)
+    relation_sql = (
+        _record_index_sql(sidecar, fork_path, kind, horizon_ns)
+        if surface == "record_index"
+        else _presentation_key_sql(sidecar, fork_path, kind, horizon_ns)
+    )
+    domain = sidecar.subtype_values(kind)
+    spine_sql = (
+        build_population_spine_sql(sidecar, fork_path, kind, (table_spec.sub_type,))
+        if table_spec.sub_type is not None and len(domain) > 1
+        else None
+    )
+    id_out = dict(table_spec.columns)[surface]
+    label = _guard_context_label(f"{table_spec.name}.{id_out}", window)
+    check_elected_key_unique(emit, relation_sql, surface, spine_sql, label)
+
+
+def _guard_edge_surface(
+    emit: "Emit",
+    sidecar: "Sidecar",
+    fork_path: str,
+    table_spec: "SourceTableSpec",
+    edge: "SourceEdgeSurface",
+    window: "Window | None",
+) -> None:
+    """Guard one referencing column's elected relations, per admitted kind
+    and surviving surface group.
+
+    A single-target-kind edge (a reference-annotated `prop__<p>` column, the
+    junction owner column) contributes one kind; a junction member field
+    contributes every admitted kind (`edge.per_kind_populations`) — each
+    guarded independently, per the doc's per-member-kind gate.
+
+    Args:
+        emit: The open emit.
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        table_spec: The referencing table's resolved output table.
+        edge: The resolved edge.
+        window: The active window, or None for a full/sliced export.
+
+    Raises:
+        ElectedKeyDuplicate: An admitted surface group's elected relation is
+            not a bijection on record_id over its consumed set.
+    """
+    edge_out = dict(table_spec.columns).get(edge.source_column, edge.source_column)
+    horizon_ns = _table_horizon(table_spec.genre, window)
+    multi_kind = len(edge.per_kind_populations) > 1
+
+    for target_kind, per_population in edge.per_kind_populations:
+        domain = set(sidecar.subtype_values(target_kind))
+        base_label = f"{table_spec.name}.{edge_out}"
+        if multi_kind:
+            base_label = f"{base_label} (member kind '{target_kind}')"
+        label = _guard_context_label(base_label, window)
+
+        for surface in _GUARD_SURFACES:
+            subset = tuple(
+                sub_type
+                for sub_type, elected in per_population
+                if elected == surface and sub_type is not None
+            )
+            if not subset:
+                continue
+            relation_sql = (
+                _record_index_sql(sidecar, fork_path, target_kind, horizon_ns)
+                if surface == "record_index"
+                else _presentation_key_sql(sidecar, fork_path, target_kind, horizon_ns)
+            )
+            spine_sql = (
+                build_population_spine_sql(sidecar, fork_path, target_kind, subset)
+                if set(subset) != domain
+                else None
+            )
+            check_elected_key_unique(emit, relation_sql, surface, spine_sql, label)
+
+
 def build_source_query_specs(
     emit: "Emit",
     config: "ExportConfig",
@@ -135,12 +303,19 @@ def build_source_query_specs(
     """
     Compile the source plan to writer-ready QuerySpecs, optionally windowed.
 
-    The source counterpart of the dimensional compile. Builds the source
-    plan, threading notice_sink to it, then one SELECT per output table
-    composing the reader relations and the row-state-events derivation (the
-    mode authors no base-table SQL); every structural sim-time column renders
-    wallclock through the shared anchor renderer, every change-log payload
-    column casts from the fold's codec VARCHAR back to its sidecar type.
+    The source counterpart of the dimensional compile. Resolves the election
+    once (`resolve_election(sidecar, config.keys)`), builds the source plan
+    (threading notice_sink and the resolved election), then one SELECT per
+    output table composing the reader relations and the row-state-events
+    derivation (the mode authors no base-table SQL); every structural
+    sim-time column renders wallclock through the shared anchor renderer,
+    every change-log payload column casts from the fold's codec VARCHAR back
+    to its sidecar type. Immediately after composing each table's render SQL,
+    guards every relation it embeds — the self identity relation when the
+    unit's own election is non-`record_id` (§ `_guard_self_identity`), and
+    each referencing column's admitted surface groups (§ `_guard_edge_surface`)
+    — before any writer runs, so a corrupted elected key fails the export
+    with nothing written.
 
     window=None keeps the full-export contract: every spec write_mode='create'.
     With a window, applies per-genre window membership and tags write_mode per
@@ -175,8 +350,22 @@ def build_source_query_specs(
         SourceAnchorRequired: anchor is None.
         ExportError: The single-branch guard or a source business rule fails
             (the SourceTableSpec resolution errors — § build_source_plan).
-        PresentationKeysInvalidError: `declare_keys` is true and the
-            sidecar's `presentation_keys` block is present and incoherent.
+        ElectedKeyDuplicate: A corrupted elected key fails the uniqueness
+            guard on some composed relation.
+        ElectionKindUnknown: A `keys` entry names a kind with no records
+            table in the emit.
+        ElectionMixedIdentity: An unsplit sub-typed unit's populations elect
+            differing identity surfaces.
+        ElectionPresentationUndeclared: A population elects presentation_id
+            without a registry entry.
+        ElectionSubTypeUnknown: A `keys` map addresses a sub-type outside the
+            kind's discriminator domain, or a flat kind.
+        ElectionUnionUnsafe: A uniform presentation_id identity election, or
+            a referencing column's admitted target populations, contain a
+            pairwise-unsafe key-space pair.
+        PresentationKeysInvalidError: `declare_keys` is true, or some
+            population elects presentation_id, and the sidecar's
+            `presentation_keys` block is present and incoherent.
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """
@@ -185,33 +374,41 @@ def build_source_query_specs(
 
     sidecar = emit.sidecar
     fork_path = require_single_branch(sidecar)
-    table_specs = build_source_plan(sidecar, config.source, notice_sink)
+    election = resolve_election(sidecar, config.keys)
+    table_specs = build_source_plan(
+        sidecar, config.source, notice_sink, election=election
+    )
 
     change_delivery = (
         config.source.change_delivery if config.source is not None else "changelog"
     )
     declare_keys = declare_keys_active(config)
 
-    return [
-        QuerySpec(
-            table_name=table_spec.name,
-            sql=apply_base_relations(
-                _render_sql_for_spec(
-                    sidecar, fork_path, table_spec, anchor, window, change_delivery
-                ),
-                base_relations,
-            ),
-            write_mode=_write_mode_for_genre(table_spec.genre, window, change_delivery),
-            view_name=None,
-            view_sql=None,
-            keys=(
-                resolve_source_table_keys(sidecar, table_spec, change_delivery)
-                if declare_keys
-                else None
-            ),
+    specs: list[QuerySpec] = []
+    for table_spec in table_specs:
+        sql = _render_sql_for_spec(
+            sidecar, fork_path, table_spec, anchor, window, change_delivery
         )
-        for table_spec in table_specs
-    ]
+        _guard_self_identity(emit, sidecar, fork_path, table_spec, window)
+        for edge in table_spec.edge_surfaces:
+            _guard_edge_surface(emit, sidecar, fork_path, table_spec, edge, window)
+        specs.append(
+            QuerySpec(
+                table_name=table_spec.name,
+                sql=apply_base_relations(sql, base_relations),
+                write_mode=_write_mode_for_genre(
+                    table_spec.genre, window, change_delivery
+                ),
+                view_name=None,
+                view_sql=None,
+                keys=(
+                    resolve_source_table_keys(sidecar, table_spec, change_delivery)
+                    if declare_keys
+                    else None
+                ),
+            )
+        )
+    return specs
 
 
 def export_source(

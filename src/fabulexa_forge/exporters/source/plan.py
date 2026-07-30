@@ -13,11 +13,12 @@ implements (no incremental window — window membership is renders.py's concern)
 Layer-direction invariant: imports only the reader, the derivations layer
 (the row-state-events fold's column-naming helper and the state-at
 derivation's column order / property-partition helpers), fabulexa_forge.errors,
-the mode-neutral reserved_names and query_spec (for `TableKeys`) modules,
-notices (for `Notice`, and `NoticeSink` TYPE_CHECKING-only), and slice_only
-modules, the sibling source.columns module, config.models (TYPE_CHECKING
-only), and stdlib. Never imports exporters.dimensional.* or
-exporters.streaming.*.
+the mode-neutral reserved_names, query_spec (for `TableKeys`), and election
+(`Election`, `check_edge_union_safety`, `check_identity_election`,
+`resolve_election`) modules, notices (for `Notice`, and `NoticeSink`
+TYPE_CHECKING-only), and slice_only modules, the sibling source.columns
+module, config.models (TYPE_CHECKING only except `KeySurface`), and stdlib.
+Never imports exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -26,7 +27,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from fabulexa_forge.config.models import ExcludeDecl, RenameEntry, SourceConfig
+    from fabulexa_forge.config.models import (
+        ExcludeDecl,
+        KeySurface,
+        RenameEntry,
+        SourceConfig,
+    )
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.sidecar import PresentationKeys, RecordRoles, Sidecar
 
@@ -44,6 +50,12 @@ from fabulexa_forge.errors import (
     SourceRoleUnknown,
     SourceSubtypesUndeclared,
     SourceUnclassifiedColumn,
+)
+from fabulexa_forge.exporters.election import (
+    Election,
+    check_edge_union_safety,
+    check_identity_election,
+    resolve_election,
 )
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.query_spec import TableKeys
@@ -76,6 +88,35 @@ _LIFECYCLE_RENAMES: dict[str, str] = {
 
 
 @dataclass(frozen=True)
+class SourceEdgeSurface:
+    """One referencing source column's resolved target election(s).
+
+    `target_kinds` names the referencing column's admitted target kind(s): a
+    one-element tuple for a reference-valued `prop__<p>` column or a junction
+    owner column, whose target kind is fixed; every kind with a declared
+    `records__<kind>` table in the emit for a junction member column — member
+    kind is per-row, not statically declared (contract § Membership-category
+    tables), so the closed, data-free admitted set is the full universe of
+    kinds a `member__<f>__kind` value could legally name. `per_kind_populations`
+    carries, per admitted kind, that kind's full declared domain with its
+    resolved election (gated pairwise union-safe per kind independently —
+    cross-kind values carry no uniqueness claim; `<f>_kind` disambiguates).
+    `rendered_type` is the mixed-column type rule's verdict: the common
+    declared type when every admitted population (across every admitted kind)
+    agrees, else `'VARCHAR'` (record_index values digit-rendered at render
+    time) — a junction member column always resolves `'VARCHAR'` when
+    non-default, since a `member__<f>__id` column is inherently VARCHAR-typed
+    regardless of election."""
+
+    source_column: str
+    target_kinds: "tuple[str, ...]"
+    per_kind_populations: (
+        "tuple[tuple[str, tuple[tuple[str | None, KeySurface], ...]], ...]"
+    )
+    rendered_type: str
+
+
+@dataclass(frozen=True)
 class SourceTableSpec:
     """One resolved output table: source identity, genre, and naming."""
 
@@ -97,6 +138,21 @@ class SourceTableSpec:
     (state-at) shape's base / state-at source names under `snapshot` — never both.
     Delivery-independent (the faithful records/membership set) for every other
     genre."""
+    identity_surface: "KeySurface"
+    """The table's own population(s)' uniform elected identity surface
+    (`'record_id'` under no election — byte-identical). For a split unit, the
+    unit's own single population's election (never gated — trivially
+    uniform). For an unsplit unit whose kind is sub-typed, gated uniform over
+    the kind's full domain (`check_identity_election`) before resolution.
+    Junction genre carries no own identity — always `'record_id'`, unused by
+    the render (owner/member columns are edges, not the table's own
+    identity)."""
+    edge_surfaces: "tuple[SourceEdgeSurface, ...]"
+    """One entry per referencing source column this table carries: a
+    reference-valued `prop__<p>` column (reference/transaction genres, and a
+    change-log kind under `change_delivery: snapshot` — never a change-log
+    kind under CDC delivery, per the doc), the junction owner column, and one
+    entry per junction member field. Empty for a CDC change-log spec."""
 
 
 @dataclass(frozen=True)
@@ -307,6 +363,362 @@ def _classify_units(sidecar: "Sidecar") -> tuple[_Unit, ...]:
             )
         # category == "fixed" (history, ...): never a plan entry.
     return tuple(units)
+
+
+# ---------------------------------------------------------------------------
+# Election resolution
+# ---------------------------------------------------------------------------
+
+
+def _resolve_identity_surface(
+    sidecar: "Sidecar",
+    election: Election,
+    kind: str,
+    sub_type: str | None,
+    table_name: str,
+) -> "KeySurface":
+    """Resolve one unit's own uniform elected identity surface.
+
+    A split unit (`sub_type` set) is a single population — trivially uniform,
+    no gate needed. A flat kind (no discriminator domain) is likewise a
+    single population. An unsplit unit whose kind is sub-typed (record_roles'
+    role does not vary by sub-type, so the whole domain lands in one table)
+    is gated (`check_identity_election`) over the kind's full domain; once
+    gated, every population resolves identically, so any domain member's
+    surface is the unit's answer.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        election: The resolved election.
+        kind: The unit's record kind.
+        sub_type: The unit's own discriminator value, or None for an unsplit
+            unit.
+        table_name: The unit's output table name, for the gate's error.
+
+    Returns:
+        The unit's uniform elected surface (`'record_id'` under no election).
+
+    Raises:
+        ElectionMixedIdentity: An unsplit sub-typed kind's populations elect
+            differing surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election whose
+            populations' key spaces contain a pairwise-unsafe pair.
+    """
+    if sub_type is not None:
+        return election.surface_for(kind, sub_type)
+    domain = sidecar.subtype_values(kind)
+    if not domain:
+        return election.surface_for(kind, None)
+    check_identity_election(election, kind, domain, table_name)
+    return election.surface_for(kind, domain[0])
+
+
+def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
+    """Every kind with a declared `records__<kind>` table, sidecar table order.
+
+    The closed, data-free universe of kinds a junction member field's
+    per-row `member__<f>__kind` value could legally name (§ per-row
+    population resolution — member kind is not statically declared).
+
+    Args:
+        sidecar: The open emit's sidecar.
+
+    Returns:
+        Record kinds, in sidecar table-declaration order.
+    """
+    kinds: list[str] = []
+    for table in sidecar.tables():
+        if table.category == "records":
+            kind = table.record_kind
+            assert kind is not None, "records table must declare record_kind"
+            kinds.append(kind)
+    return tuple(kinds)
+
+
+def _presentation_id_type(sidecar: "Sidecar", kind: str) -> str:
+    """One kind's declared `presentation_id` column DuckDB type.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The record kind; its table must carry a presentation_id column
+            (unreachable otherwise — the presentation_id-declared gate makes
+            an uncovered population unreachable from a gated plan).
+
+    Returns:
+        The declared DuckDB type.
+
+    Raises:
+        ExportError: The kind's table declares no presentation_id column — a
+            caller gating error.
+    """
+    table = f"{_RECORDS_TABLE_PREFIX}{kind}"
+    for col in sidecar.columns(table):
+        if col.name == "presentation_id":
+            return col.type
+    raise ExportError(f"records__{kind} declares no presentation_id column")
+
+
+def _resolve_single_kind_rendered_type(
+    sidecar: "Sidecar",
+    target_kind: str,
+    per_population: "tuple[tuple[str | None, KeySurface], ...]",
+) -> str:
+    """Resolve a single-target-kind edge's mixed-column type-rule verdict.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        target_kind: The edge's one target kind.
+        per_population: The target kind's gated per-population election.
+
+    Returns:
+        `'VARCHAR'` when every admitted population elects record_id (native
+        record-id type — verbatim, unaffected); `'BIGINT'` when uniform
+        record_index; the target's declared presentation_id type when
+        uniform presentation_id; `'VARCHAR'` for any other mix
+        (record_index values digit-rendered at render time).
+    """
+    surfaces = {surface for _, surface in per_population}
+    if surfaces == {"record_id"}:
+        return "VARCHAR"
+    if surfaces == {"record_index"}:
+        return "BIGINT"
+    if surfaces == {"presentation_id"}:
+        return _presentation_id_type(sidecar, target_kind)
+    return "VARCHAR"
+
+
+def _resolve_single_kind_edge(
+    sidecar: "Sidecar",
+    election: Election,
+    target_kind: str,
+    source_column: str,
+    edge_name: str,
+) -> SourceEdgeSurface:
+    """Gate and resolve one single-target-kind referencing column.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        election: The resolved election.
+        target_kind: The referencing column's one target kind.
+        source_column: The referencing column's source identity.
+        edge_name: The referencing table · column identity, for the gate's
+            error.
+
+    Returns:
+        The resolved `SourceEdgeSurface`, `target_kinds` a one-element tuple.
+
+    Raises:
+        ElectionUnionUnsafe: The target kind's admitted populations' resolved
+            key spaces contain a pairwise-unsafe pair.
+    """
+    domain = sidecar.subtype_values(target_kind)
+    check_edge_union_safety(election, target_kind, domain, edge_name)
+    per_population = tuple(
+        (p.sub_type, p.surface) for p in election.populations_for(target_kind)
+    )
+    rendered_type = _resolve_single_kind_rendered_type(
+        sidecar, target_kind, per_population
+    )
+    return SourceEdgeSurface(
+        source_column=source_column,
+        target_kinds=(target_kind,),
+        per_kind_populations=((target_kind, per_population),),
+        rendered_type=rendered_type,
+    )
+
+
+def _resolve_member_field_edge(
+    sidecar: "Sidecar",
+    election: Election,
+    known_kinds: "tuple[str, ...]",
+    source_column: str,
+    edge_name: str,
+) -> SourceEdgeSurface:
+    """Gate and resolve one junction member field over every admitted kind.
+
+    Gates each admitted kind's own domain independently (cross-kind values
+    carry no uniqueness claim — the `<f>_kind` column disambiguates, per the
+    doc's mixed-election edge columns section).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        election: The resolved election.
+        known_kinds: Every kind with a declared records table in the emit
+            (§ `_known_records_kinds`), the member field's admitted set.
+        source_column: The member field's `member__<f>__id` source identity.
+        edge_name: The referencing table · column identity, for the gates'
+            errors.
+
+    Returns:
+        The resolved `SourceEdgeSurface`, spanning `known_kinds`.
+        `rendered_type` is always `'VARCHAR'` when non-default (a
+        `member__<f>__id` column is inherently VARCHAR-typed) — `'VARCHAR'`
+        unconditionally, since the default (uniform record_id) case is also
+        natively VARCHAR.
+
+    Raises:
+        ElectionUnionUnsafe: Some admitted kind's own domain's resolved key
+            spaces contain a pairwise-unsafe pair.
+    """
+    per_kind: list[tuple[str, tuple[tuple[str | None, "KeySurface"], ...]]] = []
+    for kind in known_kinds:
+        domain = sidecar.subtype_values(kind)
+        check_edge_union_safety(
+            election, kind, domain, f"{edge_name} (member kind '{kind}')"
+        )
+        per_population = tuple(
+            (p.sub_type, p.surface) for p in election.populations_for(kind)
+        )
+        per_kind.append((kind, per_population))
+    return SourceEdgeSurface(
+        source_column=source_column,
+        target_kinds=known_kinds,
+        per_kind_populations=tuple(per_kind),
+        rendered_type="VARCHAR",
+    )
+
+
+def _resolve_reference_prop_edges(
+    sidecar: "Sidecar",
+    election: Election,
+    source_table: str,
+    columns: "tuple[tuple[str, str], ...]",
+    known_kinds: frozenset[str],
+    table_name: str,
+) -> tuple[SourceEdgeSurface, ...]:
+    """Resolve every reference-annotated `prop__<p>` column a unit carries.
+
+    Applies to reference/transaction units, and a change-log unit under
+    `change_delivery: snapshot` — never a change-log unit under CDC delivery
+    (the doc's per-row rendering table omits changelog from this row; the
+    fold's reference-valued payload columns stay verbatim regardless of
+    election). A property whose target kind has no declared records table in
+    the emit yields no entry — the kind-exists gate's consequence: it cannot
+    carry an election, so the column renders its default verbatim record_id
+    with no join needed.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        election: The resolved election.
+        source_table: The unit's `records__<kind>` table.
+        columns: The unit's default (source, output) column pairs.
+        known_kinds: Every kind with a declared records table in the emit.
+        table_name: The unit's output table name, for the gates' errors.
+
+    Returns:
+        One `SourceEdgeSurface` per surviving reference-annotated column, in
+        `columns` order.
+
+    Raises:
+        ElectionUnionUnsafe: A surviving edge's admitted target populations'
+            resolved key spaces contain a pairwise-unsafe pair.
+    """
+    references: dict[str, str] = {
+        col.name: col.references
+        for col in sidecar.columns(source_table)
+        if col.name.startswith(_PROP_PREFIX) and col.references is not None
+    }
+    edges: list[SourceEdgeSurface] = []
+    for src, _out in columns:
+        target_kind = references.get(src)
+        if target_kind is None or target_kind not in known_kinds:
+            continue
+        edge_name = f"{table_name}.{src}"
+        edges.append(
+            _resolve_single_kind_edge(sidecar, election, target_kind, src, edge_name)
+        )
+    return tuple(edges)
+
+
+def _resolve_junction_edges(
+    sidecar: "Sidecar",
+    election: Election,
+    source_table: str,
+    owner_kind: str,
+    known_kinds: "tuple[str, ...]",
+    table_name: str,
+) -> tuple[SourceEdgeSurface, ...]:
+    """Resolve a junction unit's owner column and every member field.
+
+    A membership table's owning kind ordinarily has a declared records table
+    in the emit; when it does not (the kind-exists gate's consequence), the
+    owner column carries no entry — it cannot carry an election, so it
+    renders its default verbatim record_id with no join needed.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        election: The resolved election.
+        source_table: The `membership__<K>__<p>` table.
+        owner_kind: The owning kind (`<K>`).
+        known_kinds: Every kind with a declared records table in the emit
+            (§ `_known_records_kinds`).
+        table_name: The unit's output table name, for the gates' errors.
+
+    Returns:
+        The owner column's `SourceEdgeSurface` first (when the owner kind
+        has a declared records table), then one per member field in sidecar
+        column-declaration order.
+
+    Raises:
+        ElectionUnionUnsafe: The owner kind's, or some member kind's, own
+            domain's resolved key spaces contain a pairwise-unsafe pair.
+    """
+    edges: list[SourceEdgeSurface] = []
+    if owner_kind in known_kinds:
+        edges.append(
+            _resolve_single_kind_edge(
+                sidecar,
+                election,
+                owner_kind,
+                "record_id",
+                f"{table_name}.{owner_kind}_id",
+            )
+        )
+    for col in sidecar.columns(source_table):
+        name = col.name
+        if name.startswith(_MEMBER_PREFIX) and name.endswith(_MEMBER_ID_SUFFIX):
+            field = name[len(_MEMBER_PREFIX) : -len(_MEMBER_ID_SUFFIX)]
+            edges.append(
+                _resolve_member_field_edge(
+                    sidecar, election, known_kinds, name, f"{table_name}.{field}_id"
+                )
+            )
+    return tuple(edges)
+
+
+def _apply_identity_election(
+    columns: "tuple[tuple[str, str], ...]", identity_surface: "KeySurface"
+) -> "tuple[tuple[str, str], ...]":
+    """Rewrite a unit's default columns for its own identity election.
+
+    Under no election (`'record_id'`), a no-op — byte-identical. Otherwise
+    the `record_id` entry's source key becomes the elected surface's contract
+    column name (so `rename` addressing follows source identity, per the
+    doc), and — under `presentation_id` election — the standalone
+    `presentation_id` payload column entry (when present) is absorbed: it
+    now occupies the identity slot, so emitting both would duplicate a
+    column.
+
+    Args:
+        columns: The unit's default (source, output) column pairs (source
+            names are base/canonical-fold names, so the identity column is
+            always literally `'record_id'` here).
+        identity_surface: The unit's own resolved identity election.
+
+    Returns:
+        The rewritten (source, output) column pairs.
+    """
+    if identity_surface == "record_id":
+        return columns
+    rewritten: list[tuple[str, str]] = []
+    for src, out in columns:
+        if src == "record_id":
+            rewritten.append((identity_surface, out))
+        elif src == "presentation_id" and identity_surface == "presentation_id":
+            continue
+        else:
+            rewritten.append((src, out))
+    return tuple(rewritten)
 
 
 # ---------------------------------------------------------------------------
@@ -748,20 +1160,31 @@ def _slice_only_omission_notice(unit: _Unit, column_name: str) -> Notice:
 
 def _resolve_specs(
     sidecar: "Sidecar",
+    election: Election,
     units: tuple[_Unit, ...],
     rename: "list[RenameEntry] | None",
     change_delivery: Literal["changelog", "snapshot"],
     notice_sink: "NoticeSink",
 ) -> tuple[SourceTableSpec, ...]:
-    """Resolve every unit's default naming, then apply matching rename entries.
+    """Resolve every unit's election, default naming, then apply matching
+    rename entries.
 
     The emission point for `slice-only-column-omitted`: per unit, computes the
     unit's omitted set (empty for a junction unit — membership columns carry
     no class) and emits one notice per unit x column, unit order then sidecar
-    column order, before rename resolution and spec assembly.
+    column order, before rename resolution and spec assembly. Own-identity
+    election is resolved and gated (`_resolve_identity_surface`) before the
+    default columns are built, so `_apply_identity_election` narrows the
+    default set (absorption) prior to rename resolution — a rename keyed on
+    the absorbed/dropped identity column is then unresolvable, per the doc.
+    Edge elections (reference-annotated `prop__<p>` columns, any genre;
+    junction owner + member columns) are resolved and gated over the
+    narrowed set, using the unit's default (pre-rename) output table name for
+    every gate/edge error label.
 
     Args:
         sidecar: The open emit's sidecar.
+        election: The resolved election.
         units: The classified, exclude-filtered units.
         rename: The source.rename entries, or None.
         change_delivery: The source config's delivery mode for change-log
@@ -775,13 +1198,22 @@ def _resolve_specs(
         SourceRenameSliceOnly: A rename entry's columns key names a
             policy-omitted slice_only column.
         SourceRenameUnresolved: A rename entry's (table, sub_type) does not
-            match any unit, or one of its columns keys is unresolved.
+            match any unit, or one of its columns keys is unresolved
+            (including one an election absorbed or dropped).
+        ElectionMixedIdentity: An unsplit sub-typed unit's populations elect
+            differing identity surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id identity election, or
+            a referencing column's admitted target populations, contain a
+            pairwise-unsafe key-space pair.
         TemporalClassUnavailableError: Propagated from the omitted-column scan.
     """
     rename_by_key: dict[tuple[str, str | None], RenameEntry] = {}
     if rename is not None:
         for entry in rename:
             rename_by_key[(entry.table, entry.sub_type)] = entry
+
+    known_kinds = _known_records_kinds(sidecar)
+    known_kinds_set = frozenset(known_kinds)
 
     matched_keys: set[tuple[str, str | None]] = set()
     specs: list[SourceTableSpec] = []
@@ -798,6 +1230,32 @@ def _resolve_specs(
         name = _default_table_name(unit)
         columns = _default_columns(sidecar, unit, change_delivery, omitted)
 
+        if unit.genre == "junction":
+            identity_surface: "KeySurface" = "record_id"
+            edge_surfaces = _resolve_junction_edges(
+                sidecar, election, unit.source_table, unit.kind, known_kinds, name
+            )
+        else:
+            identity_surface = _resolve_identity_surface(
+                sidecar, election, unit.kind, unit.sub_type, name
+            )
+            columns = _apply_identity_election(columns, identity_surface)
+            elects_reference_edges = unit.genre != "changelog" or (
+                change_delivery == "snapshot"
+            )
+            edge_surfaces = (
+                _resolve_reference_prop_edges(
+                    sidecar,
+                    election,
+                    unit.source_table,
+                    columns,
+                    known_kinds_set,
+                    name,
+                )
+                if elects_reference_edges
+                else ()
+            )
+
         key = (unit.source_table, unit.sub_type)
         matched_entry = rename_by_key.get(key)
         if matched_entry is not None:
@@ -811,6 +1269,8 @@ def _resolve_specs(
                 genre=unit.genre,
                 name=name,
                 columns=columns,
+                identity_surface=identity_surface,
+                edge_surfaces=edge_surfaces,
             )
         )
 
@@ -979,12 +1439,17 @@ def resolve_source_table_keys(
       (one row per record at the horizon; tracked kinds never sub-type
       split).
     - reference / transaction, unsplit (`spec.sub_type is None`) → primary
-      key on the record-identity (`id`) column's output name; unique on
-      `presentation_id`'s output name iff the whole-table claim holds (flat
-      `key` entry, or partitioned rollup with non-None `unique_within`).
+      key on the elected identity column's output name (`spec.columns`
+      keyed on `spec.identity_surface` — the doc's `declare_keys` interplay
+      row); unique on `presentation_id`'s output name iff the whole-table
+      claim holds (flat `key` entry, or partitioned rollup with non-None
+      `unique_within`) AND the kind's own election is not `presentation_id`
+      (already the primary key there, not doubly declared) AND the column
+      survives (absorbed under `presentation_id` election — never present).
     - reference / transaction, split unit (`spec.sub_type` set) → primary
-      key on `id`; unique on `presentation_id` iff `key_for(kind, sub_type)`
-      exists — the entry's presence is the claim.
+      key on the elected identity column; unique on `presentation_id`
+      (subject to the same non-doubly-declared/survives conditions) iff
+      `key_for(kind, sub_type)` exists — the entry's presence is the claim.
 
     Output names are read from `spec.columns` (source → output pairs), so
     renames are honored. A kind absent from the block declares identity keys
@@ -1010,7 +1475,7 @@ def resolve_source_table_keys(
         return None
 
     columns = dict(spec.columns)
-    id_output = columns["record_id"]
+    id_output = columns[spec.identity_surface]
     pid_output = columns.get("presentation_id")
     kind = _kind_from_records_table(spec.source_table)
     presentation_keys = sidecar.presentation_keys()
@@ -1021,7 +1486,11 @@ def resolve_source_table_keys(
         claimed = _sub_type_claimed(presentation_keys, kind, spec.sub_type)
 
     unique: tuple[tuple[str, ...], ...] = (
-        ((pid_output,),) if claimed and pid_output is not None else ()
+        ((pid_output,),)
+        if claimed
+        and pid_output is not None
+        and spec.identity_surface != "presentation_id"
+        else ()
     )
     return TableKeys(primary_key=(id_output,), unique=unique)
 
@@ -1035,26 +1504,36 @@ def build_source_plan(
     sidecar: "Sidecar",
     config: "SourceConfig | None",
     notice_sink: "NoticeSink",
+    *,
+    election: "Election | None" = None,
 ) -> tuple[SourceTableSpec, ...]:
     """
-    Classify the emit and resolve every output table's genre, name, and columns.
+    Classify the emit and resolve every output table's genre, name, columns,
+    and key election.
 
     Applies the genre trichotomy and the sub-type split over every records and
     membership table in the sidecar, then exclude, presentation defaults
-    (delivery-dependent for a change-log kind — § `change_delivery`), and
-    renames, then the collision checks. Deterministic: sidecar table order, with
-    split units in enum-domain declaration order.
+    (delivery-dependent for a change-log kind — § `change_delivery`), the key
+    election (per unit: identity gate + resolution, absorption, referencing-
+    column gates + resolution — § `_resolve_specs`), and renames, then the
+    collision checks. Deterministic: sidecar table order, with split units in
+    enum-domain declaration order.
 
     Each unit's delivered column set excludes non-exempt slice_only columns
     (one 'slice-only-column-omitted' Notice per omitted column per unit, in
     plan order); the collision check and rename resolution run over the
-    narrowed set; a rename columns key naming an omitted column raises
-    SourceRenameSliceOnly.
+    election-narrowed set; a rename columns key naming an omitted or
+    election-absorbed/dropped column raises SourceRenameSliceOnly /
+    SourceRenameUnresolved respectively.
 
     Args:
         sidecar: The open emit's sidecar.
         config: The source section, or None for the bare-mode full dump.
         notice_sink: Receiver for slice-only-column-omitted notices.
+        election: The resolved election, or None to resolve the all-default
+            election internally (every population elects record_id — the
+            caller has no `keys` block to thread, or is an election-free
+            internal/test caller).
 
     Returns:
         One SourceTableSpec per output table, in deterministic order.
@@ -1070,7 +1549,8 @@ def build_source_plan(
         SourceRenameSliceOnly: A rename entry's columns key names a
             policy-omitted slice_only column.
         SourceRenameUnresolved: A rename entry's table or sub_type does not resolve, or
-            a columns key does not name a source column of the table.
+            a columns key does not name a source column of the table (including
+            one an election absorbed or dropped).
         SourceNameCollision: Two output tables share a name, or two columns of one
             output table share a name, after defaults and renames.
         ExportError: A resolved output table name collides with the cross-mode
@@ -1080,9 +1560,18 @@ def build_source_plan(
             `last_mutation_sim_time` (the presentation-name posture).
         SourceUnclassifiedColumn: A records-category column matches no
             records-column taxonomy role.
+        ElectionMixedIdentity: An unsplit sub-typed unit's populations elect
+            differing identity surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id identity election, or
+            a referencing column's admitted target populations, contain a
+            pairwise-unsafe key-space pair.
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """
+    resolved_election = (
+        election if election is not None else resolve_election(sidecar, None)
+    )
+
     units = _classify_units(sidecar)
 
     exclude = config.exclude if config is not None else None
@@ -1090,7 +1579,9 @@ def build_source_plan(
 
     rename = config.rename if config is not None else None
     change_delivery = config.change_delivery if config is not None else "changelog"
-    specs = _resolve_specs(sidecar, units, rename, change_delivery, notice_sink)
+    specs = _resolve_specs(
+        sidecar, resolved_election, units, rename, change_delivery, notice_sink
+    )
 
     _check_collisions(specs)
     _check_reserved_names(specs)

@@ -1042,3 +1042,479 @@ def build_degenerate_slice_only_source_emit(tmp_path: Path) -> Path:
         },
     )
     return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Key election fixtures (Phase 5)
+# ---------------------------------------------------------------------------
+
+_DEVICE_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__device_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+_DEVICE_EDGE_ORDER_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__device_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="device",
+    ),
+    identity_column("ref_index__device_id", "BIGINT"),
+]
+
+_WATCHERS_MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "member__party__kind", "type": "VARCHAR"},
+    {"name": "member__party__id", "type": "VARCHAR"},
+]
+
+
+def build_source_election_emit(tmp_path: Path, *, corrupt_device: bool = False) -> Path:
+    """Build the key-election render/engine test emit: a sub-typed change-log
+    kind (`device`, day/night), a flat transaction kind referencing it
+    (`order`), and a junction `order` owns (`membership__order__watchers`)
+    whose member field admits both kinds.
+
+    - device: dev_day (day, active, presentation_id 'DAY_001'), dev_night
+        (night, deactivated at 40ms — its own change-log export renders a
+        'd' event, exercising the identity-populated-on-d-rows case).
+        `corrupt_device=True` sets dev_night's presentation_id to dev_day's
+        value ('DAY_001') — a cross-sub-type duplicate the (spine-unrestricted,
+        since device never splits — a change-log kind is never a split unit)
+        self-identity guard must catch.
+    - order: ord_a references dev_day, ord_b references dev_night —
+        `prop__device_id`'s edge dispatches per row on device's own
+        records-spine discriminator, resolving ord_b's edge to dev_night's
+        elected value despite dev_night's deactivation (never through
+        device's fold, which device carries independent of this edge).
+    - membership__order__watchers (owner=order): one row's member is
+        dev_day (kind='device'), the other ord_a (kind='order') — a
+        mixed-kind member field for the `<f>_kind` disambiguator and
+        mixed-column type rule tests.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+        corrupt_device: Corrupt dev_night's presentation_id to duplicate
+            dev_day's — the self/edge guard tests' target.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__device", _DEVICE_COLUMNS))
+    conn.execute(_create_ddl("records__order", _DEVICE_EDGE_ORDER_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        _create_ddl("membership__order__watchers", _WATCHERS_MEMBERSHIP_COLUMNS)
+    )
+
+    night_presentation_id = "DAY_001" if corrupt_device else "NIGHT_001"
+
+    conn.execute(
+        'INSERT INTO "records__device" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "dev_day", "DAY_001", 10 * _MS, True, 10 * _MS, 0, "day", "open"],
+    )
+    conn.execute(
+        'INSERT INTO "records__device" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "dev_night",
+            night_presentation_id,
+            10 * _MS,
+            False,
+            40 * _MS,
+            40 * _MS,
+            1,
+            "night",
+            "open",
+        ],
+    )
+    for record_id in ("dev_day", "dev_night"):
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "device", record_id, "status", 10 * _MS, "open"],
+        )
+
+    conn.execute(
+        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "ord_a", "ORD_001", 20 * _MS, True, 20 * _MS, 0, "dev_day", 0],
+    )
+    conn.execute(
+        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "ord_b", "ORD_002", 20 * _MS, True, 20 * _MS, 1, "dev_night", 1],
+    )
+
+    conn.execute(
+        'INSERT INTO "membership__order__watchers" VALUES (?, ?, ?, NULL, ?, ?)',
+        ["trunk", "ord_a", 25 * _MS, "device", "dev_day"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__order__watchers" VALUES (?, ?, ?, NULL, ?, ?)',
+        ["trunk", "ord_b", 25 * _MS, "order", "ord_a"],
+    )
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__device", "records", _DEVICE_COLUMNS, 2, record_kind="device"
+            ),
+            _table_spec(
+                "records__order",
+                "records",
+                _DEVICE_EDGE_ORDER_COLUMNS,
+                2,
+                record_kind="order",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 2),
+            _table_spec(
+                "membership__order__watchers",
+                "membership",
+                _WATCHERS_MEMBERSHIP_COLUMNS,
+                2,
+                record_kind="order",
+                property_name="watchers",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 50 * _MS}],
+        extra={
+            "record_roles": {"order": "fact"},
+            "enum_domains": {"device": {"device_type": ["day", "night"]}},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+            "presentation_keys": {
+                "device": {
+                    "sub_types": {
+                        "day": {
+                            "unique_within": "emit",
+                            "branch_stable": False,
+                            "slice_stable": False,
+                            "key_space": {
+                                "class": "counter",
+                                "prefix": "DAY_",
+                                "width": 3,
+                            },
+                        },
+                        "night": {
+                            "unique_within": "emit",
+                            "branch_stable": False,
+                            "slice_stable": False,
+                            "key_space": {
+                                "class": "counter",
+                                "prefix": "NIGHT_",
+                                "width": 3,
+                            },
+                        },
+                    },
+                    "unique_within": "emit",
+                    "branch_stable": False,
+                    "slice_stable": False,
+                },
+                "order": {
+                    "key": {
+                        "unique_within": "emit",
+                        "branch_stable": False,
+                        "slice_stable": False,
+                        "key_space": {
+                            "class": "counter",
+                            "prefix": "ORD_",
+                            "width": 3,
+                        },
+                    }
+                },
+            },
+        },
+    )
+    return tmp_path
+
+
+_TEAM_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+]
+
+_SOLO_DEVICE_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__device_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+_TEAM_WATCHERS_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "member__thing__kind", "type": "VARCHAR"},
+    {"name": "member__thing__id", "type": "VARCHAR"},
+]
+
+
+def build_corrupted_junction_member_emit(tmp_path: Path) -> Path:
+    """Build a junction-only emit isolating the per-member-kind guard: a flat
+    owner kind (`team`) and a single-sub-type change-log target kind
+    (`device`, domain {'solo'}, duplicated presentation_id 'DUP_001' between
+    dv1/dv2) admitted only through `membership__team__watchers`' member field
+    — no reference-annotated `prop__` column anywhere touches `device`, so a
+    corrupted elected key is reachable only via the junction member-edge
+    guard, never a reference-edge guard. `device` carries a declared
+    sub-type domain (a bare discriminator suffices — the guard's per-kind
+    subset only restricts a sub-typed admitted population, per
+    `_guard_edge_surface`) so the member-kind guard's subset is non-empty.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__team", _TEAM_COLUMNS))
+    conn.execute(_create_ddl("records__device", _SOLO_DEVICE_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_ddl("membership__team__watchers", _TEAM_WATCHERS_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__team" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "t1", 10 * _MS, True, 10 * _MS, 0],
+    )
+    for record_id, record_index in (("dv1", 0), ("dv2", 1)):
+        conn.execute(
+            'INSERT INTO "records__device" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+            [
+                "trunk",
+                record_id,
+                "DUP_001",
+                10 * _MS,
+                True,
+                10 * _MS,
+                record_index,
+                "solo",
+                "open",
+            ],
+        )
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "device", record_id, "status", 10 * _MS, "open"],
+        )
+    conn.execute(
+        'INSERT INTO "membership__team__watchers" VALUES (?, ?, ?, NULL, ?, ?)',
+        ["trunk", "t1", 20 * _MS, "device", "dv1"],
+    )
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__team", "records", _TEAM_COLUMNS, 1, record_kind="team"
+            ),
+            _table_spec(
+                "records__device",
+                "records",
+                _SOLO_DEVICE_COLUMNS,
+                2,
+                record_kind="device",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 2),
+            _table_spec(
+                "membership__team__watchers",
+                "membership",
+                _TEAM_WATCHERS_COLUMNS,
+                1,
+                record_kind="team",
+                property_name="watchers",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 30 * _MS}],
+        extra={
+            "record_roles": {"team": "dimension"},
+            "enum_domains": {"device": {"device_type": ["solo"]}},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+            "presentation_keys": {
+                "device": {
+                    "sub_types": {
+                        "solo": {
+                            "unique_within": "emit",
+                            "branch_stable": False,
+                            "slice_stable": False,
+                            "key_space": {
+                                "class": "counter",
+                                "prefix": "DUP_",
+                                "width": 3,
+                            },
+                        }
+                    },
+                    "unique_within": "emit",
+                    "branch_stable": False,
+                    "slice_stable": False,
+                }
+            },
+        },
+    )
+    return tmp_path
+
+
+_SPLIT_ACTOR_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+
+def build_split_actor_presentation_id_emit(
+    tmp_path: Path, *, duplicate_within_consultant: bool = False
+) -> Path:
+    """Build a split `actor` kind (consultant/nurse) for the split-unit
+    identity guard's spine-restriction test: consultant's c1 and nurse's n1
+    coincidentally share one presentation_id value ('CONS_001') — a
+    cross-population value collision each sub-type's own restricted-spine
+    guard must NOT catch, since consultant and nurse are separate output
+    tables. `duplicate_within_consultant=True` adds a second consultant
+    record (c2) sharing c1's value — a genuine duplicate WITHIN consultant's
+    own spine, which the guard must still catch.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+        duplicate_within_consultant: Add a second consultant record sharing
+            c1's presentation_id.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__actor", _SPLIT_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "c1", "CONS_001", 0, True, 0, 0, "consultant"],
+    )
+    next_index = 1
+    if duplicate_within_consultant:
+        conn.execute(
+            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+            ["trunk", "c2", "CONS_001", 0, True, 0, next_index, "consultant"],
+        )
+        next_index += 1
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "n1", "CONS_001", 0, True, 0, next_index, "nurse"],
+    )
+    rows = next_index + 1
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__actor",
+                "records",
+                _SPLIT_ACTOR_COLUMNS,
+                rows,
+                record_kind="actor",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 0),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={
+            "record_roles": {"actor": {"consultant": "dimension", "nurse": "fact"}},
+            "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+            "presentation_keys": {
+                "actor": {
+                    "sub_types": {
+                        "consultant": {
+                            "unique_within": "emit",
+                            "branch_stable": False,
+                            "slice_stable": False,
+                            "key_space": {
+                                "class": "counter",
+                                "prefix": "CONS_",
+                                "width": 3,
+                            },
+                        },
+                        "nurse": {
+                            "unique_within": "emit",
+                            "branch_stable": False,
+                            "slice_stable": False,
+                            "key_space": {
+                                "class": "counter",
+                                "prefix": "NURSE_",
+                                "width": 3,
+                            },
+                        },
+                    },
+                    "unique_within": "emit",
+                    "branch_stable": False,
+                    "slice_stable": False,
+                },
+            },
+        },
+    )
+    return tmp_path
