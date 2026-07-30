@@ -2,7 +2,7 @@ sprint: key-election
 parent_branch: enable_better_ids
 baseline_sha: 8bb6fcb218cb76c30ca4d7c3e07ed1b46bc628f8
 started: 2026-07-29
-current_phase: 3
+current_phase: 4
 capabilities:
   - config: [keys-election-block, target-key-widening]
   - shared-exporter: [election-resolution, static-gates, uniqueness-guard]
@@ -24,7 +24,7 @@ phases:
     name: "Presentation-key derivation"
     demo: "docs/sprints/key-election/demos/phase_2_presentation_key_relation.py"
   3:
-    status: pending
+    status: complete
     name: "Election resolution, gates, spine, guard"
     demo: "docs/sprints/key-election/demos/phase_3_election_gates.py"
   4:
