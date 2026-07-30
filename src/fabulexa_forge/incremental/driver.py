@@ -200,10 +200,18 @@ def export_window(
         specs = build_base_query_specs(emit, config, anchor, window, notice_sink)
     else:
         from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+        from fabulexa_forge.exporters.election import resolve_election
 
         assert config.dimensional is not None
+        election = resolve_election(emit.sidecar, config.keys)
         specs = build_query_specs(
-            emit, config.dimensional, anchor, window, notice_sink, base_relations=None
+            emit,
+            config.dimensional,
+            anchor,
+            window,
+            notice_sink,
+            base_relations=None,
+            election=election,
         )
 
     if fmt == "csv" and declare_keys_active(config):

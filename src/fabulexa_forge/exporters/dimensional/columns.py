@@ -14,11 +14,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ColumnDecl, DimensionalConfig, TableDecl
+    from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import render_typed_literal
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.reader.errors import TableNotFoundError
 
 __all__ = ["render_anchor_timestamp_expr", "render_typed_literal"]
@@ -342,6 +344,7 @@ def build_column_expr(
     anchor_kind: str | None = None,
     config: "DimensionalConfig | None" = None,
     sidecar: "Sidecar | None" = None,
+    election: "Election | None" = None,
     grain_alias: str = "_grain",
     source_table_name: str | None = None,
 ) -> tuple[str, list[str]]:
@@ -363,6 +366,9 @@ def build_column_expr(
         anchor_kind: The record kind of the grain's anchor (required for fk).
         config: The dimensional config (required for fk columns).
         sidecar: The open emit's sidecar (required for fk columns).
+        election: The resolved election (for fk columns), or None to
+            resolve the all-default election internally (every population
+            elects record_id).
         grain_alias: SQL alias of the base grain table (default: "_grain").
             Used to qualify from/correlation column references.
         source_table_name: The resolved DuckDB source table name, used to look
@@ -391,9 +397,25 @@ def build_column_expr(
             build_fk_expr,
             check_fk_target_is_dim,
         )
+        from fabulexa_forge.exporters.dimensional.populations import (
+            resolve_dim_source_populations,
+            resolve_fk_surface,
+        )
 
         target_table_decl = check_fk_target_is_dim(col_decl, table_decl, config)
         target_kind = target_table_decl.source.kind
+        resolved_election = (
+            election if election is not None else resolve_election(sidecar, None)
+        )
+        dim_populations = resolve_dim_source_populations(
+            sidecar, target_kind, target_table_decl.source.filter
+        )
+        resolved_surface = resolve_fk_surface(
+            resolved_election,
+            dim_populations,
+            col_decl.fk.target_key,
+            f"{table_decl.name}.{col_decl.name}",
+        )
         return build_fk_expr(
             col_decl=col_decl,
             table_decl=table_decl,
@@ -401,6 +423,8 @@ def build_column_expr(
             anchor_kind=anchor_kind,
             target_kind=target_kind,
             sidecar=sidecar,
+            resolved_surface=resolved_surface,
+            dim_populations=dim_populations,
         )
     if col_decl.derived is not None:
         derived = col_decl.derived

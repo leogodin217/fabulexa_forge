@@ -2,7 +2,7 @@ sprint: key-election
 parent_branch: enable_better_ids
 baseline_sha: 8bb6fcb218cb76c30ca4d7c3e07ed1b46bc628f8
 started: 2026-07-29
-current_phase: 6
+current_phase: 7
 capabilities:
   - config: [keys-election-block, target-key-widening]
   - shared-exporter: [election-resolution, static-gates, uniqueness-guard]
@@ -54,7 +54,7 @@ phases:
           - "tests/exporters/source/test_election_plan.py"
           - "tests/exporters/source/test_election_renders.py"
   6:
-    status: pending
+    status: complete
     name: "Dimensional election"
     demo: "docs/sprints/key-election/demos/phase_6_dimensional_election.py"
     steps:

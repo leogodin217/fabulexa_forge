@@ -48,6 +48,7 @@ from fabulexa_forge.exporters.dimensional.validation import (
     check_incremental_grain_supported,
     validate_table,
 )
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.query_spec import query_spec_output_name
 from fabulexa_forge.exporters.source.engine import build_source_query_specs
 from fabulexa_forge.exporters.source.plan import build_source_plan
@@ -60,6 +61,7 @@ if TYPE_CHECKING:
 
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import DimensionalConfig, ExportConfig, TableDecl
+    from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.query_spec import QuerySpec
     from fabulexa_forge.exporters.source.plan import SourceTableSpec
@@ -206,12 +208,15 @@ def _compile_window_specs(
     anchor: "EffectiveAnchor | None",
     window: Window,
     notice_sink: "NoticeSink",
+    election: "Election | None",
 ) -> "list[QuerySpec]":
     """Dispatch a shape's windowed compile to its mode's engine.
 
     The exact call the incremental driver's `export_window` makes for the
     windowed compile step — `base_relations=None`, so the compiled SQL reads
-    the emit's physical base tables unmediated.
+    the emit's physical base tables unmediated. `election` is threaded to the
+    dimensional engine only — `build_source_query_specs` resolves its own
+    election from `config.keys` internally.
 
     Args:
         emit: The open emit.
@@ -219,6 +224,8 @@ def _compile_window_specs(
         anchor: The resolved effective anchor, or None.
         window: The half-open window to compile.
         notice_sink: Receiver for plan notices.
+        election: The resolved election (dimensional shapes), or None for a
+            source shape.
 
     Returns:
         One QuerySpec per declared output table, in the mode's deterministic
@@ -236,7 +243,13 @@ def _compile_window_specs(
         )
     assert config.dimensional is not None
     return build_query_specs(
-        emit, config.dimensional, anchor, window, notice_sink, base_relations=None
+        emit,
+        config.dimensional,
+        anchor,
+        window,
+        notice_sink,
+        base_relations=None,
+        election=election,
     )
 
 
@@ -309,6 +322,7 @@ def _compile_state_specs(
     anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
     base_relations: dict[str, str],
+    election: "Election | None",
 ) -> "list[QuerySpec]":
     """Dispatch a shape's state(T) compile to its mode's full-export engine.
 
@@ -318,7 +332,9 @@ def _compile_state_specs(
     to its truncated-at-T replacement (§ The compile indirection) — the mode
     never sees a horizon. A state-only shape never runs the windowed business
     rules: window=None skips check_incremental_grain_supported / the
-    incremental-* refusals entirely.
+    incremental-* refusals entirely. `election` is threaded to the
+    dimensional engine only — `build_source_query_specs` resolves its own
+    election from `config.keys` internally.
 
     Args:
         truncated_emit: The truncated emit view (§ Shaped state).
@@ -327,6 +343,8 @@ def _compile_state_specs(
         notice_sink: Receiver for plan notices.
         base_relations: Physical base-table name -> replacing relation SELECT,
             one entry per sidecar base table.
+        election: The resolved election (dimensional shapes), or None for a
+            source shape.
 
     Returns:
         One QuerySpec per declared output table, in the mode's deterministic
@@ -354,6 +372,7 @@ def _compile_state_specs(
         None,
         notice_sink,
         base_relations=base_relations,
+        election=election,
     )
 
 
@@ -361,6 +380,7 @@ def _open_dimensional(
     config: "DimensionalConfig",
     sidecar: "Sidecar",
     notice_sink: "NoticeSink",
+    election: "Election",
 ) -> tuple[ShapedTableDecl, ...]:
     """Run the dimensional mode's full config validation and derive `tables()`.
 
@@ -368,12 +388,15 @@ def _open_dimensional(
     loop does (`validate_table` with `window=None`) — the same always-on
     business rules, in the same declaration order, with no windowed-only gate
     — so any config `ExportError` (including the reserved-name and
-    slice_only-column-read refusals) passes through unchanged.
+    slice_only-column-read refusals, and the election gates) passes through
+    unchanged.
 
     Args:
         config: The dimensional-mode section.
         sidecar: The open emit's sidecar.
         notice_sink: Receiver for plan notices.
+        election: The resolved election (`resolve_election(sidecar,
+            config.keys)`, resolved once by `open_shaped_playback`).
 
     Returns:
         One ShapedTableDecl per declared table, in declaration order.
@@ -385,7 +408,9 @@ def _open_dimensional(
     """
     decls: list[ShapedTableDecl] = []
     for table_decl in config.tables:
-        validate_table(table_decl, config, sidecar, None, notice_sink)
+        validate_table(
+            table_decl, config, sidecar, None, notice_sink, election=election
+        )
         decls.append(
             ShapedTableDecl(
                 name=table_decl.name,
@@ -446,12 +471,14 @@ class ShapedPlayback:
         anchor: "EffectiveAnchor | None",
         notice_sink: "NoticeSink",
         table_decls: tuple[ShapedTableDecl, ...],
+        election: "Election | None",
     ) -> None:
         self._emit = emit
         self._config = config
         self._anchor = anchor
         self._notice_sink = notice_sink
         self._table_decls = table_decls
+        self._election = election
 
     def tables(self) -> tuple[ShapedTableDecl, ...]:
         """The shape's declared output tables, in the shape's canonical
@@ -505,7 +532,12 @@ class ShapedPlayback:
             index=None, start_ns=start_sim_time, end_ns=end_sim_time, label=""
         )
         specs = _compile_window_specs(
-            self._emit, self._config, self._anchor, window, self._notice_sink
+            self._emit,
+            self._config,
+            self._anchor,
+            window,
+            self._notice_sink,
+            self._election,
         )
         return tuple(
             ShapedTable(
@@ -553,6 +585,7 @@ class ShapedPlayback:
             self._anchor,
             self._notice_sink,
             base_relations,
+            self._election,
         )
         return tuple(
             ShapedTable(
@@ -603,6 +636,10 @@ def open_shaped_playback(
 
     Returns:
         A ShapedPlayback head bound to (emit, config, anchor, notice_sink).
+        For a dimensional shape, resolves `config.keys` once
+        (`resolve_election`) and threads it to the open validation and every
+        window() / state() compile; a source shape carries no separate
+        election parameter (`build_source_query_specs` resolves its own).
 
     Raises:
         PlaybackError: A seam-level open gate fails (source shape with
@@ -617,8 +654,12 @@ def open_shaped_playback(
 
     if config.mode == "source":
         table_decls = _open_source(config, emit.sidecar, notice_sink)
+        election = None
     else:
         assert config.dimensional is not None
-        table_decls = _open_dimensional(config.dimensional, emit.sidecar, notice_sink)
+        election = resolve_election(emit.sidecar, config.keys)
+        table_decls = _open_dimensional(
+            config.dimensional, emit.sidecar, notice_sink, election
+        )
 
-    return ShapedPlayback(emit, config, anchor, notice_sink, table_decls)
+    return ShapedPlayback(emit, config, anchor, notice_sink, table_decls, election)

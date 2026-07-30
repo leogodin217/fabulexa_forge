@@ -17,10 +17,15 @@ All functions are module-level for independent testability.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from fabulexa_forge.config.models import ColumnDecl, DimensionalConfig, TableDecl
+    from fabulexa_forge.config.models import (
+        ColumnDecl,
+        DimensionalConfig,
+        KeySurface,
+        TableDecl,
+    )
     from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar
 
 from fabulexa_forge.derivations.reference_resolution import (
@@ -33,11 +38,110 @@ from fabulexa_forge.derivations.reference_resolution import (
     get_fork_path_from_sidecar,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.populations import (
+    DimSourcePopulations,
+    dim_identity_relation_at_end_sql,
+    dim_population_sub_types,
+)
+from fabulexa_forge.exporters.election import build_population_spine_sql
 from fabulexa_forge.exporters.slice_only import (
     is_non_exempt_slice_only,
     slice_only_refusal_message,
 )
 from fabulexa_forge.reader.errors import TableNotFoundError
+
+# ---------------------------------------------------------------------------
+# FK surface dispatch (shared by all four builders)
+# ---------------------------------------------------------------------------
+
+
+def _fk_identity_relation_sql(
+    sidecar: "Sidecar",
+    fork_path: str,
+    resolved_surface: "Literal['record_index', 'presentation_id']",
+    dim_populations: DimSourcePopulations,
+) -> str:
+    """The (possibly population-restricted) FK identity relation to LEFT JOIN.
+
+    Composes the dimensional entry-point relation
+    (`dim_identity_relation_at_end_sql`) and, when the destination dim's
+    source population set is a proper subset of its kind's declared domain,
+    restricts it to that set via a semi-join on the population spine
+    (`build_population_spine_sql`) — the sprint contracts' § 4 restriction
+    rule: the full domain needs no restriction; a proper subset composes one
+    so an out-of-set target row resolves to no matching relation row (NULL
+    through the LEFT JOIN, never a collision-hiding fabrication).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `get_fork_path_from_sidecar`.
+        resolved_surface: The FK's one resolved non-record_id surface.
+        dim_populations: The destination dim's source population set.
+
+    Returns:
+        A complete SELECT producing (record_id, `resolved_surface`).
+    """
+    relation_sql = dim_identity_relation_at_end_sql(
+        sidecar, fork_path, dim_populations.kind, resolved_surface
+    )
+    if not dim_populations.proper_subset:
+        return relation_sql
+    spine_sql = build_population_spine_sql(
+        sidecar,
+        fork_path,
+        dim_populations.kind,
+        dim_population_sub_types(dim_populations),
+    )
+    return (
+        f'SELECT "record_id", "{resolved_surface}" FROM ({relation_sql}) AS "_ident"'
+        f' WHERE "_ident"."record_id" IN ({spine_sql})'
+    )
+
+
+def _dispatch_fk_surface(
+    record_id_expr: str,
+    sidecar: "Sidecar",
+    fork_path: str,
+    resolved_surface: "KeySurface",
+    dim_populations: DimSourcePopulations,
+    ident_alias: str,
+    output_name: str,
+) -> "tuple[str, str | None]":
+    """Project one FK's resolved surface off a record-id-producing expression.
+
+    The shared private dispatch the doc's four FK builders replace their
+    local `target_key == 'presentation_id'` arm with (sprint contracts § 4):
+    `record_id` projects `record_id_expr` verbatim, no extra join;
+    `record_index` / `presentation_id` LEFT JOINs the (possibly restricted)
+    identity relation keyed on `record_id_expr` and projects the surface
+    column — the out-of-set → NULL posture falls out of the LEFT JOIN, no
+    CASE logic.
+
+    Args:
+        record_id_expr: A qualified SQL expression producing the resolved
+            target's record_id (or NULL when unresolved/kind-mismatched).
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `get_fork_path_from_sidecar`.
+        resolved_surface: The FK's one resolved surface.
+        dim_populations: The destination dim's source population set.
+        ident_alias: A unique alias for the identity-relation join.
+        output_name: The FK column's output name.
+
+    Returns:
+        (select_expr, extra_join_clause_or_None).
+    """
+    if resolved_surface == "record_id":
+        return f'{record_id_expr} AS "{output_name}"', None
+    relation_sql = _fk_identity_relation_sql(
+        sidecar, fork_path, resolved_surface, dim_populations
+    )
+    join = (
+        f'LEFT JOIN ({relation_sql}) AS "{ident_alias}"'
+        f' ON "{ident_alias}"."record_id" = {record_id_expr}'
+    )
+    select_expr = f'"{ident_alias}"."{resolved_surface}" AS "{output_name}"'
+    return select_expr, join
+
 
 # ---------------------------------------------------------------------------
 # FK target validation
@@ -86,14 +190,18 @@ def build_reference_fk_expr(
     target_kind: str,
     sidecar: "Sidecar",
     source_grain: str,
+    resolved_surface: "KeySurface",
+    dim_populations: DimSourcePopulations,
 ) -> tuple[str, list[str]]:
     """Build the SELECT expression + JOIN clauses for a via:reference FK column.
 
     Composes the reference-path derivation: resolves the hop chain, calls
-    build_reference_path_sql to produce a subquery, and LEFT JOINs it on
-    record_id. The SELECT projects the derivation's `resolved` column aliased
-    to col_decl.name. Fan-out-free: the derivation guarantees at most one
-    resolved per anchor record_id.
+    build_reference_path_sql to produce a subquery resolving to record_id,
+    and LEFT JOINs it on record_id. Fan-out-free: the derivation guarantees
+    at most one resolved per anchor record_id. The resolved record_id is then
+    projected through `_dispatch_fk_surface` — verbatim under `record_id`, or
+    LEFT JOINed against the (possibly population-restricted) identity
+    relation under `record_index` / `presentation_id`.
 
     For any non-records grain (history_point, history_interval, membership) the
     reference chain starts from records__<anchor_kind> joined on record_id; only
@@ -112,6 +220,9 @@ def build_reference_fk_expr(
         source_grain: The grain type ('records', 'history_point',
             'history_interval', 'membership'); only 'records' skips the
             preamble records JOIN.
+        resolved_surface: The FK's one resolved surface (inherited or the
+            explicit `target_key`).
+        dim_populations: The destination dim's source population set.
 
     Returns:
         (select_expr, join_clauses) — insert join_clauses before the ORDER BY,
@@ -146,35 +257,12 @@ def build_reference_fk_expr(
     alias_ns = f"_fk_{col_decl.name}"
     fork_path = get_fork_path_from_sidecar(sidecar)
 
-    if col_decl.fk.target_key == "presentation_id":
-        # Derivation resolves to record_id; an extra join fetches presentation_id
-        deriv_sql = build_reference_path_sql(
-            sidecar=sidecar,
-            fork_path=fork_path,
-            anchor_kind=anchor_kind,
-            hop_columns=hops,
-            terminal_projection="record_id",
-        )
-        deriv_alias = f"{alias_ns}_rp"
-        rec_alias = f"{alias_ns}_rp_rec"
-        target_table = f"records__{target_kind}"
-        join_clauses = [
-            f'LEFT JOIN ({deriv_sql}) AS "{deriv_alias}"'
-            f' ON "{deriv_alias}"."record_id" = "{anchor_alias}"."record_id"',
-            f'LEFT JOIN "{target_table}" AS "{rec_alias}"'
-            f' ON "{rec_alias}"."record_id" = "{deriv_alias}"."resolved"',
-        ]
-        select_expr = f'"{rec_alias}"."presentation_id" AS "{col_decl.name}"'
-        return select_expr, join_clauses
-
     deriv_sql = build_reference_path_sql(
         sidecar=sidecar,
         fork_path=fork_path,
         anchor_kind=anchor_kind,
         hop_columns=hops,
-        # Absent target_key inherits the destination dim's election, which
-        # is record_id absent a `keys` block.
-        terminal_projection=col_decl.fk.target_key or "record_id",
+        terminal_projection="record_id",
     )
     deriv_alias = f"{alias_ns}_rp"
 
@@ -182,7 +270,17 @@ def build_reference_fk_expr(
         f'LEFT JOIN ({deriv_sql}) AS "{deriv_alias}"'
         f' ON "{deriv_alias}"."record_id" = "{anchor_alias}"."record_id"'
     ]
-    select_expr = f'"{deriv_alias}"."resolved" AS "{col_decl.name}"'
+    select_expr, extra_join = _dispatch_fk_surface(
+        f'"{deriv_alias}"."resolved"',
+        sidecar,
+        fork_path,
+        resolved_surface,
+        dim_populations,
+        f"{alias_ns}_ident",
+        col_decl.name,
+    )
+    if extra_join is not None:
+        join_clauses.append(extra_join)
     return select_expr, join_clauses
 
 
@@ -351,13 +449,15 @@ def build_membership_fk_expr_on_records(
     anchor_kind: str,
     target_kind: str,
     sidecar: "Sidecar",
+    resolved_surface: "KeySurface",
+    dim_populations: DimSourcePopulations,
 ) -> tuple[str, list[str]]:
     """Build SELECT expr + JOIN clauses for a via:membership FK (records/history grain).
 
     Composes the membership-edge derivation: resolves membership table and
-    member_field, calls build_membership_edge_sql to produce a subquery, and
-    LEFT JOINs it on record_id. The SELECT projects `resolved` (the
-    member__<field>__id) aliased to col_decl.name.
+    member_field, calls build_membership_edge_sql to produce a subquery
+    resolving to the member's record_id, and LEFT JOINs it on record_id. The
+    resolved record_id is then projected through `_dispatch_fk_surface`.
 
     Args:
         col_decl: The FK column declaration (fk.via == 'membership').
@@ -365,6 +465,8 @@ def build_membership_fk_expr_on_records(
         anchor_kind: The anchor grain's record kind.
         target_kind: The dim's source kind.
         sidecar: The open emit's sidecar.
+        resolved_surface: The FK's one resolved surface.
+        dim_populations: The destination dim's source population set.
 
     Returns:
         (select_expr, join_clauses).
@@ -397,23 +499,22 @@ def build_membership_fk_expr_on_records(
     )
     mem_alias = f"_fk_{col_decl.name}_mem"
 
-    join_clause = (
+    join_clauses = [
         f'LEFT JOIN ({deriv_sql}) AS "{mem_alias}"'
         f' ON "{mem_alias}"."record_id" = "_grain"."record_id"'
+    ]
+    select_expr, extra_join = _dispatch_fk_surface(
+        f'"{mem_alias}"."resolved"',
+        sidecar,
+        fork_path,
+        resolved_surface,
+        dim_populations,
+        f"_fk_{col_decl.name}_ident",
+        col_decl.name,
     )
-
-    if fk.target_key == "presentation_id":
-        rec_alias = f"_fk_{col_decl.name}_mem_rec"
-        target_table = f"records__{target_kind}"
-        rec_join = (
-            f'LEFT JOIN "{target_table}" AS "{rec_alias}"'
-            f' ON "{rec_alias}"."record_id" = "{mem_alias}"."resolved"'
-        )
-        select_expr = f'"{rec_alias}"."presentation_id" AS "{col_decl.name}"'
-        return select_expr, [join_clause, rec_join]
-
-    select_expr = f'"{mem_alias}"."resolved" AS "{col_decl.name}"'
-    return select_expr, [join_clause]
+    if extra_join is not None:
+        join_clauses.append(extra_join)
+    return select_expr, join_clauses
 
 
 def build_membership_fk_expr_on_membership(
@@ -422,11 +523,14 @@ def build_membership_fk_expr_on_membership(
     anchor_kind: str,
     target_kind: str,
     sidecar: "Sidecar",
+    resolved_surface: "KeySurface",
+    dim_populations: DimSourcePopulations,
 ) -> tuple[str, list[str]]:
     """Build SELECT expr for a via:membership FK when the grain IS a membership grain.
 
-    The binding is already the grain — project member__<member_field>__id directly
-    from the grain surface (already narrowed by source.where).
+    The binding is already the grain — member__<member_field>__id, filtered
+    by target_kind (a row whose member kind mismatches resolves to NULL), is
+    the resolved record_id; projected through `_dispatch_fk_surface`.
 
     Args:
         col_decl: The FK column declaration (fk.via == 'membership').
@@ -434,9 +538,13 @@ def build_membership_fk_expr_on_membership(
         anchor_kind: The anchor grain's record kind (the membership owner kind).
         target_kind: The dim's source kind.
         sidecar: The open emit's sidecar.
+        resolved_surface: The FK's one resolved surface.
+        dim_populations: The destination dim's source population set.
 
     Returns:
-        (select_expr, []) — no JOIN needed; grain is already the membership table.
+        (select_expr, join_clauses) — [] under a `record_id` resolution (the
+        grain already carries the value); the identity-relation join
+        otherwise.
 
     Raises:
         ExportError: MembershipEdgeResolvable.
@@ -456,24 +564,22 @@ def build_membership_fk_expr_on_membership(
 
     id_col = f"member__{member_field}__id"
     kind_col = f"member__{member_field}__kind"
+    fork_path = get_fork_path_from_sidecar(sidecar)
 
-    if fk.target_key == "presentation_id":
-        target_table = f"records__{target_kind}"
-        rec_alias = f"_fk_{col_decl.name}_mem_rec"
-        rec_join = (
-            f'LEFT JOIN "{target_table}" AS "{rec_alias}"'
-            f' ON "{rec_alias}"."record_id" = "_grain"."{id_col}"'
-            f' AND "_grain"."{kind_col}" = \'{target_kind}\''
-        )
-        select_expr = f'"{rec_alias}"."presentation_id" AS "{col_decl.name}"'
-        return select_expr, [rec_join]
-
-    # On a membership grain, filter by target_kind inline in a CASE/NULLIF
-    select_expr = (
-        f"CASE WHEN \"{kind_col}\" = '{target_kind}'"
-        f' THEN "{id_col}" ELSE NULL END AS "{col_decl.name}"'
+    record_id_expr = (
+        f'CASE WHEN "_grain"."{kind_col}" = \'{target_kind}\''
+        f' THEN "_grain"."{id_col}" ELSE NULL END'
     )
-    return select_expr, []
+    select_expr, extra_join = _dispatch_fk_surface(
+        record_id_expr,
+        sidecar,
+        fork_path,
+        resolved_surface,
+        dim_populations,
+        f"_fk_{col_decl.name}_ident",
+        col_decl.name,
+    )
+    return select_expr, [extra_join] if extra_join is not None else []
 
 
 # ---------------------------------------------------------------------------
@@ -487,6 +593,8 @@ def build_point_in_time_membership_fk_expr(
     anchor_kind: str,
     target_kind: str,
     sidecar: "Sidecar",
+    resolved_surface: "KeySurface",
+    dim_populations: DimSourcePopulations,
 ) -> tuple[str, list[str]]:
     """Build SELECT expr + JOIN clauses for a point-in-time via:membership FK.
 
@@ -499,7 +607,11 @@ def build_point_in_time_membership_fk_expr(
 
     The correlated scalar subquery is DETERMINISTIC (ORDER BY joined_sim_time
     DESC, record_id ASC LIMIT 1) — guarantees ≤1 result per grain row, no
-    fan-out.
+    fan-out. Under a non-`record_id` resolved surface, the subquery JOINs the
+    (possibly population-restricted) identity relation instead of the target
+    kind's records table directly — an owner outside the dim's source
+    population set resolves to no join row (NULL), matching the doc's
+    out-of-set condition.
 
     Args:
         col_decl: The FK column declaration (fk.via=='membership', fk.as_of set).
@@ -507,6 +619,8 @@ def build_point_in_time_membership_fk_expr(
         anchor_kind: The anchor grain's record kind.
         target_kind: The dim's source kind (the OWNER kind in the membership).
         sidecar: The open emit's sidecar.
+        resolved_surface: The FK's one resolved surface.
+        dim_populations: The destination dim's source population set.
 
     Returns:
         (select_expr, join_clauses) where join_clauses are the member-path
@@ -591,11 +705,14 @@ def build_point_in_time_membership_fk_expr(
     # INT64 max sentinel for open-interval containment
     _INT64_MAX = 9223372036854775807
 
-    # Determine what to project and whether we need a records join
-    if fk.target_key == "presentation_id":
-        target_table = f"records__{target_kind}"
-        rec_join = f'JOIN "{target_table}" r ON r."record_id" = h."record_id"'
-        proj = 'r."presentation_id"'
+    # Determine what to project and whether we need an identity-relation join
+    if resolved_surface != "record_id":
+        fork_path = get_fork_path_from_sidecar(sidecar)
+        relation_sql = _fk_identity_relation_sql(
+            sidecar, fork_path, resolved_surface, dim_populations
+        )
+        rec_join = f'JOIN ({relation_sql}) AS r ON r."record_id" = h."record_id"'
+        proj = f'r."{resolved_surface}"'
         inner = (
             f'SELECT {proj} FROM "{mem_table_name}" h\n'
             f"   {rec_join}\n"
@@ -634,11 +751,19 @@ def build_fk_expr(
     anchor_kind: str,
     target_kind: str,
     sidecar: "Sidecar",
+    resolved_surface: "KeySurface",
+    dim_populations: DimSourcePopulations,
 ) -> tuple[str, list[str]]:
     """Build the SELECT expression + JOIN clauses for an fk column.
 
     Dispatches on fk.via and grain type. Returns a (select_expr, join_clauses)
-    pair; caller integrates them into the grain SQL.
+    pair; caller integrates them into the grain SQL. `resolved_surface` and
+    `dim_populations` are resolved once by the caller
+    (`resolve_fk_surface` / `resolve_dim_source_populations`, sprint contracts
+    § 3) — this function never touches `Election`; the shipped
+    `target_key == 'presentation_id'` column-presence check is gone,
+    subsumed by the statically-earlier registry-membership check
+    (`check_edge_union_safety` under the resolved-surface override).
 
     Args:
         col_decl: The FK column declaration (exactly one fk set).
@@ -648,6 +773,9 @@ def build_fk_expr(
         anchor_kind: The record kind of the grain's anchor row.
         target_kind: The dim's source kind (from the target TableDecl).
         sidecar: The open emit's sidecar.
+        resolved_surface: The FK's one resolved surface (inherited or the
+            explicit `target_key`).
+        dim_populations: The destination dim's source population set.
 
     Returns:
         (select_expr, join_clauses).
@@ -658,27 +786,6 @@ def build_fk_expr(
     assert col_decl.fk is not None
     via = col_decl.fk.via
 
-    if col_decl.fk.target_key == "presentation_id":
-        target_table = f"records__{target_kind}"
-        try:
-            target_cols = sidecar.columns(target_table)
-        except TableNotFoundError as exc:
-            raise ExportError(
-                f"FK '{table_decl.name}.{col_decl.name}' targets '{target_kind}'"
-                f" with target_key=presentation_id but '{target_table}'"
-                " was not found in the emit; the projected emit must carry"
-                " presentation_id for a surrogate-keyed FK"
-            ) from exc
-        col_names = {c.name for c in target_cols}
-        if "presentation_id" not in col_names:
-            raise ExportError(
-                f"FK '{table_decl.name}.{col_decl.name}' targets '{target_kind}'"
-                f" with target_key=presentation_id but '{target_table}'"
-                " does not carry a 'presentation_id' column;"
-                " the projected emit must carry presentation_id"
-                " for a surrogate-keyed FK"
-            )
-
     if via == "reference":
         return build_reference_fk_expr(
             col_decl=col_decl,
@@ -688,6 +795,8 @@ def build_fk_expr(
             target_kind=target_kind,
             sidecar=sidecar,
             source_grain=source_grain,
+            resolved_surface=resolved_surface,
+            dim_populations=dim_populations,
         )
 
     # via == "membership"
@@ -698,6 +807,8 @@ def build_fk_expr(
             anchor_kind=anchor_kind,
             target_kind=target_kind,
             sidecar=sidecar,
+            resolved_surface=resolved_surface,
+            dim_populations=dim_populations,
         )
     if source_grain == "membership":
         return build_membership_fk_expr_on_membership(
@@ -706,6 +817,8 @@ def build_fk_expr(
             anchor_kind=anchor_kind,
             target_kind=target_kind,
             sidecar=sidecar,
+            resolved_surface=resolved_surface,
+            dim_populations=dim_populations,
         )
     return build_membership_fk_expr_on_records(
         col_decl=col_decl,
@@ -713,6 +826,8 @@ def build_fk_expr(
         anchor_kind=anchor_kind,
         target_kind=target_kind,
         sidecar=sidecar,
+        resolved_surface=resolved_surface,
+        dim_populations=dim_populations,
     )
 
 
