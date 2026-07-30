@@ -67,6 +67,6 @@ phases:
           - "tests/exporters/dimensional/test_populations.py"
           - "tests/exporters/dimensional/test_election_fk.py"
   7:
-    status: pending
+    status: complete
     name: "init keys proposal (dimensional)"
     demo: "docs/sprints/key-election/demos/phase_7_init_keys.py"
