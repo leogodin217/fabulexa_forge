@@ -27,6 +27,13 @@ _SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # no traversal), so a `groups` target can never escape the jsonl output dir.
 _TOPIC_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# ---------------------------------------------------------------------------
+# Key election
+# ---------------------------------------------------------------------------
+
+KeySurface = Literal["record_id", "record_index", "presentation_id"]
+"""The three identity surfaces a population or FK edge may elect."""
+
 
 def _require_sql_identifier(value: str, context: str) -> None:
     """Reject an author-supplied name that is not a plain SQL identifier.
@@ -76,9 +83,11 @@ class FkClause(StrictBaseModel):
     """The membership property name to join against."""
     path: list[str] | None = None
     """Reference-edge hop chain from the grain kind to the target kind."""
-    target_key: Literal["record_id", "presentation_id"] = "record_id"
-    """Which identity to write into the fact FK — the natural record_id,
-    or the warehouse surrogate presentation_id."""
+    target_key: KeySurface | None = None
+    """Which identity surface to write into the FK column. Absent: inherit
+    the destination dim's source population set's election (record_id when
+    it carries none). Present: per-edge override, gated identically over the
+    same population set."""
     as_of: str | None = None
     """For a point-in-time membership FK, the grain column holding the
     firing time T at which membership is resolved."""
@@ -764,6 +773,31 @@ class ExportConfig(StrictBaseModel):
     base: BaseConfig | None = None
     """The escape-hatch + slice declaration for the base mode; absent means a bare
     current-state dump with no exclude/rename/slice_at."""
+    keys: dict[str, KeySurface | dict[str, KeySurface]] | None = None
+    """Per-kind key election. A scalar elects the surface for the whole kind
+    (every population, for a sub-typed kind); a map elects per sub-type.
+    Absent: no election — every mode keys and renders record identity as
+    today. Kind/sub-type existence, registry declaration, and union safety
+    are export-time gates against the sidecar, not parse-time checks (the
+    config is emit-independent)."""
+
+    @model_validator(mode="after")
+    def keys_well_formed(self) -> Self:
+        """`keys` (when present) is non-empty; every per-kind map is non-empty.
+
+        Emit-dependent checks (kind/sub-type existence, registry declaration,
+        union safety) are deliberately not here — the config is emit-independent.
+
+        Raises:
+            ValueError: `keys` is an empty map, or a per-kind map value is empty.
+        """
+        if self.keys is not None:
+            if not self.keys:
+                raise ValueError("keys: must not be empty (omit the field instead)")
+            for kind, election in self.keys.items():
+                if isinstance(election, dict) and not election:
+                    raise ValueError(f"keys.{kind}: per-sub-type map must not be empty")
+        return self
 
     @model_validator(mode="after")
     def mode_section_matches(self) -> Self:

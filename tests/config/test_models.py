@@ -549,7 +549,7 @@ def test_fk_reference_with_path_parses() -> None:
     )
     assert fk.via == "reference"
     assert fk.path == ["prop__encounter", "prop__patient"]
-    assert fk.target_key == "record_id"
+    assert fk.target_key is None
 
 
 def test_fk_membership_member_path_without_as_of_raises() -> None:
@@ -996,3 +996,122 @@ def test_plain_identifier_table_and_column_names_pass() -> None:
     )
     assert t.name == "_dim_customer_2"
     assert t.columns[0].name == "Id_2"
+
+
+# ---------------------------------------------------------------------------
+# ExportConfig.keys — key election (parse-time only; emit-independent)
+# ---------------------------------------------------------------------------
+
+
+def test_keys_absent_parses_as_none() -> None:
+    """No `keys` block parses cleanly; the field is None."""
+    cfg = ExportConfig.model_validate(
+        {"mode": "dimensional", "dimensional": _MINIMAL_DIMENSIONAL}
+    )
+    assert cfg.keys is None
+
+
+def test_keys_empty_map_raises() -> None:
+    """`keys: {}` (present but empty) is rejected."""
+    with pytest.raises(ValidationError, match="must not be empty"):
+        ExportConfig.model_validate(
+            {
+                "mode": "dimensional",
+                "dimensional": _MINIMAL_DIMENSIONAL,
+                "keys": {},
+            }
+        )
+
+
+@pytest.mark.parametrize("surface", ["record_id", "record_index", "presentation_id"])
+def test_keys_scalar_election_parses_for_each_surface(surface: str) -> None:
+    """A scalar election parses for each of the three surfaces."""
+    cfg = ExportConfig.model_validate(
+        {
+            "mode": "dimensional",
+            "dimensional": _MINIMAL_DIMENSIONAL,
+            "keys": {"entity": surface},
+        }
+    )
+    assert cfg.keys == {"entity": surface}
+
+
+def test_keys_per_sub_type_map_parses() -> None:
+    """A per-sub-type map elects independently per sub-type."""
+    cfg = ExportConfig.model_validate(
+        {
+            "mode": "dimensional",
+            "dimensional": _MINIMAL_DIMENSIONAL,
+            "keys": {"entity": {"alpha": "presentation_id", "beta": "record_index"}},
+        }
+    )
+    assert cfg.keys == {"entity": {"alpha": "presentation_id", "beta": "record_index"}}
+
+
+def test_keys_empty_per_kind_map_raises() -> None:
+    """`keys: {entity: {}}` (empty per-kind map) is rejected."""
+    with pytest.raises(ValidationError, match="per-sub-type map must not be empty"):
+        ExportConfig.model_validate(
+            {
+                "mode": "dimensional",
+                "dimensional": _MINIMAL_DIMENSIONAL,
+                "keys": {"entity": {}},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "bad_election",
+    ["uuid", {"alpha": "uuid"}],
+)
+def test_keys_non_surface_value_raises(bad_election: object) -> None:
+    """A scalar or map election value outside the KeySurface literal is refused."""
+    with pytest.raises(ValidationError):
+        ExportConfig.model_validate(
+            {
+                "mode": "dimensional",
+                "dimensional": _MINIMAL_DIMENSIONAL,
+                "keys": {"entity": bad_election},
+            }
+        )
+
+
+def test_keys_kind_existence_not_checked_at_parse_time() -> None:
+    """`keys` accepts a kind name Pydantic can't check against any emit — kind/
+    sub-type existence is an export-time gate, not a parse-time error
+    (emit-independence)."""
+    cfg = ExportConfig.model_validate(
+        {
+            "mode": "dimensional",
+            "dimensional": _MINIMAL_DIMENSIONAL,
+            "keys": {"no_such_kind": "presentation_id"},
+        }
+    )
+    assert cfg.keys == {"no_such_kind": "presentation_id"}
+
+
+# ---------------------------------------------------------------------------
+# FkClause.target_key — widened surface, inheritance default
+# ---------------------------------------------------------------------------
+
+
+def test_fk_target_key_absent_is_none() -> None:
+    """`target_key` absent parses as None (inherit), not 'record_id'."""
+    fk = FkClause.model_validate({"to": "dim_x", "via": "reference"})
+    assert fk.target_key is None
+
+
+def test_fk_target_key_record_index_parses() -> None:
+    """`target_key: record_index` parses."""
+    fk = FkClause.model_validate(
+        {"to": "dim_x", "via": "reference", "target_key": "record_index"}
+    )
+    assert fk.target_key == "record_index"
+
+
+def test_fk_target_key_invalid_literal_raises() -> None:
+    """An invalid `target_key` literal is refused."""
+    with pytest.raises(ValidationError):
+        FkClause.model_validate(
+            {"to": "dim_x", "via": "reference", "target_key": "uuid"}
+        )

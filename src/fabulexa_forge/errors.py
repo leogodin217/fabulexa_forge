@@ -259,3 +259,53 @@ class BaseRenameSliceOnly(ExportError):
 class BaseNameCollision(ExportError):
     """Two resolved base output tables share a name, or two columns of one output
     table do, after presentation defaults and `base.rename`. Never suffixed."""
+
+
+class ElectionKindUnknown(ExportError):
+    """A `keys` entry names a kind with no records table in the emit."""
+
+
+class ElectionSubTypeUnknown(ExportError):
+    """A `keys` map addresses a sub-type outside the kind's discriminator
+    domain, or addresses a flat kind with a map."""
+
+
+class ElectionPresentationUndeclared(ExportError):
+    """A population elects presentation_id without a presentation_keys
+    entry covering it — or a dimensional edge resolves presentation_id
+    (inherited or explicit) over a source population set with an
+    uncovered population."""
+
+
+class ElectionMixedIdentity(ExportError):
+    """An output table combines populations electing differing surfaces —
+    one table, one identity surface; refused at plan time, naming the
+    table and the (population, surface) pairs."""
+
+
+class ElectionUnionUnsafe(ExportError):
+    """Elected key spaces admit a value collision — among a uniform
+    presentation_id election's populations on one identity column, or
+    across a reference edge's admitted target mix."""
+
+
+class ElectionInheritanceAmbiguous(ExportError):
+    """A dimensional FK without an explicit `target_key` targets a dim
+    whose source population set carries more than one distinct election —
+    nothing coherent to inherit; names the edge and the differing
+    elections."""
+
+
+class ElectionDimKeyDisagrees(ExportError):
+    """A dimensional FK's resolved surface (inherited from the destination
+    dim's source population's election, with no explicit target_key
+    override) is not among the destination dim's declared key columns'
+    sources; names the dim, its key sources, and the elected surface."""
+
+
+class ElectedKeyDuplicate(ExportError):
+    """The render-time uniqueness guard: over a composed identity
+    relation, restricted to the consuming population set, row count,
+    COUNT(DISTINCT record_id), and COUNT(DISTINCT elected value) are not
+    all equal, or an elected value is NULL; names the table or edge and
+    the surface."""

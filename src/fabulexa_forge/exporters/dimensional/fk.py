@@ -172,7 +172,9 @@ def build_reference_fk_expr(
         fork_path=fork_path,
         anchor_kind=anchor_kind,
         hop_columns=hops,
-        terminal_projection=col_decl.fk.target_key,
+        # Absent target_key inherits the destination dim's election, which
+        # is record_id absent a `keys` block.
+        terminal_projection=col_decl.fk.target_key or "record_id",
     )
     deriv_alias = f"{alias_ns}_rp"
 
