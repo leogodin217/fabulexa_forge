@@ -242,6 +242,66 @@ class SourceUnclassifiedColumn(ExportError):
     """
 
 
+class SourceTableKindUnknown(ExportError):
+    """A declared `kind` has no `records__<kind>` table in the sidecar.
+
+    Raised by `resolve_populations`, the shared population-set resolver
+    consumed by both `tables` entries and `events` sources. The message is
+    prefixed with the declaring unit's label, verbatim — `table '<name>'`
+    for a `tables` entry, `events source #<n>` (1-based, declaration order)
+    for an `events` source.
+    """
+
+
+class SourceTableSubTypeUnknown(ExportError):
+    """A declared `sub_types` entry names a value outside the kind's
+    discriminator domain. Owner-prefixed message, per
+    `SourceTableKindUnknown`."""
+
+
+class SourceSubTypesOnFlatKind(ExportError):
+    """A declaration gives `sub_types` for a kind with no discriminator
+    domain — a flat kind has no populations to address. Owner-prefixed
+    message, per `SourceTableKindUnknown`."""
+
+
+class SourceTableMembershipUnknown(ExportError):
+    """A declared `membership` reference resolves to no
+    `membership__<K>__<p>` table in the sidecar. Owner-prefixed message,
+    per `SourceTableKindUnknown`."""
+
+
+class SourceColumnUnresolved(ExportError):
+    """A `columns` / `rename` / `only` / `ignore` entry names no column or
+    property of its source surface — including a non-elected, unrendered
+    identity surface name, and, under a windowed invocation,
+    `last_mutation_sim_time` (the windowed state render omits it —
+    horizon honesty). The message names the election or the omission
+    reason, not just the entry."""
+
+
+class SourceColumnNotAddressable(ExportError):
+    """A declaration entry names a mechanism column (`fork_path`,
+    `record_index` outside its role as a table's elected identity surface,
+    `ref_index__*`), or a `columns` entry names a state table's *elected*
+    identity surface — identity is election-governed there, not
+    selection-governed."""
+
+
+class SourceSliceOnlyRead(ExportError):
+    """A declaration entry (`columns` / `rename` / `only` / `ignore`) names
+    a non-exempt `temporal_class: slice_only` column — the column carries
+    no deliverable value under the export-wide slice_only policy, so the
+    reference is unsatisfiable rather than silently omitted."""
+
+
+class SourceEventSourceOverlap(ExportError):
+    """Two `events.sources` entries resolve overlapping population sets
+    (membership sources distinct by `(kind, property)`) — each population
+    may be audited by exactly one source, so the total event order stays
+    tie-free and no event is double-logged."""
+
+
 class BaseExcludeUnresolved(ExportError):
     """A `base.exclude.kinds`/`base.exclude.tables` entry matches nothing base emits."""
 

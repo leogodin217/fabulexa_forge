@@ -521,6 +521,226 @@ class RenameEntry(StrictBaseModel):
         return self
 
 
+# ---------------------------------------------------------------------------
+# Source declared-table grammar: population-address decl models
+# ---------------------------------------------------------------------------
+
+
+def _require_nonempty_str(value: str, field_name: str) -> None:
+    """Reject an empty author-supplied label field.
+
+    Args:
+        value: The field's value.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is the empty string.
+    """
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty")
+
+
+def _require_distinct_nonempty_tuple(
+    value: tuple[str, ...] | None, field_name: str
+) -> None:
+    """A tuple field: when present, non-empty, with distinct entries.
+
+    Shared by every declared-table / events-source list-valued field
+    (`sub_types`, `columns`, `only`, `ignore`) — the parse-time rule applies
+    identically to all of them.
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty tuple, or contains a duplicate entry.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for entry in value:
+        if entry in seen:
+            duplicates.append(entry)
+        seen.add(entry)
+    if duplicates:
+        raise ValueError(f"{field_name} entries must be distinct: {duplicates}")
+
+
+def _require_rename_map_valid(value: dict[str, str] | None, field_name: str) -> None:
+    """A rename map: when present, non-empty, with distinct output names.
+
+    Keys (source column names) are already distinct by dict construction;
+    this additionally enforces that two source columns may not rename to
+    the same output name.
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty dict, or two keys share a value.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for target in value.values():
+        if target in seen:
+            duplicates.append(target)
+        seen.add(target)
+    if duplicates:
+        raise ValueError(f"{field_name} values must be distinct: {duplicates}")
+
+
+def _require_exactly_one_population_source(
+    kind: str | None, membership: "MembershipRef | None", label: str
+) -> None:
+    """Exactly one of `kind` / `membership` addresses the declaration's population.
+
+    Args:
+        kind: The declaration's `kind` field.
+        membership: The declaration's `membership` field.
+        label: The declaring unit's message label.
+
+    Raises:
+        ValueError: Both or neither of `kind` / `membership` is set.
+    """
+    if (kind is None) == (membership is None):
+        raise ValueError(f"{label} must set exactly one of 'kind' / 'membership'")
+
+
+def _require_sub_types_only_with_kind(
+    kind: str | None, sub_types: tuple[str, ...] | None, label: str
+) -> None:
+    """`sub_types` only accompanies a `kind` address, never a `membership` one.
+
+    Args:
+        kind: The declaration's `kind` field.
+        sub_types: The declaration's `sub_types` field.
+        label: The declaring unit's message label.
+
+    Raises:
+        ValueError: `sub_types` is set while `kind` is not.
+    """
+    if sub_types is not None and kind is None:
+        raise ValueError(f"{label}: 'sub_types' is only valid together with 'kind'")
+
+
+class MembershipRef(StrictBaseModel):
+    """Addresses one membership table by its contract identity."""
+
+    kind: str
+    """The owning kind `K` of the sidecar `membership__<K>__<property>` table."""
+    property: str
+    """The membership property `p` of the sidecar `membership__<K>__<p>` table."""
+
+
+class SourceTableDecl(StrictBaseModel):
+    """One declared output table: a name, one population source, optional column selection and renames."""  # noqa: E501
+
+    name: str
+    """Author-verbatim output table name."""
+    kind: str | None = None
+    """A records kind, exclusive with `membership` (`table_shape`)."""
+    sub_types: tuple[str, ...] | None = None
+    """Explicit population subset; only valid alongside `kind`. Absent =
+    every declared sub-type."""
+    membership: MembershipRef | None = None
+    """A membership-table address, exclusive with `kind`."""
+    columns: tuple[str, ...] | None = None
+    """Source-column selection; absent = full classified projection."""
+    rename: dict[str, str] | None = None
+    """Source column name -> output name overrides."""
+
+    @model_validator(mode="after")
+    def table_shape(self) -> Self:
+        """The declaration's structural shape (design doc § Config Models).
+
+        Raises:
+            ValueError: `name` is empty; not exactly one of `kind` /
+                `membership` is set; `sub_types` is set without `kind`;
+                `sub_types` / `columns` is present-but-empty or carries a
+                duplicate entry; `rename` is present-but-empty or two keys
+                share a target value.
+        """
+        _require_nonempty_str(self.name, "SourceTableDecl.name")
+        label = f"table {self.name!r}"
+        _require_exactly_one_population_source(self.kind, self.membership, label)
+        _require_sub_types_only_with_kind(self.kind, self.sub_types, label)
+        _require_distinct_nonempty_tuple(self.sub_types, "SourceTableDecl.sub_types")
+        _require_distinct_nonempty_tuple(self.columns, "SourceTableDecl.columns")
+        _require_rename_map_valid(self.rename, "SourceTableDecl.rename")
+        return self
+
+
+class SourceEventSourceDecl(StrictBaseModel):
+    """One audited population set for the event log."""
+
+    kind: str | None = None
+    """A records kind, exclusive with `membership` (`source_shape`)."""
+    sub_types: tuple[str, ...] | None = None
+    """Explicit population subset; only valid alongside `kind`. Absent =
+    every declared sub-type."""
+    membership: MembershipRef | None = None
+    """A membership-table address, exclusive with `kind`."""
+    only: tuple[str, ...] | None = None
+    """Audited-property subset by bare name (element-field name for a
+    membership source); mutually exclusive with `ignore`."""
+    ignore: tuple[str, ...] | None = None
+    """Audited-property exclusion by bare name; mutually exclusive with
+    `only`."""
+
+    @model_validator(mode="after")
+    def source_shape(self) -> Self:
+        """The declaration's structural shape (design doc § Config Models).
+
+        Raises:
+            ValueError: Not exactly one of `kind` / `membership` is set;
+                `sub_types` is set without `kind`; `sub_types` / `only` /
+                `ignore` is present-but-empty or carries a duplicate entry;
+                both `only` and `ignore` are set.
+        """
+        label = "events source"
+        _require_exactly_one_population_source(self.kind, self.membership, label)
+        _require_sub_types_only_with_kind(self.kind, self.sub_types, label)
+        _require_distinct_nonempty_tuple(
+            self.sub_types, "SourceEventSourceDecl.sub_types"
+        )
+        _require_distinct_nonempty_tuple(self.only, "SourceEventSourceDecl.only")
+        _require_distinct_nonempty_tuple(self.ignore, "SourceEventSourceDecl.ignore")
+        if self.only is not None and self.ignore is not None:
+            raise ValueError(f"{label}: 'only' and 'ignore' are mutually exclusive")
+        return self
+
+
+class SourceEventsDecl(StrictBaseModel):
+    """The single polymorphic event log declaration."""
+
+    name: str
+    """Author-verbatim output table name for the log."""
+    sources: tuple[SourceEventSourceDecl, ...]
+    """Audited populations, >= 1 entry, pairwise-disjoint (gated at plan
+    time — `SourceEventSourceOverlap`)."""
+
+    @model_validator(mode="after")
+    def events_shape(self) -> Self:
+        """The declaration's structural shape (design doc § Config Models).
+
+        Raises:
+            ValueError: `name` is empty, or `sources` is empty.
+        """
+        _require_nonempty_str(self.name, "SourceEventsDecl.name")
+        if not self.sources:
+            raise ValueError("SourceEventsDecl.sources must be non-empty (>= 1 entry)")
+        return self
+
+
 class SourceConfig(StrictBaseModel):
     """The source-mode section: escape hatches over the full-emit dump."""
 

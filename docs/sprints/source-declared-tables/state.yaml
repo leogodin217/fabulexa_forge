@@ -2,7 +2,7 @@ sprint: source-declared-tables
 parent_branch: enable_better_ids
 baseline_sha: ee97ac3093bbe96d35d13fe44a8346e7c6e2313d
 started: 2026-07-31
-current_phase: 1
+current_phase: 2
 capabilities:
   - config: [source-declared-grammar, decl-models]
   - shared-exporter: [population-resolver, identity-translation]
@@ -16,7 +16,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Population resolver + declaration vocabulary + errors"
     demo: "docs/sprints/source-declared-tables/demos/phase_1_populations.py"
   2:
