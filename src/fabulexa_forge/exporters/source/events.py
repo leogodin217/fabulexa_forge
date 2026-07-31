@@ -3,17 +3,15 @@
 The one render that composes two folds (`build_row_state_events_sql`,
 `build_membership_events_sql`) plus lag/diff/JSON machinery no other render
 shares — warrants its own module (`docs/sprints/source-declared-tables/spec.md`
-§ 3c). `SourceEventSourcePlan` / `SourceEventLogPlan` are hand-constructed in
-tests during this phase; a later phase wires `plan.py` to produce them and the
-engine to compile them.
+§ 3c). `SourceEventSourcePlan` / `SourceEventLogPlan` are produced by
+`plan.py` and compiled by `engine.py`.
 
-**`change_edges.source_column` convention** (this module's choice, since the
-plan is hand-constructed here): a records source's audited reference-valued
-property uses `prop__<p>` (matching `exporters.source.plan`'s
-`_resolve_reference_prop_edges`); a membership source's audited member
-reference field uses `member__<f>__id` (matching
-`_resolve_member_field_edge`) — the same source-column identities a future
-plan-builder phase would derive by calling those same functions.
+**`change_edges.source_column` convention**: a records source's audited
+reference-valued property uses `prop__<p>` (matching
+`exporters.source.plan`'s `_resolve_reference_prop_edges`); a membership
+source's audited member reference field uses `member__<f>__id` (matching
+`_resolve_member_field_edge`) — the same source-column identities the
+plan-builder derives by calling those same functions.
 
 Layer-direction invariant: imports the reader (through the derivations
 layer), the derivations layer's two event folds, the mode-neutral election

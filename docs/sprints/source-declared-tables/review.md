@@ -108,3 +108,20 @@ the spec itself (spec.md:63/115), so it is not an undocumented deviation.
 **REVISIONS NEEDED** — one blocker (Gate 4, weakened identity-translation assertion in
 `test_election_renders.py`). Everything else is observations, which do not gate merge and are
 surfaced for the user's per-item decision at the ACCEPT/FIX checkpoint.
+
+## Resolution
+
+- **Blocker (Gate 4, `test_election_renders.py`)** — FIXED in `db0363b`. The by-order-id lookup
+  was restored so a swap between the two rows fails the test; a re-review confirmed against the
+  fixture that `r["id"]` is the order's own identity and closed the finding.
+- **Observation 1 (Gate 2/7, stale `events.py` module docstring)** — FIXED at the user's
+  direction. The docstring now describes the current end state (plan.py produces the plan types,
+  engine.py compiles them).
+- **Observation 3 (Gate 4, `test_source_decls.py` multiplication)** — FIXED at the user's
+  direction. Three structurally identical groups consolidated under `@pytest.mark.parametrize`
+  with readable ids (4 + 3 + 2 = 9 cases into 3 functions); collected test count unchanged at 32,
+  no coverage and no `match=` precision lost. The "exactly one of kind/membership",
+  "sub_types only with kind", and singleton empty-field tests were deliberately left separate —
+  each is a distinct validator or has no sibling to parametrize against.
+- **Observations 2, 4, 5** — accepted as-is by the user; no change made. (5 was the reviewer's
+  own "legitimate, no action needed".)

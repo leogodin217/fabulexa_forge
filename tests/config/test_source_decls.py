@@ -100,50 +100,63 @@ def test_table_decl_sub_types_with_kind_parses() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_table_decl_name_empty_rejected() -> None:
-    """Empty name -> rejected."""
-    with pytest.raises(ValidationError, match="non-empty"):
-        SourceTableDecl(name="", kind="trip")
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        pytest.param({"name": "", "kind": "trip"}, "non-empty", id="name_empty"),
+        pytest.param(
+            {"name": "customers", "kind": "customer", "sub_types": ()},
+            "non-empty",
+            id="sub_types_empty",
+        ),
+        pytest.param(
+            {"name": "trips", "kind": "trip", "columns": ()},
+            "non-empty",
+            id="columns_empty",
+        ),
+        pytest.param(
+            {"name": "trips", "kind": "trip", "rename": {}},
+            "non-empty",
+            id="rename_empty",
+        ),
+    ],
+)
+def test_table_decl_field_empty_rejected(kwargs: dict[str, object], match: str) -> None:
+    """An empty (but present) collection/name field -> rejected."""
+    with pytest.raises(ValidationError, match=match):
+        SourceTableDecl(**kwargs)  # type: ignore[arg-type]
 
 
-def test_table_decl_sub_types_empty_tuple_rejected() -> None:
-    """sub_types present but empty -> rejected."""
-    with pytest.raises(ValidationError, match="non-empty"):
-        SourceTableDecl(name="customers", kind="customer", sub_types=())
-
-
-def test_table_decl_sub_types_duplicate_rejected() -> None:
-    """sub_types with a duplicate entry -> rejected."""
-    with pytest.raises(ValidationError, match="distinct"):
-        SourceTableDecl(name="customers", kind="customer", sub_types=("vip", "vip"))
-
-
-def test_table_decl_columns_empty_rejected() -> None:
-    """columns present but empty -> rejected."""
-    with pytest.raises(ValidationError, match="non-empty"):
-        SourceTableDecl(name="trips", kind="trip", columns=())
-
-
-def test_table_decl_columns_duplicate_rejected() -> None:
-    """columns with a duplicate entry -> rejected."""
-    with pytest.raises(ValidationError, match="distinct"):
-        SourceTableDecl(name="trips", kind="trip", columns=("prop__fare", "prop__fare"))
-
-
-def test_table_decl_rename_empty_rejected() -> None:
-    """rename present but empty -> rejected."""
-    with pytest.raises(ValidationError, match="non-empty"):
-        SourceTableDecl(name="trips", kind="trip", rename={})
-
-
-def test_table_decl_rename_values_distinct() -> None:
-    """Two rename keys targeting the same output name -> rejected."""
-    with pytest.raises(ValidationError, match="distinct"):
-        SourceTableDecl(
-            name="trips",
-            kind="trip",
-            rename={"prop__fare": "amount", "prop__tip": "amount"},
-        )
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        pytest.param(
+            {"name": "customers", "kind": "customer", "sub_types": ("vip", "vip")},
+            "distinct",
+            id="sub_types_duplicate",
+        ),
+        pytest.param(
+            {"name": "trips", "kind": "trip", "columns": ("prop__fare", "prop__fare")},
+            "distinct",
+            id="columns_duplicate",
+        ),
+        pytest.param(
+            {
+                "name": "trips",
+                "kind": "trip",
+                "rename": {"prop__fare": "amount", "prop__tip": "amount"},
+            },
+            "distinct",
+            id="rename_values_not_distinct",
+        ),
+    ],
+)
+def test_table_decl_field_duplicate_rejected(
+    kwargs: dict[str, object], match: str
+) -> None:
+    """A duplicate entry (or non-distinct rename target) -> rejected."""
+    with pytest.raises(ValidationError, match=match):
+        SourceTableDecl(**kwargs)  # type: ignore[arg-type]
 
 
 def test_table_decl_rename_distinct_values_parses() -> None:
@@ -212,16 +225,27 @@ def test_event_source_decl_only_empty_rejected() -> None:
         SourceEventSourceDecl(kind="trip", only=())
 
 
-def test_event_source_decl_only_duplicate_rejected() -> None:
-    """`only` with a duplicate entry -> rejected."""
-    with pytest.raises(ValidationError, match="distinct"):
-        SourceEventSourceDecl(kind="trip", only=("status", "status"))
-
-
-def test_event_source_decl_ignore_duplicate_rejected() -> None:
-    """`ignore` with a duplicate entry -> rejected."""
-    with pytest.raises(ValidationError, match="distinct"):
-        SourceEventSourceDecl(kind="trip", ignore=("fare", "fare"))
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        pytest.param(
+            {"kind": "trip", "only": ("status", "status")},
+            "distinct",
+            id="only_duplicate",
+        ),
+        pytest.param(
+            {"kind": "trip", "ignore": ("fare", "fare")},
+            "distinct",
+            id="ignore_duplicate",
+        ),
+    ],
+)
+def test_event_source_decl_field_duplicate_rejected(
+    kwargs: dict[str, object], match: str
+) -> None:
+    """A duplicate entry in `only`/`ignore` -> rejected."""
+    with pytest.raises(ValidationError, match=match):
+        SourceEventSourceDecl(**kwargs)  # type: ignore[arg-type]
 
 
 def test_event_source_decl_only_parses() -> None:
