@@ -181,12 +181,13 @@ def test_edge_mixed_population_resolution_reads_spine_deactivated_target_resolve
     tmp_path: Path,
 ) -> None:
     """A mixed (per-sub-type) device election dispatches per row on device's
-    own records-spine discriminator (never a fold after-image): the order
-    referencing the deactivated dev_night still resolves its elected
-    record_index value, digit-rendered in the shared VARCHAR column. device
-    is never declared as its own `tables[]` output here — a mixed
-    per-population election is only reachable for a target no output table
-    itself demands a uniform surface for."""
+    own records-spine discriminator (never a fold after-image): ord_a's edge
+    to dev_day resolves its elected presentation_id, while ord_b's edge to
+    the deactivated dev_night still resolves its elected record_index value,
+    digit-rendered in the shared VARCHAR column. device is never declared as
+    its own `tables[]` output here — a mixed per-population election is only
+    reachable for a target no output table itself demands a uniform surface
+    for."""
     emit_dir = build_source_election_emit(tmp_path)
     config = _config(tables=(SourceTableDecl(name="orders", kind="order"),))
     table, rows = _rows_for(
@@ -196,11 +197,10 @@ def test_edge_mixed_population_resolution_reads_spine_deactivated_target_resolve
     )
     assert isinstance(table, SourceStateTablePlan)
     edge = table.edge_surfaces[0]
-    day_row = next(r for r in rows if r["device_id"] == "DAY_001")
-    night_row = next(r for r in rows if r["device_id"] == "1")
+    by_id = {r["id"]: r for r in rows}
     assert edge.rendered_type == "VARCHAR"
-    assert day_row is not None
-    assert night_row is not None
+    assert by_id["ord_a"]["device_id"] == "DAY_001"
+    assert by_id["ord_b"]["device_id"] == "1"
 
 
 # ---------------------------------------------------------------------------
