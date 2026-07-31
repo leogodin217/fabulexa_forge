@@ -14,9 +14,6 @@ Covers:
 - bogus --timezone -> RebaseUnknownTimezone (exit 1)
 - rebase: {} -> ConfigError (exit 1)
 - mode: cdc config -> ConfigError (exit 1), rejected at load time
-- change_delivery: snapshot (Unit 3): a --next drip grows the changelog kind's
-  snapshot; a full export refuses with SourceSnapshotRequiresWindows; changing
-  change_delivery mid-drip trips IncrementalFingerprintMismatch
 - the remaining incremental CLI error funnel: IncrementalAnchorRequired,
   IncrementalPeriodRegimeMismatch, IncrementalCursorInvalid, and
   IncrementalRangeInvalid each surface through cmd_export as exit 1
@@ -1203,12 +1200,16 @@ def build_source_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
 
 
 def write_source_config(config_path: Path) -> None:
-    """Write a bare `mode: source` export config (no exclude/rename).
+    """Write a `mode: source` export config declaring one `state` table over
+    the `location` kind.
 
     Args:
         config_path: Path to write the YAML config to.
     """
-    config_path.write_text("mode: source\n", encoding="utf-8")
+    config_path.write_text(
+        "mode: source\nsource:\n  tables:\n  - name: location\n    kind: location\n",
+        encoding="utf-8",
+    )
 
 
 def test_cmd_export_source_mode_csv_success(
@@ -1240,17 +1241,21 @@ def test_cmd_export_source_mode_duckdb_success(
     assert out_db.exists()
 
 
-def write_source_incremental_config(config_path: Path) -> None:
-    """Write a `mode: source` config with a calendar-day incremental block.
+def write_source_incremental_config(config_path: Path, kind: str = "location") -> None:
+    """Write a `mode: source` config with a calendar-day incremental block,
+    declaring one `state` table over `kind`.
 
     Source mode always requires a resolved anchor, so its incremental block
     must use the calendar regime (`period`), not `sim_period_ns`.
 
     Args:
         config_path: Path to write the YAML config to.
+        kind: The records kind to declare the sole `state` table over.
     """
     config_path.write_text(
-        "mode: source\nincremental:\n  period: day\n", encoding="utf-8"
+        "mode: source\nincremental:\n  period: day\nsource:\n"
+        f"  tables:\n  - name: {kind}\n    kind: {kind}\n",
+        encoding="utf-8",
     )
 
 
@@ -1383,7 +1388,7 @@ def test_cmd_export_source_mode_next_drip_to_drained(
     window (label-prefixed counts), then exits 3 once drained."""
     emit_dir = build_day_scale_source_emit(tmp_path / "emit")
     config_path = tmp_path / "config.yaml"
-    write_source_incremental_config(config_path)
+    write_source_incremental_config(config_path, kind="widget")
     out = tmp_path / "wh.duckdb"
 
     exit_codes: list[int] = []
@@ -1424,97 +1429,3 @@ def test_main_export_source_mode_dispatches(
     )
     assert exit_code == 0
     assert (out_dir / "location.csv").exists()
-
-
-# ---------------------------------------------------------------------------
-# Phase 3: change_delivery: snapshot (Unit 3) — end-to-end
-# ---------------------------------------------------------------------------
-
-
-def write_source_snapshot_incremental_config(config_path: Path) -> None:
-    """Write a `mode: source` config with a calendar-day incremental block and
-    `source.change_delivery: snapshot`.
-
-    Args:
-        config_path: Path to write the YAML config to.
-    """
-    config_path.write_text(
-        "mode: source\nincremental:\n  period: day\nsource:\n"
-        "  change_delivery: snapshot\n",
-        encoding="utf-8",
-    )
-
-
-def test_cmd_export_source_mode_snapshot_next_drip_grows(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A `--next` drip over `mode: source` + `change_delivery: snapshot` emits one
-    growing full-table snapshot per window for the changelog kind: the table's
-    row count never shrinks, starts at 1 (the day-0 creation), and reaches 2
-    once both records are created."""
-    emit_dir = build_day_scale_source_emit(tmp_path / "emit")
-    config_path = tmp_path / "config.yaml"
-    write_source_snapshot_incremental_config(config_path)
-    out = tmp_path / "wh.duckdb"
-
-    widget_counts: list[int] = []
-    for _ in range(6):  # enough iterations to drain
-        code = cmd_export(emit_dir, config_path, out, "duckdb", next_window=True)
-        capsys.readouterr()
-        if code == 3:
-            break
-        assert code == 0
-        conn = duckdb.connect(str(out), read_only=True)
-        try:
-            row = conn.execute('SELECT COUNT(*) FROM "widget"').fetchone()
-            assert row is not None
-            widget_counts.append(row[0])
-        finally:
-            conn.close()
-
-    assert widget_counts[0] == 1
-    assert widget_counts[-1] == 2
-    assert widget_counts == sorted(widget_counts), (
-        f"Expected a never-shrinking snapshot, got {widget_counts}"
-    )
-
-
-def test_cmd_export_source_mode_snapshot_full_export_reconstructs(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """A full (non-windowed) export with `change_delivery: snapshot` succeeds,
-    reconstructing at the tape's end (Phase 9) instead of refusing."""
-    emit_dir = build_source_emit(tmp_path / "emit")
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        "mode: source\nsource:\n  change_delivery: snapshot\n", encoding="utf-8"
-    )
-    out_dir = tmp_path / "out_csv"
-    out_dir.mkdir()
-
-    exit_code = cmd_export(emit_dir, config_path, out_dir, "csv")
-    assert exit_code == 0
-    assert (out_dir / "location.csv").exists()
-
-
-def test_cmd_export_source_mode_change_delivery_mid_drip_fingerprint_mismatch(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    """Changing `change_delivery` between drip calls trips
-    IncrementalFingerprintMismatch (the config participates in the fingerprint)."""
-    emit_dir = build_day_scale_source_emit(tmp_path / "emit")
-    config_path = tmp_path / "config.yaml"
-    write_source_snapshot_incremental_config(config_path)
-    out = tmp_path / "wh.duckdb"
-
-    first_code = cmd_export(emit_dir, config_path, out, "duckdb", next_window=True)
-    capsys.readouterr()
-    assert first_code == 0
-
-    write_source_incremental_config(config_path)  # drops change_delivery: snapshot
-
-    exit_code = cmd_export(emit_dir, config_path, out, "duckdb", next_window=True)
-    captured = capsys.readouterr()
-    assert exit_code == 1
-    assert "ERROR" in captured.err
-    assert "fingerprint" in captured.err.lower()

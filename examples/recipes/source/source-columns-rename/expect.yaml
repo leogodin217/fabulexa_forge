@@ -1,0 +1,7 @@
+tables:
+  doctor:
+    columns: [doctor_id, doctor_name]
+    row_count: 1
+    contains_rows:
+      - doctor_id: d001
+        doctor_name: Dr. Carter

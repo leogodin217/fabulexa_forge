@@ -1,0 +1,33 @@
+# Recipe: source-columns-rename
+# ============================================================
+# `columns:` / `rename:` on a `state` table narrow and relabel its final
+# delivered column set (source.md § Column selection). Both keys are
+# SOURCE-column identities — base-table column names (`record_id`,
+# `created_sim_time`, `active`, `deactivated_at`, `prop__<p>`) — never the
+# derived output names, and the identity slot is election-governed, never
+# selection-governed: it cannot appear in `columns`, but it CAN carry a
+# `rename` entry (its elected surface's contract name, `record_id` under
+# no election).
+#
+# This recipe drops every lifecycle column (`created_at` / `active` /
+# `deactivated_at` / `updated_at`) from `doctor` by naming only `prop__name`
+# in `columns` (the identity always survives selection), then relabels both
+# surviving columns with `rename`.
+#
+# Fixture world (recipe emit):
+#   records__doctor — one record, d001 "Dr. Carter".
+#
+# Output:
+#   doctor — 1 row, exactly 2 columns: doctor_id (was id), doctor_name
+#            (was name) — no created_at / active / deactivated_at / updated_at.
+
+mode: source
+
+source:
+  tables:
+    - name: doctor
+      kind: doctor
+      columns: [prop__name]
+      rename:
+        record_id: doctor_id
+        prop__name: doctor_name

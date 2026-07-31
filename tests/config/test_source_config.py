@@ -1,261 +1,252 @@
-"""Tests for SourceConfig, RenameEntry, and the two-sided mode/section validator.
+"""Tests for the declared-table `SourceConfig` grammar and its two-sided
+mode/section validator.
 
-Each test asserts on model behavior (structural constraints), not that Pydantic
-parses successfully — the invariants are tested, not the library.
+Each test asserts on model behavior (structural constraints), not that
+Pydantic parses successfully — the invariants are tested, not the library.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+import yaml
 from pydantic import ValidationError
 
-from fabulexa_forge.config.models import ExportConfig, RenameEntry, SourceConfig
+from fabulexa_forge.config.loader import load_export_config
+from fabulexa_forge.config.models import ExportConfig, SourceConfig
 
 # ---------------------------------------------------------------------------
-# Bare mode: source parses
+# The declared grammar parses (design doc § Configuration, verbatim)
 # ---------------------------------------------------------------------------
 
-
-def test_bare_mode_source_parses() -> None:
-    """A bare mode: source config parses; config.source is None."""
-    config = ExportConfig.model_validate({"mode": "source"})
-    assert config.mode == "source"
-    assert config.source is None
-    assert config.dimensional is None
-
-
-def test_mode_source_with_exclude_kinds_parses() -> None:
-    """mode: source with source.exclude.kinds parses."""
-    config = ExportConfig.model_validate(
-        {
-            "mode": "source",
-            "source": {"exclude": {"kinds": ["scheduler"]}},
-        }
-    )
-    assert config.source is not None
-    assert config.source.exclude is not None
-    assert config.source.exclude.kinds == ["scheduler"]
-
-
-def test_mode_source_with_rename_parses() -> None:
-    """mode: source with source.rename parses."""
-    config = ExportConfig.model_validate(
-        {
-            "mode": "source",
-            "source": {
-                "rename": [{"table": "records__actor", "name": "actors"}],
-            },
-        }
-    )
-    assert config.source is not None
-    assert config.source.rename is not None
-    assert config.source.rename[0].table == "records__actor"
-    assert config.source.rename[0].name == "actors"
-
-
-# ---------------------------------------------------------------------------
-# at_least_one_field (SourceConfig)
-# ---------------------------------------------------------------------------
-
-
-def test_bare_source_block_rejected() -> None:
-    """A bare source: {} (no field explicitly set) is rejected."""
-    with pytest.raises(ValidationError, match="at least one"):
-        SourceConfig.model_validate({})
-
-
-def test_source_with_only_exclude_is_valid() -> None:
-    """A source block setting only exclude is valid."""
-    cfg = SourceConfig.model_validate({"exclude": {"kinds": ["scheduler"]}})
-    assert cfg.exclude is not None
-    assert cfg.rename is None
-
-
-def test_source_with_only_rename_is_valid() -> None:
-    """A source block setting only rename is valid."""
-    cfg = SourceConfig.model_validate(
-        {"rename": [{"table": "records__actor", "name": "actors"}]}
-    )
-    assert cfg.rename is not None
-    assert cfg.exclude is None
-
-
-# ---------------------------------------------------------------------------
-# entry_well_formed (RenameEntry)
-# ---------------------------------------------------------------------------
-
-
-def test_rename_entry_neither_name_nor_columns_raises() -> None:
-    """A RenameEntry with neither name nor columns raises."""
-    with pytest.raises(ValidationError, match="at least one"):
-        RenameEntry.model_validate({"table": "records__actor"})
-
-
-def test_rename_entry_with_name_only_is_valid() -> None:
-    """A RenameEntry with name only is valid."""
-    entry = RenameEntry.model_validate({"table": "records__actor", "name": "actors"})
-    assert entry.name == "actors"
-    assert entry.columns is None
-
-
-def test_rename_entry_with_columns_only_is_valid() -> None:
-    """A RenameEntry with columns only is valid."""
-    entry = RenameEntry.model_validate(
-        {"table": "records__actor", "columns": {"record_id": "actor_id"}}
-    )
-    assert entry.columns == {"record_id": "actor_id"}
-
-
-def test_rename_entry_empty_columns_raises() -> None:
-    """A RenameEntry with an empty columns map raises."""
-    with pytest.raises(ValidationError, match="must not be empty"):
-        RenameEntry.model_validate({"table": "records__actor", "columns": {}})
-
-
-def test_rename_entry_empty_column_key_raises() -> None:
-    """A RenameEntry with an empty columns key raises."""
-    with pytest.raises(ValidationError, match="keys must be non-empty"):
-        RenameEntry.model_validate({"table": "records__actor", "columns": {"": "x"}})
-
-
-def test_rename_entry_empty_column_value_raises() -> None:
-    """A RenameEntry with an empty columns value raises."""
-    with pytest.raises(ValidationError, match="values must be non-empty"):
-        RenameEntry.model_validate({"table": "records__actor", "columns": {"x": ""}})
-
-
-def test_rename_entry_duplicate_column_values_raises() -> None:
-    """Two source columns renamed to the same output name raises."""
-    with pytest.raises(ValidationError, match="distinct"):
-        RenameEntry.model_validate(
+_DESIGN_DOC_EXAMPLE = {
+    "mode": "source",
+    "keys": {"trip": "presentation_id"},
+    "source": {
+        "tables": [
             {
-                "table": "records__actor",
-                "columns": {"prop__id": "id", "record_id": "id"},
+                "name": "trips",
+                "kind": "trip",
+                "columns": [
+                    "prop__status",
+                    "prop__fare",
+                    "prop__rider",
+                    "created_sim_time",
+                ],
+                "rename": {"prop__fare": "fare_usd"},
+            },
+            {
+                "name": "customers",
+                "kind": "customer",
+                "sub_types": ["standard", "vip"],
+            },
+            {
+                "name": "trip_drivers",
+                "membership": {"kind": "trip", "property": "drivers"},
+            },
+        ],
+        "events": {
+            "name": "versions",
+            "sources": [
+                {"kind": "trip", "only": ["status", "fare"]},
+                {"membership": {"kind": "trip", "property": "drivers"}},
+            ],
+        },
+        "declare_keys": True,
+    },
+}
+
+
+def test_design_doc_configuration_example_parses() -> None:
+    """The design doc's § Configuration example loads verbatim."""
+    config = ExportConfig.model_validate(_DESIGN_DOC_EXAMPLE)
+    assert config.mode == "source"
+    assert config.keys == {"trip": "presentation_id"}
+    assert config.source is not None
+    assert [t.name for t in config.source.tables] == [
+        "trips",
+        "customers",
+        "trip_drivers",
+    ]
+
+    trips, customers, trip_drivers = config.source.tables
+    assert trips.kind == "trip"
+    assert trips.columns == (
+        "prop__status",
+        "prop__fare",
+        "prop__rider",
+        "created_sim_time",
+    )
+    assert trips.rename == {"prop__fare": "fare_usd"}
+    assert customers.sub_types == ("standard", "vip")
+    assert trip_drivers.membership is not None
+    assert trip_drivers.membership.kind == "trip"
+    assert trip_drivers.membership.property == "drivers"
+
+    events = config.source.events
+    assert events is not None
+    assert events.name == "versions"
+    assert len(events.sources) == 2
+    assert events.sources[0].kind == "trip"
+    assert events.sources[0].only == ("status", "fare")
+    assert events.sources[1].membership is not None
+    assert events.sources[1].membership.property == "drivers"
+
+    assert config.source.declare_keys is True
+
+
+# ---------------------------------------------------------------------------
+# Load-time errors: bare mode / empty section / no-output declaration
+# ---------------------------------------------------------------------------
+
+
+def test_bare_mode_source_is_a_load_time_error() -> None:
+    """A bare `mode: source` (no `source` section) is refused — the
+    bare-dump allowance dies with the exclude/rename grammar."""
+    with pytest.raises(ValidationError, match="requires a 'source' section"):
+        ExportConfig.model_validate({"mode": "source"})
+
+
+def test_empty_source_block_is_a_load_time_error() -> None:
+    """`source: {}` is refused — `SourceConfig`'s own validator additionally
+    requires >= 1 of `tables` / `events`, since a source config declares its
+    output or is refused at load."""
+    with pytest.raises(ValidationError, match="at least one output"):
+        ExportConfig.model_validate({"mode": "source", "source": {}})
+
+
+def test_no_output_declaration_is_a_load_time_error() -> None:
+    """`declare_keys` alone, with no `tables` and no `events`, is refused —
+    `declare_keys` is not itself an output declaration."""
+    with pytest.raises(ValidationError, match="at least one output"):
+        SourceConfig.model_validate({"declare_keys": True})
+
+
+def test_source_forbids_dimensional_section() -> None:
+    """`mode='source'` forbids a `dimensional` section."""
+    with pytest.raises(ValidationError, match="forbids a 'dimensional' section"):
+        ExportConfig.model_validate(
+            {
+                "mode": "source",
+                "source": {"tables": [{"name": "t", "kind": "k"}]},
+                "dimensional": {
+                    "tables": [
+                        {
+                            "name": "dim_actor",
+                            "role": "dim",
+                            "scd": "type1",
+                            "source": {"grain": "records", "kind": "actor"},
+                            "key": ["id"],
+                            "columns": [{"name": "id", "from": "record_id"}],
+                        }
+                    ]
+                },
             }
         )
 
 
-def test_rename_entry_empty_table_raises() -> None:
-    """An empty table string raises."""
-    with pytest.raises(ValidationError):
-        RenameEntry.model_validate({"table": "", "name": "actors"})
-
-
-def test_rename_entry_empty_name_raises() -> None:
-    """An empty name string raises."""
-    with pytest.raises(ValidationError, match="name must be a non-empty string"):
-        RenameEntry.model_validate({"table": "records__actor", "name": ""})
-
-
-def test_rename_entry_empty_sub_type_raises() -> None:
-    """An empty sub_type string raises."""
-    with pytest.raises(ValidationError, match="sub_type must be a non-empty string"):
-        RenameEntry.model_validate(
-            {"table": "records__entity", "sub_type": "", "name": "consultants"}
+def test_source_forbids_base_section() -> None:
+    """`mode='source'` forbids a `base` section."""
+    with pytest.raises(ValidationError, match="forbids a 'base' section"):
+        ExportConfig.model_validate(
+            {
+                "mode": "source",
+                "source": {"tables": [{"name": "t", "kind": "k"}]},
+                "base": {"slice_at": 100},
+            }
         )
 
 
+def test_events_only_config_is_legal() -> None:
+    """A log-only config (`tables` empty, `events` declared) is legal —
+    `tables` defaults empty."""
+    config = SourceConfig.model_validate(
+        {"events": {"name": "versions", "sources": [{"kind": "trip"}]}}
+    )
+    assert config.tables == ()
+    assert config.events is not None
+
+
 # ---------------------------------------------------------------------------
-# entries_disjoint (SourceConfig)
+# Duplicate table names in the declaration list
 # ---------------------------------------------------------------------------
 
 
-def test_two_rename_entries_same_table_and_sub_type_raises() -> None:
-    """Two rename entries targeting the same (table, sub_type) raise."""
-    with pytest.raises(ValidationError, match="same \\(table, sub_type\\)"):
+def test_duplicate_table_names_rejected() -> None:
+    """Two `tables[]` entries sharing a `name` are refused at parse time."""
+    with pytest.raises(ValidationError, match="duplicate table names"):
         SourceConfig.model_validate(
             {
-                "rename": [
-                    {"table": "records__entity", "sub_type": "consultant", "name": "a"},
-                    {"table": "records__entity", "sub_type": "consultant", "name": "b"},
+                "tables": [
+                    {"name": "trips", "kind": "trip"},
+                    {"name": "trips", "kind": "customer"},
                 ]
             }
         )
 
 
-def test_two_rename_entries_same_table_different_sub_type_is_valid() -> None:
-    """Two rename entries on the same table but different sub_type are valid."""
-    cfg = SourceConfig.model_validate(
+def test_distinct_table_names_are_valid() -> None:
+    """Two `tables[]` entries with distinct names are valid, even when they
+    address the same population."""
+    config = SourceConfig.model_validate(
         {
-            "rename": [
-                {"table": "records__entity", "sub_type": "consultant", "name": "a"},
-                {"table": "records__entity", "sub_type": "nurse", "name": "b"},
+            "tables": [
+                {"name": "trips_a", "kind": "trip"},
+                {"name": "trips_b", "kind": "trip"},
             ]
         }
     )
-    assert cfg.rename is not None
-    assert len(cfg.rename) == 2
+    assert len(config.tables) == 2
 
 
 # ---------------------------------------------------------------------------
-# change_delivery (SourceConfig)
+# `declare_keys` composes with `tables` and `events`
 # ---------------------------------------------------------------------------
 
 
-def test_change_delivery_defaults_to_changelog() -> None:
-    """change_delivery defaults to 'changelog' when absent."""
-    cfg = SourceConfig.model_validate({"exclude": {"kinds": ["scheduler"]}})
-    assert cfg.change_delivery == "changelog"
-
-
-def test_change_delivery_parses_snapshot() -> None:
-    """change_delivery parses the explicit 'snapshot' value."""
-    cfg = SourceConfig.model_validate({"change_delivery": "snapshot"})
-    assert cfg.change_delivery == "snapshot"
-
-
-def test_change_delivery_alone_satisfies_at_least_one_field() -> None:
-    """An explicit change_delivery: changelog alone passes at_least_one_field."""
-    cfg = SourceConfig.model_validate({"change_delivery": "changelog"})
-    assert cfg.change_delivery == "changelog"
-    assert "change_delivery" in cfg.model_fields_set
-
-
-def test_change_delivery_unknown_value_raises() -> None:
-    """An unknown change_delivery value raises ValidationError."""
-    with pytest.raises(ValidationError):
-        SourceConfig.model_validate({"change_delivery": "bogus"})
-
-
-# ---------------------------------------------------------------------------
-# declare_keys (SourceConfig)
-# ---------------------------------------------------------------------------
-
-
-def test_declare_keys_true_alone_is_valid_section() -> None:
-    """source: {declare_keys: true} alone is a valid, non-empty section."""
-    cfg = SourceConfig.model_validate({"declare_keys": True})
-    assert cfg.declare_keys is True
-
-
-def test_declare_keys_false_behaves_as_absent() -> None:
-    """source: {declare_keys: false} loads; declare_keys reads False, same
-    off-posture as the field being absent — the config layer stores the
-    author's explicit value verbatim, the engine's off/on decision is a
-    separate concern."""
-    cfg = SourceConfig.model_validate({"declare_keys": False})
-    assert cfg.declare_keys is False
-
-
-def test_declare_keys_non_bool_rejected() -> None:
-    """source: {declare_keys: [...]} (not a bool) is rejected."""
-    with pytest.raises(ValidationError):
-        SourceConfig.model_validate({"declare_keys": []})
-
-
-def test_empty_source_block_error_names_declare_keys() -> None:
-    """The at-least-one-field error message names declare_keys."""
-    with pytest.raises(ValidationError, match="declare_keys"):
-        SourceConfig.model_validate({})
-
-
-def test_declare_keys_composes_freely_with_change_delivery() -> None:
-    """declare_keys and change_delivery compose freely in one section."""
-    cfg = SourceConfig.model_validate(
-        {"declare_keys": True, "change_delivery": "snapshot"}
+def test_declare_keys_composes_with_tables() -> None:
+    """`declare_keys` composes freely with a `tables`-only declaration."""
+    config = SourceConfig.model_validate(
+        {"tables": [{"name": "trips", "kind": "trip"}], "declare_keys": True}
     )
-    assert cfg.declare_keys is True
-    assert cfg.change_delivery == "snapshot"
+    assert config.declare_keys is True
+    assert config.tables[0].name == "trips"
+
+
+def test_declare_keys_composes_with_events() -> None:
+    """`declare_keys` composes freely with an `events`-only declaration."""
+    config = SourceConfig.model_validate(
+        {
+            "events": {"name": "versions", "sources": [{"kind": "trip"}]},
+            "declare_keys": True,
+        }
+    )
+    assert config.declare_keys is True
+    assert config.events is not None
+
+
+def test_declare_keys_composes_with_both_tables_and_events() -> None:
+    """`declare_keys` composes freely with both `tables` and `events`
+    declared together."""
+    config = SourceConfig.model_validate(
+        {
+            "tables": [{"name": "trips", "kind": "trip"}],
+            "events": {"name": "versions", "sources": [{"kind": "trip"}]},
+            "declare_keys": True,
+        }
+    )
+    assert config.declare_keys is True
+    assert len(config.tables) == 1
+    assert config.events is not None
+
+
+def test_declare_keys_defaults_false() -> None:
+    """`declare_keys` defaults to False when absent."""
+    config = SourceConfig.model_validate(
+        {"tables": [{"name": "trips", "kind": "trip"}]}
+    )
+    assert config.declare_keys is False
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +259,7 @@ def test_rebase_and_incremental_are_valid_siblings_under_mode_source() -> None:
     config = ExportConfig.model_validate(
         {
             "mode": "source",
+            "source": {"tables": [{"name": "trips", "kind": "trip"}]},
             "rebase": {"timezone": "UTC"},
             "incremental": {"period": "day"},
         }
@@ -279,36 +271,23 @@ def test_rebase_and_incremental_are_valid_siblings_under_mode_source() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Rename targets are SQL identifiers (they become output table/column names)
+# Loader round-trip
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "bad_target",
-    ["../../etc/cron.d/evil", "/etc/evil", 'triage" ; ATTACH', "has space"],
-)
-def test_rename_table_target_not_sql_identifier_raises(bad_target: str) -> None:
-    """A rename entry's output table name outside the identifier pattern raises."""
-    with pytest.raises(ValidationError, match="SQL identifier"):
-        RenameEntry.model_validate({"table": "records__queue", "name": bad_target})
-
-
-def test_rename_column_target_not_sql_identifier_raises() -> None:
-    """A rename entry's output column name with an embedded quote raises."""
-    with pytest.raises(ValidationError, match="SQL identifier"):
-        RenameEntry.model_validate(
-            {"table": "records__location", "columns": {"prop__name": 'na"me'}}
-        )
-
-
-def test_rename_sidecar_keys_stay_unrestricted() -> None:
-    """Only rename *targets* are gated; sidecar-identity keys (table / column
-    keys) keep their full character set (e.g. membership__K__p)."""
-    entry = RenameEntry.model_validate(
-        {
-            "table": "membership__team__members",
-            "name": "team_membership",
-            "columns": {"prop__display_name": "display_name"},
-        }
-    )
-    assert entry.name == "team_membership"
+def test_loader_round_trips_the_declared_grammar(tmp_path: Path) -> None:
+    """`load_export_config` round-trips the declared grammar from a YAML
+    file on disk, identically to `ExportConfig.model_validate`."""
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text(yaml.safe_dump(_DESIGN_DOC_EXAMPLE), encoding="utf-8")
+    config = load_export_config(config_path)
+    assert config.mode == "source"
+    assert config.source is not None
+    assert [t.name for t in config.source.tables] == [
+        "trips",
+        "customers",
+        "trip_drivers",
+    ]
+    assert config.source.events is not None
+    assert config.source.events.name == "versions"
+    assert config.source.declare_keys is True

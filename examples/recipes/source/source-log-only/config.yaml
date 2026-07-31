@@ -1,0 +1,36 @@
+# Recipe: source-log-only
+# ============================================================
+# `tables` defaults to empty — a `source:` section that declares only
+# `events` (no `tables` key at all) is a legal, complete config: a
+# log-only app-database export (design doc § Config Models,
+# `SourceConfig.tables` docstring). The only requirement is that at least
+# one of `tables` / `events` is declared; `source: {}` on its own is
+# refused.
+#
+# This recipe also exercises the event log's MEMBERSHIP source shape (the
+# other source shape `source-event-log` doesn't cover): a `membership:`
+# address audits a junction's element/member fields instead of a kind's
+# properties. `item_type` becomes `<K>.<property>`; `item_id` is the
+# OWNER's elected identity (the queue, not the waiting patient); a member
+# reference field (`patient`) expands in the `changes` object into its
+# `<f>_kind` / `<f>_id` entry pair.
+#
+# Fixture world (recipe emit):
+#   membership__queue__waiters — 2 waiter intervals on owner q001:
+#     p001 priority 2: joined@1d, left@2d   (closed — join then leave)
+#     p002 priority 1: joined@2d, left NULL (open — join only)
+#
+# Output (3 rows, item_type "queue.waiters", item_id q001 throughout):
+#   create  (p001 joins)  changes has priority/patient_kind/patient_id [null, v]
+#   create  (p002 joins)  changes has priority/patient_kind/patient_id [null, v]
+#   destroy (p001 leaves) changes has priority/patient_kind/patient_id [v, null]
+
+mode: source
+
+source:
+  events:
+    name: waiter_log
+    sources:
+      - membership:
+          kind: queue
+          property: waiters

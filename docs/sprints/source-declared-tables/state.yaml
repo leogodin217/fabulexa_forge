@@ -2,7 +2,7 @@ sprint: source-declared-tables
 parent_branch: enable_better_ids
 baseline_sha: ee97ac3093bbe96d35d13fe44a8346e7c6e2313d
 started: 2026-07-31
-current_phase: 3
+current_phase: 4
 capabilities:
   - config: [source-declared-grammar, decl-models]
   - shared-exporter: [population-resolver, identity-translation]
@@ -24,7 +24,7 @@ phases:
     name: "Event-log render (standalone)"
     demo: "docs/sprints/source-declared-tables/demos/phase_2_event_log.py"
   3:
-    status: pending
+    status: complete
     name: "The cutover (atomic)"
     demo: "docs/sprints/source-declared-tables/demos/phase_3_declared_export.py"
     steps:

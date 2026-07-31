@@ -1,25 +1,28 @@
 """Emit construction helpers for source-mode exporter tests (renders/engine).
 
-Builds a DuckDB-backed emit spanning all four genres — changelog, reference,
-transaction, junction — plus a tracked sub-typed kind (never split). All
+Builds a DuckDB-backed emit spanning tracked, untracked, referencing, and
+sub-typed records kinds plus a junction — the raw material a `tables`
+declaration list carves into `state` / `junction` output tables. All
 helpers are module-level functions — no fixtures — so test modules import
 directly.
 
-Scenario:
-  - records__visit: tracked (prop__status, prop__priority) -> changelog.
+Scenario (kind -> the declared-table shape a `tables` entry over it takes):
+  - records__visit: tracked (prop__status, prop__priority) -> one `state`
+      table.
       v001: created only (one 'c' event).
       v002: created, then a coincident status+priority change (one 'u' event).
       v003: created, then deactivated with no property change (one 'd' event).
   - records__shift: tracked, with an untracked prop__shift_type discriminator
-      (declared as an enum domain, but never split — tracked dominates)
-      -> changelog; one deactivated record ('c' then 'd').
-  - records__location: untracked, dimension role -> reference.
-  - records__order: untracked, fact role -> transaction; carries a
+      (declared as an enum domain) -> one `state` table, the discriminator
+      retained; one deactivated record ('c' then 'd').
+  - records__location: untracked -> one `state` table, a full snapshot.
+  - records__order: untracked -> one `state` table; carries a
       reference-annotated prop__location_id column (id-only, unjoined).
-  - records__actor: untracked, object-registry role -> splits into
-      consultant (dimension) / nurse (fact).
-  - membership__visit__team: junction owned by visit; one closed and one
-      still-open interval.
+  - records__actor: untracked, sub-typed (consultant/nurse) -> two `state`
+      tables, one declared `sub_types: [consultant]` and one
+      `sub_types: [nurse]`.
+  - membership__visit__team: junction owned by visit -> one `junction`
+      table; one closed and one still-open interval.
 """
 
 from __future__ import annotations
@@ -293,11 +296,6 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
     conn.close()
 
     extra: dict[str, object] = {
-        "record_roles": {
-            "location": "dimension",
-            "order": "fact",
-            "actor": {"consultant": "dimension", "nurse": "fact"},
-        },
         "enum_domains": {
             "actor": {"actor_type": ["consultant", "nurse"]},
             "shift": {"shift_type": ["day", "night"]},
@@ -361,16 +359,17 @@ def windowed_test_windows() -> tuple[Window, Window, Window]:
 def build_windowed_source_test_emit(tmp_path: Path) -> Path:
     """Build a source-mode test emit spanning the three `windowed_test_windows`.
 
-    Scenario, one kind per genre plus a junction, activity split across all
-    three windows:
-      - records__visit (changelog, tracked): v001 created in w0, updated in
+    Scenario, one tracked kind, one untracked referencing kind, one plain
+    untracked kind, plus a junction, activity split across all three
+    windows:
+      - records__visit (tracked -> `state`): v001 created in w0, updated in
           w1 ('c' then 'u'); v002 created in w1, deactivated in w2 ('c' then
           'd'); v003 created in w2 only ('c').
-      - records__order (transaction): one row's last_mutation_sim_time lands
-          in each window.
-      - records__location (reference): always a full snapshot regardless of
-          window; two rows for realism.
-      - membership__visit__team (junction, extract-on-change): m_A joins in
+      - records__order (untracked -> `state`): one row's
+          last_mutation_sim_time lands in each window.
+      - records__location (untracked -> `state`): always a full snapshot
+          regardless of window; two rows for realism.
+      - membership__visit__team (`junction`, extract-on-change): m_A joins in
           w0 and leaves in w1 (w0 emits join-only, left_at masked; w1
           re-emits with left_at set); m_B joins and leaves both within w2
           (one closed row); m_C joins in w0 and never leaves (w0 emits
@@ -505,7 +504,6 @@ def build_windowed_source_test_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "record_roles": {"location": "dimension", "order": "fact"},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -534,7 +532,7 @@ _WIDGET_COLUMNS: list[dict[str, object]] = [
 def build_day_scale_source_emit(tmp_path: Path) -> Path:
     """Build a `mode: source` emit spanning three calendar-day windows.
 
-    One tracked (changelog-genre) kind, 'widget', anchored at
+    One tracked kind, 'widget' (a `state` table), anchored at
     2024-01-01T00:00:00 UTC: w001 created day 0, w002 created day 1, w001's
     name changes day 2. `slice_at` sits exactly on the day-3 boundary, so
     window index 3 is an empty emitted window and index 4 drains.
@@ -590,7 +588,6 @@ def build_day_scale_source_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 3 * _DAY_NS}],
         extra={
-            "record_roles": {"widget": "dimension"},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -598,99 +595,6 @@ def build_day_scale_source_emit(tmp_path: Path) -> Path:
         },
     )
     return tmp_path
-
-
-_VENUE_TRACKED_COLUMNS: list[dict[str, object]] = [
-    identity_column("fork_path", "VARCHAR"),
-    identity_column("record_id", "VARCHAR"),
-    {"name": "created_sim_time", "type": "BIGINT"},
-    {"name": "active", "type": "BOOLEAN"},
-    {"name": "deactivated_at", "type": "BIGINT"},
-    {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    identity_column("record_index", "BIGINT"),
-    prop_column(
-        "prop__name", "VARCHAR", history_tracked=True, temporal_class="tracked"
-    ),
-]
-
-_VENUE_CONSTANT_COLUMNS: list[dict[str, object]] = [
-    identity_column("fork_path", "VARCHAR"),
-    identity_column("record_id", "VARCHAR"),
-    {"name": "created_sim_time", "type": "BIGINT"},
-    {"name": "active", "type": "BOOLEAN"},
-    {"name": "deactivated_at", "type": "BIGINT"},
-    {"name": "last_mutation_sim_time", "type": "BIGINT"},
-    identity_column("record_index", "BIGINT"),
-    prop_column(
-        "prop__name", "VARCHAR", history_tracked=True, temporal_class="constant"
-    ),
-]
-
-
-def _build_venue_emit(tmp_path: Path, columns: list[dict[str, object]]) -> Path:
-    """Shared body for the venue reclassification fixtures: one dimension-role
-    kind, `venue`, whose sole prop__ column is `columns`' single presentation
-    value, differing only in its declared temporal_class.
-    """
-    db_path = tmp_path / "run.duckdb"
-    conn = duckdb.connect(str(db_path))
-    conn.execute(_create_ddl("records__venue", columns))
-    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
-    conn.execute(
-        'INSERT INTO "records__venue" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
-        ["trunk", "ven001", 10 * _MS, True, 10 * _MS, 0, "Main Hall"],
-    )
-    conn.execute(
-        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
-        ["trunk", "venue", "ven001", "name", 10 * _MS, "Main Hall"],
-    )
-    conn.close()
-
-    write_emit(
-        tmp_path,
-        tables=[
-            _table_spec("records__venue", "records", columns, 1, record_kind="venue"),
-            _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
-        ],
-        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 20 * _MS}],
-        extra={
-            "record_roles": {"venue": "dimension"},
-            "runtime": {
-                "timezone": "UTC",
-                "start_datetime": "2024-01-01T00:00:00+00:00",
-            },
-        },
-    )
-    return tmp_path
-
-
-def build_presentation_reclassified_source_emit(tmp_path: Path) -> Path:
-    """A dimension-role kind whose sole prop__ column is a `tracked`-class
-    presentation value: the genre trichotomy reclassifies it from reference to
-    change-log genre even though `record_roles` still declares 'dimension' — a
-    name that genuinely changes over time *is* a change log.
-
-    Args:
-        tmp_path: Directory to write the emit artifacts into.
-
-    Returns:
-        tmp_path (the emit directory).
-    """
-    return _build_venue_emit(tmp_path, _VENUE_TRACKED_COLUMNS)
-
-
-def build_presentation_constant_source_emit(tmp_path: Path) -> Path:
-    """The same kind shape as `build_presentation_reclassified_source_emit`,
-    presentation column class `constant`: no reclassification — genre stays
-    'reference' by role, since the class (not the history_tracked bit) decides.
-
-    Args:
-        tmp_path: Directory to write the emit artifacts into.
-
-    Returns:
-        tmp_path (the emit directory).
-    """
-    return _build_venue_emit(tmp_path, _VENUE_CONSTANT_COLUMNS)
 
 
 def build_empty_source_emit(tmp_path: Path) -> Path:
@@ -722,7 +626,6 @@ def build_empty_source_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100 * _MS}],
         extra={
-            "record_roles": {"location": "dimension"},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -753,12 +656,12 @@ _SLICE_ONLY_PATIENT_COLUMNS: list[dict[str, object]] = [
 
 
 def build_slice_only_source_emit(tmp_path: Path) -> Path:
-    """Build a `mode: source` emit whose sole (changelog-genre) kind carries one
-    non-exempt `temporal_class: slice_only` property alongside a tracked one —
-    the Phase-3 column-projection-only invariance fixture: the fold's c/u/d
-    row set and `seq` assignment are unaffected by whether `prop__loyalty_tier`
-    is included in the projected column set, since an untracked property never
-    drives fold event generation.
+    """Build a `mode: source` emit whose sole tracked kind (one `state`
+    table) carries one non-exempt `temporal_class: slice_only` property
+    alongside a tracked one — the column-projection-only invariance fixture:
+    the fold's c/u/d row set and `seq` assignment are unaffected by whether
+    `prop__loyalty_tier` is included in the projected column set, since an
+    untracked property never drives fold event generation.
 
     Scenario: p001 created only ('c'); p002 created then its (tracked) status
     changes ('c' then 'u'). Both carry a `prop__loyalty_tier` value set at
@@ -811,7 +714,6 @@ def build_slice_only_source_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "record_roles": {"patient": "dimension"},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -867,16 +769,16 @@ _KEYS_MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
 
 
 def build_source_keys_emit(tmp_path: Path) -> Path:
-    """Build a `declare_keys` engine-test emit spanning changelog, split-unit,
-    and junction genres.
+    """Build a `declare_keys` engine-test emit spanning a tracked kind, a
+    sub-typed split kind, and a junction.
 
-    - records__visit: tracked (prop__status) -> changelog; carries a flat
-        whole-column presentation_keys claim; owns membership__visit__team
-        (junction, never keyed).
-    - records__actor: untracked, object-registry role -> splits into
-        consultant (dimension) / nurse (fact); the block declares only
-        `consultant`'s partition — presence is the claim, `nurse` gets
-        identity keys only.
+    - records__visit: tracked (prop__status) -> one `state` table; carries a
+        flat whole-column presentation_keys claim; owns
+        membership__visit__team (a `junction` table, never keyed).
+    - records__actor: untracked, sub-typed (consultant/nurse) -> splits into
+        two `state` tables, one per `sub_types` declaration; the block
+        declares only `consultant`'s partition — presence is the claim,
+        `nurse` gets identity keys only.
 
     Args:
         tmp_path: Directory to write the emit artifacts into.
@@ -938,7 +840,6 @@ def build_source_keys_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "record_roles": {"actor": {"consultant": "dimension", "nurse": "fact"}},
             "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
             "runtime": {
                 "timezone": "UTC",
@@ -998,11 +899,11 @@ _SLICE_ONLY_ONLY_COLUMNS: list[dict[str, object]] = [
 
 
 def build_degenerate_slice_only_source_emit(tmp_path: Path) -> Path:
-    """Build a `mode: source` emit whose sole (reference-genre) kind's every
-    property is a non-exempt `temporal_class: slice_only` column — the
-    Phase-3 degenerate-unit fixture: the unit is never suppressed, still
-    rendering its identity and lifecycle columns with every prop__ column
-    omitted.
+    """Build a `mode: source` emit whose sole untracked kind (one `state`
+    table)'s every property is a non-exempt `temporal_class: slice_only`
+    column — the degenerate-unit fixture: the unit is never suppressed,
+    still rendering its identity and lifecycle columns with every prop__
+    column omitted.
 
     Args:
         tmp_path: Directory to write the emit artifacts into.
@@ -1034,7 +935,6 @@ def build_degenerate_slice_only_source_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 20 * _MS}],
         extra={
-            "record_roles": {"member": "dimension"},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1045,7 +945,7 @@ def build_degenerate_slice_only_source_emit(tmp_path: Path) -> Path:
 
 
 # ---------------------------------------------------------------------------
-# Key election fixtures (Phase 5)
+# Key election fixtures
 # ---------------------------------------------------------------------------
 
 _DEVICE_COLUMNS: list[dict[str, object]] = [
@@ -1095,13 +995,14 @@ _WATCHERS_MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
 
 
 def build_source_election_emit(tmp_path: Path, *, corrupt_device: bool = False) -> Path:
-    """Build the key-election render/engine test emit: a sub-typed change-log
-    kind (`device`, day/night), a flat transaction kind referencing it
-    (`order`), and a junction `order` owns (`membership__order__watchers`)
-    whose member field admits both kinds.
+    """Build the key-election render/engine test emit: a sub-typed tracked
+    kind (`device`, day/night, one `state` table per sub-type), a flat
+    untracked kind referencing it (`order`, one `state` table), and a
+    junction `order` owns (`membership__order__watchers`) whose member field
+    admits both kinds.
 
     - device: dev_day (day, active, presentation_id 'DAY_001'), dev_night
-        (night, deactivated at 40ms — its own change-log export renders a
+        (night, deactivated at 40ms — its own event-log export renders a
         'd' event, exercising the identity-populated-on-d-rows case).
         `corrupt_device=True` sets dev_night's presentation_id to dev_day's
         value ('DAY_001') — a cross-sub-type duplicate the (spine-unrestricted,
@@ -1207,7 +1108,6 @@ def build_source_election_emit(tmp_path: Path, *, corrupt_device: bool = False) 
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 50 * _MS}],
         extra={
-            "record_roles": {"order": "fact"},
             "enum_domains": {"device": {"device_type": ["day", "night"]}},
             "runtime": {
                 "timezone": "UTC",
@@ -1298,7 +1198,7 @@ _TEAM_WATCHERS_COLUMNS: list[dict[str, object]] = [
 
 def build_corrupted_junction_member_emit(tmp_path: Path) -> Path:
     """Build a junction-only emit isolating the per-member-kind guard: a flat
-    owner kind (`team`) and a single-sub-type change-log target kind
+    owner kind (`team`) and a single-sub-type tracked target kind
     (`device`, domain {'solo'}, duplicated presentation_id 'DUP_001' between
     dv1/dv2) admitted only through `membership__team__watchers`' member field
     — no reference-annotated `prop__` column anywhere touches `device`, so a
@@ -1377,7 +1277,6 @@ def build_corrupted_junction_member_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 30 * _MS}],
         extra={
-            "record_roles": {"team": "dimension"},
             "enum_domains": {"device": {"device_type": ["solo"]}},
             "runtime": {
                 "timezone": "UTC",
@@ -1474,7 +1373,7 @@ _WATCHERS_TICKET_COLUMNS: list[dict[str, object]] = [
 
 
 def build_events_test_emit(tmp_path: Path) -> Path:
-    """Build the event-log render test emit (Phase 2, `events.py`, standalone).
+    """Build the event-log render test emit (`events.py`).
 
     - records__ticket: tracked, sub-typed by `ticket_type` (bug/feature, never
         split — tracked dominates), a reference-annotated `prop__assignee_id`
@@ -1490,9 +1389,9 @@ def build_events_test_emit(tmp_path: Path) -> Path:
           t003 (feature): created@120ms status=pending priority=9,
               assignee=NULL; never changes; stays active — excluded when a
               records source narrows to `sub_types: [bug]`.
-    - records__agent: flat, untracked, dimension role: agent_a (record_index
-        0, 'Alice'), agent_b (record_index 1, 'Bob') — the reference-property
-        and member-field translation target.
+    - records__agent: flat, untracked: agent_a (record_index 0, 'Alice'),
+        agent_b (record_index 1, 'Bob') — the reference-property and
+        member-field translation target.
     - membership__ticket__watchers (owner=ticket): one closed interval
         (agent_a, joined 110ms/left 170ms, note 'urgent') and one still-open
         interval (agent_b, joined 180ms, note 'fyi') — a scalar
@@ -1614,7 +1513,6 @@ def build_events_test_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "record_roles": {"ticket": "dimension", "agent": "dimension"},
             "enum_domains": {"ticket": {"ticket_type": ["bug", "feature"]}},
             "runtime": {
                 "timezone": "UTC",
@@ -1683,7 +1581,6 @@ def build_split_actor_presentation_id_emit(
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
-            "record_roles": {"actor": {"consultant": "dimension", "nurse": "fact"}},
             "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
             "runtime": {
                 "timezone": "UTC",

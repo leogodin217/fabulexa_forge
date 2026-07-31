@@ -1,18 +1,22 @@
 """Emit + config scaffold for tier-2 shaped-playback tests (Phase 10+).
 
-One emit exercises every class/genre `tables()` must classify:
-  - records__gadget: untracked, role 'dimension' -> source genre 'reference';
-      a records-grain type-1 dim in a dimensional shape.
-  - records__shipment: untracked, role 'fact' -> source genre 'transaction';
-      a records-grain fact in a dimensional shape.
+One emit exercises every class `tables()` must classify, for both a
+dimensional shape and a declared source shape:
+  - records__gadget: untracked, role 'dimension' -> a `state` table in a
+      source shape (always `snapshot`-delivered); a records-grain type-1
+      dim in a dimensional shape.
+  - records__shipment: untracked, role 'fact' -> a `state` table in a
+      source shape; a records-grain fact in a dimensional shape.
   - records__widget: tracked (prop__status), 2 history points (sim_time 0,
-      10) -> source genre 'changelog'; also a history_point fact and an
-      SCD-2 dim in a dimensional shape.
+      10) -> a `state` table plus an event-log source in a source shape
+      (the log `append`-delivered); also a history_point fact and an SCD-2
+      dim in a dimensional shape.
   - membership__widget__parts: 2 rows — one still-open interval
       (joined_sim_time=5, no leave) and one closed interval
       (joined_sim_time=2, left_sim_time=8) exercising extract-on-change
-      left_at horizon-masking -> source genre 'junction'; a membership-grain
-      table in a dimensional shape (the windowed-grain rule's rejection case).
+      left_at horizon-masking -> a `junction` table in a source shape (always
+      `append`-delivered); a membership-grain table in a dimensional shape
+      (the windowed-grain rule's rejection case).
 
 Every base.json write routes through `_support.sidecar_builder.write_emit`;
 every value-carrying `prop__` column through `prop_column` — the one sidecar
@@ -31,8 +35,12 @@ from fabulexa_forge.config.models import (
     DerivedSpec,
     DimensionalConfig,
     ExportConfig,
+    MembershipRef,
     SourceConfig,
     SourceDecl,
+    SourceEventsDecl,
+    SourceEventSourceDecl,
+    SourceTableDecl,
     TableDecl,
 )
 
@@ -380,20 +388,55 @@ def dimensional_shape_config() -> ExportConfig:
 
 
 def source_shape_config() -> ExportConfig:
-    """The bare source shape: a full dump over the fixture emit.
+    """The declared source shape over the fixture emit: three `state`
+    tables (gadget, shipment, widget), one `junction` table
+    (widget_parts), and an event log over widget's tracked history.
 
-    Deterministic enumeration order (sidecar table order): gadget
-    (reference -> snapshot), shipment (transaction -> append), widget
-    (changelog -> append), widget_parts (junction -> append).
+    Deterministic enumeration order (`tables` declaration order, the event
+    log last): gadget, shipment, widget, widget_parts, widget_versions.
+    Deliveries: every `state` table snapshots; the junction and the event
+    log append.
     """
-    return ExportConfig(mode="source")
+    return ExportConfig(
+        mode="source",
+        source=SourceConfig(
+            tables=(
+                SourceTableDecl(name="gadget", kind="gadget"),
+                SourceTableDecl(name="shipment", kind="shipment"),
+                SourceTableDecl(name="widget", kind="widget"),
+                SourceTableDecl(
+                    name="widget_parts",
+                    membership=MembershipRef(kind="widget", property="parts"),
+                ),
+            ),
+            events=SourceEventsDecl(
+                name="widget_versions",
+                sources=(SourceEventSourceDecl(kind="widget"),),
+            ),
+        ),
+    )
 
 
-def source_snapshot_delivery_shape_config() -> ExportConfig:
-    """The source shape with `change_delivery: snapshot` — the widget
-    changelog table reconstructs a full-table state-at snapshot per window
-    instead of appending event rows."""
-    return ExportConfig(mode="source", source=SourceConfig(change_delivery="snapshot"))
+def source_last_mutation_named_shape_config() -> ExportConfig:
+    """A `state` table naming `last_mutation_sim_time` explicitly in
+    `columns` — the windowed-refusal counterpart of the dimensional
+    `window_delivery=None` diagnostic: opens (the full-export shape
+    validates, `updated_at` is reconstructible for a full export), but the
+    first `window()` ask raises `SourceColumnUnresolved` from the windowed
+    plan build (`last_mutation_sim_time` is not reconstructible at a past
+    horizon)."""
+    return ExportConfig(
+        mode="source",
+        source=SourceConfig(
+            tables=(
+                SourceTableDecl(
+                    name="widget",
+                    kind="widget",
+                    columns=("last_mutation_sim_time",),
+                ),
+            )
+        ),
+    )
 
 
 def windowable_dimensional_shape_config() -> ExportConfig:
@@ -716,14 +759,21 @@ def state_junction_shape_config() -> ExportConfig:
 
 
 def state_source_shape_config() -> ExportConfig:
-    """The bare source shape over build_state_test_emit: a full dump —
-    gadget (reference -> snapshot), shipment (transaction -> append), widget
-    (changelog -> append), widget_parts (junction -> append)."""
-    return ExportConfig(mode="source")
-
-
-def state_source_snapshot_delivery_shape_config() -> ExportConfig:
-    """The source shape over build_state_test_emit with `change_delivery:
-    snapshot` — the widget changelog table reconstructs a full-table
-    state-at snapshot instead of appending event rows."""
-    return ExportConfig(mode="source", source=SourceConfig(change_delivery="snapshot"))
+    """The declared source shape over build_state_test_emit: three `state`
+    tables (gadget, shipment, widget) and one `junction` table
+    (widget_parts). Every `state` table's `state()` and windowed
+    reconstruction are `snapshot`-delivered by construction."""
+    return ExportConfig(
+        mode="source",
+        source=SourceConfig(
+            tables=(
+                SourceTableDecl(name="gadget", kind="gadget"),
+                SourceTableDecl(name="shipment", kind="shipment"),
+                SourceTableDecl(name="widget", kind="widget"),
+                SourceTableDecl(
+                    name="widget_parts",
+                    membership=MembershipRef(kind="widget", property="parts"),
+                ),
+            )
+        ),
+    )

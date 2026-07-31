@@ -897,7 +897,11 @@ def test_export_config_mode_source_with_dimensional_section_raises() -> None:
     """mode='source' with a dimensional section present raises (two-sided)."""
     with pytest.raises(ValidationError, match="forbids a 'dimensional' section"):
         ExportConfig.model_validate(
-            {"mode": "source", "dimensional": _MINIMAL_DIMENSIONAL}
+            {
+                "mode": "source",
+                "source": {"tables": [{"name": "actors", "kind": "actor"}]},
+                "dimensional": _MINIMAL_DIMENSIONAL,
+            }
         )
 
 
@@ -908,17 +912,9 @@ def test_export_config_mode_dimensional_with_source_section_raises() -> None:
             {
                 "mode": "dimensional",
                 "dimensional": _MINIMAL_DIMENSIONAL,
-                "source": {"exclude": {"kinds": ["scheduler"]}},
+                "source": {"tables": [{"name": "actors", "kind": "actor"}]},
             }
         )
-
-
-def test_export_config_mode_source_with_no_section_is_ok() -> None:
-    """mode='source' with no source section at all is valid (unlike dimensional,
-    the source section is pure escape hatches — never required)."""
-    config = ExportConfig.model_validate({"mode": "source"})
-    assert config.mode == "source"
-    assert config.source is None
 
 
 def test_export_config_cdc_block_rejected_as_unknown_field() -> None:

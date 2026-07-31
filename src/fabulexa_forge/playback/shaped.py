@@ -18,7 +18,10 @@ table, built from the derivations-owned truncated-tape builders) plus the
 truncated sidecar view (a second `Emit` composed over the head's own open
 connection), so every faithful builder enumerates exactly the columns the
 truncated relations carry and the mode never sees a horizon — the bridging
-theorem's realization.
+theorem's realization. Dimensional's engine takes `base_relations` directly;
+the source engine carries no such parameter (§ 2), so this seam applies the
+rewrite itself, post-compile, over the source engine's plain specs
+(`_rewrite_specs_base_relations`).
 
 Layer-direction invariant: unlike the rest of `fabulexa_forge.playback`, this
 module is the seam's one crossing into `exporters.*` / `config` — tier 2 wraps
@@ -32,7 +35,7 @@ and stdlib.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal
 
 from fabulexa_forge.derivations.guard import require_single_branch
@@ -43,6 +46,7 @@ from fabulexa_forge.derivations.truncated_tape import (
     build_truncated_sidecar,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.base_relations import apply_base_relations
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.validation import (
     check_incremental_grain_supported,
@@ -50,13 +54,18 @@ from fabulexa_forge.exporters.dimensional.validation import (
 )
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.query_spec import query_spec_output_name
-from fabulexa_forge.exporters.source.engine import build_source_query_specs
-from fabulexa_forge.exporters.source.plan import build_source_plan
+from fabulexa_forge.exporters.source.engine import (
+    build_source_query_specs,
+    require_source_anchor,
+)
+from fabulexa_forge.exporters.source.plan import SourceStateTablePlan, build_source_plan
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.reader.emit import Emit
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     import pyarrow as pa
 
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -64,7 +73,8 @@ if TYPE_CHECKING:
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.query_spec import QuerySpec
-    from fabulexa_forge.exporters.source.plan import SourceTableSpec
+    from fabulexa_forge.exporters.source.events import SourceEventLogPlan
+    from fabulexa_forge.exporters.source.plan import SourceJunctionTablePlan
     from fabulexa_forge.reader.sidecar import Sidecar
 
 _SOURCE_ANCHOR_REQUIRED_MSG = (
@@ -152,28 +162,23 @@ def _dimensional_window_delivery(
 
 
 def _source_window_delivery(
-    genre: Literal["changelog", "reference", "transaction", "junction"],
-    change_delivery: Literal["changelog", "snapshot"],
+    unit: "SourceStateTablePlan | SourceJunctionTablePlan | SourceEventLogPlan",
 ) -> Literal["append", "snapshot"]:
-    """Static window-delivery class for one source output table's genre.
+    """Static window-delivery class for one source plan unit.
 
-    Mirrors the windowed dispatch in `source.engine._write_mode_for_genre`:
-    change-log genre appends under `changelog` delivery, or snapshots (a full
-    state-at reconstruction each window) under `snapshot` delivery; reference
-    is a full snapshot every window; transaction and junction append.
+    Mirrors the engine's windowed write_mode dispatch (the two surfaces
+    must not drift): state -> 'snapshot' (a full horizon reconstruction
+    per window, write_mode 'replace'), junction -> 'append'
+    (extract-on-change), event log -> 'append'. Never None — no source
+    render is rejected by the windowed-grain rule.
 
     Args:
-        genre: The resolved output table's genre.
-        change_delivery: The source config's delivery mode for change-log
-            kinds.
+        unit: The resolved plan unit.
 
     Returns:
-        'append' or 'snapshot'. Source genres have no grain rejected by the
-        windowed-grain rule, so this never returns None.
+        'append' or 'snapshot'.
     """
-    if genre == "changelog":
-        return "snapshot" if change_delivery == "snapshot" else "append"
-    if genre == "reference":
+    if isinstance(unit, SourceStateTablePlan):
         return "snapshot"
     return "append"
 
@@ -208,15 +213,16 @@ def _compile_window_specs(
     anchor: "EffectiveAnchor | None",
     window: Window,
     notice_sink: "NoticeSink",
-    election: "Election | None",
+    election: "Election",
 ) -> "list[QuerySpec]":
     """Dispatch a shape's windowed compile to its mode's engine.
 
     The exact call the incremental driver's `export_window` makes for the
     windowed compile step — `base_relations=None`, so the compiled SQL reads
-    the emit's physical base tables unmediated. `election` is threaded to the
-    dimensional engine only — `build_source_query_specs` resolves its own
-    election from `config.keys` internally.
+    the emit's physical base tables unmediated. A source shape builds its
+    windowed plan (`build_source_plan(..., windowed=True, ...)`) then
+    compiles it (`build_source_query_specs(plan, window)`) — the same
+    two-step split `open_shaped_playback` already resolved `election` for.
 
     Args:
         emit: The open emit.
@@ -224,8 +230,7 @@ def _compile_window_specs(
         anchor: The resolved effective anchor, or None.
         window: The half-open window to compile.
         notice_sink: Receiver for plan notices.
-        election: The resolved election (dimensional shapes), or None for a
-            source shape.
+        election: The resolved election, threaded to both modes' engines.
 
     Returns:
         One QuerySpec per declared output table, in the mode's deterministic
@@ -234,13 +239,16 @@ def _compile_window_specs(
     Raises:
         ExportError: A windowed business rule fails for the shape (naming the
             offending table).
+        SourceAnchorRequired: A source shape's anchor is None.
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """
     if config.mode == "source":
-        return build_source_query_specs(
-            emit, config, anchor, window, notice_sink, base_relations=None
+        resolved_anchor = require_source_anchor(anchor)
+        plan = build_source_plan(
+            emit, config, resolved_anchor, election, windowed=True, notices=notice_sink
         )
+        return list(build_source_query_specs(plan, window))
     assert config.dimensional is not None
     return build_query_specs(
         emit,
@@ -316,25 +324,72 @@ def _truncated_emit_view(emit: "Emit", truncated_sidecar: "Sidecar") -> "Emit":
     return Emit(sidecar=truncated_sidecar, emit_dir=emit.emit_dir, conn=emit._conn)
 
 
+def _rewrite_specs_base_relations(
+    specs: "list[QuerySpec]",
+    base_relations: "Mapping[str, str]",
+) -> "list[QuerySpec]":
+    """Apply the base-relations rewrite to every compiled spec.
+
+    playback/shaped.py — the state() seam's post-compile step, replacing
+    the engine-side rewrite the old source engine's `base_relations`
+    parameter performed (§ 2: the source engine loses that parameter
+    entirely — `apply_base_relations` is a pure post-compile SQL rewrite,
+    so hoisting it to its one non-None caller loses nothing). Rewrites
+    every spec's `sql` (and `view_sql` when present) via
+    `apply_base_relations`, rebuilding the frozen QuerySpecs; every other
+    field passes through unchanged.
+
+    Args:
+        specs: The mode engine's compiled specs, compile order.
+        base_relations: Physical base-table name -> replacing relation
+            SELECT, one entry per sidecar base table
+            (`_truncated_base_relations`).
+
+    Returns:
+        The rewritten specs, input order.
+    """
+    return [
+        replace(
+            spec,
+            sql=apply_base_relations(spec.sql, base_relations),
+            view_sql=(
+                apply_base_relations(spec.view_sql, base_relations)
+                if spec.view_sql is not None
+                else None
+            ),
+        )
+        for spec in specs
+    ]
+
+
 def _compile_state_specs(
     truncated_emit: "Emit",
     config: "ExportConfig",
     anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
     base_relations: dict[str, str],
-    election: "Election | None",
+    election: "Election",
 ) -> "list[QuerySpec]":
     """Dispatch a shape's state(T) compile to its mode's full-export engine.
 
     The mode's full-export compile (window=None — write_mode='create' on
     every spec, the full-export tag both modes already emit) against the
-    truncated emit view, with base_relations mapping every sidecar base table
-    to its truncated-at-T replacement (§ The compile indirection) — the mode
-    never sees a horizon. A state-only shape never runs the windowed business
-    rules: window=None skips check_incremental_grain_supported / the
-    incremental-* refusals entirely. `election` is threaded to the
-    dimensional engine only — `build_source_query_specs` resolves its own
-    election from `config.keys` internally.
+    truncated emit view. Dimensional keeps its own `base_relations`
+    parameter (mapping every sidecar base table to its truncated-at-T
+    replacement, § The compile indirection — the mode never sees a
+    horizon). A source shape's engine carries no `base_relations`
+    parameter at all (§ 2): its plan builds against the truncated emit
+    view directly (`windowed=False`), the query specs compile
+    (`build_source_query_specs(plan, None)`), and this seam applies the
+    same rewrite itself (`_rewrite_specs_base_relations`) — so the elected-
+    key uniqueness guard, having moved to plan time, executes against the
+    truncated *view*'s physical tape through its shared connection: sound
+    (uniqueness of a creation-constant surface is monotone under
+    row-subsetting) but conservatively strict — a collision existing only
+    among rows the truncation drops would still refuse. A state-only shape
+    never runs the windowed business rules: window=None skips
+    check_incremental_grain_supported / the incremental-* refusals
+    entirely.
 
     Args:
         truncated_emit: The truncated emit view (§ Shaped state).
@@ -343,8 +398,7 @@ def _compile_state_specs(
         notice_sink: Receiver for plan notices.
         base_relations: Physical base-table name -> replacing relation SELECT,
             one entry per sidecar base table.
-        election: The resolved election (dimensional shapes), or None for a
-            source shape.
+        election: The resolved election, threaded to both modes' engines.
 
     Returns:
         One QuerySpec per declared output table, in the mode's deterministic
@@ -352,18 +406,22 @@ def _compile_state_specs(
 
     Raises:
         ExportError: A config business rule fails for the shape.
+        SourceAnchorRequired: A source shape's anchor is None.
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """
     if config.mode == "source":
-        return build_source_query_specs(
+        resolved_anchor = require_source_anchor(anchor)
+        plan = build_source_plan(
             truncated_emit,
             config,
-            anchor,
-            None,
-            notice_sink,
-            base_relations=base_relations,
+            resolved_anchor,
+            election,
+            windowed=False,
+            notices=notice_sink,
         )
+        specs = list(build_source_query_specs(plan, None))
+        return _rewrite_specs_base_relations(specs, base_relations)
     assert config.dimensional is not None
     return build_query_specs(
         truncated_emit,
@@ -422,43 +480,56 @@ def _open_dimensional(
 
 def _open_source(
     config: "ExportConfig",
-    sidecar: "Sidecar",
+    emit: "Emit",
+    anchor: "EffectiveAnchor",
     notice_sink: "NoticeSink",
+    election: "Election",
 ) -> tuple[ShapedTableDecl, ...]:
     """Run the source mode's full config validation and derive `tables()`.
 
-    `build_source_plan` is the source mode's complete config-validation
-    surface (every source business rule, including the reserved-name and
-    rename-onto-a-dropped-column refusals, resolves inside it) and is called
-    exactly once, so its notices reach notice_sink exactly once.
+    Calls `build_source_plan(emit, config, anchor, election, windowed=False,
+    notice_sink)` exactly once — the mode's complete validation surface,
+    plan-time uniqueness guards included, notices emitted exactly once —
+    and maps units to `ShapedTableDecl(name, _source_window_delivery(unit))`,
+    `tables` declaration order, event log last.
+
+    Open validates the FULL-export shape. A config whose `columns` /
+    `rename` names `last_mutation_sim_time` therefore opens and serves
+    `state()`; its first `window()` ask raises `SourceColumnUnresolved` from
+    the windowed plan build — the source counterpart of the dimensional
+    `window_delivery=None` diagnostic, surfaced as the plan-time refusal
+    rather than a decl field (the refusal is per-column, not per-table-class).
 
     Args:
         config: The export config (mode='source').
-        sidecar: The open emit's sidecar.
+        emit: The open emit.
+        anchor: The resolved effective anchor.
         notice_sink: Receiver for plan notices.
+        election: The resolved key-election view.
 
     Returns:
-        One ShapedTableDecl per output table, in the mode's deterministic
-        full-export enumeration order.
+        One ShapedTableDecl per output table.
 
     Raises:
-        ExportError: A source business rule fails.
-        TemporalClassUnavailableError: A consulted column's temporal pair is
-            unavailable (non-conformant emit).
+        ExportError: A source business rule fails (the full plan-time
+            surface, § build_source_plan).
+        TemporalClassUnavailableError: Propagated.
     """
-    table_specs: tuple["SourceTableSpec", ...] = build_source_plan(
-        sidecar, config.source, notice_sink
+    plan = build_source_plan(
+        emit, config, anchor, election, windowed=False, notices=notice_sink
     )
-    change_delivery = (
-        config.source.change_delivery if config.source is not None else "changelog"
-    )
-    return tuple(
-        ShapedTableDecl(
-            name=spec.name,
-            window_delivery=_source_window_delivery(spec.genre, change_delivery),
+    decls = [
+        ShapedTableDecl(name=unit.name, window_delivery=_source_window_delivery(unit))
+        for unit in plan.tables
+    ]
+    if plan.events is not None:
+        decls.append(
+            ShapedTableDecl(
+                name=plan.events.name,
+                window_delivery=_source_window_delivery(plan.events),
+            )
         )
-        for spec in table_specs
-    )
+    return tuple(decls)
 
 
 class ShapedPlayback:
@@ -471,7 +542,7 @@ class ShapedPlayback:
         anchor: "EffectiveAnchor | None",
         notice_sink: "NoticeSink",
         table_decls: tuple[ShapedTableDecl, ...],
-        election: "Election | None",
+        election: "Election",
     ) -> None:
         self._emit = emit
         self._config = config
@@ -636,10 +707,11 @@ def open_shaped_playback(
 
     Returns:
         A ShapedPlayback head bound to (emit, config, anchor, notice_sink).
-        For a dimensional shape, resolves `config.keys` once
-        (`resolve_election`) and threads it to the open validation and every
-        window() / state() compile; a source shape carries no separate
-        election parameter (`build_source_query_specs` resolves its own).
+        Resolves `config.keys` once (`resolve_election`) for either mode and
+        threads it to the open validation and every window() / state()
+        compile — the None-for-source special case is gone: a source shape's
+        identity/edge gates need the same election view a dimensional
+        shape's do.
 
     Raises:
         PlaybackError: A seam-level open gate fails (source shape with
@@ -652,12 +724,12 @@ def open_shaped_playback(
 
     require_single_branch(emit.sidecar)
 
+    election = resolve_election(emit.sidecar, config.keys)
     if config.mode == "source":
-        table_decls = _open_source(config, emit.sidecar, notice_sink)
-        election = None
+        assert anchor is not None, "the source anchor-required check above narrows this"
+        table_decls = _open_source(config, emit, anchor, notice_sink, election)
     else:
         assert config.dimensional is not None
-        election = resolve_election(emit.sidecar, config.keys)
         table_decls = _open_dimensional(
             config.dimensional, emit.sidecar, notice_sink, election
         )

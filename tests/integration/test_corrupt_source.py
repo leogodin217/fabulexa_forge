@@ -23,6 +23,8 @@ from fabulexa_forge.config.models import (
     CorruptConfig,
     ExportConfig,
     NullCells,
+    SourceConfig,
+    SourceTableDecl,
     Target,
 )
 from fabulexa_forge.corrupters.engine import corrupt_emit
@@ -72,7 +74,10 @@ def test_corrupt_then_source_export_surfaces_declared_defect(tmp_path: Path) -> 
     assert defect["location"]["column"] == "prop__name"
     record_id = dict(defect["location"]["row"]["keys"])["record_id"]
 
-    config = ExportConfig(mode="source")
+    config = ExportConfig(
+        mode="source",
+        source=SourceConfig(tables=(SourceTableDecl(name="doctor", kind="doctor"),)),
+    )
     out_dir = tmp_path / "dump"
     out_dir.mkdir()
     with open_emit(corrupt_dir) as emit:

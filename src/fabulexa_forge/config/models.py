@@ -742,61 +742,62 @@ class SourceEventsDecl(StrictBaseModel):
 
 
 class SourceConfig(StrictBaseModel):
-    """The source-mode section: escape hatches over the full-emit dump."""
+    """mode: source section — the declared app-database shape."""
 
-    exclude: ExcludeDecl | None = None
-    """Kinds and sidecar tables dropped before export."""
-    rename: list[RenameEntry] | None = None
-    """Per-table output-name overrides."""
-    change_delivery: Literal["changelog", "snapshot"] = "changelog"
-    """How change-log-genre kinds deliver: the wide CDC table (default), or
-    full-table snapshots — one per window horizon under a windowed invocation,
-    one at the tape's end in a full export. Participates in the incremental
-    fingerprint."""
-    declare_keys: bool | None = None
+    tables: tuple[SourceTableDecl, ...] = ()
+    """The declared output tables: `state` (kind) or `junction` (membership)
+    per entry, declaration order. Defaults empty (a log-only config is
+    legal); at least one of `tables` / `events` must be declared."""
+    events: SourceEventsDecl | None = None
+    """The single polymorphic event log declaration; absent = no history
+    exported (a Type-1-only app)."""
+    declare_keys: bool = False
     """Emit declared key constraints (PK/UNIQUE) for the DuckDB writer,
-    resolved from the sidecar's presentation_keys registry. Absent or False
-    -> off (a semantic default 'off', mirroring `slice_at` — not an invented
-    mapping value). Ignored under CSV: a keys-not-declarable-csv notice is
-    emitted instead."""
+    resolved from the sidecar's presentation_keys registry. Off by default —
+    the design doc's own contract default, not an invented value. Ignored
+    under CSV: a keys-not-declarable-csv notice is emitted instead."""
 
     @model_validator(mode="after")
-    def at_least_one_field(self) -> Self:
-        """A present `source` section sets at least one of exclude / rename /
-        declare_keys.
+    def source_section_required(self) -> Self:
+        """A `source` section declares at least one output: >= 1 entry in
+        `tables`, or an `events` block.
 
         Raises:
-            ValueError: No field was explicitly set (source: {} is not
-                meaningful — omit the section entirely for a bare full dump).
+            ValueError: `tables` is empty and `events` is None — there is no
+                implicit layout to fall back to (`source: {}` is refused).
         """
-        if not self.model_fields_set:
+        if not self.tables and self.events is None:
             raise ValueError(
-                "source section must set at least one of exclude / rename /"
-                " declare_keys (an empty source: {} block is not meaningful;"
-                " omit the section for a bare full dump)"
+                "source section must declare at least one output: >= 1 entry"
+                " in 'tables', or an 'events' block"
             )
         return self
 
     @model_validator(mode="after")
-    def entries_disjoint(self) -> Self:
-        """No two rename entries share the same (table, sub_type) target.
+    def table_source_exclusive(self) -> Self:
+        """Cross-declaration checks the per-declaration validators cannot
+        see: `tables[].name` is distinct across the declaration list. Every
+        other rule the design doc's `table_source_exclusive` docstring
+        describes — exactly one of `kind` / `membership`, `sub_types` only
+        with `kind`, non-empty distinct collections, `rename` values
+        distinct, `only`/`ignore` mutually exclusive — is already enforced
+        per-declaration by `SourceTableDecl.table_shape` /
+        `SourceEventSourceDecl.source_shape`; "at most one events block" is
+        structural (`events` is a single optional field, never a list).
 
         Raises:
-            ValueError: Two rename entries target the same (table, sub_type).
+            ValueError: Two `tables` entries share the same `name`.
         """
-        if self.rename is not None:
-            seen: set[tuple[str, str | None]] = set()
-            duplicates: list[tuple[str, str | None]] = []
-            for entry in self.rename:
-                key = (entry.table, entry.sub_type)
-                if key in seen:
-                    duplicates.append(key)
-                seen.add(key)
-            if duplicates:
-                raise ValueError(
-                    "SourceConfig.rename contains more than one entry for the"
-                    f" same (table, sub_type): {duplicates}"
-                )
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for decl in self.tables:
+            if decl.name in seen:
+                duplicates.append(decl.name)
+            seen.add(decl.name)
+        if duplicates:
+            raise ValueError(
+                f"source.tables contains duplicate table names: {duplicates}"
+            )
         return self
 
 
@@ -988,8 +989,9 @@ class ExportConfig(StrictBaseModel):
     dimensional: DimensionalConfig | None = None
     """The star-schema declaration for the dimensional mode."""
     source: SourceConfig | None = None
-    """The escape-hatch declaration for the source mode; absent means a bare
-    full dump with no exclude/rename."""
+    """The declared app-database shape for the source mode; required when
+    mode='source' (`mode_section_matches`) — there is no implicit bare-dump
+    layout."""
     base: BaseConfig | None = None
     """The escape-hatch + slice declaration for the base mode; absent means a bare
     current-state dump with no exclude/rename/slice_at."""
@@ -1021,17 +1023,22 @@ class ExportConfig(StrictBaseModel):
 
     @model_validator(mode="after")
     def mode_section_matches(self) -> Self:
-        """The section named by `mode` matches; the other modes' sections are absent.
+        """The section named by `mode` is present; the other modes' sections
+        are absent.
 
-        `mode='dimensional'` requires the `dimensional` section (unchanged single-arm
-        behavior). `mode='source'` and `mode='base'` have no such requirement — both
-        sections are pure escape hatches, so a bare `mode: source` / `mode: base`
-        (no mode-specific section at all) is a valid full dump. Whichever mode is
-        selected, the *other* modes' sections must be absent.
+        `mode='dimensional'` requires the `dimensional` section (unchanged).
+        `mode='source'` now joins that posture — it requires the `source`
+        section (the bare-dump allowance is removed; `SourceConfig`'s own
+        `source_section_required` validator additionally refuses `source: {}`,
+        since a source config declares its output or is refused at load).
+        `mode='base'` keeps its escape-hatch posture — a bare `mode: base` (no
+        `base` section) stays a valid full dump. Whichever mode is selected,
+        the *other* modes' sections must be absent.
 
         Raises:
-            ValueError: `mode='dimensional'` with the `dimensional` section absent;
-                or any mode with another mode's section present.
+            ValueError: `mode='dimensional'` without `dimensional`;
+                `mode='source'` without `source`; any mode with another
+                mode's section present.
         """
         if self.mode == "dimensional":
             if self.dimensional is None:
@@ -1041,6 +1048,8 @@ class ExportConfig(StrictBaseModel):
             if self.base is not None:
                 raise ValueError("mode='dimensional' forbids a 'base' section")
         elif self.mode == "source":
+            if self.source is None:
+                raise ValueError("mode='source' requires a 'source' section")
             if self.dimensional is not None:
                 raise ValueError("mode='source' forbids a 'dimensional' section")
             if self.base is not None:

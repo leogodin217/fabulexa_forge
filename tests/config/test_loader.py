@@ -66,13 +66,3 @@ def test_missing_required_field_raises_config_error(tmp_path: Path) -> None:
     cfg.write_text("mode: dimensional\n", encoding="utf-8")
     with pytest.raises(ConfigError, match="validation failed"):
         load_export_config(cfg)
-
-
-def test_mode_source_config_round_trips(tmp_path: Path) -> None:
-    """A bare mode: source YAML config round-trips through load_export_config."""
-    cfg = tmp_path / "cfg.yaml"
-    cfg.write_text("mode: source\n", encoding="utf-8")
-    result = load_export_config(cfg)
-    assert result.mode == "source"
-    assert result.source is None
-    assert result.dimensional is None

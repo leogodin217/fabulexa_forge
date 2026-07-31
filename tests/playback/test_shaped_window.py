@@ -10,8 +10,10 @@ from _support.notices import discard_notice_sink
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.query_spec import query_spec_output_name
 from fabulexa_forge.exporters.source.engine import build_source_query_specs
+from fabulexa_forge.exporters.source.plan import build_source_plan
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.playback.shaped import ShapedTable, open_shaped_playback
@@ -21,7 +23,6 @@ from ._shaped_fixtures import (
     build_shaped_test_emit,
     dimensional_shape_config,
     source_shape_config,
-    source_snapshot_delivery_shape_config,
     windowable_dimensional_shape_config,
 )
 
@@ -59,12 +60,16 @@ def _direct_dimensional_specs(
 def _direct_source_specs(
     emit: "Emit", config: "ExportConfig", start_ns: int, end_ns: int
 ):
-    """Compile the same window directly through the engine (the reference)."""
+    """Compile the same window directly through the source engine's own
+    plan-then-compile split (the reference)."""
     anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+    assert anchor is not None
+    election = resolve_election(emit.sidecar, config.keys)
     window = Window(index=None, start_ns=start_ns, end_ns=end_ns, label="")
-    return build_source_query_specs(
-        emit, config, anchor, window, discard_notice_sink, base_relations=None
+    plan = build_source_plan(
+        emit, config, anchor, election, windowed=True, notices=discard_notice_sink
     )
+    return build_source_query_specs(plan, window)
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +152,7 @@ def test_window_promotes_source_engine_compile_verbatim(tmp_path: "Path") -> Non
 
 
 # ---------------------------------------------------------------------------
-# Per-class / per-genre window membership
+# Per-class / per-render window membership
 # ---------------------------------------------------------------------------
 
 
@@ -196,23 +201,32 @@ def test_type1_dim_full_every_window(tmp_path: "Path") -> None:
     assert first.table.column("id").to_pylist() == ["g1"]
 
 
-def test_source_transaction_windows_on_last_mutation_sim_time(tmp_path: "Path") -> None:
+def test_source_state_table_reconstructs_full_horizon_as_of_window_end(
+    tmp_path: "Path",
+) -> None:
+    """A `state` table's windowed compile is a full horizon snapshot
+    (records created strictly before window.end_ns) — row sets accumulate
+    across windows, never filtered to just that window's own membership."""
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         head = _open_source(emit, source_shape_config())
-        # shipment: last_mutation_sim_time = 1
-        included = _tables_by_name(head.window(0, 2))["shipment"]
-        excluded = _tables_by_name(head.window(2, 4))["shipment"]
-    assert included.table.column("id").to_pylist() == ["s1"]
-    assert excluded.table.num_rows == 0
+        # shipment: created_sim_time = 0
+        before_creation = _tables_by_name(head.window(0, 0))["shipment"]
+        first_window = _tables_by_name(head.window(0, 2))["shipment"]
+        later_window = _tables_by_name(head.window(2, 4))["shipment"]
+    assert before_creation.delivery == "snapshot"
+    assert before_creation.table.num_rows == 0
+    assert first_window.table.column("id").to_pylist() == ["s1"]
+    # accumulates: still present in a strictly later window, not dropped.
+    assert later_window.table.column("id").to_pylist() == ["s1"]
 
 
-def test_source_changelog_windows_on_event_sim_time(tmp_path: "Path") -> None:
+def test_source_event_log_windows_on_event_sim_time(tmp_path: "Path") -> None:
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         head = _open_source(emit, source_shape_config())
-        first = _tables_by_name(head.window(0, 10))["widget"]
-        second = _tables_by_name(head.window(10, 20))["widget"]
+        first = _tables_by_name(head.window(0, 10))["widget_versions"]
+        second = _tables_by_name(head.window(10, 20))["widget_versions"]
     assert first.delivery == "append"
     assert first.table.num_rows == 1
     assert second.table.num_rows == 1
@@ -248,9 +262,11 @@ def test_source_junction_extract_on_change_left_at_masked(tmp_path: "Path") -> N
     assert rows_b["nut"] is not None
 
 
-def test_source_snapshot_delivery_reconstructs_at_horizon_end(tmp_path: "Path") -> None:
+def test_source_state_table_reconstructs_different_content_at_different_horizons(
+    tmp_path: "Path",
+) -> None:
     emit_dir = build_shaped_test_emit(tmp_path)
-    config = source_snapshot_delivery_shape_config()
+    config = source_shape_config()
     with open_emit(emit_dir) as emit:
         head = _open_source(emit, config)
         early = _tables_by_name(head.window(0, 5))["widget"]

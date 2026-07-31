@@ -1,11 +1,17 @@
 """Tests for the `base_relations` compile indirection (`exporters/base_relations.py`)
 and its threading through both pure compile surfaces.
 
-Covers: `base_relations=None` byte-identical to the unparameterized compile (both
-modes); `shadow_base_relations`'s CTE wrap, including a compiled query that already
-opens with its own `WITH`; the self-read-binds-physical binding rule; total
-shadowing across a dimensional FK hop and a source change-log read (history +
-records spine), with an unmapped name falling back physical.
+Covers: dimensional's `base_relations=None` byte-identical to the
+unparameterized compile, and (source) the plan/engine's compiled SQL
+matching the render function called directly; `shadow_base_relations`'s CTE
+wrap, including a compiled query that already opens with its own `WITH`;
+the self-read-binds-physical binding rule; total shadowing across a
+dimensional FK hop (via `build_query_specs`'s own `base_relations`
+parameter) and a source change-log read (history + records spine, via the
+playback seam's post-compile `_rewrite_specs_base_relations` — the source
+engine itself carries no `base_relations` parameter, per § 2 of the
+source-declared-tables design doc), with an unmapped name falling back
+physical.
 """
 
 from __future__ import annotations
@@ -29,7 +35,11 @@ from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
     DimensionalConfig,
     ExportConfig,
+    SourceConfig,
     SourceDecl,
+    SourceEventsDecl,
+    SourceEventSourceDecl,
+    SourceTableDecl,
     TableDecl,
 )
 from fabulexa_forge.derivations import require_single_branch
@@ -40,13 +50,18 @@ from fabulexa_forge.exporters.base_relations import (
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.grains import build_grain_sql
 from fabulexa_forge.exporters.dimensional.validation import validate_table
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.source.engine import build_source_query_specs
+from fabulexa_forge.exporters.source.plan import build_source_plan
+from fabulexa_forge.exporters.source.renders import build_state_render_sql
+from fabulexa_forge.playback.shaped import _rewrite_specs_base_relations
 from fabulexa_forge.reader.emit import open_emit
 
 _MS = 1_000_000
 
 # ---------------------------------------------------------------------------
-# base_relations=None: byte-identical to the unparameterized compile
+# base_relations=None / no base_relations: byte-identical to the
+# unparameterized compile
 # ---------------------------------------------------------------------------
 
 
@@ -94,30 +109,30 @@ def test_dimensional_none_byte_identical(tmp_path: Path) -> None:
     assert specs[0].sql == sql_direct
 
 
-def test_source_none_byte_identical(tmp_path: Path) -> None:
-    """base_relations=None compiles the same SQL as calling build_render_sql directly."""
-    from fabulexa_forge.exporters.source.plan import build_source_plan
-    from fabulexa_forge.exporters.source.renders import build_render_sql
-
+def test_source_query_specs_matches_render_function_directly(tmp_path: Path) -> None:
+    """The source engine's compiled spec matches calling build_state_render_sql
+    directly — the source engine carries no `base_relations` parameter at all
+    (§ 2); its compile is a pure function of (plan, window)."""
     emit_dir = build_source_test_emit(tmp_path)
-    config = ExportConfig(mode="source")
+    config = ExportConfig(
+        mode="source",
+        source=SourceConfig(
+            tables=(SourceTableDecl(name="location", kind="location"),)
+        ),
+    )
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
-        specs = build_source_query_specs(
-            emit,
-            config,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
+        election = resolve_election(emit.sidecar, config.keys)
+        plan = build_source_plan(
+            emit, config, anchor, election, False, discard_notice_sink
         )
+        specs = build_source_query_specs(plan, None)
 
-        sidecar = emit.sidecar
-        fork_path = require_single_branch(sidecar)
-        table_specs = build_source_plan(sidecar, config.source, discard_notice_sink)
-        location_spec = next(t for t in table_specs if t.name == "location")
-        sql_direct = build_render_sql(sidecar, fork_path, location_spec, anchor, None)
+        location_unit = next(t for t in plan.tables if t.name == "location")
+        sql_direct = build_state_render_sql(
+            plan.sidecar, plan.fork_path, location_unit, plan.anchor, None
+        )
 
     location = next(s for s in specs if s.table_name == "location")
     assert location.sql == sql_direct
@@ -260,28 +275,37 @@ def test_dimensional_fk_hop_shadowed_total(tmp_path: Path) -> None:
 
 
 def test_source_changelog_read_shadowed_total(tmp_path: Path) -> None:
-    """The change-log fold's history read resolves through the mapping; the
-    unmapped records spine (identity/lifecycle) falls back physical."""
+    """The event log's history read resolves through the mapping (applied by
+    the playback seam's `_rewrite_specs_base_relations`, § 2 — the source
+    engine itself carries no `base_relations` parameter); the unmapped
+    records spine (identity/lifecycle) falls back physical."""
     emit_dir = build_source_test_emit(tmp_path)
-    config = ExportConfig(mode="source")
+    config = ExportConfig(
+        mode="source",
+        source=SourceConfig(
+            events=SourceEventsDecl(
+                name="visit_events",
+                sources=(SourceEventSourceDecl(kind="visit"),),
+            )
+        ),
+    )
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
-
-        specs_physical = build_source_query_specs(
-            emit,
-            config,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
+        election = resolve_election(emit.sidecar, config.keys)
+        plan = build_source_plan(
+            emit, config, anchor, election, False, discard_notice_sink
         )
-        visit_physical = next(s for s in specs_physical if s.table_name == "visit")
+
+        specs_physical = build_source_query_specs(plan, None)
+        visit_physical = next(
+            s for s in specs_physical if s.table_name == "visit_events"
+        )
         rows_physical = emit.query_arrow(visit_physical.sql, ()).to_pydict()
 
         # v002's coincident status+priority change at 150ms coalesces into one
-        # 'u' event; excluding those two history rows removes that event. The
-        # replacing relation schema-qualifies its self-read (main."history")
+        # 'update' event; excluding those two history rows removes that event.
+        # The replacing relation schema-qualifies its self-read (main."history")
         # to reach the physical table under DuckDB's binder.
         base_relations = {
             "history": (
@@ -290,25 +314,22 @@ def test_source_changelog_read_shadowed_total(tmp_path: Path) -> None:
                 f"{150 * _MS})"
             )
         }
-        specs_shadowed = build_source_query_specs(
-            emit,
-            config,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=base_relations,
+        specs_shadowed = _rewrite_specs_base_relations(
+            list(build_source_query_specs(plan, None)), base_relations
         )
-        visit_shadowed = next(s for s in specs_shadowed if s.table_name == "visit")
+        visit_shadowed = next(
+            s for s in specs_shadowed if s.table_name == "visit_events"
+        )
         rows_shadowed = emit.query_arrow(visit_shadowed.sql, ()).to_pydict()
 
-    # Physical: v001 c; v002 c, u; v003 c, d -> 5 rows.
-    assert len(rows_physical["id"]) == 5
-    # Shadowed: v002's 'u' event disappears -> 4 rows. The history read went
-    # through the mapping — no physical leak.
-    assert len(rows_shadowed["id"]) == 4
+    # Physical: v001 create; v002 create, update; v003 create, delete -> 5 rows.
+    assert len(rows_physical["item_id"]) == 5
+    # Shadowed: v002's 'update' event disappears -> 4 rows. The history read
+    # went through the mapping — no physical leak.
+    assert len(rows_shadowed["item_id"]) == 4
     # The (unmapped) records spine is unaffected: every record's identity
     # still surfaces, physical.
-    assert set(rows_shadowed["id"]) == {"v001", "v002", "v003"}
+    assert set(rows_shadowed["item_id"]) == {"v001", "v002", "v003"}
 
 
 if __name__ == "__main__":

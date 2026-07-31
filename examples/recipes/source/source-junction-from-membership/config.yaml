@@ -1,20 +1,14 @@
 # Recipe: source-junction-from-membership
 # ============================================================
-# The JUNCTION genre: every `membership__<K>__<p>` table exports
-# unconditionally as an operational association table, whatever the owner
-# kind's own genre (source.md § The junction render) — a faithful read of
-# the interval rows, no derivation.
+# `tables: [...]` with a `membership:` address declares the JUNCTION
+# render: every membership table exports as a faithful read of the
+# interval rows — no derivation, whatever shape the owner kind's own
+# `state` table takes (source.md § The junction render).
 #
-# `exclude.kinds` narrows the bare dump down to the owner kind whose
-# membership table is under test (queue, owning membership__queue__waiters)
-# so this recipe's expect.yaml only has to declare the owner's own
-# reference-genre table plus the junction table itself — a membership
-# table's owner can never be excluded out from under it (exclude.kinds
-# would drop `queue_waiters` right along with `queue`; see
-# `source-exclude-kind`).
-#
-# Table naming: the default output name is `<K>_<p>` — owner kind + member
-# property, e.g. `queue_waiters` for `membership__queue__waiters`.
+# The declared grammar has no bare dump / exclude to narrow down: this
+# recipe's `tables` list names exactly the two units under test — the
+# junction (`queue_waiters`) and its owner (`queue`) — so expect.yaml's
+# exact table-set check needs nothing else declared.
 #
 # Junction column shape (source.md § The junction render):
 #   <K>_id     — record_id (the owner), e.g. queue_id
@@ -36,5 +30,10 @@
 mode: source
 
 source:
-  exclude:
-    kinds: [patient, doctor, staff, admission]
+  tables:
+    - name: queue
+      kind: queue
+    - name: queue_waiters
+      membership:
+        kind: queue
+        property: waiters

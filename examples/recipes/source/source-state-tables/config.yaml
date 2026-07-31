@@ -1,0 +1,39 @@
+# Recipe: source-state-tables
+# ============================================================
+# `tables: [...]` with a `kind:` address declares the STATE render: one
+# CURRENT row per record of the kind's declared populations, unconditionally
+# — whatever history the kind's properties carry (source.md § The state
+# render). There is no separate change-log genre any more: even a kind with
+# a history-tracked property (`patient`, whose `prop__status` is SCD-2
+# tracked in this fixture) exports as a plain current-value snapshot, one
+# row per record, never one row per change.
+#
+# Column shape (full, non-windowed export):
+#   id           — the elected identity surface (record_id by default)
+#   created_at   — created_sim_time, wallclock TIMESTAMP
+#   active       — verbatim
+#   deactivated_at — wallclock TIMESTAMP, null while active
+#   updated_at   — last_mutation_sim_time, wallclock TIMESTAMP (a full
+#                  export includes it; a windowed state table omits it —
+#                  see source.md § Ordering and determinism)
+#   <p>          — each selected prop__<p>, prefix-stripped
+#
+# Fixture world (recipe emit):
+#   records__patient — prop__status history-tracked; p001 status
+#                      pending@1d -> active@2d -> discharged@3d, p002
+#                      status pending@2d. Neither patient is deactivated.
+#   records__doctor  — one untracked record, d001 "Dr. Carter".
+#
+# Output:
+#   patient — 2 rows (p001, p002), each holding its CURRENT status —
+#             p001 discharged (the latest history value), p002 pending.
+#   doctor  — 1 row (d001), the plain reference shape.
+
+mode: source
+
+source:
+  tables:
+    - name: patient
+      kind: patient
+    - name: doctor
+      kind: doctor

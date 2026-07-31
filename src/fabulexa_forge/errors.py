@@ -172,55 +172,17 @@ class CorruptValidationError(CorruptError):
     source, the failing check ids."""
 
 
-class SourceRecordRolesRequired(ExportError):
-    """A `mode: source` export was run against an emit whose sidecar carries no
-    `record_roles` registry. Classification of untracked kinds requires it; there
-    is no inference fallback — an emit predating the registry is refused."""
-
-
 class SourceHistoryTrackedRequired(ExportError):
     """A `mode: source` export was run against an emit whose sidecar carries no
-    per-column `history_tracked` flags. The change-log/reference/transaction
-    trichotomy is flag-authoritative; there is no history-table inference
-    fallback — an emit predating the flag is refused."""
-
-
-class SourceRoleUnknown(ExportError):
-    """An untracked exported kind — or a declared sub-type of an untracked
-    object-registry kind — has no resolvable entry in `record_roles`. A tracked
-    kind needs no role (tracked-ness dominates); this error names the kind (and
-    sub-type, when applicable)."""
-
-
-class SourceSubtypesUndeclared(ExportError):
-    """An untracked kind's `record_roles` entry is object-valued (role varies by
-    sub-type) but the sidecar declares no `<kind>_type` enum domain to enumerate
-    its split units from."""
-
-
-class SourceExcludeUnresolved(ExportError):
-    """A `source.exclude.kinds` or `source.exclude.tables` entry matches nothing
-    in the open emit's sidecar."""
-
-
-class SourceRenameUnresolved(ExportError):
-    """A `source.rename` entry's `table` (and `sub_type`, when the kind splits)
-    does not resolve to an exported unit, or one of its `columns` keys does not
-    name a source column of that unit."""
-
-
-class SourceRenameSliceOnly(ExportError):
-    """A `source.rename` entry's `columns` key names a policy-omitted
-    `temporal_class: slice_only` column — the column carries no value to
-    deliver under this rename, so the rename is unsatisfiable rather than
-    silently ignored."""
+    per-column `history_tracked` flags. The event log and the windowed state
+    snapshot are flag-authoritative; there is no inference fallback — an emit
+    predating the flag is refused."""
 
 
 class SourceNameCollision(ExportError):
     """Two resolved output tables share a name, or two columns of one resolved
-    output table share a name, after presentation defaults and `source.rename`
-    are applied. Never silently suffixed or dropped — the author resolves it via
-    `source.rename`."""
+    output table share a name, after defaults and `rename` are applied. Never
+    silently suffixed or dropped — the author resolves it via `rename`."""
 
 
 class SourceAnchorRequired(ExportError):

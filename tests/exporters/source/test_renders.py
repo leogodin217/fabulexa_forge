@@ -1,19 +1,19 @@
-"""Tests for the four genre render SQL builders.
+"""Tests for the two declared-table render SQL builders: `build_state_render_sql`
+and `build_junction_render_sql` (`exporters/source/renders.py`, § 3b).
 
 Runs each render's SQL directly against the DuckDB-backed spanning fixture
-(`_source_fixtures.build_source_test_emit`), asserting the fold/relation
-composition, wallclock rendering, CAST-back typing, and per-genre ordering the
-design doc specifies. `window=None` call sites exercise the full-export
-contract (byte-identical to Unit 1); the windowed fixture
-(`_source_fixtures.build_windowed_source_test_emit`) exercises per-genre
-window membership: change-log by `event_sim_time`, transaction by
-`last_mutation_sim_time`, reference's unconditional full snapshot, and
-junction extract-on-change with `left_at` horizon-masking. Also covers
-`build_snapshot_render_sql` (change_delivery: snapshot, Unit 3): composing
-`build_state_at_sql` at `window.end_ns`, omitting `updated_at`, and
-horizon-rendering `active`/`deactivated_at` — and, horizon-less (Phase 9,
-`window=None`), composing `build_state_at_end_sql` to reconstruct at the
-tape's end instead of refusing.
+(`_source_fixtures.build_source_test_emit`), asserting the faithful-read
+composition, wallclock rendering, default-election join-free SQL, and total
+ordering the design doc specifies. `window=None` call sites exercise the
+full-export contract (one row per record, `updated_at` included, native
+types); the windowed fixture (`_source_fixtures.build_windowed_source_test_emit`)
+exercises the `state` render's horizon reconstruction (`build_state_at_sql`
+composed at `window.end_ns`: one row per record created strictly before the
+horizon, horizon-rendered `active`/`deactivated_at`, codec-VARCHAR after-image
+CAST back to the sidecar's declared type) and the `junction` render's
+extract-on-change window membership with `left_at` horizon-masking. The
+event-log render is its own suite (`test_events_render.py`); key-election
+joins are `test_election_renders.py`'s.
 """
 
 from __future__ import annotations
@@ -21,30 +21,29 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
-from typing import Iterator
+from typing import TYPE_CHECKING, Iterator
 
 from _support.notices import discard_notice_sink
 
-from fabulexa_forge.anchor import (
-    EffectiveAnchor,
-    render_anchor_timestamp_expr,
-    resolve_effective_anchor,
+from fabulexa_forge.anchor import render_anchor_timestamp_expr, resolve_effective_anchor
+from fabulexa_forge.config.models import (
+    ExportConfig,
+    MembershipRef,
+    SourceConfig,
+    SourceTableDecl,
 )
-from fabulexa_forge.config.models import SourceConfig
-from fabulexa_forge.derivations.guard import require_single_branch
-from fabulexa_forge.derivations.state_at import (
-    build_state_at_end_sql,
-    build_state_at_sql,
+from fabulexa_forge.exporters.election import resolve_election
+from fabulexa_forge.exporters.source.plan import (
+    SourceJunctionTablePlan,
+    SourcePlan,
+    SourceStateTablePlan,
+    build_source_plan,
 )
-from fabulexa_forge.exporters.source.plan import SourceTableSpec, build_source_plan
 from fabulexa_forge.exporters.source.renders import (
-    build_changelog_render_sql,
     build_junction_render_sql,
-    build_records_render_sql,
-    build_render_sql,
-    build_snapshot_render_sql,
+    build_state_render_sql,
 )
-from fabulexa_forge.reader.emit import Emit, open_emit
+from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
     build_degenerate_slice_only_source_emit,
@@ -55,416 +54,377 @@ from ._source_fixtures import (
     windowed_test_windows,
 )
 
+if TYPE_CHECKING:
+    from fabulexa_forge.incremental.windows import Window
+    from fabulexa_forge.reader.emit import Emit
 
-@contextmanager
-def _spanning_emit(
-    tmp_path: Path,
-    config: "SourceConfig | None" = None,
-) -> Iterator[tuple[Emit, tuple[SourceTableSpec, ...], str, EffectiveAnchor]]:
-    """Open the spanning fixture emit and resolve its plan, fork_path, and anchor.
-
-    Args:
-        tmp_path: Directory to write the emit artifacts into.
-        config: The source config to resolve the plan under, or None for the
-            bare-mode defaults (change_delivery='changelog').
-    """
-    emit_dir = build_source_test_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        fork_path = require_single_branch(emit.sidecar)
-        specs = build_source_plan(emit.sidecar, config, notice_sink=discard_notice_sink)
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        assert anchor is not None
-        yield emit, specs, fork_path, anchor
+# ---------------------------------------------------------------------------
+# Plan-building + row-mapping helpers
+# ---------------------------------------------------------------------------
 
 
 @contextmanager
-def _windowed_emit(
-    tmp_path: Path,
-    config: "SourceConfig | None" = None,
-) -> Iterator[tuple[Emit, tuple[SourceTableSpec, ...], str, EffectiveAnchor]]:
-    """Open the windowed fixture emit and resolve its plan, fork_path, and anchor.
-
-    Args:
-        tmp_path: Directory to write the emit artifacts into.
-        config: The source config to resolve the plan under, or None for the
-            bare-mode defaults (change_delivery='changelog').
-    """
-    emit_dir = build_windowed_source_test_emit(tmp_path)
+def _plan(
+    emit_dir: Path,
+    tables: "tuple[SourceTableDecl, ...]",
+    *,
+    windowed: bool = False,
+) -> "Iterator[tuple[Emit, SourcePlan]]":
+    """Open `emit_dir` and build a SourcePlan over `tables`, resolving the
+    anchor and election the way the engine does."""
+    config = ExportConfig(mode="source", source=SourceConfig(tables=tables))
     with open_emit(emit_dir) as emit:
-        fork_path = require_single_branch(emit.sidecar)
-        specs = build_source_plan(emit.sidecar, config, notice_sink=discard_notice_sink)
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
-        yield emit, specs, fork_path, anchor
+        election = resolve_election(emit.sidecar, config.keys)
+        plan = build_source_plan(
+            emit, config, anchor, election, windowed, discard_notice_sink
+        )
+        yield emit, plan
 
 
-def _spec_for(specs: tuple[SourceTableSpec, ...], source_table: str) -> SourceTableSpec:
-    """Return the sole spec matching source_table (assumed unsplit)."""
-    return next(s for s in specs if s.source_table == source_table)
+def _state(plan: SourcePlan, name: str) -> SourceStateTablePlan:
+    """The sole `state` unit named `name`."""
+    table = next(t for t in plan.tables if t.name == name)
+    assert isinstance(table, SourceStateTablePlan)
+    return table
 
 
-def _spec_for_subtype(
-    specs: tuple[SourceTableSpec, ...], source_table: str, sub_type: str
-) -> SourceTableSpec:
-    """Return the spec matching (source_table, sub_type)."""
-    return next(
-        s for s in specs if s.source_table == source_table and s.sub_type == sub_type
-    )
+def _junction(plan: SourcePlan, name: str) -> SourceJunctionTablePlan:
+    """The sole `junction` unit named `name`."""
+    table = next(t for t in plan.tables if t.name == name)
+    assert isinstance(table, SourceJunctionTablePlan)
+    return table
 
 
-def _col_map(spec: SourceTableSpec, row: tuple[object, ...]) -> dict[str, object]:
-    """Zip a result row against spec.columns' output names."""
-    return {out: value for (_, out), value in zip(spec.columns, row)}
+def _col_map(
+    table: "SourceStateTablePlan | SourceJunctionTablePlan", row: tuple[object, ...]
+) -> dict[str, object]:
+    """Zip a result row against a table unit's output column names."""
+    return {out: value for (_, out), value in zip(table.columns, row)}
 
 
 def _mapped_rows(
-    emit: Emit, spec: SourceTableSpec, sql: str
+    emit: "Emit", table: "SourceStateTablePlan | SourceJunctionTablePlan", sql: str
 ) -> list[dict[str, object]]:
-    """Execute sql and zip every row against spec.columns' output names."""
-    return [_col_map(spec, row) for row in emit.query(sql, ())]
+    """Execute sql and zip every row against `table`'s output column names."""
+    return [_col_map(table, row) for row in emit.query(sql, ())]
+
+
+def _rows_by(
+    emit: "Emit",
+    table: "SourceStateTablePlan | SourceJunctionTablePlan",
+    fork_path: str,
+    anchor: object,
+    window: "Window | None",
+    key_col: str,
+    *,
+    junction: bool = False,
+) -> dict[object, dict[str, object]]:
+    """Render `table` at `window` and index its rows by `key_col`."""
+    builder = build_junction_render_sql if junction else build_state_render_sql
+    sql = builder(emit.sidecar, fork_path, table, anchor, window)  # type: ignore[arg-type]
+    return {r[key_col]: r for r in _mapped_rows(emit, table, sql)}
+
+
+_SPANNING_TABLES: "tuple[SourceTableDecl, ...]" = (
+    SourceTableDecl(name="visit", kind="visit"),
+    SourceTableDecl(name="shift", kind="shift"),
+    SourceTableDecl(name="location", kind="location"),
+    SourceTableDecl(name="order", kind="order"),
+    SourceTableDecl(name="consultant", kind="actor", sub_types=("consultant",)),
+    SourceTableDecl(name="nurse", kind="actor", sub_types=("nurse",)),
+    SourceTableDecl(
+        name="visit_team", membership=MembershipRef(kind="visit", property="team")
+    ),
+)
+
+_WINDOWED_TABLES: "tuple[SourceTableDecl, ...]" = (
+    SourceTableDecl(name="visit", kind="visit"),
+    SourceTableDecl(name="order", kind="order"),
+    SourceTableDecl(name="location", kind="location"),
+    SourceTableDecl(
+        name="visit_team", membership=MembershipRef(kind="visit", property="team")
+    ),
+)
 
 
 # ---------------------------------------------------------------------------
-# Change-log render
+# `state` render: full export
 # ---------------------------------------------------------------------------
 
 
-def test_changelog_render_ops_and_ordering(tmp_path: Path) -> None:
-    """One 'c' per record, one coalesced 'u', one 'd'; ordered by (time, class, id)."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        sql = build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = _mapped_rows(emit, spec, sql)
-        assert [(r["id"], r["op"]) for r in rows] == [
-            ("v001", "c"),
-            ("v002", "c"),
-            ("v003", "c"),
-            ("v002", "u"),
-            ("v003", "d"),
-        ]
-
-
-def test_changelog_render_delete_payload_null(tmp_path: Path) -> None:
-    """A 'd' row carries NULL presentation_id and NULL payload columns."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        sql = build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = _mapped_rows(emit, spec, sql)
-        delete_row = next(r for r in rows if r["op"] == "d")
-        assert delete_row["id"] == "v003"
-        assert delete_row["presentation_id"] is None
-        assert delete_row["status"] is None
-        assert delete_row["priority"] is None
-
-
-def test_changelog_render_coincident_changes_coalesced(tmp_path: Path) -> None:
-    """v002's coincident status+priority change folds into exactly one 'u' row."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        sql = build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = _mapped_rows(emit, spec, sql)
-        update_rows = [r for r in rows if r["op"] == "u" and r["id"] == "v002"]
-        assert len(update_rows) == 1
-        assert update_rows[0]["status"] == "closed"
-        assert update_rows[0]["priority"] == 5
-
-
-def test_changelog_render_casts_back_to_sidecar_types(tmp_path: Path) -> None:
-    """Payload/presentation_id columns are typed per sidecar type, not VARCHAR."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        sql = build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = _mapped_rows(emit, spec, sql)
-        create_row = next(r for r in rows if r["op"] == "c" and r["id"] == "v001")
-        assert isinstance(create_row["presentation_id"], int)
-        assert create_row["status"] == "open"
-        # priority is history-tracked; its ASOF-joined after-image only resolves
-        # once a history row exists at or before the event (v002's coalesced 'u').
-        update_row = next(r for r in rows if r["op"] == "u" and r["id"] == "v002")
-        assert isinstance(update_row["priority"], int)
-        assert update_row["priority"] == 5
-
-
-def test_changelog_render_wallclock_changed_at(tmp_path: Path) -> None:
-    """changed_at renders wallclock through the shared anchor renderer."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        sql = build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = _mapped_rows(emit, spec, sql)
-        create_row = next(r for r in rows if r["op"] == "c" and r["id"] == "v001")
-        assert "2024-01-01" in str(create_row["changed_at"])
-
-
-def test_changelog_never_split_tracked_subtyped(tmp_path: Path) -> None:
-    """A tracked sub-typed kind is one changelog table; discriminator retained."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        shift_specs = [s for s in specs if s.source_table == "records__shift"]
-        assert len(shift_specs) == 1
-        spec = shift_specs[0]
-        assert spec.sub_type is None
-
-        sql = build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = _mapped_rows(emit, spec, sql)
-        create_row = next(r for r in rows if r["op"] == "c")
-        delete_row = next(r for r in rows if r["op"] == "d")
-        assert create_row["shift_type"] == "day"
-        assert delete_row["shift_type"] is None
-
-
-def test_changelog_render_uses_shared_anchor_renderer(tmp_path: Path) -> None:
-    """changed_at's rendering is byte-identical to render_anchor_timestamp_expr."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        sql = build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        expected = render_anchor_timestamp_expr(
-            anchor, '"_fold"."event_sim_time"', "changed_at"
+def test_state_render_wallclock_created_at_and_raw_ordering(tmp_path: Path) -> None:
+    """created_at renders wallclock through the shared anchor renderer; ORDER
+    BY is raw sim-time, never the rendered column."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _state(plan, "visit")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
         )
-        assert expected in sql
-        order_clause = sql.split("ORDER BY", 1)[1]
-        assert '"_fold"."event_sim_time"' in order_clause
-        assert "changed_at" not in order_clause
+    expected = render_anchor_timestamp_expr(
+        plan.anchor, '"_rec"."created_sim_time"', "created_at"
+    )
+    assert expected in sql
+    order_clause = sql.split("ORDER BY", 1)[1]
+    assert '"_rec"."created_sim_time"' in order_clause
+    assert "created_at" not in order_clause
 
 
-# ---------------------------------------------------------------------------
-# Reference / transaction render
-# ---------------------------------------------------------------------------
-
-
-def test_reference_render_deactivated_at_null_iff_active(tmp_path: Path) -> None:
+def test_state_render_full_snapshot_active_deactivated_at(tmp_path: Path) -> None:
     """deactivated_at is NULL exactly for the active record; fork_path dropped."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__location")
-        sql = build_records_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = {r["id"]: r for r in _mapped_rows(emit, spec, sql)}
-        assert rows["loc001"]["active"] is True
-        assert rows["loc001"]["deactivated_at"] is None
-        assert rows["loc002"]["active"] is False
-        assert "2024-01-01" in str(rows["loc002"]["deactivated_at"])
-        assert "fork_path" not in rows["loc001"]
-
-
-def test_reference_render_reference_column_id_only_unjoined(tmp_path: Path) -> None:
-    """A reference-annotated prop__ column lands verbatim, id-only, unjoined."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__order")
-        sql = build_records_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = _mapped_rows(emit, spec, sql)
-        assert rows[0]["location_id"] == "loc001"
-
-
-def test_reference_render_split_unit_discriminator_filtered(tmp_path: Path) -> None:
-    """A split unit's query is filtered to its sub-type; discriminator dropped."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        consultant_spec = _spec_for_subtype(specs, "records__actor", "consultant")
-        sql = build_records_render_sql(
-            emit.sidecar, fork_path, consultant_spec, anchor, None
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _state(plan, "location")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
         )
-        rows = _mapped_rows(emit, consultant_spec, sql)
-        assert len(rows) == 1
-        assert rows[0]["id"] == "act001"
-        assert "actor_type" not in rows[0]
+        rows = {r["id"]: r for r in _mapped_rows(emit, table, sql)}
+    assert rows["loc001"]["active"] is True
+    assert rows["loc001"]["deactivated_at"] is None
+    assert rows["loc002"]["active"] is False
+    assert "2024-01-01" in str(rows["loc002"]["deactivated_at"])
+    assert "fork_path" not in rows["loc001"]
 
 
-def test_records_render_uses_shared_anchor_renderer_and_raw_ordering(
+def test_state_render_reference_column_id_only_unjoined(tmp_path: Path) -> None:
+    """A reference-annotated prop__ column lands verbatim, id-only, unjoined."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _state(plan, "order")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    assert rows[0]["location_id"] == "loc001"
+
+
+def test_state_render_default_identity_composes_join_free_sql(tmp_path: Path) -> None:
+    """A table whose identity/edge surfaces are all at their default
+    (record_id) composes byte-identical, join-free SQL."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _state(plan, "order")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+    assert "LEFT JOIN" not in sql
+
+
+def test_state_render_split_unit_discriminator_dropped_and_filtered(
     tmp_path: Path,
 ) -> None:
-    """created_at renders through the shared renderer; ORDER BY is raw sim-time."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__location")
-        sql = build_records_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        expected = render_anchor_timestamp_expr(
-            anchor, '"_rec"."created_sim_time"', "created_at"
+    """A single-sub_types-addressed table filters to its sub-type and drops
+    the discriminator column from its projection."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _state(plan, "consultant")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
         )
-        assert expected in sql
-        order_clause = sql.split("ORDER BY", 1)[1]
-        assert '"_rec"."created_sim_time"' in order_clause
-        assert "created_at" not in order_clause
+        rows = _mapped_rows(emit, table, sql)
+    assert "'consultant'" in sql
+    assert len(rows) == 1
+    assert rows[0]["id"] == "act001"
+    assert "actor_type" not in rows[0]
+
+
+def test_state_render_multi_population_discriminator_retained_no_filter(
+    tmp_path: Path,
+) -> None:
+    """A table addressing a kind's full sub-type domain retains its
+    discriminator column and composes no discriminator WHERE — the
+    no-op-filter-not-composed rule."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _state(plan, "shift")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    assert '"prop__shift_type" IN' not in sql
+    assert rows[0]["shift_type"] == "day"
+
+
+def test_state_render_full_export_includes_updated_at(tmp_path: Path) -> None:
+    """A full export renders `updated_at` (last_mutation_sim_time), wallclock."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _state(plan, "visit")
+        assert any(out == "updated_at" for _, out in table.columns)
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = {r["id"]: r for r in _mapped_rows(emit, table, sql)}
+    assert "2024-01-01" in str(rows["v001"]["updated_at"])
+
+
+def test_state_render_determinism(tmp_path: Path) -> None:
+    """Two renders of the same table compose byte-identical SQL."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _state(plan, "visit")
+        sql_a = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        sql_b = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+    assert sql_a == sql_b
 
 
 # ---------------------------------------------------------------------------
-# Junction render
+# `junction` render: full export
 # ---------------------------------------------------------------------------
 
 
 def test_junction_render_naming_and_open_interval(tmp_path: Path) -> None:
     """record_id-><K>_id; left_at NULL while open; elem__/member__ projected."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "membership__visit__team")
-        sql = build_junction_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = _mapped_rows(emit, spec, sql)
-        assert len(rows) == 2
-        for row in rows:
-            assert row["visit_id"] == "v001"
-        closed = next(r for r in rows if r["role_name"] == "lead")
-        still_open = next(r for r in rows if r["role_name"] == "support")
-        assert closed["left_at"] is not None
-        assert still_open["left_at"] is None
-        assert "2024-01-01" in str(closed["joined_at"])
-        assert closed["actor_kind"] == "actor"
-        assert closed["actor_id"] == "act001"
-        assert still_open["actor_id"] == "act002"
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    assert len(rows) == 2
+    for row in rows:
+        assert row["visit_id"] == "v001"
+    closed = next(r for r in rows if r["role_name"] == "lead")
+    still_open = next(r for r in rows if r["role_name"] == "support")
+    assert closed["left_at"] is not None
+    assert still_open["left_at"] is None
+    assert "2024-01-01" in str(closed["joined_at"])
+    assert closed["actor_kind"] == "actor"
+    assert closed["actor_id"] == "act001"
+    assert still_open["actor_id"] == "act002"
 
 
-def test_junction_render_uses_shared_anchor_renderer_and_raw_ordering(
-    tmp_path: Path,
-) -> None:
+def test_junction_render_wallclock_joined_at_and_raw_ordering(tmp_path: Path) -> None:
     """joined_at renders through the shared renderer; ORDER BY is raw sim-time."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "membership__visit__team")
-        sql = build_junction_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        expected = render_anchor_timestamp_expr(
-            anchor, '"_mem"."joined_sim_time"', "joined_at"
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
         )
-        assert expected in sql
-        order_clause = sql.split("ORDER BY", 1)[1]
-        assert '"_mem"."joined_sim_time"' in order_clause
-        assert "joined_at" not in order_clause
+    expected = render_anchor_timestamp_expr(
+        plan.anchor, '"_mem"."joined_sim_time"', "joined_at"
+    )
+    assert expected in sql
+    order_clause = sql.split("ORDER BY", 1)[1]
+    assert '"_mem"."joined_sim_time"' in order_clause
+    assert "joined_at" not in order_clause
 
 
-# ---------------------------------------------------------------------------
-# Dispatch
-# ---------------------------------------------------------------------------
-
-
-def test_build_render_sql_dispatches_per_genre(tmp_path: Path) -> None:
-    """build_render_sql routes each genre to its own render builder."""
-    with _spanning_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        changelog_spec = _spec_for(specs, "records__visit")
-        reference_spec = _spec_for(specs, "records__location")
-        junction_spec = _spec_for(specs, "membership__visit__team")
-
-        assert build_render_sql(
-            emit.sidecar, fork_path, changelog_spec, anchor, None
-        ) == build_changelog_render_sql(
-            emit.sidecar, fork_path, changelog_spec, anchor, None
-        )
-        assert build_render_sql(
-            emit.sidecar, fork_path, reference_spec, anchor, None
-        ) == build_records_render_sql(
-            emit.sidecar, fork_path, reference_spec, anchor, None
-        )
-        assert build_render_sql(
-            emit.sidecar, fork_path, junction_spec, anchor, None
-        ) == build_junction_render_sql(
-            emit.sidecar, fork_path, junction_spec, anchor, None
-        )
-
-
-# ---------------------------------------------------------------------------
-# Windowed rendering (Unit 2)
-# ---------------------------------------------------------------------------
-
-
-def test_changelog_render_windowed_filters_by_event_sim_time(tmp_path: Path) -> None:
-    """change-log render filters to event_sim_time in [window.start_ns, window.end_ns)."""
-    w0, w1, w2 = windowed_test_windows()
-    with _windowed_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        rows_w0 = _mapped_rows(
-            emit,
-            spec,
-            build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, w0),
-        )
-        rows_w1 = _mapped_rows(
-            emit,
-            spec,
-            build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, w1),
-        )
-        rows_w2 = _mapped_rows(
-            emit,
-            spec,
-            build_changelog_render_sql(emit.sidecar, fork_path, spec, anchor, w2),
-        )
-    assert [(r["id"], r["op"]) for r in rows_w0] == [("v001", "c")]
-    assert [(r["id"], r["op"]) for r in rows_w1] == [("v001", "u"), ("v002", "c")]
-    assert [(r["id"], r["op"]) for r in rows_w2] == [("v003", "c"), ("v002", "d")]
-
-
-def test_records_render_windowed_transaction_filters_by_last_mutation_sim_time(
+def test_junction_render_default_identity_composes_join_free_sql(
     tmp_path: Path,
 ) -> None:
-    """Transaction render filters to last_mutation_sim_time in the window."""
+    """A junction whose owner/member edges are all at their default composes
+    no join."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+    assert "LEFT JOIN" not in sql
+
+
+def test_junction_render_determinism(tmp_path: Path) -> None:
+    """Two renders of the same junction table compose byte-identical SQL."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        sql_a = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        sql_b = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+    assert sql_a == sql_b
+
+
+# ---------------------------------------------------------------------------
+# `state` render: windowed (horizon reconstruction)
+# ---------------------------------------------------------------------------
+
+
+def test_state_render_windowed_omits_updated_at(tmp_path: Path) -> None:
+    """A windowed `state` table's projection carries no updated_at — a past
+    horizon cannot reconstruct the sim-internal mutation instant."""
+    with _plan(
+        build_windowed_source_test_emit(tmp_path), _WINDOWED_TABLES, windowed=True
+    ) as (emit, plan):
+        table = _state(plan, "visit")
+    assert all(out != "updated_at" for _, out in table.columns)
+
+
+def test_state_render_windowed_reconstructs_at_horizon(tmp_path: Path) -> None:
+    """Windowed `state` composes build_state_at_sql at window.end_ns: one row
+    per record created strictly before the horizon; active/deactivated_at
+    horizon-rendered — a deactivation after the horizon stays masked."""
     w0, w1, w2 = windowed_test_windows()
-    with _windowed_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__order")
-        ids_w0 = {
-            r["id"]
-            for r in _mapped_rows(
-                emit,
-                spec,
-                build_records_render_sql(emit.sidecar, fork_path, spec, anchor, w0),
-            )
-        }
-        ids_w1 = {
-            r["id"]
-            for r in _mapped_rows(
-                emit,
-                spec,
-                build_records_render_sql(emit.sidecar, fork_path, spec, anchor, w1),
-            )
-        }
-        ids_w2 = {
-            r["id"]
-            for r in _mapped_rows(
-                emit,
-                spec,
-                build_records_render_sql(emit.sidecar, fork_path, spec, anchor, w2),
-            )
-        }
+    with _plan(
+        build_windowed_source_test_emit(tmp_path), _WINDOWED_TABLES, windowed=True
+    ) as (emit, plan):
+        table = _state(plan, "visit")
+        rows_w0 = _rows_by(emit, table, plan.fork_path, plan.anchor, w0, "id")
+        rows_w1 = _rows_by(emit, table, plan.fork_path, plan.anchor, w1, "id")
+        rows_w2 = _rows_by(emit, table, plan.fork_path, plan.anchor, w2, "id")
+    assert set(rows_w0) == {"v001"}
+    assert set(rows_w1) == {"v001", "v002"}
+    assert set(rows_w2) == {"v001", "v002", "v003"}
+    # v002: created w1 (150ms), deactivated w2 (250ms) — still active at w1's horizon.
+    assert rows_w1["v002"]["active"] is True
+    assert rows_w1["v002"]["deactivated_at"] is None
+    assert rows_w2["v002"]["active"] is False
+    assert "2024-01-01" in str(rows_w2["v002"]["deactivated_at"])
+
+
+def test_state_render_windowed_casts_back_to_sidecar_types(tmp_path: Path) -> None:
+    """A windowed reconstruction's codec-VARCHAR after-image CASTs back to
+    the sidecar's declared type; a tracked property reflects its as-of value."""
+    _, w1, _ = windowed_test_windows()
+    with _plan(
+        build_windowed_source_test_emit(tmp_path), _WINDOWED_TABLES, windowed=True
+    ) as (emit, plan):
+        table = _state(plan, "visit")
+        rows = _rows_by(emit, table, plan.fork_path, plan.anchor, w1, "id")
+    assert isinstance(rows["v001"]["priority"], int)
+    assert rows["v001"]["priority"] == 1
+    assert rows["v001"]["status"] == "closed"  # v001's w1 status change (120ms)
+
+
+def test_state_render_windowed_horizon_snapshot_cumulative(tmp_path: Path) -> None:
+    """An untracked kind's windowed reconstruction is a cumulative horizon
+    snapshot: every record created strictly before the horizon, not a
+    per-window delta."""
+    w0, w1, w2 = windowed_test_windows()
+    with _plan(
+        build_windowed_source_test_emit(tmp_path), _WINDOWED_TABLES, windowed=True
+    ) as (emit, plan):
+        table = _state(plan, "order")
+        ids_w0 = set(_rows_by(emit, table, plan.fork_path, plan.anchor, w0, "id"))
+        ids_w1 = set(_rows_by(emit, table, plan.fork_path, plan.anchor, w1, "id"))
+        ids_w2 = set(_rows_by(emit, table, plan.fork_path, plan.anchor, w2, "id"))
     assert ids_w0 == {"ord001"}
-    assert ids_w1 == {"ord002"}
-    assert ids_w2 == {"ord003"}
+    assert ids_w1 == {"ord001", "ord002"}
+    assert ids_w2 == {"ord001", "ord002", "ord003"}
 
 
-def test_records_render_windowed_reference_full_snapshot_every_window(
-    tmp_path: Path,
-) -> None:
-    """Reference render carries no predicate: same full snapshot every window."""
-    w0, w1, w2 = windowed_test_windows()
-    with _windowed_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__location")
-        full_sql = build_records_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        full_rows = _mapped_rows(emit, spec, full_sql)
-        for window in (w0, w1, w2):
-            sql = build_records_render_sql(
-                emit.sidecar, fork_path, spec, anchor, window
-            )
-            assert sql == full_sql
-            assert _mapped_rows(emit, spec, sql) == full_rows
+# ---------------------------------------------------------------------------
+# `junction` render: windowed (extract-on-change)
+# ---------------------------------------------------------------------------
 
 
 def test_junction_render_windowed_extract_on_change(tmp_path: Path) -> None:
-    """Junction render extracts-on-change: join-only masks left_at, a later leave
-    re-emits it set, a same-window join+leave emits one closed row, and an
-    interval touching neither bound in a window emits no row for it.
-    """
+    """Junction render extracts-on-change: join-only masks left_at, a later
+    leave re-emits it set, a same-window join+leave emits one closed row, and
+    an interval touching neither bound in a window emits no row for it."""
     w0, w1, w2 = windowed_test_windows()
-    with _windowed_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "membership__visit__team")
-        rows_w0 = {
-            r["visit_id"]: r
-            for r in _mapped_rows(
-                emit,
-                spec,
-                build_junction_render_sql(emit.sidecar, fork_path, spec, anchor, w0),
-            )
-        }
-        rows_w1 = {
-            r["visit_id"]: r
-            for r in _mapped_rows(
-                emit,
-                spec,
-                build_junction_render_sql(emit.sidecar, fork_path, spec, anchor, w1),
-            )
-        }
-        rows_w2 = {
-            r["visit_id"]: r
-            for r in _mapped_rows(
-                emit,
-                spec,
-                build_junction_render_sql(emit.sidecar, fork_path, spec, anchor, w2),
-            )
-        }
+    with _plan(
+        build_windowed_source_test_emit(tmp_path), _WINDOWED_TABLES, windowed=True
+    ) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        rows_w0 = _rows_by(
+            emit, table, plan.fork_path, plan.anchor, w0, "visit_id", junction=True
+        )
+        rows_w1 = _rows_by(
+            emit, table, plan.fork_path, plan.anchor, w1, "visit_id", junction=True
+        )
+        rows_w2 = _rows_by(
+            emit, table, plan.fork_path, plan.anchor, w2, "visit_id", junction=True
+        )
 
     # w0: m_A (v001) and m_C (v002) both join-only here; left_at masked.
     assert set(rows_w0) == {"v001", "v002"}
@@ -483,192 +443,68 @@ def test_junction_render_windowed_extract_on_change(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Snapshot render (change_delivery: snapshot, Unit 3)
-# ---------------------------------------------------------------------------
-
-_SNAPSHOT_CONFIG = SourceConfig(change_delivery="snapshot")
-
-
-def test_snapshot_render_composes_build_state_at_sql(tmp_path: Path) -> None:
-    """The snapshot render composes build_state_at_sql at window.end_ns."""
-    w0, _, _ = windowed_test_windows()
-    with _windowed_emit(tmp_path, _SNAPSHOT_CONFIG) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        sql = build_snapshot_render_sql(emit.sidecar, fork_path, spec, anchor, w0)
-        properties = frozenset(
-            src[len("prop__") :] for src, _ in spec.columns if src.startswith("prop__")
-        )
-        expected_state_at = build_state_at_sql(
-            emit.sidecar, fork_path, "visit", properties, w0.end_ns
-        )
-    assert expected_state_at in sql
-
-
-def test_snapshot_render_omits_updated_at(tmp_path: Path) -> None:
-    """The snapshot shape carries no updated_at column (there is no per-event
-    timestamp to render)."""
-    w0, _, _ = windowed_test_windows()
-    with _windowed_emit(tmp_path, _SNAPSHOT_CONFIG) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        assert all(out != "updated_at" for _, out in spec.columns)
-        sql = build_snapshot_render_sql(emit.sidecar, fork_path, spec, anchor, w0)
-    assert "updated_at" not in sql
-
-
-def test_snapshot_render_horizon_renders_active_deactivated_at(tmp_path: Path) -> None:
-    """active/deactivated_at are the fold's own horizon-rendered columns: a record
-    deactivated after the horizon shows active=True/deactivated_at=NULL;
-    deactivated before, active=False with deactivated_at rendered wallclock."""
-    _, w1, w2 = windowed_test_windows()
-    with _windowed_emit(tmp_path, _SNAPSHOT_CONFIG) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        rows_w1 = {
-            r["id"]: r
-            for r in _mapped_rows(
-                emit,
-                spec,
-                build_snapshot_render_sql(emit.sidecar, fork_path, spec, anchor, w1),
-            )
-        }
-        rows_w2 = {
-            r["id"]: r
-            for r in _mapped_rows(
-                emit,
-                spec,
-                build_snapshot_render_sql(emit.sidecar, fork_path, spec, anchor, w2),
-            )
-        }
-    # v002 (created w1, deactivated w2): deactivation lands after w1's horizon.
-    assert rows_w1["v002"]["active"] is True
-    assert rows_w1["v002"]["deactivated_at"] is None
-    # ...but at or before w2's horizon.
-    assert rows_w2["v002"]["active"] is False
-    assert "2024-01-01" in str(rows_w2["v002"]["deactivated_at"])
-
-
-# ---------------------------------------------------------------------------
-# Horizon-less snapshot delivery (Phase 9): reconstruct at the tape's end
+# slice_only column omission
 # ---------------------------------------------------------------------------
 
 
-def test_snapshot_render_window_none_composes_build_state_at_end_sql(
+def test_state_render_slice_only_omission_preserves_row_values(
     tmp_path: Path,
 ) -> None:
-    """window=None composes build_state_at_end_sql — no horizon parameter, no
-    horizon predicate."""
-    with _spanning_emit(tmp_path, _SNAPSHOT_CONFIG) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        sql = build_snapshot_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        properties = frozenset(
-            src[len("prop__") :] for src, _ in spec.columns if src.startswith("prop__")
+    """A non-exempt slice_only column is absent from a full-export state
+    render; the row identities and tracked values are unaffected — the
+    column-projection-only invariance the render's docstring documents (an
+    untracked property never drives reconstruction)."""
+    tables = (SourceTableDecl(name="patient", kind="patient"),)
+    with _plan(build_slice_only_source_emit(tmp_path), tables) as (emit, plan):
+        table = _state(plan, "patient")
+        assert all(src != "prop__loyalty_tier" for src, _ in table.columns)
+
+        narrowed_sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
         )
-        expected_state_at_end = build_state_at_end_sql(
-            emit.sidecar, fork_path, "visit", properties
+        narrowed_rows = _mapped_rows(emit, table, narrowed_sql)
+
+        control_table = replace(
+            table, columns=table.columns + (("prop__loyalty_tier", "loyalty_tier"),)
         )
-    assert expected_state_at_end in sql
-
-
-def test_snapshot_render_window_none_deactivated_after_last_history_event(
-    tmp_path: Path,
-) -> None:
-    """A record deactivated after its last history event (v003) renders
-    inactive end-of-tape — the lifecycle-instant case a history-only horizon
-    would get wrong; a still-active record's tracked value is its latest
-    recorded history value, constant its current records value."""
-    with _spanning_emit(tmp_path, _SNAPSHOT_CONFIG) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__visit")
-        rows = {
-            r["id"]: r
-            for r in _mapped_rows(
-                emit,
-                spec,
-                build_snapshot_render_sql(emit.sidecar, fork_path, spec, anchor, None),
-            )
-        }
-    assert rows["v003"]["active"] is False
-    assert rows["v003"]["deactivated_at"] is not None
-    assert rows["v002"]["active"] is True
-    assert rows["v002"]["status"] == "closed"  # latest recorded history value
-
-
-# ---------------------------------------------------------------------------
-# slice_only column omission (Phase 3)
-# ---------------------------------------------------------------------------
-
-
-@contextmanager
-def _slice_only_emit(
-    tmp_path: Path,
-    config: "SourceConfig | None" = None,
-) -> Iterator[tuple[Emit, tuple[SourceTableSpec, ...], str, EffectiveAnchor]]:
-    """Open the slice_only fixture emit and resolve its plan, fork_path, and anchor."""
-    emit_dir = build_slice_only_source_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        fork_path = require_single_branch(emit.sidecar)
-        specs = build_source_plan(emit.sidecar, config, notice_sink=discard_notice_sink)
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        assert anchor is not None
-        yield emit, specs, fork_path, anchor
-
-
-def test_changelog_render_slice_only_omission_preserves_row_set(
-    tmp_path: Path,
-) -> None:
-    """A non-exempt slice_only column is absent from the after-image; the c/u/d
-    row set and seq assignment are unchanged from a control render whose
-    columns carry the slice_only column too (the column-projection-only
-    invariance the changelog render's docstring documents)."""
-    with _slice_only_emit(tmp_path) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__patient")
-        assert all(src != "prop__loyalty_tier" for src, _ in spec.columns)
-
-        narrowed_sql = build_changelog_render_sql(
-            emit.sidecar, fork_path, spec, anchor, None
+        control_sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, control_table, plan.anchor, None
         )
-        narrowed_rows = _mapped_rows(emit, spec, narrowed_sql)
+        control_rows = _mapped_rows(emit, control_table, control_sql)
 
-        control_spec = replace(
-            spec, columns=spec.columns + (("prop__loyalty_tier", "loyalty_tier"),)
-        )
-        control_sql = build_changelog_render_sql(
-            emit.sidecar, fork_path, control_spec, anchor, None
-        )
-        control_rows = _mapped_rows(emit, control_spec, control_sql)
-
-    narrowed_shape = [(r["id"], r["op"], r["status"]) for r in narrowed_rows]
-    control_shape = [(r["id"], r["op"], r["status"]) for r in control_rows]
+    narrowed_shape = [(r["id"], r["status"]) for r in narrowed_rows]
+    control_shape = [(r["id"], r["status"]) for r in control_rows]
     assert narrowed_shape == control_shape
-    assert narrowed_shape == [
-        ("p001", "c", "open"),
-        ("p002", "c", "open"),
-        ("p002", "u", "closed"),
-    ]
+    assert narrowed_shape == [("p001", "open"), ("p002", "closed")]
 
 
-def test_snapshot_render_slice_only_column_absent_and_row_set_unchanged(
+def test_state_render_slice_only_omission_preserves_row_values_windowed(
     tmp_path: Path,
 ) -> None:
-    """Under snapshot delivery, the slice_only column is absent from the
-    state-at projection; the snapshot row set (identity, active, tracked
+    """Under a windowed reconstruction, the slice_only column is absent from
+    the state-at projection; the row set (identity, active, tracked
     property) is unchanged from a control render carrying the column."""
     horizon = slice_only_horizon_window()
-    config = SourceConfig(change_delivery="snapshot")
-    with _slice_only_emit(tmp_path, config) as (emit, specs, fork_path, anchor):
-        spec = _spec_for(specs, "records__patient")
-        assert all(src != "prop__loyalty_tier" for src, _ in spec.columns)
+    tables = (SourceTableDecl(name="patient", kind="patient"),)
+    with _plan(build_slice_only_source_emit(tmp_path), tables, windowed=True) as (
+        emit,
+        plan,
+    ):
+        table = _state(plan, "patient")
+        assert all(src != "prop__loyalty_tier" for src, _ in table.columns)
 
-        narrowed_sql = build_snapshot_render_sql(
-            emit.sidecar, fork_path, spec, anchor, horizon
+        narrowed_sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, horizon
         )
-        narrowed_rows = _mapped_rows(emit, spec, narrowed_sql)
+        narrowed_rows = _mapped_rows(emit, table, narrowed_sql)
 
-        control_spec = replace(
-            spec, columns=spec.columns + (("prop__loyalty_tier", "loyalty_tier"),)
+        control_table = replace(
+            table, columns=table.columns + (("prop__loyalty_tier", "loyalty_tier"),)
         )
-        control_sql = build_snapshot_render_sql(
-            emit.sidecar, fork_path, control_spec, anchor, horizon
+        control_sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, control_table, plan.anchor, horizon
         )
-        control_rows = _mapped_rows(emit, control_spec, control_sql)
+        control_rows = _mapped_rows(emit, control_table, control_sql)
 
     narrowed_shape = {r["id"]: (r["active"], r["status"]) for r in narrowed_rows}
     control_shape = {r["id"]: (r["active"], r["status"]) for r in control_rows}
@@ -676,23 +512,23 @@ def test_snapshot_render_slice_only_column_absent_and_row_set_unchanged(
     assert narrowed_shape == {"p001": (True, "open"), "p002": (True, "closed")}
 
 
-def test_degenerate_unit_still_renders_identity_and_lifecycle(
+def test_state_render_degenerate_unit_still_renders_identity_and_lifecycle(
     tmp_path: Path,
 ) -> None:
     """A unit whose every property is non-exempt slice_only is never
     suppressed: it still renders its row, carrying identity and lifecycle
     columns with every prop__ column omitted."""
-    emit_dir = build_degenerate_slice_only_source_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        fork_path = require_single_branch(emit.sidecar)
-        specs = build_source_plan(emit.sidecar, None, notice_sink=discard_notice_sink)
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        assert anchor is not None
-        spec = _spec_for(specs, "records__member")
-        assert all(not src.startswith("prop__") for src, _ in spec.columns)
-
-        sql = build_records_render_sql(emit.sidecar, fork_path, spec, anchor, None)
-        rows = _mapped_rows(emit, spec, sql)
+    tables = (SourceTableDecl(name="member", kind="member"),)
+    with _plan(build_degenerate_slice_only_source_emit(tmp_path), tables) as (
+        emit,
+        plan,
+    ):
+        table = _state(plan, "member")
+        assert all(not src.startswith("prop__") for src, _ in table.columns)
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
 
     assert len(rows) == 1
     assert rows[0]["id"] == "mem001"

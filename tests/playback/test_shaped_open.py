@@ -16,11 +16,16 @@ from fabulexa_forge.config.models import (
     ExportConfig,
     IncrementalConfig,
     RebaseConfig,
-    SourceConfig,
     SourceDecl,
     TableDecl,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.populations import Population
+from fabulexa_forge.exporters.source.events import SourceEventLogPlan
+from fabulexa_forge.exporters.source.plan import (
+    SourceJunctionTablePlan,
+    SourceStateTablePlan,
+)
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.playback.shaped import (
     ShapedTableDecl,
@@ -33,6 +38,7 @@ from fabulexa_forge.reader.emit import open_emit
 from ._shaped_fixtures import (
     build_shaped_test_emit,
     dimensional_shape_config,
+    source_last_mutation_named_shape_config,
     source_shape_config,
 )
 
@@ -64,8 +70,41 @@ def _make_table_decl(
     )
 
 
+def _make_state_unit() -> SourceStateTablePlan:
+    """Build a standalone SourceStateTablePlan for the pure classification
+    helper — never compiled; only the type discriminates."""
+    return SourceStateTablePlan(
+        name="t",
+        kind="k",
+        populations=(Population(kind="k", sub_type=None),),
+        columns=(),
+        identity_surface="record_id",
+        edge_surfaces=(),
+        keys=None,
+    )
+
+
+def _make_junction_unit() -> SourceJunctionTablePlan:
+    """Build a standalone SourceJunctionTablePlan for the pure classification
+    helper — never compiled; only the type discriminates."""
+    return SourceJunctionTablePlan(
+        name="t",
+        owner_kind="k",
+        property="p",
+        source_table="membership__k__p",
+        columns=(),
+        edge_surfaces=(),
+    )
+
+
+def _make_event_log_unit() -> SourceEventLogPlan:
+    """Build a standalone SourceEventLogPlan for the pure classification
+    helper — never compiled; only the type discriminates."""
+    return SourceEventLogPlan(name="t", sources=(), item_id_type="VARCHAR")
+
+
 # ---------------------------------------------------------------------------
-# Static per-class / per-genre classification (pure functions, no emit)
+# Static per-class / per-unit classification (pure functions, no emit)
 # ---------------------------------------------------------------------------
 
 
@@ -99,24 +138,16 @@ def test_dimensional_membership_grain_is_none() -> None:
     assert _dimensional_window_delivery(decl) is None
 
 
-def test_source_changelog_genre_appends_under_changelog_delivery() -> None:
-    assert _source_window_delivery("changelog", "changelog") == "append"
+def test_source_state_table_snapshots() -> None:
+    assert _source_window_delivery(_make_state_unit()) == "snapshot"
 
 
-def test_source_changelog_genre_snapshots_under_snapshot_delivery() -> None:
-    assert _source_window_delivery("changelog", "snapshot") == "snapshot"
+def test_source_junction_table_appends() -> None:
+    assert _source_window_delivery(_make_junction_unit()) == "append"
 
 
-def test_source_reference_genre_snapshots() -> None:
-    assert _source_window_delivery("reference", "changelog") == "snapshot"
-
-
-def test_source_transaction_genre_appends() -> None:
-    assert _source_window_delivery("transaction", "changelog") == "append"
-
-
-def test_source_junction_genre_appends() -> None:
-    assert _source_window_delivery("junction", "changelog") == "append"
+def test_source_event_log_appends() -> None:
+    assert _source_window_delivery(_make_event_log_unit()) == "append"
 
 
 # ---------------------------------------------------------------------------
@@ -154,7 +185,7 @@ def test_source_shape_requires_anchor(tmp_path: "Path") -> None:
             open_shaped_playback(emit, source_shape_config(), None, discard_notice_sink)
 
 
-def test_source_shape_opens_with_resolved_anchor_and_enumerates_tables(
+def test_source_shape_opens_with_resolved_anchor_and_enumerates_tables_then_log(
     tmp_path: "Path",
 ) -> None:
     emit_dir = build_shaped_test_emit(tmp_path)
@@ -165,24 +196,31 @@ def test_source_shape_opens_with_resolved_anchor_and_enumerates_tables(
         )
         assert head.tables() == (
             ShapedTableDecl(name="gadget", window_delivery="snapshot"),
-            ShapedTableDecl(name="shipment", window_delivery="append"),
-            ShapedTableDecl(name="widget", window_delivery="append"),
+            ShapedTableDecl(name="shipment", window_delivery="snapshot"),
+            ShapedTableDecl(name="widget", window_delivery="snapshot"),
             ShapedTableDecl(name="widget_parts", window_delivery="append"),
+            ShapedTableDecl(name="widget_versions", window_delivery="append"),
         )
 
 
-def test_source_shape_snapshot_delivery_marks_changelog_table_snapshot(
+def test_source_shape_last_mutation_sim_time_opens_but_window_refuses(
     tmp_path: "Path",
 ) -> None:
+    """A `columns` entry naming `last_mutation_sim_time` validates against
+    the full-export shape at open — `updated_at` is reconstructible for a
+    full export — but the first `window()` ask rebuilds the plan against
+    the windowed shape and refuses."""
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        config = ExportConfig(
-            mode="source", source=SourceConfig(change_delivery="snapshot")
+        head = open_shaped_playback(
+            emit, source_last_mutation_named_shape_config(), anchor, discard_notice_sink
         )
-        head = open_shaped_playback(emit, config, anchor, discard_notice_sink)
-        decls = {decl.name: decl.window_delivery for decl in head.tables()}
-        assert decls["widget"] == "snapshot"
+        assert head.tables() == (
+            ShapedTableDecl(name="widget", window_delivery="snapshot"),
+        )
+        with pytest.raises(ExportError):
+            head.window(0, 100)
 
 
 def test_reserved_presentation_name_refused_at_open(tmp_path: "Path") -> None:

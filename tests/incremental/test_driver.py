@@ -1072,32 +1072,36 @@ def test_csv_determinism_byte_identical_drops(tmp_path: Path) -> None:
 
 
 def _source_config(
+    source: dict[str, object],
     period: Literal["day", "week", "month"] = "day",
-    source: dict[str, object] | None = None,
 ) -> ExportConfig:
     """Build a mode='source' config with a calendar-regime incremental block
     (the only regime compatible with source mode's mandatory anchor).
 
     Args:
+        source: The `source` section dict (`tables` / `events` /
+            `declare_keys` — the declared grammar).
         period: incremental.period.
-        source: Optional `source` section dict (exclude/rename).
 
     Returns:
         Validated ExportConfig.
     """
-    data: dict[str, object] = {"mode": "source", "incremental": {"period": period}}
-    if source is not None:
-        data["source"] = source
+    data: dict[str, object] = {
+        "mode": "source",
+        "incremental": {"period": period},
+        "source": source,
+    }
     return ExportConfig.model_validate(data)
 
 
-def _source_config_no_incremental(
-    source: dict[str, object] | None = None,
-) -> ExportConfig:
-    """Build a mode='source' config with no incremental block (range export)."""
-    data: dict[str, object] = {"mode": "source"}
-    if source is not None:
-        data["source"] = source
+def _source_config_no_incremental(source: dict[str, object]) -> ExportConfig:
+    """Build a mode='source' config with no incremental block (range export).
+
+    Args:
+        source: The `source` section dict (`tables` / `events` /
+            `declare_keys` — the declared grammar).
+    """
+    data: dict[str, object] = {"mode": "source", "source": source}
     return ExportConfig.model_validate(data)
 
 
@@ -1133,10 +1137,13 @@ def test_source_mode_duckdb_multi_window_drip_dispatches_to_source_engine(
     tmp_path: Path,
 ) -> None:
     """--next over mode='source' drips calendar-day windows via
-    build_source_query_specs: one changelog append per window's events,
-    window 3 empty, window 4 drains."""
+    build_source_query_specs: a declared `state` table's windowed render is
+    a full-horizon snapshot (rows accumulate across windows) — window 0
+    sees w001 only, window 1 adds w002, windows 2-3 hold steady at 2 (a
+    later property change and an empty window neither add nor drop rows),
+    window 4 drains."""
     emit_dir = build_day_scale_source_emit(tmp_path)
-    config = _source_config()
+    config = _source_config(source={"tables": [{"name": "widget", "kind": "widget"}]})
     out = tmp_path / "wh.duckdb"
 
     with open_emit(emit_dir) as emit:
@@ -1145,7 +1152,7 @@ def test_source_mode_duckdb_multi_window_drip_dispatches_to_source_engine(
     assert [o.window.index for o in outcomes if o.window is not None] == [0, 1, 2, 3]
     for outcome in outcomes:
         assert set(outcome.row_counts) == {"widget"}
-    assert [o.row_counts["widget"] for o in outcomes] == [1, 1, 1, 0]
+    assert [o.row_counts["widget"] for o in outcomes] == [1, 2, 2, 2]
 
 
 def test_source_mode_csv_multi_window_drip_dispatches_to_source_engine(
@@ -1155,7 +1162,7 @@ def test_source_mode_csv_multi_window_drip_dispatches_to_source_engine(
     window with the source table name, dispatching through
     build_source_query_specs."""
     emit_dir = build_day_scale_source_emit(tmp_path)
-    config = _source_config()
+    config = _source_config(source={"tables": [{"name": "widget", "kind": "widget"}]})
     out = tmp_path / "drops"
 
     with open_emit(emit_dir) as emit:
@@ -1176,7 +1183,19 @@ def test_source_mode_export_window_explicit_range_dispatches_to_source_engine(
     export_window never derives a window from a cadence, so the ms-scale
     spanning fixture and its explicit Windows apply directly."""
     emit_dir = build_windowed_source_test_emit(tmp_path)
-    config = _source_config_no_incremental()
+    config = _source_config_no_incremental(
+        source={
+            "tables": [
+                {"name": "visit", "kind": "visit"},
+                {"name": "order", "kind": "order"},
+                {"name": "location", "kind": "location"},
+                {
+                    "name": "visit_team",
+                    "membership": {"kind": "visit", "property": "team"},
+                },
+            ]
+        }
+    )
     out = tmp_path / "range.duckdb"
     window, _, _ = windowed_test_windows()
     range_window = Window(
@@ -1209,11 +1228,18 @@ def test_source_mode_export_window_explicit_range_dispatches_to_source_engine(
 def test_source_mode_fingerprint_mismatch_on_source_config_change(
     tmp_path: Path,
 ) -> None:
-    """A source.* config change mid-drip (e.g. exclude.tables) flips the drip
-    fingerprint and raises IncrementalFingerprintMismatch, exactly as a
+    """A source.tables change mid-drip (dropping a declared table) flips the
+    drip fingerprint and raises IncrementalFingerprintMismatch, exactly as a
     dimensional.* config change does today."""
     emit_dir = build_source_test_emit(tmp_path)
-    config = _source_config()
+    config = _source_config(
+        source={
+            "tables": [
+                {"name": "visit", "kind": "visit"},
+                {"name": "location", "kind": "location"},
+            ]
+        }
+    )
     out = tmp_path / "wh.duckdb"
 
     with open_emit(emit_dir) as emit:
@@ -1222,7 +1248,9 @@ def test_source_mode_fingerprint_mismatch_on_source_config_change(
             emit, config, out, "duckdb", anchor, notice_sink=discard_notice_sink
         )  # window 0
 
-    altered_config = _source_config(source={"exclude": {"tables": ["location"]}})
+    altered_config = _source_config(
+        source={"tables": [{"name": "visit", "kind": "visit"}]}
+    )
 
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
@@ -1447,7 +1475,12 @@ def test_declare_keys_csv_notice_source_mode_once_per_invocation(
     """CSV + source-mode declare_keys: exactly one keys-not-declarable-csv
     notice per --next invocation."""
     emit_dir = build_source_test_emit(tmp_path)
-    config = _source_config(source={"declare_keys": True})
+    config = _source_config(
+        source={
+            "tables": [{"name": "visit", "kind": "visit"}],
+            "declare_keys": True,
+        }
+    )
     out = tmp_path / "drops"
 
     with open_emit(emit_dir) as emit:
