@@ -25,13 +25,14 @@ from fabulexa_forge.errors import (
     ExportError,
 )
 from fabulexa_forge.exporters.election import (
+    build_identity_translation_sql,
     build_population_spine_sql,
     check_edge_union_safety,
     check_elected_key_unique,
     check_identity_election,
     resolve_election,
 )
-from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.emit import Emit, open_emit
 from fabulexa_forge.reader.errors import PresentationKeysInvalidError
 from fabulexa_forge.reader.sidecar import KeySpace, Sidecar, union_safe
 
@@ -540,3 +541,159 @@ class TestCheckElectedKeyUnique:
             check_elected_key_unique(
                 emit, relation_sql, "presentation_id", spine_sql, "orders.id"
             )
+
+
+# ---------------------------------------------------------------------------
+# build_identity_translation_sql
+# ---------------------------------------------------------------------------
+
+
+def _identity_translation_emit(tmp_path: Path) -> Path:
+    """A sub-typed `device` kind (day/night, presentation_id-carrying) plus a
+    flat `widget` kind, for `build_identity_translation_sql`'s per-surface /
+    per-row resolution tests."""
+    device_columns: list[dict[str, object]] = [
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "presentation_id", "type": "VARCHAR"},
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
+        {"name": "prop__device_type", "type": "VARCHAR"},
+    ]
+    widget_columns: list[dict[str, object]] = [
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
+    ]
+
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        'CREATE TABLE "records__device" ('
+        '"fork_path" VARCHAR, "record_id" VARCHAR, "presentation_id" VARCHAR,'
+        ' "created_sim_time" BIGINT, "active" BOOLEAN, "deactivated_at" BIGINT,'
+        ' "last_mutation_sim_time" BIGINT, "record_index" BIGINT,'
+        ' "prop__device_type" VARCHAR)'
+    )
+    conn.execute(
+        'CREATE TABLE "records__widget" ('
+        '"fork_path" VARCHAR, "record_id" VARCHAR, "created_sim_time" BIGINT,'
+        ' "active" BOOLEAN, "deactivated_at" BIGINT,'
+        ' "last_mutation_sim_time" BIGINT, "record_index" BIGINT)'
+    )
+    conn.execute(
+        'INSERT INTO "records__device" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "dev1", "DAY_1", 10, True, 10, 0, "day"],
+    )
+    conn.execute(
+        'INSERT INTO "records__device" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "dev2", "NIGHT_1", 10, True, 10, 1, "night"],
+    )
+    conn.execute(
+        'INSERT INTO "records__device" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "dev3", "DAY_2", 20, True, 20, 2, "day"],
+    )
+    conn.execute(
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "w1", 10, True, 10, 0],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            {
+                "name": "records__device",
+                "category": "records",
+                "record_kind": "device",
+                "columns": device_columns,
+                "rows": 3,
+            },
+            {
+                "name": "records__widget",
+                "category": "records",
+                "record_kind": "widget",
+                "columns": widget_columns,
+                "rows": 1,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={"enum_domains": {"device": {"device_type": ["day", "night"]}}},
+    )
+    return tmp_path
+
+
+def _elected_values(emit: Emit, sql: str) -> dict[str, str]:
+    """Execute an identity-translation SELECT, keyed by record_id."""
+    result: dict[str, str] = {}
+    for record_id, elected_value in emit.query(sql, ()):
+        assert isinstance(record_id, str)
+        assert isinstance(elected_value, str)
+        result[record_id] = elected_value
+    return result
+
+
+class TestBuildIdentityTranslationSql:
+    def test_uniform_record_id_is_identity_projection(self, tmp_path: Path) -> None:
+        with open_emit(_identity_translation_emit(tmp_path)) as emit:
+            sql = build_identity_translation_sql(
+                emit.sidecar, "trunk", "widget", ((None, "record_id"),)
+            )
+            rows = _elected_values(emit, sql)
+        assert rows == {"w1": "w1"}
+
+    def test_record_index_digit_rendered(self, tmp_path: Path) -> None:
+        with open_emit(_identity_translation_emit(tmp_path)) as emit:
+            sql = build_identity_translation_sql(
+                emit.sidecar,
+                "trunk",
+                "device",
+                (("day", "record_index"), ("night", "record_index")),
+            )
+            rows = _elected_values(emit, sql)
+        assert rows == {"dev1": "0", "dev2": "1", "dev3": "2"}
+
+    def test_presentation_id_via_presentation_key_derivation(
+        self, tmp_path: Path
+    ) -> None:
+        with open_emit(_identity_translation_emit(tmp_path)) as emit:
+            sql = build_identity_translation_sql(
+                emit.sidecar,
+                "trunk",
+                "device",
+                (("day", "presentation_id"), ("night", "presentation_id")),
+            )
+            rows = _elected_values(emit, sql)
+        assert rows == {"dev1": "DAY_1", "dev2": "NIGHT_1", "dev3": "DAY_2"}
+
+    def test_mixed_per_population_resolves_per_row_via_discriminator(
+        self, tmp_path: Path
+    ) -> None:
+        with open_emit(_identity_translation_emit(tmp_path)) as emit:
+            sql = build_identity_translation_sql(
+                emit.sidecar,
+                "trunk",
+                "device",
+                (("day", "presentation_id"), ("night", "record_index")),
+            )
+            rows = _elected_values(emit, sql)
+        assert rows == {"dev1": "DAY_1", "dev2": "1", "dev3": "DAY_2"}
+
+    def test_every_record_of_kind_appears_exactly_once(self, tmp_path: Path) -> None:
+        with open_emit(_identity_translation_emit(tmp_path)) as emit:
+            sql = build_identity_translation_sql(
+                emit.sidecar,
+                "trunk",
+                "device",
+                (("day", "record_id"), ("night", "record_id")),
+            )
+            rows = emit.query(sql, ())
+        assert len(rows) == 3
+        assert {r[0] for r in rows} == {"dev1", "dev2", "dev3"}

@@ -646,6 +646,119 @@ def _presentation_key_sql(
     )
 
 
+def _identity_case_expr(
+    discriminator_expr: str,
+    per_population: "tuple[tuple[str | None, KeySurface], ...]",
+    exprs: Mapping["KeySurface", str],
+) -> str:
+    """Build the per-row CASE dispatch choosing one population's surface value.
+
+    Mirrors `exporters.source.renders._population_case_expr` in shape
+    (private to that module; not imported here — election never imports a
+    mode package, so this is a deliberate, temporary duplication until
+    Phase 3 rebuilds renders.py atop `build_identity_translation_sql`). A
+    flat (single, `sub_type=None`) population needs no CASE — its lone
+    surface applies unconditionally.
+
+    Args:
+        discriminator_expr: The qualified `prop__<kind>_type` expression to
+            dispatch on; unused for a flat population.
+        per_population: The kind's gated per-population election.
+        exprs: Surface -> the value expression to select for that surface.
+
+    Returns:
+        A bare SQL value expression (a CASE, or the single arm unconditionally).
+    """
+    if len(per_population) == 1 and per_population[0][0] is None:
+        return exprs[per_population[0][1]]
+    arms = []
+    for sub_type, surface in per_population:
+        assert sub_type is not None, "a multi-population set is always sub-typed"
+        arms.append(
+            f"WHEN {discriminator_expr} = {_sql_literal(sub_type)}"
+            f" THEN {exprs[surface]}"
+        )
+    return "CASE " + " ".join(arms) + " END"
+
+
+def build_identity_translation_sql(
+    sidecar: "Sidecar",
+    fork_path: str,
+    kind: str,
+    per_population: "tuple[tuple[str | None, KeySurface], ...]",
+) -> str:
+    """One kind's record_id -> elected-surface translation relation.
+
+    A two-column relation `(record_id, elected_value)`, one row per record
+    of `kind` restricted to the listed populations: per population, the
+    elected surface's value — record_id verbatim, record_index
+    digit-rendered, presentation_id via the presentation-key derivation —
+    resolved per row through the records-spine discriminator when the
+    listed populations elect differing surfaces (the per-row
+    mixed-election device the design doc's event log requires).
+    `elected_value` is always VARCHAR — the union-safe common carrier; a
+    caller needing a typed column (a uniform-surface item_id) CASTs the
+    joined value to its resolved rendered type. Horizon-free: elected
+    surfaces are creation-constant, so no as-of position exists to pass.
+
+    Composes `_record_index_sql` / `_presentation_key_sql` and the
+    records-spine read; a `per_population` uniformly electing 'record_id'
+    still composes (identity projection) so callers need no special case.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch.
+        kind: The target kind (must carry a `records__<kind>` table).
+        per_population: (sub_type, surface) pairs — the populations rows
+            may resolve to, each with its gated elected surface. A flat
+            kind passes the single (None, surface) pair.
+
+    Returns:
+        The relation SELECT (composable as a subquery / CTE body).
+
+    Raises:
+        TableNotFoundError: `records__<kind>` is absent (propagated).
+    """
+    surfaces = {surface for _, surface in per_population}
+    records_sql = build_records_relation_sql(sidecar, fork_path, kind, {})
+    discriminator_expr = f'"_rec"."prop__{kind}_type"'
+    exprs: Mapping["KeySurface", str] = {
+        "record_id": 'CAST("_rec"."record_id" AS VARCHAR)',
+        "record_index": 'CAST("_idx"."record_index" AS VARCHAR)',
+        "presentation_id": 'CAST("_pid"."presentation_id" AS VARCHAR)',
+    }
+    value_sql = _identity_case_expr(discriminator_expr, per_population, exprs)
+
+    joins = ""
+    if "record_index" in surfaces:
+        index_sql = _record_index_sql(sidecar, fork_path, kind, None)
+        joins += (
+            f' LEFT JOIN ({index_sql}) AS "_idx"'
+            ' ON "_rec"."record_id" = "_idx"."record_id"'
+        )
+    if "presentation_id" in surfaces:
+        presentation_sql = _presentation_key_sql(sidecar, fork_path, kind, None)
+        joins += (
+            f' LEFT JOIN ({presentation_sql}) AS "_pid"'
+            ' ON "_rec"."record_id" = "_pid"."record_id"'
+        )
+
+    flat = len(per_population) == 1 and per_population[0][0] is None
+    where_clause = ""
+    if not flat:
+        values = ", ".join(
+            _sql_literal(sub_type)
+            for sub_type, _ in per_population
+            if sub_type is not None
+        )
+        where_clause = f" WHERE {discriminator_expr} IN ({values})"
+
+    return (
+        f'SELECT "_rec"."record_id" AS "record_id", {value_sql} AS "elected_value"'
+        f' FROM ({records_sql}) AS "_rec"{joins}{where_clause}'
+    )
+
+
 def check_elected_key_unique(
     emit: "Emit",
     relation_sql: str,

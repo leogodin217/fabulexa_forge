@@ -1422,6 +1422,209 @@ _SPLIT_ACTOR_COLUMNS: list[dict[str, object]] = [
 ]
 
 
+_TICKET_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__ticket_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__priority", "BIGINT", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__assignee_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="agent",
+    ),
+    identity_column("ref_index__assignee_id", "BIGINT"),
+]
+
+_AGENT_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+_WATCHERS_TICKET_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__note", "type": "VARCHAR"},
+    {"name": "member__party__kind", "type": "VARCHAR"},
+    {"name": "member__party__id", "type": "VARCHAR"},
+]
+
+
+def build_events_test_emit(tmp_path: Path) -> Path:
+    """Build the event-log render test emit (Phase 2, `events.py`, standalone).
+
+    - records__ticket: tracked, sub-typed by `ticket_type` (bug/feature, never
+        split — tracked dominates), a reference-annotated `prop__assignee_id`
+        column (`references: agent`):
+          t001 (bug): created@100ms status=open priority=1 assignee=agent_a;
+              status-only update @150ms ("closed"), then priority-only update
+              @200ms (5) — two independent update markers, exercising
+              "exactly the differing entries" and "coincident changes
+              coalesce" (elsewhere, via `visit` in `build_source_test_emit`).
+          t002 (bug): created@100ms status=open priority=2 assignee=agent_b;
+              no further changes; deactivated@180ms — a destroy whose "last
+              value" is the creation after-image.
+          t003 (feature): created@120ms status=pending priority=9,
+              assignee=NULL; never changes; stays active — excluded when a
+              records source narrows to `sub_types: [bug]`.
+    - records__agent: flat, untracked, dimension role: agent_a (record_index
+        0, 'Alice'), agent_b (record_index 1, 'Bob') — the reference-property
+        and member-field translation target.
+    - membership__ticket__watchers (owner=ticket): one closed interval
+        (agent_a, joined 110ms/left 170ms, note 'urgent') and one still-open
+        interval (agent_b, joined 180ms, note 'fyi') — a scalar
+        (`elem__note`) and a reference (`member__party__kind`/`__id`) field.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__ticket", _TICKET_COLUMNS))
+    conn.execute(_create_ddl("records__agent", _AGENT_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_ddl("membership__ticket__watchers", _WATCHERS_TICKET_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__ticket" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "t001",
+            100 * _MS,
+            True,
+            200 * _MS,
+            0,
+            "bug",
+            "closed",
+            5,
+            "agent_a",
+            0,
+        ],
+    )
+    conn.execute(
+        'INSERT INTO "records__ticket" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "t002",
+            100 * _MS,
+            False,
+            180 * _MS,
+            180 * _MS,
+            1,
+            "bug",
+            "open",
+            2,
+            "agent_b",
+            1,
+        ],
+    )
+    conn.execute(
+        'INSERT INTO "records__ticket" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, NULL, NULL)',
+        ["trunk", "t003", 120 * _MS, True, 120 * _MS, 2, "feature", "pending", 9],
+    )
+
+    for record_id, sim_time, status, priority in (
+        ("t001", 100 * _MS, "open", 1),
+        ("t002", 100 * _MS, "open", 2),
+        ("t003", 120 * _MS, "pending", 9),
+    ):
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "ticket", record_id, "status", sim_time, status],
+        )
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "ticket", record_id, "priority", sim_time, str(priority)],
+        )
+    # t001: status-only change, then a later priority-only change.
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "ticket", "t001", "status", 150 * _MS, "closed"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "ticket", "t001", "priority", 200 * _MS, "5"],
+    )
+
+    conn.execute(
+        'INSERT INTO "records__agent" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "agent_a", 50 * _MS, True, 50 * _MS, 0, "Alice"],
+    )
+    conn.execute(
+        'INSERT INTO "records__agent" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "agent_b", 50 * _MS, True, 50 * _MS, 1, "Bob"],
+    )
+
+    conn.execute(
+        'INSERT INTO "membership__ticket__watchers" VALUES (?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "t001", 110 * _MS, 170 * _MS, "urgent", "agent", "agent_a"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__ticket__watchers" VALUES (?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "t001", 180 * _MS, "fyi", "agent", "agent_b"],
+    )
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__ticket", "records", _TICKET_COLUMNS, 3, record_kind="ticket"
+            ),
+            _table_spec(
+                "records__agent", "records", _AGENT_COLUMNS, 2, record_kind="agent"
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 8),
+            _table_spec(
+                "membership__ticket__watchers",
+                "membership",
+                _WATCHERS_TICKET_COLUMNS,
+                2,
+                record_kind="ticket",
+                property_name="watchers",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra={
+            "record_roles": {"ticket": "dimension", "agent": "dimension"},
+            "enum_domains": {"ticket": {"ticket_type": ["bug", "feature"]}},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
 def build_split_actor_presentation_id_emit(
     tmp_path: Path, *, duplicate_within_consultant: bool = False
 ) -> Path:
