@@ -64,6 +64,21 @@ non-NULL cells and SQL `UNIQUE` ignores NULLs — the same semantics — whereas
 `PRIMARY KEY` would reject the NULLs a partitioned kind's undeclared sub-types
 legitimately carry.
 
+Under a key election ([`key-election.md`](key-election.md)), the declared
+primary key follows the **elected identity column** — under base's
+`record_index` election that is `<kind>_key`, the id-space column being
+dropped — and side `UNIQUE` declarations follow the surviving columns: a
+`UNIQUE` whose column the election absorbed or dropped (`record_id` under a
+non-`record_id` election, the standalone `presentation_id` once absorbed) is
+simply not declared. Election substitutes the column inside the resolution
+table above, never widens it — a table that declares no `PRIMARY KEY`
+(change-log, junction) still declares none, and populations without an
+election resolve exactly per the table. One posture is scoped to the elected
+identity column alone: as an *elected identity column*, `presentation_id` is
+PK-eligible — its non-NULL table-wide uniqueness is established by the
+election's render-time guard, not by a claim — while non-elected declared
+claims keep the `UNIQUE`-never-`PRIMARY KEY` posture above.
+
 | Condition | Result |
 |---|---|
 | `declare_keys` absent or false | No key metadata compiled; output byte-identical to a `declare_keys`-less export |
@@ -133,7 +148,11 @@ as any other config field does.
 Dimensional export declares no keys, but dimensional `init` consults the block:
 when it carries a whole-table claim for a proposed kind, the kind's stub carries
 one advisory comment naming `presentation_id` as the contract-declared natural
-key ([`dimensional.md`](dimensional.md) § `init` inference contract).
+key ([`dimensional.md`](dimensional.md) § `init` inference contract). Where the
+stub's population instead elects `presentation_id` in `init`'s proposed `keys`
+block, the key column sources `from: presentation_id` directly and no advisory
+is emitted — the claim is consumed as a key source
+([`key-election.md`](key-election.md) § `init` proposals).
 
 ## Invariants
 
@@ -232,6 +251,7 @@ means off. It carries no cross-field rule — it composes with `slice_at`,
 | [`writers.md`](writers.md) | The DuckDB materialization boundary the keyed creation path extends |
 | [`incremental.md`](incremental.md) | The windowed driver whose write regimes gate per-window declaration |
 | [`dimensional.md`](dimensional.md) | `init`'s natural-key advisory — the one dimensional consumer of the block |
+| [`key-election.md`](key-election.md) | The key-election surface — the declared primary key follows the elected identity column; PK-eligibility of elected `presentation_id` |
 | [`notices.md`](notices.md) | The channel `keys-not-declarable-csv` flows through |
 | [`corrupters.md`](corrupters.md) | The verbatim-carry composition and the falsified-claim surfacing |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The `presentation_keys` block, its consistency rules, and the normative union-safety algebra |

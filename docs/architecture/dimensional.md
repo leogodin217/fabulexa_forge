@@ -273,6 +273,23 @@ An anchor record with no FK value on some rows — e.g. a `history` grain keyed 
 the FK. This is a documented limitation, never fabricated: a discharge history row
 cannot reach `journey_instance`, so its `spell_id` FK is `NULL`.
 
+**The FK identity surface.** Which identity surface the resolved FK column
+*carries* is the key-election surface's contract
+([`key-election.md`](key-election.md) § Rendering: dimensional). In brief:
+`fk.target_key` accepts `record_id` / `record_index` / `presentation_id`;
+absent, the edge inherits the election of the destination dim's **source
+population set** (the dim's `source.kind`, narrowed by the `filter`'s
+discriminator conjunct), refusing at plan time when that set carries more than
+one distinct election (`ElectionInheritanceAmbiguous`). A non-`record_id`
+surface resolves through the record-index or presentation-key join relation
+restricted to that population set — an out-of-set target renders `NULL` — and
+`presentation_id` resolution requires every admitted population
+registry-declared and pairwise union-safe, with or without a config `keys`
+block. The dim-key agreement check (`ElectionDimKeyDisagrees`) forces an
+inheriting edge's destination dim to declare a `key` column sourced `from:`
+the elected contract column, so both sides of the join agree before any data
+is read.
+
 ### Lookup — type-1 record-attribute enrichment
 
 A `lookup` column projects a record's scalar `prop__<property>` value onto an output row
@@ -617,13 +634,20 @@ reachable by explicit author projection: identity columns are neither proposed
 nor specially forbidden in author config — a base column named explicitly
 projects faithfully, as any base value does.
 
-**The natural-key advisory.** When the emit's `presentation_keys` block carries a
-whole-table claim for a proposed kind (a flat `key` entry, or a partitioned
-rollup with a `unique_within`), the kind's stub carries one comment naming
-`presentation_id` as the contract-declared natural key and its scope. No claim,
-no comment — and no config grammar change: the advisory is a comment, never a
-field. `init` consults the reader's strict accessor and shares its
-strict-on-read behavior — an incoherent present block refuses `init` too
+**The natural-key advisory and the `keys` proposal.** When the emit's
+`presentation_keys` block carries a whole-table claim for a proposed kind (a
+flat `key` entry, or a partitioned rollup with a `unique_within`), the kind's
+stub carries one comment naming `presentation_id` as the contract-declared
+natural key and its scope. No claim, no comment — and no config grammar change:
+the advisory is a comment, never a field. `init` also proposes the cross-mode
+`keys` election block and aligns its dim stubs with it: a proposed dim whose
+source population elects `presentation_id` sources its key column
+`from: presentation_id` directly — the claim consumed as a key source, so the
+dim-key agreement check holds by construction and the advisory comment is not
+emitted for that stub; the proposal is self-gated through the export's own
+election machinery ([`key-election.md`](key-election.md) § `init` proposals).
+`init` consults the reader's strict accessor and shares its strict-on-read
+behavior — an incoherent present block refuses `init` too
 ([`reader.md`](reader.md) § The presentation-keys registry is strict on read,
 [`declared-keys.md`](declared-keys.md)).
 
@@ -860,10 +884,11 @@ What the dimensional exporter deliberately does not own:
 - **Queue-state derivation.** Membership read-joins and membership-grain role-binding
   facts are in scope; deriving queue state (wait time, FIFO/priority order) and
   materializing `waiters`/`holders` as queue/bridge tables is not.
-- **Presentation-id remap.** Dimension keys are the mechanism `record_id`. A
-  `presentation_id` surrogate, when the emit carries one, is a faithful passthrough
-  column (and a valid FK `target_key`); minting `PAT_`-style ids or synthesizing names
-  from scratch is a separate package's job, never the exporter's.
+- **Presentation-id remap.** The join *mechanism* is `record_id` — every pathfind
+  hop keys on it. A `presentation_id` surrogate, when the emit carries one, is a
+  faithful passthrough column and an electable FK surface
+  ([`key-election.md`](key-election.md)); minting `PAT_`-style ids or synthesizing
+  names from scratch is a separate package's job, never the exporter's.
 - **Other modes and corrupters.** Only `mode: dimensional` is defined here; `base` /
   `source` / `streaming` modes and corrupters are separate surfaces. CSV and DuckDB are
   the writers; Parquet is not.
@@ -881,6 +906,7 @@ What the dimensional exporter deliberately does not own:
 | [`playback.md`](playback.md) | The seam whose tier-2 `state` compiles this mode over a truncated tape via `base_relations`; the presentation-name posture's companion |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — `query_arrow`, the `history_tracked` flag, the faithful-read builders, the per-type decode contract |
 | [`conformance.md`](conformance.md) | The C1–C14 contract the input is trusted to satisfy |
+| [`key-election.md`](key-election.md) | The cross-mode key-election surface — FK `target_key` semantics, inheritance, the dim-key agreement check, `init`'s `keys` proposal |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The config grammar these semantics bind |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The input contract (table categories, `references`, membership, `history_tracked`) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |

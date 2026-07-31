@@ -257,6 +257,22 @@ read of the interval rows, no derivation:
 | `elem__<f>` | `<f>` | verbatim, native type |
 | `member__<f>__kind` / `member__<f>__id` | `<f>_kind` / `<f>_id` | verbatim |
 
+### Elected identity surfaces
+
+Which identity surface the `id` column and every referencing column *carry* is
+the cross-mode key-election surface's contract
+([`key-election.md`](key-election.md) § Rendering: source). In brief: under a
+config `keys` election the elected surface (`record_id` / `record_index` /
+`presentation_id`) renders as the table's identity column in every genre —
+change-log identity resolved through a post-fold join on the fold's
+`record_id`, leaving the row-state-events fold untouched — and reference
+`prop__` columns, junction owner columns, and junction member columns render
+their *target* populations' elections. Source's plan step runs the election's
+identity gates (an unsplit sub-typed table spans populations — one table, one
+identity surface) and edge gates; `rename` addresses the id column by the
+elected surface's contract column name. Absent the `keys` block, every render
+site carries verbatim `record_id`, as the genre tables above state.
+
 ### The `slice_only` omission
 
 Every records-genre render — change-log after-image, reference, transaction, and
@@ -704,6 +720,7 @@ owned by [`declared-keys.md`](declared-keys.md).
 | [`corrupters.md`](corrupters.md) | The corrupt → source composition — a source export over a corrupted emit surfaces declared defects unchanged |
 | [`writers.md`](writers.md) | The CSV / DuckDB adapters source shares with every mode |
 | [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — per-genre declared primary-key / uniqueness constraints |
+| [`key-election.md`](key-election.md) | The cross-mode key-election surface — elected identity and edge rendering per genre, the identity and edge gates source's plan runs |
 | [`config-docstrings.md`](config-docstrings.md) | The docstring convention `SourceConfig` / `RenameEntry` follow |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Source-mode feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |

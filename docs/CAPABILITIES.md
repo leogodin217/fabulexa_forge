@@ -237,6 +237,21 @@ Each mode reads the same emit and writes a different target shape.
   the claimed natural key. Off by default — output byte-identical; claims are never
   validated against data. See
   [`architecture/declared-keys.md`](architecture/declared-keys.md).
+- ✓ **Key election** *(post-Stage 4)* — cross-mode `keys` config block electing, per
+  population (per sub-type for sub-typed kinds, per kind for flat), which of the emit's
+  identity surfaces — `record_id` / `record_index` / `presentation_id` — presents as
+  that population's exported identity, with every referencing column rendered in its
+  *target's* elected surface (re-derived at the export horizon through the record-index
+  / presentation-key join relations). Statically gated against the sidecar's
+  `presentation_keys` registry and the contract's union-safety algebra (one table, one
+  identity surface; edges pairwise union-safe); one render-time uniqueness guard
+  refuses silently-broken joins over corrupted identities. Source renders the elected
+  surface per genre; base makes the id-space value surface elective beside its
+  always-on index keys; dimensional FKs inherit the destination dim's election
+  (`fk.target_key` per-edge override, dim-key agreement check); `init` proposes a
+  self-gated `keys` block. Absent the block, output keeps the `record_id` default.
+  Forge never mints — election selects among surfaces the emit carries. See
+  [`architecture/key-election.md`](architecture/key-election.md).
 - ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
   through a required caller-supplied sink; CLI renders one line per notice to stderr,
   off stdout. See [`architecture/notices.md`](architecture/notices.md).

@@ -247,6 +247,22 @@ excluded. Suppressing one encoding but not the other would make the pair disagre
 about what the export contains, and the author who excluded the kind is the one who
 chose the dangling edge.
 
+### Elected identity surfaces
+
+The index keys above always ship; which id-space *value* surface ships beside
+them is the cross-mode key-election surface's contract
+([`key-election.md`](key-election.md) § Rendering: base). In brief: under a
+config `keys` election, a table's own `presentation_id` election renders the
+elected value in the id-space slot (rename key `presentation_id`, the
+standalone payload column absorbed), a `record_index` election drops the
+id-space self column (`<kind>_key` *is* the election), and each edge's
+`prop__<p>` value column follows its *target* populations' elections beside the
+always-on `<p>_key` — the two axes independent. Base's plan step runs the
+election's identity gates over each kind's full declared domain (base never
+splits — one table, one identity surface) and edge gates per reference edge.
+Absent the `keys` block, every table carries the `<kind>_key` / `id` /
+`prop__<p>` / `<p>_key` shape this doc states.
+
 ### The `slice_only` omission
 
 Base auto-projects a kind's full property set — a flat projection has no author-named
@@ -473,6 +489,7 @@ gating are owned by [`declared-keys.md`](declared-keys.md).
 | [`source.md`](source.md) | Snapshot delivery (the same state-at composition), the presentation-name posture, and the `slice_only` omission shape base shares |
 | [`slice-only.md`](slice-only.md) · [`notices.md`](notices.md) | The reused omission policy and the channel its notices flow through |
 | [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — declared primary-key / uniqueness constraints on base's flat tables |
+| [`key-election.md`](key-election.md) | The cross-mode key-election surface — the elective id-space value surface beside the always-on index keys, and the gates base's plan runs |
 | [`playback.md`](playback.md) | Shaped state and the bridging theorem that make direct-horizon equivalent |
 | [`anchor.md`](anchor.md) · [`incremental.md`](incremental.md) | The shared wallclock renderer and the window/cursor/fingerprint driver base wires into |
 | [`corrupters.md`](corrupters.md) | The corrupt → base composition — a base export over a corrupted emit surfaces declared defects unchanged |
