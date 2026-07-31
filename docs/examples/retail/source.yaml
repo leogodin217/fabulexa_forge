@@ -2,38 +2,69 @@
 # ============================================================
 # `fabulexa-forge export docs/examples/retail/bundle docs/examples/retail/source.yaml`
 #
-# Source mode classifies every table into a genre from record_roles ×
-# temporal_class, with NO author declaration of genre. TRACKED-NESS DOMINATES:
-# any kind carrying a class-`tracked` prop exports as a wide CDC CHANGE-LOG
-# table (op / changed_at / id / after-image cols) regardless of its warehouse
-# role. Retail's classification:
-#   - actor            -> CHANGE-LOG (prop__total_purchases is tracked). AND
-#                         record_roles.actor is an OBJECT {customer, ops}, so
-#                         it SUB-TYPE-SPLITS into two change-log tables named
-#                         after the sub-types: `customer` and `ops`. The
-#                         actor_type discriminator column is dropped from each
-#                         (constant within the table, recoverable from its name).
-#   - entity           -> CHANGE-LOG (prop__status / prop__error_rate tracked).
-#                         record_roles.entity is a bare "dimension" string (NOT
-#                         an object), so entity does NOT sub-type-split in source
-#                         — products and infrastructure land in one change-log
-#                         table. (Contrast stream.yaml, whose sub-typing follows
-#                         the entity_type enum-domain, not record_roles.)
-#   - journey_instance -> CHANGE-LOG (prop__current_state tracked).
-#   - tick_decision    -> TRANSACTION (a fact kind with no tracked prop): the
-#                         immutable customer-action funnel events.
-#   - membership__tick_decision__bindings -> JUNCTION (interval) table: which
-#                         product each customer action was bound to.
+# Source mode DECLARES its own output shape (source-declared-tables): each
+# `tables[]` entry is a `state` table (current-state, one row per record)
+# over a `kind:`, or a `junction` table over a `membership:` reference.
+# Retail's declarations:
 #
-# No kinds excluded — retail has no simulation-mechanism kind to drop (see
-# base.yaml; `tick_decision` is real event data here, and there is no `queue`).
+#   SPLIT    actor -> customer + ops, two `state` tables over the same
+#            `kind: actor` (the SI wide records table, `actor_type`
+#            discriminator), each narrowed by its own `sub_types:` — the
+#            per-sub-type split alternative `init` shows in comments, taken
+#            up here because customer and ops are genuinely separate
+#            operational tables, not two views of one. Both still share the
+#            one `actor` audit stream below — the log's population is
+#            independent of how many state tables read from it.
+#   COMBINED entity (products + infrastructure) stays ONE `state` table:
+#            declaring bare `kind: entity` (no `sub_types:`) takes the
+#            combined STI shape, matching the single change-log table the
+#            old auto-genre classification produced.
+#   PLAIN    journey_instance and tick_decision each get their own table;
+#            tick_decision is untracked (an immutable customer-action
+#            funnel event — a create-only spine, so its `state` table IS
+#            the full record) and so carries no `events:` source.
+#   JUNCTION membership__tick_decision__bindings -> which product each
+#            customer action was bound to.
 #
-# Source is the first mode that REQUIRES a resolved wallclock anchor (change-log
-# `changed_at` and junction `joined_at`/`left_at` are real TIMESTAMPs). No
-# rebase block is given, so the anchor falls back to the sidecar `runtime`
-# (start 2022-03-01, UTC) — the emit's own clock. Uncomment `rebase:` to override.
+# History is opt-in via the single polymorphic `events:` log; TRACKED-NESS
+# decides who is worth auditing, independent of the state-table split above:
+# actor (prop__total_purchases), entity (prop__status / prop__error_rate),
+# journey_instance (prop__current_state).
+#
+# No kinds are omitted — retail has no simulation-mechanism kind to drop
+# (see base.yaml; `tick_decision` is real event data here, and there is no
+# `queue`).
+#
+# Source is the first mode that REQUIRES a resolved wallclock anchor (the
+# event log's `occurred_at` and the junction's `joined_at`/`left_at` are
+# real TIMESTAMPs). No rebase block is given, so the anchor falls back to
+# the sidecar `runtime` (start 2022-03-01, UTC) — the emit's own clock.
+# Uncomment `rebase:` to override.
 
 mode: source
+
+source:
+  tables:
+    - name: customer
+      kind: actor
+      sub_types: [customer]
+    - name: ops
+      kind: actor
+      sub_types: [ops]
+    - name: entity
+      kind: entity
+    - name: journey_instance
+      kind: journey_instance
+    - name: tick_decision
+      kind: tick_decision
+    - name: tick_decision_bindings
+      membership: {kind: tick_decision, property: bindings}
+  events:
+    name: history
+    sources:
+      - kind: actor
+      - kind: entity
+      - kind: journey_instance
 
 # rebase:
 #   base_date: 2022-03-01

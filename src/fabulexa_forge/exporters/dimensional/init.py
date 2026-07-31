@@ -16,6 +16,12 @@ from typing import TYPE_CHECKING, Callable
 
 from fabulexa_forge.errors import ElectionUnionUnsafe, InitRequiresRecordRoles
 from fabulexa_forge.exporters.election import check_edge_union_safety, resolve_election
+from fabulexa_forge.exporters.keys_init import (
+    build_keys_config,
+    domains_for_kinds,
+    natural_expanded_surfaces,
+    write_keys_block,
+)
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.reader.records_columns import (
@@ -29,7 +35,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import KeySurface
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit
-    from fabulexa_forge.reader.sidecar import PresentationKeys, RecordRoles, Sidecar
+    from fabulexa_forge.reader.sidecar import PresentationKeys, Sidecar
 
 
 # Registry role token -> config role token
@@ -223,107 +229,6 @@ def _membership_kinds_and_props(
     return result
 
 
-def _domains_for_kinds(
-    sidecar: "Sidecar", record_roles: "RecordRoles"
-) -> dict[str, tuple[str, ...]]:
-    """Every proposed kind's declared sub-type domain, `()` for a flat kind.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        record_roles: The sidecar's `record_roles` view.
-
-    Returns:
-        kind -> `sidecar.subtype_values(kind)`, over `record_roles.kinds()`.
-    """
-    return {kind: sidecar.subtype_values(kind) for kind in record_roles.kinds()}
-
-
-def _population_declared(
-    presentation_keys: "PresentationKeys | None", kind: str, sub_type: str | None
-) -> bool:
-    """Whether one population carries a `presentation_keys` declaration.
-
-    A flat kind's `key` entry, or a partitioned kind's per-sub-type entry
-    (`key_for`) — presence alone, independent of the kind's rollup claim
-    (a rollup with no claim still leaves each individually-declared
-    sub-type's own entry present).
-
-    Args:
-        presentation_keys: The open emit's `presentation_keys` view, or None.
-        kind: The population's kind.
-        sub_type: The population's discriminator value, or None for a flat kind.
-
-    Returns:
-        True iff the population has its own registry entry.
-    """
-    if presentation_keys is None or kind not in presentation_keys.kinds():
-        return False
-    try:
-        if sub_type is None:
-            presentation_keys.key(kind)
-        else:
-            presentation_keys.key_for(kind, sub_type)
-    except (KeyError, ValueError):
-        return False
-    return True
-
-
-def _natural_expanded_surfaces(
-    presentation_keys: "PresentationKeys | None",
-    domains: "dict[str, tuple[str, ...]]",
-) -> "dict[tuple[str, str | None], KeySurface]":
-    """The doc's natural per-population proposal: declared -> presentation_id,
-    undeclared -> record_index — total over every population `domains` covers.
-
-    Args:
-        presentation_keys: The open emit's `presentation_keys` view, or None.
-        domains: Every proposed kind's sub-type domain, from `_domains_for_kinds`.
-
-    Returns:
-        (kind, sub_type) -> the natural election, one entry per population.
-    """
-    expanded: "dict[tuple[str, str | None], KeySurface]" = {}
-    for kind, domain in domains.items():
-        sub_types: tuple[str | None, ...] = domain if domain else (None,)
-        for sub_type in sub_types:
-            expanded[(kind, sub_type)] = (
-                "presentation_id"
-                if _population_declared(presentation_keys, kind, sub_type)
-                else "record_index"
-            )
-    return expanded
-
-
-def _build_keys_config(
-    expanded: "dict[tuple[str, str | None], KeySurface]",
-    domains: "dict[str, tuple[str, ...]]",
-) -> "dict[str, KeySurface | dict[str, KeySurface]]":
-    """The config `keys` block shape from an expanded per-population map.
-
-    Mirrors the registry's own shape (doc § `init` proposals): a flat kind
-    proposes the scalar; a partitioned kind proposes the per-sub-type map,
-    collapsed to the scalar when every sub-type agrees.
-
-    Args:
-        expanded: (kind, sub_type) -> elected surface, total over `domains`.
-        domains: Every proposed kind's sub-type domain.
-
-    Returns:
-        The `ExportConfig.keys`-shaped proposal.
-    """
-    config: "dict[str, KeySurface | dict[str, KeySurface]]" = {}
-    for kind, domain in domains.items():
-        if not domain:
-            config[kind] = expanded[(kind, None)]
-            continue
-        sub_map: "dict[str, KeySurface]" = {
-            sub_type: expanded[(kind, sub_type)] for sub_type in domain
-        }
-        values = set(sub_map.values())
-        config[kind] = next(iter(values)) if len(values) == 1 else sub_map
-    return config
-
-
 def _reference_edges(all_tables: tuple[TableSpec, ...]) -> list[tuple[str, str, str]]:
     """Every `references` column across every records table — the reference graph.
 
@@ -378,7 +283,7 @@ def _self_gate_keys_proposal(
         proposal, and kind -> a one-line reason naming the forcing gate, for
         every kind the gate degraded.
     """
-    election = resolve_election(sidecar, _build_keys_config(expanded, domains))
+    election = resolve_election(sidecar, build_keys_config(expanded, domains))
     degraded: dict[str, str] = {}
     for source_kind, column, target_kind in _reference_edges(all_tables):
         if target_kind not in domains:
@@ -398,41 +303,13 @@ def _self_gate_keys_proposal(
             degraded[target_kind] = f"ElectionUnionUnsafe: {exc}"
 
     if not degraded:
-        return _build_keys_config(expanded, domains), degraded
+        return build_keys_config(expanded, domains), degraded
 
     for kind in degraded:
         sub_types: tuple[str | None, ...] = domains[kind] if domains[kind] else (None,)
         for sub_type in sub_types:
             expanded[(kind, sub_type)] = "record_index"
-    return _build_keys_config(expanded, domains), degraded
-
-
-def _write_keys_block(
-    w: Callable[[str], None],
-    keys_config: "dict[str, KeySurface | dict[str, KeySurface]]",
-    degraded: dict[str, str],
-) -> None:
-    """Write the proposed `keys:` block, one line per kind (or per sub-type).
-
-    A degraded kind always renders as a scalar `record_index` (uniform
-    election collapses by construction) with a trailing comment naming the
-    forcing gate.
-
-    Args:
-        w: Line-writing callable.
-        keys_config: The gated `ExportConfig.keys`-shaped proposal.
-        degraded: kind -> reason, for every kind the self-gate forced.
-    """
-    w("keys:")
-    for kind, election in keys_config.items():
-        if isinstance(election, dict):
-            w(f"  {kind}:")
-            for sub_type, surface in election.items():
-                w(f"    {sub_type}: {surface}")
-        else:
-            reason = f"  # NOTE: {degraded[kind]}" if kind in degraded else ""
-            w(f"  {kind}: {election}{reason}")
-    w("")
+    return build_keys_config(expanded, domains), degraded
 
 
 def _write_dim_scd2_stub(
@@ -679,8 +556,8 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     assert record_roles is not None
     presentation_keys = sidecar.presentation_keys()
 
-    domains = _domains_for_kinds(sidecar, record_roles)
-    expanded = _natural_expanded_surfaces(presentation_keys, domains)
+    domains = domains_for_kinds(sidecar, record_roles.kinds())
+    expanded = natural_expanded_surfaces(presentation_keys, domains)
     keys_config, degraded = _self_gate_keys_proposal(
         sidecar, all_tables, domains, expanded
     )
@@ -698,7 +575,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     w("")
     w("mode: dimensional")
     w("")
-    _write_keys_block(w, keys_config, degraded)
+    write_keys_block(w, keys_config, degraded)
     w("dimensional:")
     w("  tables:")
 

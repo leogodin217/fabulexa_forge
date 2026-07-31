@@ -2,34 +2,55 @@
 # ============================================================
 # `fabulexa-forge export docs/examples/ride-sharing/bundle docs/examples/ride-sharing/source.yaml`
 #
-# Source mode classifies every table into a genre from record_roles ×
-# temporal_class, with NO author declaration of genre:
-#   - tracked kinds (a class-`tracked` prop) -> wide CDC CHANGE-LOG tables
-#     (op / changed_at / id / after-image cols). Ride-sharing tracked kinds:
-#     actor (status — the trip lifecycle changelog, this bundle's headline
-#     shape), journey_instance (current_state), resource (allocated).
-#   - untracked dimension kinds -> REFERENCE tables (entity: riders + zones).
-#   - untracked fact kinds -> TRANSACTION tables.
-#   - membership__resource__holders -> a JUNCTION (interval) table: which trip
-#     held which driver, from match through drop-off.
+# Source mode DECLARES its own output shape (source-declared-tables): each
+# `tables[]` entry is a `state` table (current-state, one row per record)
+# over a `kind:`, or a `junction` table over a `membership:` reference.
+# Every domain-meaningful kind gets its own `state` table, verbatim-named:
+# actor (trips), entity (riders + zones), journey_instance (trip
+# lifecycles), resource (drivers) — plus one `junction` table over
+# `membership__resource__holders` (which trip held which driver, from match
+# through drop-off).
 #
-# Source is the first mode that REQUIRES a resolved wallclock anchor (change-log
-# `changed_at` is a real TIMESTAMP). No rebase block is given, so the anchor
-# falls back to the sidecar `runtime` (start 2026-01-05, UTC) — the emit's own
-# clock. Uncomment `rebase:` to override origin/zone.
+# History is opt-in via the single polymorphic `events:` log; TRACKED-NESS
+# decides who is worth auditing: actor (status — the trip lifecycle
+# changelog, this bundle's headline shape), journey_instance
+# (current_state), resource (allocated). entity carries no tracked
+# property, so it is state-only (no `events` source) — the same choice
+# `init`'s own proposal would make.
 #
-# Same two mechanism kinds excluded as base/dimensional (see base.yaml). In
-# source, excluding a kind also drops the membership tables it owns:
-# excluding `queue` drops membership__queue__waiters, and excluding
-# `tick_decision` drops membership__tick_decision__bindings — junctions without
-# their owner are not operational. That leaves membership__resource__holders as
-# the one surviving junction (driver ⟷ trip holds).
+# Source is the first mode that REQUIRES a resolved wallclock anchor (the
+# event log's `occurred_at` is a real TIMESTAMP). No rebase block is given,
+# so the anchor falls back to the sidecar `runtime` (start 2026-01-05, UTC)
+# — the emit's own clock. Uncomment `rebase:` to override origin/zone.
+#
+# Same two mechanism kinds excluded as base/dimensional (see base.yaml) —
+# omission is source's own exclusion mechanism, so `tick_decision` and
+# `queue` are simply never declared. Neither owns a membership table this
+# bundle keeps: excluding `queue` drops membership__queue__waiters, and
+# excluding `tick_decision` drops membership__tick_decision__bindings —
+# junctions without their owner are not operational, so
+# membership__resource__holders is the one declared here.
 
 mode: source
 
 source:
-  exclude:
-    kinds: [tick_decision, queue]
+  tables:
+    - name: actor
+      kind: actor
+    - name: entity
+      kind: entity
+    - name: journey_instance
+      kind: journey_instance
+    - name: resource
+      kind: resource
+    - name: resource_holders
+      membership: {kind: resource, property: holders}
+  events:
+    name: history
+    sources:
+      - kind: actor
+      - kind: journey_instance
+      - kind: resource
 
 # rebase:
 #   base_date: 2026-01-05

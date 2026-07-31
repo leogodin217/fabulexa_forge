@@ -653,12 +653,10 @@ def _identity_case_expr(
 ) -> str:
     """Build the per-row CASE dispatch choosing one population's surface value.
 
-    Mirrors `exporters.source.renders._population_case_expr` in shape
-    (private to that module; not imported here — election never imports a
-    mode package, so this is a deliberate, temporary duplication until
-    Phase 3 rebuilds renders.py atop `build_identity_translation_sql`). A
-    flat (single, `sub_type=None`) population needs no CASE — its lone
-    surface applies unconditionally.
+    The sole per-row CASE dispatch builder; `renders.py`'s state/junction
+    builders compose it exclusively through `build_identity_translation_sql`
+    below rather than carrying a private copy. A flat (single, `sub_type=None`)
+    population needs no CASE — its lone surface applies unconditionally.
 
     Args:
         discriminator_expr: The qualified `prop__<kind>_type` expression to

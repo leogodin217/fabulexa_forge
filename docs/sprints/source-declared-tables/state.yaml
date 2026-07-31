@@ -73,6 +73,6 @@ phases:
         files:
           - "tests/recipes/test_source_recipes.py"
   4:
-    status: pending
+    status: complete
     name: "init --mode source + examples refresh"
     demo: "docs/sprints/source-declared-tables/demos/phase_4_init_source.py"
