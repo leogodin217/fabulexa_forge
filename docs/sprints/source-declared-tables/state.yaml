@@ -1,0 +1,78 @@
+sprint: source-declared-tables
+parent_branch: enable_better_ids
+baseline_sha: ee97ac3093bbe96d35d13fe44a8346e7c6e2313d
+started: 2026-07-31
+current_phase: 1
+capabilities:
+  - config: [source-declared-grammar, decl-models]
+  - shared-exporter: [population-resolver, identity-translation]
+  - source: [declared-plan, state-render, junction-render, event-log, windowed-renders]
+  - key-election: [declared-table-gates, item-type-gates]
+  - playback: [source-shape-rekey]
+  - init: [source-proposal]
+  - recipes: [source-corpus-rebuild]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "Population resolver + declaration vocabulary + errors"
+    demo: "docs/sprints/source-declared-tables/demos/phase_1_populations.py"
+  2:
+    status: pending
+    name: "Event-log render (standalone)"
+    demo: "docs/sprints/source-declared-tables/demos/phase_2_event_log.py"
+  3:
+    status: pending
+    name: "The cutover (atomic)"
+    demo: "docs/sprints/source-declared-tables/demos/phase_3_declared_export.py"
+    steps:
+      - kind: source
+        summary: "SourceConfig swap (tables/events/declare_keys + parse validators + mode_section_matches), six errors retired, plan.py rebuilt: declared tables + event log resolved to SourcePlan units (populations, taxonomy columns, columns/rename, identity/edge/item-type gates, overlap/collision/reserved checks, plan-time uniqueness guards, resolve_state_table_keys)"
+      - kind: source
+        summary: "renders.py rebuilt (state/junction builders over plan units; genre dispatch + changelog/snapshot renders deleted), engine.py plan+compile split + per-render write modes + event-log wiring, playback/shaped.py re-key + _rewrite_specs_base_relations + election threading, incremental driver call-site; creates the demo"
+      - kind: author
+        summary: "Rewrite _source_fixtures.py: drop record_roles/genre coupling, delete the two reclassification builders, declared-table captions"
+        files:
+          - "tests/exporters/source/_source_fixtures.py"
+      - kind: author
+        summary: "Rewrite config + plan suites against the declared-table grammar per spec Phase 3 test bullets"
+        files:
+          - "tests/config/test_source_config.py"
+          - "tests/exporters/source/test_plan.py"
+      - kind: author
+        summary: "Rewrite render + engine suites: state/junction renders, write modes, windowed shapes, determinism"
+        files:
+          - "tests/exporters/source/test_renders.py"
+          - "tests/exporters/source/test_engine.py"
+      - kind: author
+        summary: "Rewrite election suites: gates per declared table + per item-type, elected renders incl. event-log item_id, plan-time uniqueness guard"
+        files:
+          - "tests/exporters/source/test_election_plan.py"
+          - "tests/exporters/source/test_election_renders.py"
+      - kind: author
+        summary: "Rewrite playback shaped source coverage: declared shapes, render-keyed deliveries, windowed-plan-per-ask refusal, seam-side base_relations"
+        files:
+          - "tests/playback/_shaped_fixtures.py"
+          - "tests/playback/test_shaped_open.py"
+          - "tests/playback/test_shaped_state.py"
+          - "tests/playback/test_shaped_window.py"
+      - kind: migrate
+        tactic: fan-out
+        change: "SourceConfig grammar swap: configs declare tables/events; exclude/rename/change_delivery/bare-dump forms die; tests of deleted behavior removed per spec Phase 3"
+        files:
+          - "tests/config/test_loader.py"
+          - "tests/config/test_base_config.py"
+          - "tests/integration/test_corrupt_source.py"
+          - "tests/incremental/test_driver.py"
+          - "tests/exporters/test_base_relations.py"
+          - "tests/test_cli_export.py"
+      - kind: author
+        summary: "Rebuild the source recipe corpus per the spec Phase 3 Files table (6 folders deleted, 2 migrated, 4 created) + test_source_recipes.py harness (snapshot-delivery branch dies)"
+        files:
+          - "tests/recipes/test_source_recipes.py"
+  4:
+    status: pending
+    name: "init --mode source + examples refresh"
+    demo: "docs/sprints/source-declared-tables/demos/phase_4_init_source.py"
