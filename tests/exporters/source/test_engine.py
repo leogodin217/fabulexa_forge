@@ -1,18 +1,21 @@
-"""Tests for build_source_query_specs and export_source.
+"""Tests for `require_source_anchor`, `build_source_query_specs`, and
+`export_source` (`exporters/source/engine.py`).
 
-Full-export cases (`window=None`) pass every spec write_mode='create'. Windowed
-cases (Unit 2) confirm per-genre write_mode tagging: change-log/transaction
-append, reference replace, junction append. Snapshot-delivery cases (Phase 9)
-confirm a full (non-windowed) export reconstructs at the tape's end
-(`build_state_at_end_sql`, write_mode='create') instead of refusing, and
-write_mode='replace' + build_snapshot_render_sql routing for a windowed
-changelog-genre spec.
+Full-export cases (`window=None`) pass every spec `write_mode='create'`.
+Windowed cases tag per-unit write_mode: `state` `replace` (a full horizon
+snapshot per window), `junction` / the event log `append` (extract-on-change
+/ append-only). Compile order mirrors `plan.tables` declaration order, the
+event log last. `build_source_query_specs` raises `ValueError` when `window`
+presence disagrees with the plan's own `windowed` flag — a caller
+programming error, guarded here as a contract check.
 """
 
 from __future__ import annotations
 
 import csv
+from contextlib import contextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING, Iterator
 
 import duckdb
 import pytest
@@ -20,9 +23,16 @@ from _support.duckdb_introspect import constraint_types
 from _support.notices import RecordingNoticeSink, discard_notice_sink
 
 from fabulexa_forge.anchor import resolve_effective_anchor
-from fabulexa_forge.config.models import ExportConfig, SourceConfig
-from fabulexa_forge.derivations.guard import require_single_branch
+from fabulexa_forge.config.models import (
+    ExportConfig,
+    MembershipRef,
+    SourceConfig,
+    SourceEventsDecl,
+    SourceEventSourceDecl,
+    SourceTableDecl,
+)
 from fabulexa_forge.errors import SourceAnchorRequired
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.query_spec import (
     NOTICE_KEYS_NOT_DECLARABLE_CSV,
     QuerySpec,
@@ -30,27 +40,59 @@ from fabulexa_forge.exporters.query_spec import (
 from fabulexa_forge.exporters.source.engine import (
     build_source_query_specs,
     export_source,
+    require_source_anchor,
 )
-from fabulexa_forge.exporters.source.plan import build_source_plan
-from fabulexa_forge.exporters.source.renders import (
-    build_records_render_sql,
-    build_snapshot_render_sql,
-)
+from fabulexa_forge.exporters.source.plan import SourcePlan, build_source_plan
 from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
     build_empty_source_emit,
-    build_presentation_constant_source_emit,
-    build_presentation_reclassified_source_emit,
     build_source_keys_emit,
     build_source_test_emit,
     build_windowed_source_test_emit,
     windowed_test_windows,
 )
 
+if TYPE_CHECKING:
+    from fabulexa_forge.reader.emit import Emit
+
+# ---------------------------------------------------------------------------
+# Config / plan-build helpers
+# ---------------------------------------------------------------------------
+
+_SPANNING_TABLES: "tuple[SourceTableDecl, ...]" = (
+    SourceTableDecl(name="visit", kind="visit"),
+    SourceTableDecl(name="shift", kind="shift"),
+    SourceTableDecl(name="location", kind="location"),
+    SourceTableDecl(name="order", kind="order"),
+    SourceTableDecl(name="consultant", kind="actor", sub_types=("consultant",)),
+    SourceTableDecl(name="nurse", kind="actor", sub_types=("nurse",)),
+    SourceTableDecl(
+        name="visit_team", membership=MembershipRef(kind="visit", property="team")
+    ),
+)
+
+_WINDOWED_TABLES: "tuple[SourceTableDecl, ...]" = (
+    SourceTableDecl(name="visit", kind="visit"),
+    SourceTableDecl(name="order", kind="order"),
+    SourceTableDecl(name="location", kind="location"),
+    SourceTableDecl(
+        name="visit_team", membership=MembershipRef(kind="visit", property="team")
+    ),
+)
+
+_KEYS_TABLES: "tuple[SourceTableDecl, ...]" = (
+    SourceTableDecl(name="visit", kind="visit"),
+    SourceTableDecl(name="consultant", kind="actor", sub_types=("consultant",)),
+    SourceTableDecl(name="nurse", kind="actor", sub_types=("nurse",)),
+    SourceTableDecl(
+        name="visit_team", membership=MembershipRef(kind="visit", property="team")
+    ),
+)
+
 _EXPECTED_ROW_COUNTS = {
-    "visit": 5,  # v001 c; v002 c, u; v003 c, d
-    "shift": 2,  # sh001 c, d
+    "visit": 3,  # one row per record, not one per event
+    "shift": 1,
     "location": 2,
     "order": 1,
     "consultant": 1,
@@ -59,28 +101,268 @@ _EXPECTED_ROW_COUNTS = {
 }
 
 
-def test_build_source_query_specs_anchor_required(tmp_path: Path) -> None:
-    """anchor=None raises SourceAnchorRequired."""
-    emit_dir = build_source_test_emit(tmp_path, with_runtime=False)
-    config = ExportConfig(mode="source")
+def _config(
+    tables: "tuple[SourceTableDecl, ...]",
+    *,
+    events: "SourceEventsDecl | None" = None,
+    declare_keys: bool = False,
+) -> ExportConfig:
+    """Build a `mode: source` ExportConfig from a declared table/events set."""
+    return ExportConfig(
+        mode="source",
+        source=SourceConfig(tables=tables, events=events, declare_keys=declare_keys),
+    )
+
+
+@contextmanager
+def _plan(
+    emit_dir: Path,
+    tables: "tuple[SourceTableDecl, ...]",
+    *,
+    events: "SourceEventsDecl | None" = None,
+    declare_keys: bool = False,
+    windowed: bool = False,
+) -> "Iterator[tuple[Emit, SourcePlan]]":
+    """Open `emit_dir` and build a SourcePlan, resolving the anchor and
+    election the way `export_source` does."""
+    config = _config(tables, events=events, declare_keys=declare_keys)
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        assert anchor is None
-        with pytest.raises(SourceAnchorRequired):
-            build_source_query_specs(
-                emit,
-                config,
-                anchor,
-                None,
-                notice_sink=discard_notice_sink,
-                base_relations=None,
-            )
+        assert anchor is not None
+        election = resolve_election(emit.sidecar, config.keys)
+        plan = build_source_plan(
+            emit, config, anchor, election, windowed, discard_notice_sink
+        )
+        yield emit, plan
+
+
+def _unique_constraint_columns(out_path: Path, table_name: str) -> list[list[str]]:
+    """The column lists of every declared UNIQUE constraint on a table
+    (excludes the PRIMARY KEY's own implicit UNIQUE row)."""
+    conn = duckdb.connect(str(out_path), read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT constraint_column_names FROM duckdb_constraints()"
+            " WHERE table_name = ? AND constraint_type = 'UNIQUE'",
+            [table_name],
+        ).fetchall()
+    finally:
+        conn.close()
+    return [list(row[0]) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# require_source_anchor
+# ---------------------------------------------------------------------------
+
+
+def test_require_source_anchor_raises_on_none() -> None:
+    """A None anchor resolution raises SourceAnchorRequired."""
+    with pytest.raises(SourceAnchorRequired):
+        require_source_anchor(None)
+
+
+def test_require_source_anchor_returns_narrowed_anchor(tmp_path: Path) -> None:
+    """A resolved anchor passes through unchanged."""
+    with open_emit(build_source_test_emit(tmp_path)) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+    assert anchor is not None
+    assert require_source_anchor(anchor) is anchor
+
+
+# ---------------------------------------------------------------------------
+# build_source_query_specs: full export
+# ---------------------------------------------------------------------------
+
+
+def test_build_source_query_specs_full_export_write_mode(tmp_path: Path) -> None:
+    """Every full-export spec is write_mode='create' with no companion view."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        specs = build_source_query_specs(plan, None)
+
+    assert specs
+    for spec in specs:
+        assert isinstance(spec, QuerySpec)
+        assert spec.write_mode == "create"
+        assert spec.view_name is None
+        assert spec.view_sql is None
+    assert {spec.table_name for spec in specs} == set(_EXPECTED_ROW_COUNTS)
+
+
+def test_build_source_query_specs_compile_order_event_log_last(
+    tmp_path: Path,
+) -> None:
+    """`plan.tables` declaration order is preserved; the event log compiles last."""
+    tables = (
+        SourceTableDecl(name="shift", kind="shift"),
+        SourceTableDecl(name="visit", kind="visit"),
+        SourceTableDecl(name="location", kind="location"),
+    )
+    events = SourceEventsDecl(
+        name="versions", sources=(SourceEventSourceDecl(kind="visit"),)
+    )
+    with _plan(build_source_test_emit(tmp_path), tables, events=events) as (
+        emit,
+        plan,
+    ):
+        specs = build_source_query_specs(plan, None)
+    assert [spec.table_name for spec in specs] == [
+        "shift",
+        "visit",
+        "location",
+        "versions",
+    ]
+    assert specs[-1].write_mode == "create"
+
+
+def test_build_source_query_specs_determinism(tmp_path: Path) -> None:
+    """Two compiles of the same plan produce identical (table, sql, mode) specs."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        specs_a = build_source_query_specs(plan, None)
+        specs_b = build_source_query_specs(plan, None)
+    assert [(s.table_name, s.sql, s.write_mode) for s in specs_a] == [
+        (s.table_name, s.sql, s.write_mode) for s in specs_b
+    ]
+
+
+# ---------------------------------------------------------------------------
+# build_source_query_specs: windowed compile
+# ---------------------------------------------------------------------------
+
+
+def test_build_source_query_specs_windowed_write_mode_per_unit(
+    tmp_path: Path,
+) -> None:
+    """Windowed compile tags write_mode per unit kind: state replace,
+    junction append; no unit uses a companion view."""
+    window, _, _ = windowed_test_windows()
+    with _plan(
+        build_windowed_source_test_emit(tmp_path), _WINDOWED_TABLES, windowed=True
+    ) as (emit, plan):
+        specs = build_source_query_specs(plan, window)
+
+    write_mode_by_table = {spec.table_name: spec.write_mode for spec in specs}
+    assert write_mode_by_table == {
+        "visit": "replace",
+        "order": "replace",
+        "location": "replace",
+        "visit_team": "append",
+    }
+    for spec in specs:
+        assert spec.view_name is None
+        assert spec.view_sql is None
+
+
+def test_build_source_query_specs_windowed_event_log_appends(
+    tmp_path: Path,
+) -> None:
+    """A windowed compile's event-log spec is write_mode='append'."""
+    window, _, _ = windowed_test_windows()
+    events = SourceEventsDecl(
+        name="versions", sources=(SourceEventSourceDecl(kind="visit"),)
+    )
+    with _plan(
+        build_windowed_source_test_emit(tmp_path),
+        _WINDOWED_TABLES,
+        events=events,
+        windowed=True,
+    ) as (emit, plan):
+        specs = build_source_query_specs(plan, window)
+    by_table = {spec.table_name: spec for spec in specs}
+    assert by_table["versions"].write_mode == "append"
+
+
+def test_build_source_query_specs_window_presence_mismatch_raises(
+    tmp_path: Path,
+) -> None:
+    """`window` presence disagreeing with the plan's own windowed-ness raises."""
+    window, _, _ = windowed_test_windows()
+    full_dir = tmp_path / "full"
+    full_dir.mkdir()
+    windowed_dir = tmp_path / "windowed"
+    windowed_dir.mkdir()
+
+    with _plan(build_source_test_emit(full_dir), _SPANNING_TABLES) as (emit, plan):
+        with pytest.raises(ValueError, match="windowed-ness"):
+            build_source_query_specs(plan, window)
+
+    with _plan(
+        build_windowed_source_test_emit(windowed_dir), _WINDOWED_TABLES, windowed=True
+    ) as (emit, plan):
+        with pytest.raises(ValueError, match="windowed-ness"):
+            build_source_query_specs(plan, None)
+
+
+# ---------------------------------------------------------------------------
+# build_source_query_specs: declare_keys
+# ---------------------------------------------------------------------------
+
+
+def test_build_source_query_specs_declare_keys_absent_all_unkeyed(
+    tmp_path: Path,
+) -> None:
+    """declare_keys absent -> every spec's keys is None."""
+    with _plan(build_source_keys_emit(tmp_path), _KEYS_TABLES) as (emit, plan):
+        specs = build_source_query_specs(plan, None)
+    assert specs
+    assert all(spec.keys is None for spec in specs)
+
+
+def test_build_source_query_specs_declare_keys_per_table(tmp_path: Path) -> None:
+    """declare_keys: true -> the claimed split unit ('consultant') carries a
+    presentation_id UNIQUE, the unclaimed one ('nurse') identity keys only,
+    and the junction table declares no keys at all."""
+    with _plan(build_source_keys_emit(tmp_path), _KEYS_TABLES, declare_keys=True) as (
+        emit,
+        plan,
+    ):
+        specs = build_source_query_specs(plan, None)
+    by_table = {spec.table_name: spec for spec in specs}
+    assert by_table["visit"].keys is not None
+    assert by_table["visit"].keys.unique == (("presentation_id",),)
+    assert by_table["consultant"].keys is not None
+    assert by_table["consultant"].keys.unique == (("presentation_id",),)
+    assert by_table["nurse"].keys is not None
+    assert by_table["nurse"].keys.unique == ()
+    assert by_table["visit_team"].keys is None
+
+
+def test_build_source_query_specs_declare_keys_windowed_matches_full(
+    tmp_path: Path,
+) -> None:
+    """A windowed compile's declared keys equal the full-export declaration."""
+    window, _, _ = windowed_test_windows()
+    full_dir = tmp_path / "full"
+    full_dir.mkdir()
+    windowed_dir = tmp_path / "windowed"
+    windowed_dir.mkdir()
+
+    with _plan(build_source_keys_emit(full_dir), _KEYS_TABLES, declare_keys=True) as (
+        emit,
+        plan,
+    ):
+        full_specs = build_source_query_specs(plan, None)
+    with _plan(
+        build_source_keys_emit(windowed_dir),
+        _KEYS_TABLES,
+        declare_keys=True,
+        windowed=True,
+    ) as (emit, plan):
+        windowed_specs = build_source_query_specs(plan, window)
+    full_keys = {s.table_name: s.keys for s in full_specs}
+    windowed_keys = {s.table_name: s.keys for s in windowed_specs}
+    assert full_keys == windowed_keys
+
+
+# ---------------------------------------------------------------------------
+# export_source
+# ---------------------------------------------------------------------------
 
 
 def test_export_source_anchor_required(tmp_path: Path) -> None:
     """export_source raises SourceAnchorRequired before writing anything."""
     emit_dir = build_source_test_emit(tmp_path, with_runtime=False)
-    config = ExportConfig(mode="source")
+    config = _config(_SPANNING_TABLES)
     with open_emit(emit_dir) as emit:
         with pytest.raises(SourceAnchorRequired):
             export_source(
@@ -93,34 +375,10 @@ def test_export_source_anchor_required(tmp_path: Path) -> None:
             )
 
 
-def test_build_source_query_specs_full_export_write_mode(tmp_path: Path) -> None:
-    """Every full-export spec is write_mode='create' with no companion view."""
-    emit_dir = build_source_test_emit(tmp_path)
-    config = ExportConfig(mode="source")
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(
-            emit,
-            config,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-
-    assert specs
-    for spec in specs:
-        assert isinstance(spec, QuerySpec)
-        assert spec.write_mode == "create"
-        assert spec.view_name is None
-        assert spec.view_sql is None
-    assert {spec.table_name for spec in specs} == set(_EXPECTED_ROW_COUNTS)
-
-
 def test_export_source_duckdb_row_counts(tmp_path: Path) -> None:
     """export_source(fmt='duckdb') returns every table's row count and writes it."""
     emit_dir = build_source_test_emit(tmp_path)
-    config = ExportConfig(mode="source")
+    config = _config(_SPANNING_TABLES)
     out_path = tmp_path / "out.duckdb"
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
@@ -143,7 +401,7 @@ def test_export_source_duckdb_row_counts(tmp_path: Path) -> None:
 def test_export_source_csv_writes_one_file_per_table(tmp_path: Path) -> None:
     """export_source(fmt='csv') writes one <table>.csv per output table."""
     emit_dir = build_source_test_emit(tmp_path)
-    config = ExportConfig(mode="source")
+    config = _config(_SPANNING_TABLES)
     out_dir = tmp_path / "csv_out"
     out_dir.mkdir()
     with open_emit(emit_dir) as emit:
@@ -164,7 +422,7 @@ def test_export_source_csv_writes_one_file_per_table(tmp_path: Path) -> None:
 def test_export_source_zero_row_table_still_emitted(tmp_path: Path) -> None:
     """A table whose query resolves to no rows is still emitted, never dropped."""
     emit_dir = build_empty_source_emit(tmp_path)
-    config = ExportConfig(mode="source")
+    config = _config((SourceTableDecl(name="location", kind="location"),))
 
     duckdb_out = tmp_path / "empty.duckdb"
     csv_out = tmp_path / "empty_csv"
@@ -194,329 +452,27 @@ def test_export_source_zero_row_table_still_emitted(tmp_path: Path) -> None:
     assert len(rows) == 1  # header row only
 
 
-# ---------------------------------------------------------------------------
-# Windowed compile (Unit 2): per-genre write_mode
-# ---------------------------------------------------------------------------
-
-
-def test_build_source_query_specs_windowed_write_mode_per_genre(tmp_path: Path) -> None:
-    """Windowed compile tags write_mode per genre: changelog/transaction append,
-    reference replace, junction append; no source genre uses a companion view.
-    """
-    emit_dir = build_windowed_source_test_emit(tmp_path)
-    config = ExportConfig(mode="source")
-    window, _, _ = windowed_test_windows()
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(
-            emit,
-            config,
-            anchor,
-            window,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-
-    write_mode_by_table = {spec.table_name: spec.write_mode for spec in specs}
-    assert write_mode_by_table == {
-        "visit": "append",  # changelog genre
-        "order": "append",  # transaction genre
-        "location": "replace",  # reference genre
-        "visit_team": "append",  # junction genre
-    }
-    for spec in specs:
-        assert spec.view_name is None
-        assert spec.view_sql is None
-
-
-# ---------------------------------------------------------------------------
-# Snapshot delivery (change_delivery: snapshot, Unit 3 + Phase 9)
-# ---------------------------------------------------------------------------
-
-_SNAPSHOT_SOURCE_CONFIG = ExportConfig(
-    mode="source", source=SourceConfig(change_delivery="snapshot")
-)
-
-
-def test_build_source_query_specs_snapshot_full_export_reconstructs_at_tape_end(
-    tmp_path: Path,
-) -> None:
-    """change_delivery: snapshot with window=None reconstructs at the tape's
-    end instead of raising: write_mode='create', sql composes
-    build_state_at_end_sql via build_snapshot_render_sql(window=None)."""
+def test_export_source_determinism(tmp_path: Path) -> None:
+    """Two full exports of the same emit compile identical (table, sql, mode)
+    specs."""
     emit_dir = build_source_test_emit(tmp_path)
+    config = _config(_SPANNING_TABLES)
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(
-            emit,
-            _SNAPSHOT_SOURCE_CONFIG,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
+        election = resolve_election(emit.sidecar, config.keys)
+        plan = build_source_plan(
+            emit, config, anchor, election, False, discard_notice_sink
         )
-        by_table = {spec.table_name: spec for spec in specs}
-        assert by_table["visit"].write_mode == "create"
-
-        fork_path = require_single_branch(emit.sidecar)
-        table_specs = build_source_plan(
-            emit.sidecar,
-            _SNAPSHOT_SOURCE_CONFIG.source,
-            notice_sink=discard_notice_sink,
-        )
-        visit_spec = next(s for s in table_specs if s.source_table == "records__visit")
-        expected_sql = build_snapshot_render_sql(
-            emit.sidecar, fork_path, visit_spec, anchor, None
-        )
-    assert by_table["visit"].sql == expected_sql
-
-
-def test_export_source_snapshot_full_export_reconstructs_end_of_run_state(
-    tmp_path: Path,
-) -> None:
-    """export_source under change_delivery: snapshot, full export: one row per
-    record (not per event), end-of-run state; v003 (deactivated after its
-    last history event) renders inactive — the lifecycle-instant case a
-    history-only horizon would get wrong."""
-    emit_dir = build_source_test_emit(tmp_path)
-    out_path = tmp_path / "out.duckdb"
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(
-            emit,
-            _SNAPSHOT_SOURCE_CONFIG,
-            out_path,
-            "duckdb",
-            anchor,
-            notice_sink=discard_notice_sink,
-        )
-
-    assert row_counts["visit"] == 3  # one row per record, not one per event
-
-    out_conn = duckdb.connect(str(out_path), read_only=True)
-    try:
-        row = out_conn.execute(
-            'SELECT active, status FROM "visit" WHERE id = ?', ["v003"]
-        ).fetchone()
-    finally:
-        out_conn.close()
-    assert row is not None
-    assert row[0] is False
-    assert row[1] == "closed"
-
-
-def test_build_source_query_specs_windowed_snapshot_write_mode_and_render(
-    tmp_path: Path,
-) -> None:
-    """Windowed snapshot delivery tags the changelog-genre spec
-    write_mode='replace' and routes it to build_snapshot_render_sql; reference
-    and transaction specs are unaffected (same render, same write_mode)."""
-    emit_dir = build_windowed_source_test_emit(tmp_path)
-    window, _, _ = windowed_test_windows()
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(
-            emit,
-            _SNAPSHOT_SOURCE_CONFIG,
-            anchor,
-            window,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-
-        by_table = {spec.table_name: spec for spec in specs}
-        assert by_table["visit"].write_mode == "replace"  # changelog, snapshot delivery
-        assert by_table["order"].write_mode == "append"  # transaction, unaffected
-        assert by_table["location"].write_mode == "replace"  # reference, unaffected
-
-        fork_path = require_single_branch(emit.sidecar)
-        table_specs = build_source_plan(
-            emit.sidecar,
-            _SNAPSHOT_SOURCE_CONFIG.source,
-            notice_sink=discard_notice_sink,
-        )
-        visit_spec = next(s for s in table_specs if s.source_table == "records__visit")
-        order_spec = next(s for s in table_specs if s.source_table == "records__order")
-        expected_visit_sql = build_snapshot_render_sql(
-            emit.sidecar, fork_path, visit_spec, anchor, window
-        )
-        expected_order_sql = build_records_render_sql(
-            emit.sidecar, fork_path, order_spec, anchor, window
-        )
-
-    assert by_table["visit"].sql == expected_visit_sql
-    assert by_table["order"].sql == expected_order_sql
+        specs_a = build_source_query_specs(plan, None)
+        specs_b = build_source_query_specs(plan, None)
+    assert [(s.table_name, s.sql, s.write_mode) for s in specs_a] == [
+        (s.table_name, s.sql, s.write_mode) for s in specs_b
+    ]
 
 
 # ---------------------------------------------------------------------------
-# The genre trichotomy keys on the class
+# export_source: declare_keys
 # ---------------------------------------------------------------------------
-
-
-def test_tracked_presentation_column_exports_as_changelog(tmp_path: Path) -> None:
-    """A dimension-role kind whose sole prop__ column is class 'tracked'
-    reclassifies to change-log genre end-to-end: the export produces a `venue`
-    change-log table (an 'op' column, a 'c' row), not a reference snapshot."""
-    emit_dir = build_presentation_reclassified_source_emit(tmp_path)
-    config = ExportConfig(mode="source")
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(
-            emit, config, out_dir, "csv", anchor, notice_sink=discard_notice_sink
-        )
-
-    assert row_counts == {"venue": 1}
-    with (out_dir / "venue.csv").open(encoding="utf-8") as f:
-        header = next(csv.reader(f))
-    assert "op" in header
-    assert "created_at" not in header
-
-
-def test_constant_presentation_column_exports_as_reference(tmp_path: Path) -> None:
-    """The same kind shape, presentation column class 'constant': the export
-    produces a reference snapshot (no 'op' column) — no reclassification."""
-    emit_dir = build_presentation_constant_source_emit(tmp_path)
-    config = ExportConfig(mode="source")
-    out_dir = tmp_path / "out"
-    out_dir.mkdir()
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(
-            emit, config, out_dir, "csv", anchor, notice_sink=discard_notice_sink
-        )
-
-    assert row_counts == {"venue": 1}
-    with (out_dir / "venue.csv").open(encoding="utf-8") as f:
-        header = next(csv.reader(f))
-    assert "op" not in header
-    assert "created_at" in header
-
-
-# ---------------------------------------------------------------------------
-# declare_keys
-# ---------------------------------------------------------------------------
-
-_KEYS_CONFIG = ExportConfig(mode="source", source=SourceConfig(declare_keys=True))
-_KEYS_SNAPSHOT_CONFIG = ExportConfig(
-    mode="source",
-    source=SourceConfig(declare_keys=True, change_delivery="snapshot"),
-)
-
-
-def test_build_source_query_specs_declare_keys_absent_all_unkeyed(
-    tmp_path: Path,
-) -> None:
-    """declare_keys absent -> every spec's keys is None."""
-    emit_dir = build_source_keys_emit(tmp_path)
-    config = ExportConfig(mode="source")
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(
-            emit,
-            config,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-    assert specs
-    assert all(spec.keys is None for spec in specs)
-
-
-def test_build_source_query_specs_declare_keys_false_all_unkeyed(
-    tmp_path: Path,
-) -> None:
-    """declare_keys: false -> every spec's keys is None, same as absent."""
-    emit_dir = build_source_keys_emit(tmp_path)
-    config = ExportConfig(mode="source", source=SourceConfig(declare_keys=False))
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(
-            emit,
-            config,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-    assert specs
-    assert all(spec.keys is None for spec in specs)
-
-
-def test_build_source_query_specs_declare_keys_per_genre(tmp_path: Path) -> None:
-    """declare_keys: true -> changelog/junction unkeyed; the claimed split
-    unit ('consultant') carries a presentation_id UNIQUE, the unclaimed one
-    ('nurse') identity keys only."""
-    emit_dir = build_source_keys_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(
-            emit,
-            _KEYS_CONFIG,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-    by_table = {spec.table_name: spec for spec in specs}
-    assert by_table["visit"].keys is None  # changelog under changelog delivery
-    assert by_table["visit_team"].keys is None  # junction
-    assert by_table["consultant"].keys is not None
-    assert by_table["consultant"].keys.unique == (("presentation_id",),)
-    assert by_table["nurse"].keys is not None
-    assert by_table["nurse"].keys.unique == ()
-
-
-def test_build_source_query_specs_declare_keys_snapshot_delivery_changelog_keyed(
-    tmp_path: Path,
-) -> None:
-    """declare_keys: true + change_delivery: snapshot -> the changelog-genre
-    table carries the whole-table-claimed keys."""
-    emit_dir = build_source_keys_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        specs = build_source_query_specs(
-            emit,
-            _KEYS_SNAPSHOT_CONFIG,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-    by_table = {spec.table_name: spec for spec in specs}
-    assert by_table["visit"].keys is not None
-    assert by_table["visit"].keys.unique == (("presentation_id",),)
-
-
-def test_build_source_query_specs_declare_keys_windowed_matches_full(
-    tmp_path: Path,
-) -> None:
-    """A windowed compile's declared keys equal the full-export declaration."""
-    emit_dir = build_source_keys_emit(tmp_path)
-    window, _, _ = windowed_test_windows()
-    with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        full_specs = build_source_query_specs(
-            emit,
-            _KEYS_CONFIG,
-            anchor,
-            None,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-        windowed_specs = build_source_query_specs(
-            emit,
-            _KEYS_CONFIG,
-            anchor,
-            window,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-    full_keys = {s.table_name: s.keys for s in full_specs}
-    windowed_keys = {s.table_name: s.keys for s in windowed_specs}
-    assert full_keys == windowed_keys
 
 
 def test_export_source_csv_declare_keys_emits_one_notice_before_data(
@@ -525,13 +481,14 @@ def test_export_source_csv_declare_keys_emits_one_notice_before_data(
     """export_source CSV + declare_keys -> exactly one keys-not-declarable-csv
     notice, and the data is written unaffected."""
     emit_dir = build_source_keys_emit(tmp_path)
+    config = _config(_KEYS_TABLES, declare_keys=True)
     out_dir = tmp_path / "csv_out"
     out_dir.mkdir()
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         row_counts = export_source(
-            emit, _KEYS_CONFIG, out_dir, "csv", anchor, notice_sink=sink
+            emit, config, out_dir, "csv", anchor, notice_sink=sink
         )
 
     assert row_counts["consultant"] == 1
@@ -539,49 +496,35 @@ def test_export_source_csv_declare_keys_emits_one_notice_before_data(
     assert codes.count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
 
 
-def test_export_source_duckdb_declare_keys_emits_no_csv_notice(tmp_path: Path) -> None:
+def test_export_source_duckdb_declare_keys_emits_no_csv_notice(
+    tmp_path: Path,
+) -> None:
     """export_source DuckDB + declare_keys -> no keys-not-declarable-csv notice."""
     emit_dir = build_source_keys_emit(tmp_path)
+    config = _config(_KEYS_TABLES, declare_keys=True)
     out_path = tmp_path / "out.duckdb"
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        export_source(emit, _KEYS_CONFIG, out_path, "duckdb", anchor, notice_sink=sink)
+        export_source(emit, config, out_path, "duckdb", anchor, notice_sink=sink)
 
     codes = [n.code for n in sink.notices]
     assert NOTICE_KEYS_NOT_DECLARABLE_CSV not in codes
 
 
-def _unique_constraint_columns(out_path: Path, table_name: str) -> list[list[str]]:
-    """The column lists of every declared UNIQUE constraint on a table
-    (excludes the PRIMARY KEY's own implicit UNIQUE row)."""
-    conn = duckdb.connect(str(out_path), read_only=True)
-    try:
-        rows = conn.execute(
-            "SELECT constraint_column_names FROM duckdb_constraints()"
-            " WHERE table_name = ? AND constraint_type = 'UNIQUE'",
-            [table_name],
-        ).fetchall()
-    finally:
-        conn.close()
-    return [list(row[0]) for row in rows]
-
-
-def test_export_source_duckdb_declare_keys_carries_constraints(tmp_path: Path) -> None:
+def test_export_source_duckdb_declare_keys_carries_constraints(
+    tmp_path: Path,
+) -> None:
     """An end-to-end DuckDB export carries the resolved constraints: the
     claimed split unit's UNIQUE constraint names presentation_id, the
     unclaimed one declares no presentation_id UNIQUE."""
     emit_dir = build_source_keys_emit(tmp_path)
+    config = _config(_KEYS_TABLES, declare_keys=True)
     out_path = tmp_path / "out.duckdb"
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         export_source(
-            emit,
-            _KEYS_CONFIG,
-            out_path,
-            "duckdb",
-            anchor,
-            notice_sink=discard_notice_sink,
+            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
         )
 
     assert "PRIMARY KEY" in constraint_types(out_path, "consultant")

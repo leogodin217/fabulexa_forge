@@ -2,27 +2,55 @@
 # ============================================================
 # `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/source.yaml`
 #
-# Source mode classifies every table into a genre from record_roles ×
-# temporal_class, with NO author declaration of genre:
-#   - tracked kinds (a class-`tracked` prop) -> wide CDC CHANGE-LOG tables
-#     (op / changed_at / id / after-image cols). Tracked here: actor (status,
-#     zone, ride_count, loyalty_band, session_earnings), entity (demand_pressure,
-#     supply_pressure — the surge signals), journey_instance (current_state).
-#   - untracked fact kinds -> TRANSACTION tables: pairing (the rider<->driver
-#     match records).
-#   - untracked dimension kinds -> REFERENCE tables (none here — every dim kind
-#     carries a tracked prop, so entity + journey_instance land as change logs).
+# Source mode DECLARES its own output shape (docs/architecture/source.md): each
+# `tables[]` entry is a `state` table (current-state, one row per record)
+# over a `kind:`. This is a TWO-SIDED COUPLED MARKET (see dimensional.yaml),
+# so the declared tables reflect both sides and the match that joins them:
 #
-# Source is the first mode that REQUIRES a resolved wallclock anchor (change-log
-# `changed_at` is a real TIMESTAMP). No rebase block is given, so the anchor
-# falls back to the sidecar `runtime` — the emit's own clock. Uncomment
-# `rebase:` to override origin/zone.
+#   SPLIT  actor -> driver + rider, two `state` tables over the same
+#          `kind: actor` (the shared wide records table, `actor_type`
+#          discriminator), each narrowed by its own `sub_types:`. Both
+#          still share the one `actor` audit stream below.
+#   PLAIN  entity (zone_market — this market's one declared sub-type),
+#          journey_instance (trip/session FSM), and pairing (the
+#          rider<->driver match record — untracked, so it carries no
+#          `events` source) each get their own table.
+#
+# History is opt-in via the single polymorphic `events:` log; TRACKED-NESS
+# decides who is worth auditing: actor (status, zone, ride_count,
+# loyalty_band, session_earnings), entity (demand_pressure,
+# supply_pressure — the surge signals), journey_instance (current_state).
+#
+# Source is the first mode that REQUIRES a resolved wallclock anchor (the
+# event log's `occurred_at` is a real TIMESTAMP). No rebase block is given,
+# so the anchor falls back to the sidecar `runtime` — the emit's own clock.
+# Uncomment `rebase:` to override origin/zone.
 #
 # Like base, this bundle declares NO mechanism kinds (no tick_decision, no
-# queue) — every kind is operational domain data. So source takes a bare
-# `mode: source` — no `exclude:`.
+# queue) — every kind here is operational domain data, declared above.
 
 mode: source
+
+source:
+  tables:
+    - name: driver
+      kind: actor
+      sub_types: [driver]
+    - name: rider
+      kind: actor
+      sub_types: [rider]
+    - name: zone_market
+      kind: entity
+    - name: journey_instance
+      kind: journey_instance
+    - name: pairing
+      kind: pairing
+  events:
+    name: history
+    sources:
+      - kind: actor
+      - kind: entity
+      - kind: journey_instance
 
 # rebase:
 #   base_date: 2024-01-01

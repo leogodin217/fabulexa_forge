@@ -14,7 +14,14 @@ from __future__ import annotations
 import io
 from typing import TYPE_CHECKING, Callable
 
-from fabulexa_forge.errors import InitRequiresRecordRoles
+from fabulexa_forge.errors import ElectionUnionUnsafe, InitRequiresRecordRoles
+from fabulexa_forge.exporters.election import check_edge_union_safety, resolve_election
+from fabulexa_forge.exporters.keys_init import (
+    build_keys_config,
+    domains_for_kinds,
+    natural_expanded_surfaces,
+    write_keys_block,
+)
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.reader.records_columns import (
@@ -25,9 +32,10 @@ from fabulexa_forge.reader.relations import distinct_prop_values
 from fabulexa_forge.reader.sidecar import TableSpec
 
 if TYPE_CHECKING:
+    from fabulexa_forge.config.models import KeySurface
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit
-    from fabulexa_forge.reader.sidecar import Sidecar
+    from fabulexa_forge.reader.sidecar import PresentationKeys, Sidecar
 
 
 # Registry role token -> config role token
@@ -221,6 +229,89 @@ def _membership_kinds_and_props(
     return result
 
 
+def _reference_edges(all_tables: tuple[TableSpec, ...]) -> list[tuple[str, str, str]]:
+    """Every `references` column across every records table — the reference graph.
+
+    Args:
+        all_tables: All sidecar TableSpec objects.
+
+    Returns:
+        (source_kind, column_name, target_kind) triples, in sidecar order.
+    """
+    edges: list[tuple[str, str, str]] = []
+    for table in all_tables:
+        if not isinstance(table, TableSpec):
+            continue
+        if not table.name.startswith("records__"):
+            continue
+        kind = table.name[len("records__") :]
+        for col in table.columns:
+            if col.references:
+                edges.append((kind, col.name, col.references))
+    return edges
+
+
+def _self_gate_keys_proposal(
+    sidecar: "Sidecar",
+    all_tables: tuple[TableSpec, ...],
+    domains: "dict[str, tuple[str, ...]]",
+    expanded: "dict[tuple[str, str | None], KeySurface]",
+) -> "tuple[dict[str, KeySurface | dict[str, KeySurface]], dict[str, str]]":
+    """Gate the natural proposal through `resolve_election` + edge union safety.
+
+    Doc § `init` proposals: `init` runs its own proposal through the exact
+    machinery the export would run. Dimensional's plan-time gate over an
+    ungrained proposal (no `fk:` columns are proposed — FK candidates stay
+    comments) is `check_edge_union_safety` over the emit's reference graph:
+    per `references` column, gated against the target kind's full declared
+    domain with no `target_key` override (an uncommented FK candidate
+    inherits). A kind implicated in a failure degrades to uniform
+    `record_index` — always passing, by construction (doc's Invariants).
+    One pass suffices: each edge's verdict depends only on its own target
+    kind's populations, so degrading the implicated kinds cannot newly break
+    an edge that previously passed.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        all_tables: All sidecar TableSpec objects.
+        domains: Every proposed kind's sub-type domain.
+        expanded: The natural per-population proposal, mutated in place with
+            any degradations.
+
+    Returns:
+        (keys_config, degraded) — the gated `ExportConfig.keys`-shaped
+        proposal, and kind -> a one-line reason naming the forcing gate, for
+        every kind the gate degraded.
+    """
+    election = resolve_election(sidecar, build_keys_config(expanded, domains))
+    degraded: dict[str, str] = {}
+    for source_kind, column, target_kind in _reference_edges(all_tables):
+        if target_kind not in domains:
+            continue
+        if target_kind in degraded:
+            continue
+        edge_name = f"{source_kind}.{column}"
+        try:
+            check_edge_union_safety(
+                election,
+                target_kind,
+                domains[target_kind],
+                edge_name,
+                surface_override=None,
+            )
+        except ElectionUnionUnsafe as exc:
+            degraded[target_kind] = f"ElectionUnionUnsafe: {exc}"
+
+    if not degraded:
+        return build_keys_config(expanded, domains), degraded
+
+    for kind in degraded:
+        sub_types: tuple[str | None, ...] = domains[kind] if domains[kind] else (None,)
+        for sub_type in sub_types:
+            expanded[(kind, sub_type)] = "record_index"
+    return build_keys_config(expanded, domains), degraded
+
+
 def _write_dim_scd2_stub(
     w: Callable[[str], None],
     kind: str,
@@ -229,6 +320,7 @@ def _write_dim_scd2_stub(
     sidecar: "Sidecar",
     notice_sink: "NoticeSink",
     filter_line: str | None,
+    id_surface: "KeySurface",
     owned_columns: frozenset[str] | None = None,
     advisory_comment: str | None = None,
 ) -> None:
@@ -253,12 +345,15 @@ def _write_dim_scd2_stub(
         sidecar: The open emit's sidecar.
         notice_sink: Receiver for skip notices.
         filter_line: Filter YAML line to include in source, or None for no filter.
+        id_surface: The population's elected surface (`record_index` or
+            `presentation_id`) — the id column's `from:` value, aligning the
+            dim's declared key with the proposed election.
         owned_columns: The sub-type's declared columns for pruning, or None to
             propose the full union (bare-string kinds, or emits without the
             `sub_type_columns` field).
         advisory_comment: The `presentation_id` natural-key advisory comment
             line for this kind, or None when the block carries no whole-table
-            claim.
+            claim, or when `id_surface` already subsumes it.
     """
     tracked_cols = _get_tracked_columns(kind, all_tables)
     all_cols = _get_records_columns(kind, all_tables)
@@ -275,7 +370,7 @@ def _write_dim_scd2_stub(
     if advisory_comment is not None:
         w(advisory_comment)
     w("      columns:")
-    w("        - {name: id, from: record_id}")
+    w(f"        - {{name: id, from: {id_surface}}}")
     for col in all_cols:
         if records_column_role(col) not in ("payload", "presentation"):
             continue
@@ -306,6 +401,7 @@ def _write_dim_type1_stub(
     w: Callable[[str], None],
     kind: str,
     name: str,
+    id_surface: "KeySurface",
     filter_line: str | None = None,
     advisory_comment: str | None = None,
 ) -> None:
@@ -315,10 +411,13 @@ def _write_dim_type1_stub(
         w: Line-writing callable.
         kind: The record kind name.
         name: The proposed output table name.
+        id_surface: The population's elected surface (`record_index` or
+            `presentation_id`) — the id column's `from:` value, aligning the
+            dim's declared key with the proposed election.
         filter_line: Optional filter YAML line to include in source, or None.
         advisory_comment: The `presentation_id` natural-key advisory comment
             line for this kind, or None when the block carries no whole-table
-            claim.
+            claim, or when `id_surface` already subsumes it.
     """
     w(f"    - name: {name}")
     w("      role: dim  # proposal: dimension kind")
@@ -332,7 +431,7 @@ def _write_dim_type1_stub(
     if advisory_comment is not None:
         w(advisory_comment)
     w("      columns:")
-    w("        - {name: id, from: record_id}")
+    w(f"        - {{name: id, from: {id_surface}}}")
     w(
         "        # Add more columns from prop__* here;"
         " e.g. {name: name, from: prop__name}"
@@ -400,28 +499,28 @@ def _write_fact_stub(
     w("")
 
 
-def _presentation_id_advisory_comment(sidecar: "Sidecar", kind: str) -> str | None:
+def _presentation_id_advisory_comment(
+    presentation_keys: "PresentationKeys | None", kind: str
+) -> str | None:
     """The advisory comment naming `presentation_id` as a kind's natural key.
 
     Consulted once per proposed kind: a flat kind's `key` entry, or a
     partitioned kind's rollup with a non-None `unique_within`, both declare a
-    whole-table uniqueness claim over `presentation_id` (`Sidecar.
-    presentation_keys().whole_table_claim`). An absent block, a kind absent
-    from the block, or a no-claim rollup yield no comment.
+    whole-table uniqueness claim over `presentation_id`
+    (`PresentationKeys.whole_table_claim`). An absent block, a kind absent
+    from the block, or a no-claim rollup yield no comment. Subsumed on a
+    dim stub whose own population elects `presentation_id` — the caller
+    passes None there instead of this comment.
 
     Args:
-        sidecar: The open emit's sidecar (claims via
-            `sidecar.presentation_keys()` — strict-on-read applies).
+        presentation_keys: The open emit's `presentation_keys` view (from
+            `Sidecar.presentation_keys()`, fetched once by the caller), or
+            None when the emit carries no block.
         kind: The record kind under proposal.
 
     Returns:
         A single advisory comment line, or None when no whole-table claim holds.
-
-    Raises:
-        PresentationKeysInvalidError: The block is present and incoherent
-            (propagated from the accessor).
     """
-    presentation_keys = sidecar.presentation_keys()
     if presentation_keys is None or kind not in presentation_keys.kinds():
         return None
     claim = presentation_keys.whole_table_claim(kind)
@@ -455,6 +554,13 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     record_roles = sidecar.record_roles()
     # Caller guarantees record_roles is not None
     assert record_roles is not None
+    presentation_keys = sidecar.presentation_keys()
+
+    domains = domains_for_kinds(sidecar, record_roles.kinds())
+    expanded = natural_expanded_surfaces(presentation_keys, domains)
+    keys_config, degraded = _self_gate_keys_proposal(
+        sidecar, all_tables, domains, expanded
+    )
 
     membership_info = _membership_kinds_and_props(all_tables)
 
@@ -469,11 +575,12 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     w("")
     w("mode: dimensional")
     w("")
+    write_keys_block(w, keys_config, degraded)
     w("dimensional:")
     w("  tables:")
 
     for kind in record_roles.kinds():
-        advisory_comment = _presentation_id_advisory_comment(sidecar, kind)
+        advisory_comment = _presentation_id_advisory_comment(presentation_keys, kind)
         if record_roles.is_subtyped(kind):
             # Object-valued kind: split per declared sub-type
             has_tracked = _columns_have_history_tracked(kind, all_tables)
@@ -488,6 +595,10 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                 )
                 w(f"    # --- {config_role}: {kind} sub-type '{sub_type}' ---")
                 if config_role == "dim":
+                    id_surface = expanded[(kind, sub_type)]
+                    dim_advisory = (
+                        None if id_surface == "presentation_id" else advisory_comment
+                    )
                     if has_tracked:
                         _write_dim_scd2_stub(
                             w,
@@ -497,16 +608,18 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                             sidecar,
                             notice_sink,
                             filter_line,
+                            id_surface,
                             owned_columns=owned,
-                            advisory_comment=advisory_comment,
+                            advisory_comment=dim_advisory,
                         )
                     else:
                         _write_dim_type1_stub(
                             w,
                             kind,
                             name,
+                            id_surface,
                             filter_line,
-                            advisory_comment=advisory_comment,
+                            advisory_comment=dim_advisory,
                         )
                 else:
                     _write_fact_stub(
@@ -526,6 +639,10 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
             has_discriminator = _kind_has_discriminator(kind, all_tables)
 
             if config_role == "dim":
+                id_surface = expanded[(kind, None)]
+                dim_advisory = (
+                    None if id_surface == "presentation_id" else advisory_comment
+                )
                 if has_tracked:
                     w(
                         f"    # --- SCD-2 dim: {kind}"
@@ -539,12 +656,17 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                         sidecar,
                         notice_sink,
                         None,
-                        advisory_comment=advisory_comment,
+                        id_surface,
+                        advisory_comment=dim_advisory,
                     )
                 else:
                     w(f"    # --- Type-1 dim: {kind} ---")
                     _write_dim_type1_stub(
-                        w, kind, f"dim_{kind}", advisory_comment=advisory_comment
+                        w,
+                        kind,
+                        f"dim_{kind}",
+                        id_surface,
+                        advisory_comment=dim_advisory,
                     )
             else:
                 # Fact: modelling-discriminator path (SELECT DISTINCT observed values)
@@ -640,18 +762,33 @@ def generate_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     is consulted via `Sidecar.presentation_keys()` and shares its
     strict-on-read behavior.
 
+    New behavior (key election): additionally proposes a `keys:` block —
+    `presentation_id` for every population with its own `presentation_keys`
+    registry entry, `record_index` elsewhere; a flat kind proposes the
+    scalar, a partitioned kind the per-sub-type map (collapsed to the scalar
+    when every sub-type agrees). Self-gated through `resolve_election` +
+    `check_edge_union_safety` over the emit's reference graph before any
+    line is written: a kind implicated in a union-unsafe pair degrades to
+    the uniform `record_index` scalar, with a comment naming the forcing
+    gate — the proposal never fails its own gate. Each proposed dim's id
+    column sources `from:` its population's elected surface, keeping the
+    shipped `id` name; where the election is `presentation_id` this
+    subsumes the natural-key advisory comment on that stub (retained on
+    every other stub). FK candidates stay comments, `target_key`-free.
+
     Args:
         emit: The open emit. Its sidecar must carry `record_roles`.
         notice_sink: Receiver for proposal notices.
 
     Returns:
-        A YAML string: a commented candidate `mode: dimensional` config. One
-        table stub per dimension/fact kind (per declared sub-type for the
-        object-valued kind), with SCD-2 window columns where `history_tracked`
-        applies, FK-candidate comments per reference column, membership-FK
-        candidate comments for kinds that own a membership table, and the
-        `presentation_id` natural-key advisory comment where the block claims
-        it. No `exclude` block is proposed.
+        A YAML string: a commented candidate `mode: dimensional` config, with
+        a proposed `keys:` block. One table stub per dimension/fact kind (per
+        declared sub-type for the object-valued kind), with SCD-2 window
+        columns where `history_tracked` applies, FK-candidate comments per
+        reference column, membership-FK candidate comments for kinds that own
+        a membership table, and the `presentation_id` natural-key advisory
+        comment where the block claims it (subsumed on a dim stub whose own
+        election is `presentation_id`). No `exclude` block is proposed.
 
     Raises:
         InitRequiresRecordRoles: The sidecar omits `record_roles`.

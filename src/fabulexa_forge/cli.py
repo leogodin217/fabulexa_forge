@@ -291,26 +291,43 @@ def cmd_export(
     return exit_code
 
 
-def cmd_init(emit_dir: Path, out_path: Path | None) -> int:
-    """`fabulexa-forge init` — emit a commented candidate dimensional config.
+def cmd_init(
+    emit_dir: Path, out_path: Path | None, mode: Literal["dimensional", "source"]
+) -> int:
+    """`fabulexa-forge init` — emit a commented candidate config.
 
-    Reads the sidecar (and DISTINCT discriminators where needed) and proposes
-    role/SCD/split/FK candidates per the inference contract. The output is a
-    starting point the author edits; classification stays author-authoritative.
+    Dispatches on `mode`: 'dimensional' calls
+    `exporters.dimensional.init.generate_init_config` (unchanged); 'source'
+    calls `exporters.source.init.generate_source_init_config` (design doc §
+    Interface Contracts — one state table per kind, one junction per
+    membership table, the events stub, the keys proposal). Both are pure
+    functions of (emit, code version); output goes to `out_path` or stdout
+    exactly as today.
 
     Args:
         emit_dir: Directory holding run.duckdb + base.json.
         out_path: Where to write the candidate YAML; stdout when None.
+        mode: Which mode's proposal engine to run.
 
     Returns:
-        Process exit code.
+        Process exit code (1 on ReaderError / ExporterError, else 0).
     """
-    from fabulexa_forge.exporters.dimensional.init import generate_init_config
     from fabulexa_forge.exporters.notices import render_notice_stderr
 
     try:
         with open_emit(emit_dir) as emit:
-            candidate = generate_init_config(emit, render_notice_stderr)
+            if mode == "dimensional":
+                from fabulexa_forge.exporters.dimensional.init import (
+                    generate_init_config,
+                )
+
+                candidate = generate_init_config(emit, render_notice_stderr)
+            else:
+                from fabulexa_forge.exporters.source.init import (
+                    generate_source_init_config,
+                )
+
+                candidate = generate_source_init_config(emit, render_notice_stderr)
     except (ReaderError, ExporterError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -917,12 +934,16 @@ def _cmd_init(args: list[str]) -> int:
 
     parser = argparse.ArgumentParser(
         prog="fabulexa-forge init",
-        description="Propose a candidate dimensional config from the sidecar.",
+        description="Propose a candidate config from the sidecar.",
     )
     parser.add_argument("emit_dir", type=Path)
     parser.add_argument("out_path", type=Path, nargs="?", default=None)
+    parser.add_argument(
+        "--mode", choices=("dimensional", "source"), default="dimensional"
+    )
     parsed = parser.parse_args(args)
-    return cmd_init(parsed.emit_dir, parsed.out_path)
+    mode = cast(Literal["dimensional", "source"], parsed.mode)
+    return cmd_init(parsed.emit_dir, parsed.out_path, mode)
 
 
 def _print_corrupt_report(report: "CorruptReport") -> None:

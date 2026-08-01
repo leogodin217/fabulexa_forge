@@ -25,10 +25,12 @@ from pathlib import Path
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_emit_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
+from exporters.source._source_fixtures import build_source_test_emit
 from fabulexa_forge.cli import cmd_init, main
 
 # ---------------------------------------------------------------------------
@@ -535,7 +537,7 @@ def test_cmd_init_writes_to_file(tmp_path: Path) -> None:
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
 
-    exit_code = cmd_init(emit_dir, out_path)
+    exit_code = cmd_init(emit_dir, out_path, "dimensional")
     assert exit_code == 0
     assert out_path.exists()
     content = out_path.read_text(encoding="utf-8")
@@ -549,7 +551,7 @@ def test_cmd_init_writes_to_stdout(
     """cmd_init writes to stdout when out_path is None and returns 0."""
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
 
-    exit_code = cmd_init(emit_dir, None)
+    exit_code = cmd_init(emit_dir, None, "dimensional")
     captured = capsys.readouterr()
     assert exit_code == 0
     assert len(captured.out) > 0
@@ -588,7 +590,7 @@ def test_bare_dim_no_history_tracked_proposes_type1(tmp_path: Path) -> None:
     """Bare-string dimension kind, no history_tracked -> one role: dim, scd: type1 stub."""
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "dim_location" in content
     assert "role: dim" in content
@@ -604,7 +606,7 @@ def test_bare_dim_with_history_tracked_proposes_type2(tmp_path: Path) -> None:
     """Bare-string dim kind with >= 1 history_tracked -> role: dim, scd: type2."""
     emit_dir = build_bare_dim_scd2_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "dim_sensor" in content
     assert "role: dim" in content
@@ -633,7 +635,7 @@ def test_slice_only_column_omitted_from_scd2_columns(tmp_path: Path) -> None:
     """A non-exempt slice_only column is absent from the SCD-2 stub's columns."""
     emit_dir = build_bare_dim_scd2_with_slice_only_column_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "{name: region, from: prop__region}" not in content
     # Its unaffected sibling columns still appear
@@ -645,7 +647,7 @@ def test_slice_only_skip_does_not_suppress_the_kind(tmp_path: Path) -> None:
     """The kind is still proposed (as dim/type2) — the skip is column-level."""
     emit_dir = build_bare_dim_scd2_with_slice_only_column_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "dim_sensor" in content
     assert "role: dim" in content
@@ -659,7 +661,7 @@ def test_slice_only_skip_emits_stderr_notice(
     naming the kind and column, via cmd_init's render_notice_stderr sink."""
     emit_dir = build_bare_dim_scd2_with_slice_only_column_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     captured = capsys.readouterr()
     assert "notice:" in captured.err
     assert "kind 'sensor'" in captured.err
@@ -693,7 +695,7 @@ def test_exempt_discriminator_slice_only_class_still_proposed(tmp_path: Path) ->
         tmp_path / "emit", columns=_ACTOR_COLUMNS_SLICE_ONLY_DISCRIMINATOR
     )
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "dim_actor_driver" in content
     assert "fact_actor_ride" in content
@@ -707,7 +709,7 @@ def test_exempt_discriminator_filter_prefill_unchanged(tmp_path: Path) -> None:
         tmp_path / "emit", columns=_ACTOR_COLUMNS_SLICE_ONLY_DISCRIMINATOR
     )
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "prop__actor_type: driver" in content
     assert "prop__actor_type: ride" in content
@@ -722,7 +724,7 @@ def test_exempt_discriminator_slice_only_no_skip_notice(
         tmp_path / "emit", columns=_ACTOR_COLUMNS_SLICE_ONLY_DISCRIMINATOR
     )
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     captured = capsys.readouterr()
     assert "slice-only-column-omitted" not in captured.err
     assert "actor_type" not in captured.err
@@ -737,7 +739,7 @@ def test_bare_fact_no_discriminator_proposes_single_stub(tmp_path: Path) -> None
     """Bare-string fact kind with no prop__<kind>_type -> one role: fact stub."""
     emit_dir = build_bare_fact_no_discriminator_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "fact_event" in content
     assert "role: fact" in content
@@ -747,7 +749,7 @@ def test_bare_fact_no_discriminator_has_fk_candidate_comment(tmp_path: Path) -> 
     """Bare-string fact kind includes FK-candidate comment per reference column."""
     emit_dir = build_bare_fact_no_discriminator_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     # event has prop__location_id referencing location -> FK candidate comment
     assert "FK candidate" in content
@@ -763,7 +765,7 @@ def test_bare_fact_with_discriminator_proposes_per_value_stubs(tmp_path: Path) -
     """Bare-string fact kind with prop__<kind>_type -> per-DISTINCT-value stubs."""
     emit_dir = build_bare_fact_with_discriminator_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     # Two observed values
     assert "fact_trip_delivery" in content
@@ -785,7 +787,7 @@ def test_object_valued_kind_splits_per_subtype(tmp_path: Path) -> None:
     """Object-valued kind produces dim_actor_driver, fact_actor_ride, dim_actor_bus."""
     emit_dir = build_object_valued_actor_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     # Each sub-type gets its own stub
     assert "dim_actor_driver" in content
@@ -796,7 +798,7 @@ def test_object_valued_kind_filters_per_subtype(tmp_path: Path) -> None:
     """Each sub-type stub has filter:{prop__actor_type: <sub_type>}."""
     emit_dir = build_object_valued_actor_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "prop__actor_type: driver" in content
     assert "prop__actor_type: ride" in content
@@ -806,7 +808,7 @@ def test_object_valued_kind_driver_is_scd2(tmp_path: Path) -> None:
     """Object-valued dim sub-type with history_tracked columns gets scd: type2."""
     emit_dir = build_object_valued_actor_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     # driver is a dimension; actor has history_tracked -> scd: type2
     assert "scd: type2" in content
@@ -816,7 +818,7 @@ def test_object_valued_kind_unobserved_subtype_yields_stub(tmp_path: Path) -> No
     """Declared-but-unobserved sub-type (bus) still yields a stub."""
     emit_dir = build_object_valued_actor_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     # bus is declared but has no rows in the table; stub still proposed
     assert "dim_actor_bus" in content
@@ -843,7 +845,7 @@ def test_sub_type_columns_prunes_driver_to_owned_column(tmp_path: Path) -> None:
     prop__status, which belongs to a different sub-type."""
     emit_dir = build_actor_emit_with_sub_type_columns(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     driver = _actor_stub_block(out_path.read_text(encoding="utf-8"), "dim_actor_driver")
     assert "from: prop__name" in driver
     assert "from: prop__status" not in driver
@@ -854,7 +856,7 @@ def test_sub_type_columns_prunes_bus_to_owned_column(tmp_path: Path) -> None:
     prop__name."""
     emit_dir = build_actor_emit_with_sub_type_columns(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     bus = _actor_stub_block(out_path.read_text(encoding="utf-8"), "dim_actor_bus")
     assert "from: prop__status" in bus
     assert "from: prop__name" not in bus
@@ -865,7 +867,7 @@ def test_sub_type_columns_discriminator_survives_pruning(tmp_path: Path) -> None
     list yet stays proposable in every per-sub-type stub (contract carve-out)."""
     emit_dir = build_actor_emit_with_sub_type_columns(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     driver = _actor_stub_block(out_path.read_text(encoding="utf-8"), "dim_actor_driver")
     assert "from: prop__actor_type" in driver
 
@@ -875,7 +877,7 @@ def test_no_partition_keeps_full_union_columns(tmp_path: Path) -> None:
     union — driver lists both prop__name and prop__status (no pruning)."""
     emit_dir = build_object_valued_actor_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     driver = _actor_stub_block(out_path.read_text(encoding="utf-8"), "dim_actor_driver")
     assert "from: prop__name" in driver
     assert "from: prop__status" in driver
@@ -890,7 +892,7 @@ def test_membership_kind_appends_fk_comments(tmp_path: Path) -> None:
     """Kind owning a membership__<kind>__<property> table gets FK candidate comments."""
     emit_dir = build_membership_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     # Membership FK candidate comment appears
     assert "Membership FK" in content
@@ -906,7 +908,7 @@ def test_no_exclude_block_proposed(tmp_path: Path) -> None:
     """No exclude block is proposed in the generated config."""
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "exclude" not in content
 
@@ -915,7 +917,7 @@ def test_no_likely_internal_comment(tmp_path: Path) -> None:
     """No 'likely-internal' or topology comments appear in the generated config."""
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "likely-internal" not in content
     assert "topology" not in content
@@ -932,7 +934,7 @@ def test_generated_yaml_loadable_by_load_export_config(tmp_path: Path) -> None:
 
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     # Must not raise ConfigError
     load_export_config(out_path)
 
@@ -943,7 +945,7 @@ def test_generated_yaml_loadable_scd2(tmp_path: Path) -> None:
 
     emit_dir = build_bare_dim_scd2_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     load_export_config(out_path)
 
 
@@ -953,7 +955,7 @@ def test_generated_yaml_loadable_fact(tmp_path: Path) -> None:
 
     emit_dir = build_bare_fact_no_discriminator_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     load_export_config(out_path)
 
 
@@ -963,7 +965,7 @@ def test_generated_yaml_loadable_object_valued(tmp_path: Path) -> None:
 
     emit_dir = build_object_valued_actor_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     load_export_config(out_path)
 
 
@@ -979,7 +981,7 @@ def test_cmd_init_no_record_roles_returns_1(
     emit_dir = build_no_record_roles_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
 
-    exit_code = cmd_init(emit_dir, out_path)
+    exit_code = cmd_init(emit_dir, out_path, "dimensional")
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "ERROR:" in captured.err
@@ -1012,8 +1014,8 @@ def test_output_deterministic_across_two_runs(tmp_path: Path) -> None:
     emit_dir = build_object_valued_actor_emit(tmp_path / "emit")
     out1 = tmp_path / "run1.yaml"
     out2 = tmp_path / "run2.yaml"
-    cmd_init(emit_dir, out1)
-    cmd_init(emit_dir, out2)
+    cmd_init(emit_dir, out1, "dimensional")
+    cmd_init(emit_dir, out2, "dimensional")
     assert out1.read_text(encoding="utf-8") == out2.read_text(encoding="utf-8")
 
 
@@ -1201,17 +1203,19 @@ def build_object_valued_actor_emit_with_presentation_id(
     return tmp_path
 
 
-def test_claimed_flat_kind_stub_carries_advisory_comment(tmp_path: Path) -> None:
-    """A flat kind's whole-column claim adds the presentation_id advisory
-    comment to its stub."""
+def test_claimed_flat_kind_dim_key_subsumes_advisory_comment(tmp_path: Path) -> None:
+    """A flat kind's whole-column claim elects `presentation_id` (key election),
+    aligning the dim's id column and subsuming the advisory comment on that
+    stub — declared-key election supersedes the older advisory-only note."""
     emit_dir = build_flat_dim_emit_with_presentation_id(
         tmp_path / "emit", _LOCATION_PRESENTATION_KEYS
     )
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
-    assert "presentation_id` a natural key for 'location'" in content
-    assert "unique within branch" in content
+    assert "{name: id, from: presentation_id}" in content
+    assert "keys:\n  location: presentation_id" in content
+    assert "presentation_id` a natural key for 'location'" not in content
 
 
 def test_partitioned_kind_with_rollup_claim_carries_advisory_comment(
@@ -1223,7 +1227,7 @@ def test_partitioned_kind_with_rollup_claim_carries_advisory_comment(
         tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_CLAIMED
     )
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "presentation_id` a natural key for 'actor'" in content
     assert "unique within branch" in content
@@ -1236,7 +1240,7 @@ def test_unclaimed_rollup_adds_no_advisory_comment(tmp_path: Path) -> None:
         tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_UNCLAIMED
     )
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "NOTE: the emit's presentation_keys block declares" not in content
 
@@ -1245,7 +1249,7 @@ def test_absent_block_adds_no_advisory_comment(tmp_path: Path) -> None:
     """No presentation_keys block at all adds no advisory comment."""
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
-    cmd_init(emit_dir, out_path)
+    cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert "NOTE: the emit's presentation_keys block declares" not in content
 
@@ -1260,8 +1264,240 @@ def test_incoherent_block_init_fails(
     )
     out_path = tmp_path / "candidate.yaml"
 
-    exit_code = cmd_init(emit_dir, out_path)
+    exit_code = cmd_init(emit_dir, out_path, "dimensional")
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "ERROR:" in captured.err
     assert "Traceback" not in captured.err
+
+
+# ---------------------------------------------------------------------------
+# Tests: keys block proposal (key election)
+# ---------------------------------------------------------------------------
+
+#: `actor`'s sub_types with pairwise-safe, distinct prefixes covering every
+#: declared sub-type (driver/ride/bus) — the "all-agreeing map collapses to
+#: scalar" fixture.
+_ACTOR_PRESENTATION_KEYS_ALL_DECLARED: dict[str, object] = {
+    "actor": {
+        "sub_types": {
+            "driver": {
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+                "key_space": {"class": "record_index", "prefix": "DRV_", "width": 4},
+            },
+            "ride": {
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+                "key_space": {"class": "record_index", "prefix": "RID_", "width": 4},
+            },
+            "bus": {
+                "unique_within": "branch",
+                "branch_stable": True,
+                "slice_stable": True,
+                "key_space": {"class": "record_index", "prefix": "BUS_", "width": 4},
+            },
+        },
+        "unique_within": "branch",
+        "branch_stable": True,
+        "slice_stable": True,
+    }
+}
+
+#: A `booking` records table referencing `actor` — the self-gate needs a
+#: reference edge into the sub-typed kind to have anything to gate.
+_KEY_BOOKING_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {"name": "prop__actor_id", "type": "VARCHAR", "references": "actor"},
+    identity_column("ref_index__actor_id", "BIGINT"),
+]
+
+
+def build_actor_with_referencing_booking_emit(
+    tmp_path: Path, presentation_keys: dict[str, object] | None
+) -> Path:
+    """`actor` (driver/ride/bus, object-valued) + `booking` (references
+    `actor`) — the self-gate needs this referencing edge to have anything to
+    gate `actor`'s election against."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__actor", _PID_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("records__booking", _KEY_BOOKING_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "a1", 201, 10, True, 10, 0, "driver", "Alice", "active"],
+    )
+    conn.execute(
+        'INSERT INTO "records__booking" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "b1", 20, True, 20, 0, "a1", 0],
+    )
+    conn.close()
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[
+                _table_spec(
+                    "records__actor",
+                    "records",
+                    _PID_ACTOR_COLUMNS,
+                    1,
+                    record_kind="actor",
+                ),
+                _table_spec(
+                    "records__booking",
+                    "records",
+                    _KEY_BOOKING_COLUMNS,
+                    1,
+                    record_kind="booking",
+                ),
+            ],
+            record_roles={
+                "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"},
+                "booking": "fact",
+            },
+            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            presentation_keys=presentation_keys,
+        ),
+    )
+    return tmp_path
+
+
+def _assert_proposal_passes_its_own_gates(out_path: Path, emit_dir: Path) -> None:
+    """Run the emitted candidate config back through `resolve_election` and
+    `validate_table` — a proposal must never fail the gates it was self-gated
+    against."""
+    from fabulexa_forge.config.loader import load_export_config
+    from fabulexa_forge.exporters.dimensional.validation import validate_table
+    from fabulexa_forge.exporters.election import resolve_election
+    from fabulexa_forge.reader.emit import open_emit
+
+    config = load_export_config(out_path)
+    assert config.dimensional is not None
+    with open_emit(emit_dir) as emit:
+        election = resolve_election(emit.sidecar, config.keys)
+        for table_decl in config.dimensional.tables:
+            validate_table(
+                table_decl,
+                config.dimensional,
+                emit.sidecar,
+                None,
+                discard_notice_sink,
+                election=election,
+            )
+
+
+def test_undeclared_kind_proposes_record_index_scalar(tmp_path: Path) -> None:
+    """A flat kind with no presentation_keys entry proposes the record_index
+    scalar."""
+    emit_dir = build_bare_dim_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "keys:\n  location: record_index\n" in content
+    assert "{name: id, from: record_index}" in content
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+def test_partial_declaration_proposes_per_sub_type_map(tmp_path: Path) -> None:
+    """Driver/bus declared with distinct, union-safe prefixes and ride
+    undeclared proposes the per-sub-type map with the record_index
+    fallback."""
+    emit_dir = build_object_valued_actor_emit_with_presentation_id(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_CLAIMED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert (
+        "keys:\n  actor:\n    driver: presentation_id\n    ride: record_index\n"
+        "    bus: presentation_id\n" in content
+    )
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+def test_all_agreeing_map_collapses_to_scalar(tmp_path: Path) -> None:
+    """Every declared sub-type electing presentation_id collapses the
+    per-sub-type map to the scalar."""
+    emit_dir = build_object_valued_actor_emit_with_presentation_id(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_ALL_DECLARED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "keys:\n  actor: presentation_id\n" in content
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+def test_self_gate_degrades_bare_counter_siblings_with_comment(tmp_path: Path) -> None:
+    """A referencing edge into actor's full domain, with driver/bus declared
+    on bare (comparable) counter prefixes, degrades actor to the uniform
+    record_index scalar — the keys: line names the forcing gate."""
+    emit_dir = build_actor_with_referencing_booking_emit(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_UNCLAIMED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "keys:\n  actor: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "{name: id, from: record_index}" in content
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+def test_fk_candidates_remain_target_key_free(tmp_path: Path) -> None:
+    """FK-candidate comments never carry target_key, regardless of election."""
+    emit_dir = build_actor_with_referencing_booking_emit(
+        tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_UNCLAIMED
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "FK candidate:" in content
+    assert "target_key" not in content
+
+
+# ---------------------------------------------------------------------------
+# `--mode` selector (source-declared-tables Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def test_mode_source_dispatches_to_source_engine(tmp_path: Path) -> None:
+    """`init --mode source` proposes a `mode: source` candidate config."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir(parents=True, exist_ok=True)
+    build_source_test_emit(emit_dir)
+    out_path = tmp_path / "candidate.yaml"
+    exit_code = main(["init", str(emit_dir), str(out_path), "--mode", "source"])
+    assert exit_code == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert "mode: source" in content
+    assert "mode: dimensional" not in content
+
+
+def test_bare_init_byte_identical_to_dimensional_default(tmp_path: Path) -> None:
+    """Bare `init` (no `--mode`) is byte-identical to `--mode dimensional`."""
+    emit_dir = build_bare_dim_emit(tmp_path / "emit")
+    bare_out = tmp_path / "bare.yaml"
+    explicit_out = tmp_path / "explicit.yaml"
+    assert main(["init", str(emit_dir), str(bare_out)]) == 0
+    assert (
+        main(["init", str(emit_dir), str(explicit_out), "--mode", "dimensional"]) == 0
+    )
+    assert bare_out.read_text(encoding="utf-8") == explicit_out.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_mode_bogus_is_argparse_error(tmp_path: Path) -> None:
+    """`--mode bogus` is refused by argparse before any emit is opened."""
+    emit_dir = build_bare_dim_emit(tmp_path / "emit")
+    exit_code = main(["init", str(emit_dir), "--mode", "bogus"])
+    assert exit_code == 2

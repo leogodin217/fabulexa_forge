@@ -4,15 +4,15 @@
 # by `fabulexa-forge`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
 # See dev/demo/README.md.
 #
-# NHS topic set (from stream.yaml routing `nhs.{kind}`):
-#   nhs.actor             — patient/actor dimension
-#   nhs.diary             — clinic-diary dimension
-#   nhs.journey_instance  — pathway-instance dimension (busiest strip)
-#   nhs.resource          — resource dimension (`allocated` over time)
+# NHS topic set (from stream.yaml routing — nhs.{kind} folded to domain names):
+#   nhs.patient          — patient clinical-flag changes
+#   nhs.diary            — clinic-diary next_opening drift
+#   nhs.pathway_episode  — care-pathway state transitions (busiest strip)
+#   nhs.consultant       — consultant allocation over time
 #
-# All four topics are dimensions; there are no fact->dimension edges in this config,
-# so joins is empty. This is a valid pure read-back preset that demonstrates the
-# four-strip mixer board with no consumer join lag.
+# All four topics are dimension-role kinds; there are no fact->dimension edges in
+# this config, so joins is empty. This is a valid pure read-back preset that
+# demonstrates the four-strip mixer board with no consumer join lag.
 
 windows:
   - 3600000             # 1h tumbling window

@@ -61,7 +61,7 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
 | [`exporters/query_spec.py`](../../src/fabulexa_forge/exporters/query_spec.py) | `QuerySpec` (`write_mode` / `view_name` / `view_sql`) and `write_query_specs` — the mode-neutral compiled-table shape and full-export write dispatch every mode's windowed compile produces and this driver consumes |
 | [`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py) | `build_query_specs(…, window)` — the dimensional windowed compile |
 | [`exporters/dimensional/validation.py`](../../src/fabulexa_forge/exporters/dimensional/validation.py) | The ten window-gated business rules, run only when a `window` is present |
-| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `build_source_query_specs(…, window)` — the source windowed compile; see [`source.md`](source.md) § Incremental composition for its per-genre window membership |
+| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `build_source_query_specs(…, window)` — the source windowed compile; see [`source.md`](source.md) § Incremental composition for its per-render window membership |
 | [`writers/duckdb.py`](../../src/fabulexa_forge/writers/duckdb.py) | `write_duckdb_window` — one-transaction-per-window append/replace, view installs, bookkeeping tables |
 | [`errors.py`](../../src/fabulexa_forge/errors.py) | `IncrementalError` and its subclasses (config, regime, fingerprint, cursor, range) |
 
@@ -169,6 +169,17 @@ and creation time is otherwise opt-in provenance an emit may not carry. The full
 snapshot is therefore the deliberate choice — every column value is still horizon-exact
 (the gate admits only temporally constant sources), so the snapshot is wider than a
 real nightly extract, never wrong, and FK-safe at every horizon.
+
+Under `declare_keys` (base and source), the windowed compile resolves declared
+keys exactly as the full export does and sets them on each window's `QuerySpec`;
+the windowed DuckDB writer applies them at first-window table creation only,
+where the write regime preserves the constraint across windows — replace-class
+tables trivially, append-class tables only where a row lands in exactly one
+window and is final. A false claim surfaces as a rolled-back window under
+the writer's transaction rule, and `keys-not-declarable-csv` re-emits per driver
+invocation like any compile notice. The per-regime table and rationale are
+[`declared-keys.md`](declared-keys.md) § Incremental interplay; `declare_keys`
+participates in the config fingerprint exactly as any other config field does.
 
 This per-table-class window-membership contract — the window keys, the per-class
 behavior, the type-1 row-membership carve-out, and the windowed-grain rejection —
@@ -435,8 +446,9 @@ usage error on stderr, exit 1, before the emit opens).
 | Document | Why |
 |---|---|
 | [`dimensional.md`](dimensional.md) | One mode the driver wraps — grain semantics, SCD-2 `LEAD`, derived columns (incl. the ordinal amendment), the timestamp anchor |
-| [`source.md`](source.md) | The other mode the driver wraps — per-genre window membership, junction extract-on-change, snapshot delivery |
+| [`source.md`](source.md) | The other mode the driver wraps — per-render window membership: the windowed state snapshot, the appended event log, junction extract-on-change |
 | [`playback.md`](playback.md) | The seam that promotes this driver's per-table-class window-membership rules to its tier-2 `window` contract |
 | [`anchor.md`](anchor.md) | The single `EffectiveAnchor` calendar windows resolve through |
+| [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability and its per-write-regime window gating |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface the driver reads through |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored contract carrying the relied-on `last_mutation_sim_time` / `slice_at` guarantees |

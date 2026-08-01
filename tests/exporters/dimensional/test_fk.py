@@ -3,11 +3,25 @@
 Verifies via:reference (single-hop, multi-hop, ambiguous, path hint, no path)
 and via:membership (inferred table, inferred member_field, where predicate,
 NULL rows, ambiguous). Also verifies FkTargetIsDim and history-grain FK NULL.
+
+The target_key=presentation_id subsumption case was rewritten for the
+key-election sprint's Phase 6: the shipped column-presence check the old
+`test_target_key_presentation_id_missing_column_raises` exercised is gone
+from `fk.py`, subsumed by the statically-earlier registry-membership check
+over the destination dim's (possibly discriminator-filtered) source
+population set — `test_target_key_presentation_id_undeclared_population_raises`
+below exercises that check directly. The other target_key=presentation_id
+("surrogate") tests are unaffected: they target a flat kind, whose
+population set carries no discriminator to filter, so the registry-
+membership check never runs for them (`dim_population_sub_types` is the
+empty tuple) and they still surface the target table's own column-presence
+failure via the presentation-key derivation.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from _support.notices import discard_notice_sink
@@ -22,7 +36,7 @@ from fabulexa_forge.config.models import (
     SourceDecl,
     TableDecl,
 )
-from fabulexa_forge.errors import ExportError
+from fabulexa_forge.errors import ElectionPresentationUndeclared, ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.fk import check_fk_slice_only
 from fabulexa_forge.reader.emit import open_emit
@@ -355,22 +369,17 @@ def _dim(name: str, kind: str, cols: list[ColumnDecl]) -> TableDecl:
 
 def _fact(
     name: str,
-    grain: str,
+    grain: Literal["records", "history_point", "history_interval", "membership"],
     kind: str,
     cols: list[ColumnDecl],
     property: str | None = None,
     where: dict[str, str] | None = None,
 ) -> TableDecl:
-    src_kwargs: dict[str, object] = {"grain": grain, "kind": kind}
-    if property is not None:
-        src_kwargs["property"] = property
-    if where is not None:
-        src_kwargs["where"] = where
     return TableDecl(
         name=name,
         role="fact",
         key=["record_id"],
-        source=SourceDecl(**src_kwargs),  # type: ignore[arg-type]
+        source=SourceDecl(grain=grain, kind=kind, property=property, where=where),
         columns=cols,
     )
 
@@ -1344,14 +1353,114 @@ def test_membership_on_grain_surrogate(tmp_path: Path) -> None:
     assert set(rows["actor_id"]) == {"PAT_001", "PAT_002"}
 
 
-def test_target_key_presentation_id_missing_column_raises(tmp_path: Path) -> None:
-    """target_key=presentation_id raises ExportError when target records table lacks presentation_id."""
-    # Use the regular (non-surrogate) emit: records__actor has no presentation_id
-    emit_dir = build_reference_chain_emit(tmp_path)
+# Sub-typed actor (consultant/nurse), presentation_id declared for
+# consultant only — the subsumption posture's target fixture: the shipped
+# `target_key: presentation_id` column-presence check is gone (`fk.py` no
+# longer looks at the target table's columns at all); an explicit
+# `target_key: presentation_id` over a discriminator-filtered dim restricts
+# to the dim's population set, and an undeclared population inside that set
+# fails the statically-earlier registry-membership check instead
+# (`ElectionPresentationUndeclared`), never a data read.
+_SUBTYPED_ACTOR_COLUMNS = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+_CONSULTANT_ONLY_PRESENTATION_KEYS: dict[str, object] = {
+    "actor": {
+        "sub_types": {
+            "consultant": {
+                "unique_within": "emit",
+                "branch_stable": False,
+                "slice_stable": False,
+                "key_space": {"class": "counter", "prefix": "CONS_", "width": 3},
+            }
+        },
+        "unique_within": "emit",
+        "branch_stable": False,
+        "slice_stable": False,
+    }
+}
+
+
+def build_subtyped_actor_emit(tmp_path: Path) -> Path:
+    """actor: a001 consultant (presentation_id declared), a002 nurse
+    (presentation_id undeclared in the registry); journey_instance
+    references actor (the FK's anchor)."""
+    import duckdb
+
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__actor", _SUBTYPED_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("records__journey_instance", _JOURNEY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a001", "CONS_001", 10, True, 10, 0, "consultant"],
+    )
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a002", None, 10, True, 10, 1, "nurse"],
+    )
+    conn.execute(
+        'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "j001", 20, True, 20, 0, "a002", 1],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__actor", "records", _SUBTYPED_ACTOR_COLUMNS, 2, "actor"
+            ),
+            _table_spec(
+                "records__journey_instance",
+                "records",
+                _JOURNEY_COLUMNS,
+                1,
+                "journey_instance",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+        extra={
+            "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
+            "presentation_keys": _CONSULTANT_ONLY_PRESENTATION_KEYS,
+        },
+    )
+    return tmp_path
+
+
+def test_target_key_presentation_id_undeclared_population_raises(
+    tmp_path: Path,
+) -> None:
+    """target_key=presentation_id over a nurse-filtered (discriminator-
+    filtered, proper-subset) dim raises ElectionPresentationUndeclared —
+    nurse carries no presentation_keys registry entry."""
+    emit_dir = build_subtyped_actor_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         config = DimensionalConfig(
             tables=[
-                _dim("dim_actor", "actor", [_from_col("record_id", "record_id")]),
+                TableDecl(
+                    name="dim_actor_nurse",
+                    role="dim",
+                    scd="type1",
+                    key=["record_id"],
+                    source=SourceDecl(
+                        grain="records",
+                        kind="actor",
+                        filter={"prop__actor_type": "nurse"},
+                    ),
+                    columns=[_from_col("record_id", "record_id")],
+                ),
                 _fact(
                     "fact_journey",
                     "records",
@@ -1360,7 +1469,7 @@ def test_target_key_presentation_id_missing_column_raises(tmp_path: Path) -> Non
                         _from_col("record_id", "record_id"),
                         _fk_col(
                             "actor_id",
-                            "dim_actor",
+                            "dim_actor_nurse",
                             "reference",
                             target_key="presentation_id",
                         ),
@@ -1368,7 +1477,7 @@ def test_target_key_presentation_id_missing_column_raises(tmp_path: Path) -> Non
                 ),
             ]
         )
-        with pytest.raises(ExportError, match="presentation_id"):
+        with pytest.raises(ElectionPresentationUndeclared):
             build_query_specs(
                 emit,
                 config,

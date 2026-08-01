@@ -17,11 +17,11 @@ Public API: [`exporters/base/engine.py`](../../src/fabulexa_forge/exporters/base
 
 The `mode: base` exporter renders the emit as a flat single-branch projection: one
 row per record, reconstituted to current state — or to an as-of-T state — with no
-genre distinction and no change log. Every output table is the state-at
+declared-table grammar and no audit log. Every output table is the state-at
 reconstruction of one records kind, materialized as a table. Where source hands the
-consumer the change log to merge (`MAX`-per-id, `LEAD`) and dimensional hands over a
-reconstructed star, base hands over the already-merged answer: the flat current-truth
-table an incremental-ETL author is building. It reads the same emit as the other
+consumer an app-database schema (thing tables plus an audit log) and dimensional
+hands over a reconstructed star, base hands over the already-merged answer: the flat
+current-truth table an incremental-ETL author is building. It reads the same emit as the other
 modes and composes two derivations-layer residents as its whole engine — state-at for
 every value, the record-index resident for every identity key — and introduces no
 point-in-time reconstruction of its own.
@@ -81,10 +81,10 @@ records__<target>─┴─▶  record-index resident ─▶ self + edge keys ─
 
 ### The flat projection
 
-Base classifies nothing and reshapes nothing: every records-category kind in the
+Base declares nothing and reshapes nothing: every records-category kind in the
 sidecar maps to exactly one flat output table, in sidecar table-declaration order.
-There is no genre trichotomy, no sub-type split, and no membership, junction,
-reference, or fact table. A kind's table opens with its self key, then carries the
+There is no declared-table grammar, no sub-type split, and no membership, junction,
+event-log, or fact table. A kind's table opens with its self key, then carries the
 `STATE_AT_COLUMNS` prefix
 (`record_id`, `created_sim_time`, `active`, `deactivated_at`), then `presentation_id`
 when the kind carries it, then one `prop__<p>` per surviving property in sidecar
@@ -110,8 +110,8 @@ resolves exactly one horizon per invocation:
 `slice_at: T` is **inclusive of T** — an event at exactly `sim_time == T` is reflected,
 so the exclusive state-at horizon is `T + 1`. `slice_at` and `incremental` are mutually
 exclusive (§ Validation Rules). A windowed spec's `write_mode` is `'replace'` (every
-table snapshot-delivered at the window horizon, exactly as source's `change_delivery:
-snapshot`); a full or sliced spec's is `'create'`.
+table snapshot-delivered at the window horizon, exactly as source's windowed
+`state` render); a full or sliced spec's is `'create'`.
 
 ### Lifecycle and mutation columns at a horizon
 
@@ -246,6 +246,22 @@ column's behavior exactly: base emits `prop__<p>` pointing at a kind the author
 excluded. Suppressing one encoding but not the other would make the pair disagree
 about what the export contains, and the author who excluded the kind is the one who
 chose the dangling edge.
+
+### Elected identity surfaces
+
+The index keys above always ship; which id-space *value* surface ships beside
+them is the cross-mode key-election surface's contract
+([`key-election.md`](key-election.md) § Rendering: base). In brief: under a
+config `keys` election, a table's own `presentation_id` election renders the
+elected value in the id-space slot (rename key `presentation_id`, the
+standalone payload column absorbed), a `record_index` election drops the
+id-space self column (`<kind>_key` *is* the election), and each edge's
+`prop__<p>` value column follows its *target* populations' elections beside the
+always-on `<p>_key` — the two axes independent. Base's plan step runs the
+election's identity gates over each kind's full declared domain (base never
+splits — one table, one identity surface) and edge gates per reference edge.
+Absent the `keys` block, every table carries the `<kind>_key` / `id` /
+`prop__<p>` / `<p>_key` shape this doc states.
 
 ### The `slice_only` omission
 
@@ -408,6 +424,13 @@ shape.
 any data is written. The key columns add no config fields: they are the capability, and a
 toggle for a demand nobody has expressed is scaffolding (Principle #8).
 
+`declare_keys` (`BaseConfig`, optional boolean, no cross-field rule) is the one
+key-*declaration* config field: opt-in declared key metadata on every flat table —
+the `<kind>_key` primary key, `id` uniqueness, and `presentation_id` uniqueness
+where the sidecar's `presentation_keys` block claims it — materialized as DuckDB
+constraints. The resolution rules, writer semantics, CSV posture, and incremental
+gating are owned by [`declared-keys.md`](declared-keys.md).
+
 ## Rationale
 
 - **Direct-horizon over compile-indirection.** Base's shape *is* state-at, so the
@@ -463,8 +486,10 @@ toggle for a demand nobody has expressed is scaffolding (Principle #8).
 | Document | Why |
 |---|---|
 | [`derivations.md`](derivations.md) | The state-at and record-index residents base composes as its whole engine — values from the first, key columns from the second |
-| [`source.md`](source.md) | Snapshot delivery (the same state-at composition), the presentation-name posture, and the `slice_only` omission shape base shares |
+| [`source.md`](source.md) | The windowed state snapshot (the same state-at composition), the presentation-name posture, and the `slice_only` omission shape base shares |
 | [`slice-only.md`](slice-only.md) · [`notices.md`](notices.md) | The reused omission policy and the channel its notices flow through |
+| [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — declared primary-key / uniqueness constraints on base's flat tables |
+| [`key-election.md`](key-election.md) | The cross-mode key-election surface — the elective id-space value surface beside the always-on index keys, and the gates base's plan runs |
 | [`playback.md`](playback.md) | Shaped state and the bridging theorem that make direct-horizon equivalent |
 | [`anchor.md`](anchor.md) · [`incremental.md`](incremental.md) | The shared wallclock renderer and the window/cursor/fingerprint driver base wires into |
 | [`corrupters.md`](corrupters.md) | The corrupt → base composition — a base export over a corrupted emit surfaces declared defects unchanged |

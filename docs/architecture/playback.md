@@ -197,9 +197,9 @@ order. Presentation-property and identity columns beyond `presentation_id` /
 
 `window(T1, T2)` returns one relation per output table the shape declares, each
 tagged with its **delivery class** (`append` or `snapshot`) so a caller lands
-it correctly. Classes are static per table class / genre and knowable at open
+it correctly. Classes are static per table class / render and knowable at open
 through `tables()`, so a caller provisions sinks before the first ask. The
-per-table-class / per-genre window-membership contract is the incremental
+per-table-class / per-render window-membership contract is the incremental
 driver's, promoted verbatim to seam contract — stateless, relations out,
 caller owns the frontier (see [`incremental.md`](incremental.md) § Window
 membership per table class and [`source.md`](source.md) § Incremental
@@ -221,18 +221,25 @@ realized literally, not per class: the mode's full-export compile runs over the
 Delivery is `snapshot` on every table. Because the compile is the shipped
 full-export compile, as-of-T correctness is by construction — no per-class
 rules: type-1 dims read as-of-T values, SCD-2's `LEAD` over truncated `history`
-yields change points ≤ T, records-grain facts and transactions reconstruct as
-of T, and `change_delivery: snapshot` reconstructs at horizon `T + 1`.
+yields change points ≤ T, records-grain facts reconstruct as of T, source's
+state tables read the truncated records spine (current-at-T), and its event
+log's folds range over exactly the events ≤ T.
 
-**The compile indirection.** Each mode's pure compile surface carries one
-additive, time-agnostic parameter, `base_relations: Mapping[str, str] | None`
-(required, no default), mapping a physical base-table name to a replacing
-relation. With `None` compilation is byte-identical to a full export; the
-full-export and windowed callers pass `None`. Tier-2 `state` builds the mapping
-with one entry per base table the sidecar declares (fk-hop target spines and
-lookup reads must resolve truncated too), invokes the compile against the
-truncated emit view so every faithful builder enumerates exactly the columns
-the replacing relations carry, and the mode never sees a horizon.
+**The compile indirection.** A `base_relations: Mapping[str, str]` mapping —
+physical base-table name to a replacing relation — redirects a compiled
+query's base reads. It has two equivalent realizations, one per mode shape:
+dimensional's pure compile surface carries it as an additive, time-agnostic
+parameter (`base_relations: Mapping[str, str] | None`, required, no default;
+`None` compiles byte-identical to a full export, and the full-export and
+windowed callers pass `None`); source's compile carries no such parameter —
+the seam applies the mapping itself, post-compile, as a pure SQL rewrite over
+the engine's plain specs (`apply_base_relations` in
+[`exporters/base_relations.py`](../../src/fabulexa_forge/exporters/base_relations.py),
+composed by `playback/shaped.py`). Tier-2 `state` builds the mapping with one
+entry per base table the sidecar declares (fk-hop target spines and lookup
+reads must resolve truncated too) and runs the compile against the truncated
+emit view so every faithful builder enumerates exactly the columns the
+replacing relations carry; the mode never sees a horizon.
 
 **Realization: name shadowing** — a normative algorithm an independent
 reimplementation must honor. The mapping wraps the compiled query in one CTE
@@ -327,7 +334,7 @@ untouched.
    tier-1 consistency algebra holds for every `(selection, T1, T2)`; tier-2
    agreement is per table class, exact at the slice bound (the bridging
    theorem) and up to the class's documented consumer merge elsewhere. A shaped
-   change-log table over `[T1, T2)` and a tier-1 `events(T1, T2)` pull carry
+   event-log table over `[T1, T2)` and a tier-1 `events(T1, T2)` pull carry
    the same change set.
 5. **Faithful reshaping + temporal honesty, per answer.** Every delivered value
    traces to a base value or a declared recoding; no value derives from base

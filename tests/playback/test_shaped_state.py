@@ -17,8 +17,10 @@ from fabulexa_forge.derivations.truncated_tape import (
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.query_spec import query_spec_output_name
 from fabulexa_forge.exporters.source.engine import build_source_query_specs
+from fabulexa_forge.exporters.source.plan import build_source_plan
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.playback.shaped import ShapedTable, open_shaped_playback
 from fabulexa_forge.reader.emit import open_emit
@@ -31,7 +33,6 @@ from ._shaped_fixtures import (
     state_dimensional_shape_config,
     state_junction_shape_config,
     state_source_shape_config,
-    state_source_snapshot_delivery_shape_config,
     state_test_table_specs,
 )
 
@@ -53,6 +54,18 @@ def _open_dimensional(emit: "Emit", config: "ExportConfig"):
 def _open_source(emit: "Emit", config: "ExportConfig"):
     anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
     return open_shaped_playback(emit, config, anchor, discard_notice_sink)
+
+
+def _direct_source_full_specs(emit: "Emit", config: "ExportConfig"):
+    """Compile the same full export directly through the source engine's own
+    plan-then-compile split (the reference)."""
+    anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+    assert anchor is not None
+    election = resolve_election(emit.sidecar, config.keys)
+    plan = build_source_plan(
+        emit, config, anchor, election, windowed=False, notices=discard_notice_sink
+    )
+    return build_source_query_specs(plan, None)
 
 
 def _materialize_truncated_emit(
@@ -164,12 +177,9 @@ def test_bridging_theorem_source(tmp_path: "Path") -> None:
     emit_dir = build_state_test_emit(tmp_path)
     config = state_source_shape_config()
     with open_emit(emit_dir) as emit:
-        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         head = _open_source(emit, config)
         stated = _tables_by_name(head.state(100))
-        full_specs = build_source_query_specs(
-            emit, config, anchor, None, discard_notice_sink, base_relations=None
-        )
+        full_specs = _direct_source_full_specs(emit, config)
         full_by_name = {
             query_spec_output_name(spec): emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in full_specs
@@ -223,19 +233,14 @@ def test_interior_t_matches_materialized_truncated_emit_source(
     physical_dir = tmp_path / "physical"
     physical_dir.mkdir()
     emit_dir = build_state_test_emit(physical_dir)
-    config = state_source_snapshot_delivery_shape_config()
+    config = state_source_shape_config()
     with open_emit(emit_dir) as emit:
         head = _open_source(emit, config)
         stated = _tables_by_name(head.state(12))
 
     materialized_dir = _materialize_truncated_emit(tmp_path, emit_dir, 12)
     with open_emit(materialized_dir) as mat_emit:
-        mat_anchor = resolve_effective_anchor(
-            mat_emit.sidecar.runtime(), None, None, None
-        )
-        oracle_specs = build_source_query_specs(
-            mat_emit, config, mat_anchor, None, discard_notice_sink, base_relations=None
-        )
+        oracle_specs = _direct_source_full_specs(mat_emit, config)
         oracle_by_name = {
             query_spec_output_name(spec): mat_emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in oracle_specs
@@ -336,11 +341,11 @@ def test_state_only_shape_never_runs_windowed_business_rules(tmp_path: "Path") -
     assert table.table.num_rows == 2
 
 
-def test_source_snapshot_delivery_reconstructs_at_horizon_t_plus_1(
+def test_source_state_table_reconstructs_at_horizon_t_plus_1(
     tmp_path: "Path",
 ) -> None:
     emit_dir = build_state_test_emit(tmp_path)
-    config = state_source_snapshot_delivery_shape_config()
+    config = state_source_shape_config()
     with open_emit(emit_dir) as emit:
         head = _open_source(emit, config)
         early = _tables_by_name(head.state(0))["widget"]

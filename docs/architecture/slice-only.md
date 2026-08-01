@@ -52,7 +52,7 @@ construction — membership and `history` columns carry no class.
 | Read kind | Definition | Policy |
 |---|---|---|
 | **Value-read** | An output value, join resolution, row membership, or row order derives from the column's value: projection, `lookup` terminal or hop, fk hop, filter key, value-map source, derived-column source or correlation key, after-image column | Refused (author-named) or omitted (auto-projected) |
-| **Metadata read** | The engine reads the column's *class* from the sidecar (the sweep itself, the genre predicate, `init`'s skip) | Always permitted — no value is touched |
+| **Metadata read** | The engine reads the column's *class* from the sidecar (the sweep itself, source's audited-set resolution, `init`'s skip) | Always permitted — no value is touched |
 | **Classification read** | The sub-typed discriminator's current value used to classify rows, on any surface | Permitted — the one value-read exception (the carve-out) |
 
 ### The discriminator carve-out
@@ -68,7 +68,8 @@ union of sub-kinds; `prop__<K>_type` is the tag that says what each row actually
 *is*. The contract does not pin a discriminator's `temporal_class` — a producer
 may mark it `slice_only` — and an unexempted sweep would strip the one
 classification key every consumer groups, routes, and splits by (the source
-sub-type split, streaming routing and `types` selection, BI grouping). The
+declared-table population filter, streaming routing and `types` selection, BI
+grouping). The
 exempt discriminator is carried and selectable *as a classification* — the
 current value at every T — never presented as an as-of value. The carve-out
 spans every policing surface: the sweep, the source omission, the streaming
@@ -88,7 +89,7 @@ own the rule detail:
 | Mode | Enforcement | Rules (owning doc) |
 |---|---|---|
 | dimensional | Refuse every config-referenced value-read; `lookup` regated to `constant`; `init` skips proposals with a notice | `SliceOnlyColumnRefused`, `LookupColumnSafety` — [`dimensional.md`](dimensional.md) |
-| source | Omit from every records-genre render, one notice per unit × column; a `rename` naming an omitted column errors | `SourceRenameSliceOnly` — [`source.md`](source.md) |
+| source | Omit from every auto-projected surface (the state render's classified projection, the event log's audited set), one notice per unit × column; a declaration entry (`columns` / `rename` / `only` / `ignore`) naming a non-exempt column errors | `SourceSliceOnlyRead` — [`source.md`](source.md) |
 | base | Omit every non-exempt `slice_only` `prop__` column from the flat table, one `slice-only-column-omitted` notice per kind × column; the sub-typed-discriminator carve-out honored; a `rename` naming an omitted column errors | `BaseRenameSliceOnly` — [`base.md`](base.md) |
 | streaming | Refuse-only: the after-image is wholly author-named, so a `kinds[].properties` entry naming a non-exempt `slice_only` property is refused in the eager pass; no notices | `StreamPropertySliceOnly` — [`streaming.md`](streaming.md) |
 | incremental | No rules of its own: refusal is always-on before any window gate runs | [`incremental.md`](incremental.md) |
@@ -150,8 +151,9 @@ property set and key their row sets on tracked-property change instants only.
 
 - The derivations layer is class-agnostic: no fold consults `temporal_class`
   (see [`derivations.md`](derivations.md) § Boundaries).
-- Source's genre trichotomy is outside the policy: the tracked-kind predicate
-  never consults a `slice_only` column.
+- Source's declared-table resolution is outside the policy: declaration
+  resolution and the render choice never consult a `slice_only` column — the
+  policy touches projections and audited sets, never layout.
 - Structural lifecycle columns (`updated_at` sourcing, `last_mutation_sim_time`)
   carry no class and are outside the population; their presentation is owned
   elsewhere. `last_mutation_sim_time` is a reserved output column name under the

@@ -1,20 +1,25 @@
 """Source export engine: build_source_query_specs, export_source.
 
-The source counterpart of the dimensional exporter's full-export path: builds
-the source plan (`exporters.source.plan.build_source_plan`), compiles one
-render per output table (`exporters.source.renders`), and dispatches to the
-fmt-selected writer via the shared `write_query_specs`. Optionally windowed
-(Unit 2): every spec is tagged its genre's write_mode. Under
-`change_delivery: snapshot` (Unit 3), a change-log-genre spec routes to
-`build_snapshot_render_sql` instead of the CDC render and is tagged
-`write_mode='replace'` when windowed, or `write_mode='create'` for a full
-(non-windowed) export — which reconstructs at the tape's end (§ Shaped
-state, "One mode semantic, redefined") rather than refusing.
+Plan and compile are split (§ 1): `export_source` resolves the election
+(`exporters.election.resolve_election`) and builds the source plan
+(`exporters.source.plan.build_source_plan`) — the one data-dependent step,
+plan-time uniqueness guards included — then `build_source_query_specs(plan,
+window)` is a pure, connection-free compile: one `QuerySpec` per plan unit
+(`exporters.source.renders.build_state_render_sql` /
+`build_junction_render_sql`, `exporters.source.events.build_event_log_sql`),
+tables in plan order, the event log last. Full export (`window is None`)
+tags every spec `write_mode='create'`; windowed tags `state` `replace`,
+`junction` / the event log `append` (§ Incremental composition). The engine
+carries no `base_relations` parameter — that compile-indirection rewrite is
+now the playback seam's own post-compile step
+(`playback.shaped._rewrite_specs_base_relations`, § 2).
 
-Layer-direction invariant: imports the reader, derivations.guard, the source
-plan/renders modules, config.models and anchor (TYPE_CHECKING only where
-runtime use is not needed), errors, and the mode-neutral query_spec module.
-Never imports exporters.dimensional.* or exporters.streaming.*.
+Layer-direction invariant: imports the reader (TYPE_CHECKING only), the
+mode-neutral election module (`resolve_election`), the sibling source
+plan/renders/events modules, config.models, anchor, and notices
+(TYPE_CHECKING only where runtime use is not needed), errors, and the
+mode-neutral query_spec module. Never imports exporters.dimensional.* or
+exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -22,33 +27,33 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
     from pathlib import Path
 
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.exporters.notices import NoticeSink
-    from fabulexa_forge.exporters.source.plan import SourceTableSpec
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import SourceAnchorRequired
-from fabulexa_forge.exporters.base_relations import apply_base_relations
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.query_spec import (
     QuerySpec,
     declare_keys_active,
     keys_not_declarable_csv_notice,
     write_query_specs,
 )
+from fabulexa_forge.exporters.source.events import build_event_log_sql
 from fabulexa_forge.exporters.source.plan import (
+    SourceJunctionTablePlan,
+    SourcePlan,
+    SourceStateTablePlan,
     build_source_plan,
-    resolve_source_table_keys,
 )
 from fabulexa_forge.exporters.source.renders import (
-    build_render_sql,
-    build_snapshot_render_sql,
+    build_junction_render_sql,
+    build_state_render_sql,
 )
 
 _ANCHOR_REQUIRED_MESSAGE = (
@@ -57,161 +62,128 @@ _ANCHOR_REQUIRED_MESSAGE = (
     " --base-date/--timezone"
 )
 
-#: Windowed write_mode per genre (§ Incremental composition). Full export
-#: (window=None) tags every spec 'create' instead, regardless of genre.
-_WINDOWED_WRITE_MODE_BY_GENRE: dict[str, Literal["append", "replace"]] = {
-    "changelog": "append",
-    "reference": "replace",
-    "transaction": "append",
-    "junction": "append",
-}
 
+def require_source_anchor(anchor: "EffectiveAnchor | None") -> "EffectiveAnchor":
+    """Refuse a None anchor resolution for a source invocation.
 
-def _write_mode_for_genre(
-    genre: str,
-    window: "Window | None",
-    change_delivery: Literal["changelog", "snapshot"],
-) -> Literal["create", "append", "replace"]:
-    """Resolve one table spec's write_mode from its genre, windowing, and delivery.
+    `build_source_plan` requires a resolved `EffectiveAnchor` (source has no
+    base-mode raw-ns fallback); every caller of it — `export_source`, the
+    incremental driver's source branch — checks here first, so the refusal
+    is worded identically everywhere it can occur.
 
     Args:
-        genre: The resolved output table's genre.
-        window: The window to filter to, or None for the full export.
-        change_delivery: The source config's delivery mode for change-log
-            kinds.
+        anchor: The caller's resolved effective anchor, or None.
 
     Returns:
-        'create' for a full export; 'replace' for a windowed change-log spec
-        under `snapshot` delivery (a full snapshot per window); else the
-        genre's windowed write_mode.
-    """
-    if window is None:
-        return "create"
-    if genre == "changelog" and change_delivery == "snapshot":
-        return "replace"
-    return _WINDOWED_WRITE_MODE_BY_GENRE[genre]
-
-
-def _render_sql_for_spec(
-    sidecar: "Sidecar",
-    fork_path: str,
-    table_spec: "SourceTableSpec",
-    anchor: "EffectiveAnchor",
-    window: "Window | None",
-    change_delivery: Literal["changelog", "snapshot"],
-) -> str:
-    """Dispatch one output table to its render, honoring snapshot delivery.
-
-    A change-log-genre spec under `snapshot` delivery routes to
-    `build_snapshot_render_sql`, which reconstructs at `window.end_ns` when
-    windowed or at the tape's end when window is None (a full export); every
-    other spec routes to the genre dispatch in `renders.build_render_sql`.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch, from `require_single_branch`.
-        table_spec: The resolved output table.
-        anchor: The resolved effective anchor.
-        window: The window to filter to, or None for the full export.
-        change_delivery: The source config's delivery mode for change-log
-            kinds.
-
-    Returns:
-        The table's complete, ordered SELECT.
-    """
-    if table_spec.genre == "changelog" and change_delivery == "snapshot":
-        return build_snapshot_render_sql(sidecar, fork_path, table_spec, anchor, window)
-    return build_render_sql(sidecar, fork_path, table_spec, anchor, window)
-
-
-def build_source_query_specs(
-    emit: "Emit",
-    config: "ExportConfig",
-    anchor: "EffectiveAnchor | None",
-    window: "Window | None",
-    notice_sink: "NoticeSink",
-    base_relations: "Mapping[str, str] | None",
-) -> list[QuerySpec]:
-    """
-    Compile the source plan to writer-ready QuerySpecs, optionally windowed.
-
-    The source counterpart of the dimensional compile. Builds the source
-    plan, threading notice_sink to it, then one SELECT per output table
-    composing the reader relations and the row-state-events derivation (the
-    mode authors no base-table SQL); every structural sim-time column renders
-    wallclock through the shared anchor renderer, every change-log payload
-    column casts from the fold's codec VARCHAR back to its sidecar type.
-
-    window=None keeps the full-export contract: every spec write_mode='create'.
-    With a window, applies per-genre window membership and tags write_mode per
-    genre: change-log by event_sim_time (append), transaction by
-    last_mutation_sim_time (append), reference as a full replace-class
-    snapshot (replace), junction extract-on-change with left_at
-    horizon-masked (append). No source genre uses views. Under
-    `change_delivery: snapshot`, a change-log-genre spec instead renders the
-    state-at derivation: at `window.end_ns` when windowed (write_mode='replace',
-    a full snapshot per window), or at the tape's end when window=None (a full
-    export, write_mode='create') — "the tape's end" realized structurally, no
-    horizon ever computed (§ Shaped state, "One mode semantic, redefined").
-    When `config.source.declare_keys` is true, every spec's `keys` is
-    resolved via `resolve_source_table_keys` (format-agnostic — resolved
-    whatever `fmt`, and identically whether `window` is set or None);
-    otherwise every spec's `keys` is None.
-
-    Args:
-        emit: The open emit.
-        config: The validated export config (mode='source').
-        anchor: The resolved effective anchor. Required.
-        window: The window to filter to, or None for the full export.
-        notice_sink: Receiver for plan notices (slice-only-column-omitted).
-        base_relations: Physical base-table name -> replacing relation SELECT.
-            See `build_query_specs`' docstring — same contract, threaded
-            identically.
-
-    Returns:
-        One QuerySpec per output table, in deterministic order.
+        `anchor`, narrowed to non-None.
 
     Raises:
-        SourceAnchorRequired: anchor is None.
-        ExportError: The single-branch guard or a source business rule fails
-            (the SourceTableSpec resolution errors — § build_source_plan).
-        PresentationKeysInvalidError: `declare_keys` is true and the
-            sidecar's `presentation_keys` block is present and incoherent.
-        TemporalClassUnavailableError: A consulted column's temporal pair is
-            unavailable (non-conformant emit).
+        SourceAnchorRequired: `anchor` is None.
     """
     if anchor is None:
         raise SourceAnchorRequired(_ANCHOR_REQUIRED_MESSAGE)
+    return anchor
 
-    sidecar = emit.sidecar
-    fork_path = require_single_branch(sidecar)
-    table_specs = build_source_plan(sidecar, config.source, notice_sink)
 
-    change_delivery = (
-        config.source.change_delivery if config.source is not None else "changelog"
-    )
-    declare_keys = declare_keys_active(config)
+def _compile_table_spec(
+    sidecar: "Sidecar",
+    fork_path: str,
+    unit: "SourceStateTablePlan | SourceJunctionTablePlan",
+    anchor: "EffectiveAnchor",
+    window: "Window | None",
+) -> QuerySpec:
+    """Compile one `tables[]` plan unit to its QuerySpec.
 
-    return [
-        QuerySpec(
-            table_name=table_spec.name,
-            sql=apply_base_relations(
-                _render_sql_for_spec(
-                    sidecar, fork_path, table_spec, anchor, window, change_delivery
-                ),
-                base_relations,
-            ),
-            write_mode=_write_mode_for_genre(table_spec.genre, window, change_delivery),
-            view_name=None,
-            view_sql=None,
-            keys=(
-                resolve_source_table_keys(sidecar, table_spec, change_delivery)
-                if declare_keys
-                else None
-            ),
+    Args:
+        sidecar: The plan's sidecar.
+        fork_path: The sole branch.
+        unit: The resolved state or junction table unit.
+        anchor: The resolved wallclock anchor.
+        window: The incremental window, or None for a full export.
+
+    Returns:
+        The compiled spec: `write_mode='create'` for a full export;
+        windowed, `'replace'` for a `state` unit (a full horizon snapshot
+        per window) or `'append'` for a `junction` unit (extract-on-change).
+        `keys` is the unit's declared keys for a `state` table (`None` when
+        `declare_keys` is off); always `None` for a `junction` table (it
+        declares no keys).
+    """
+    if isinstance(unit, SourceStateTablePlan):
+        sql = build_state_render_sql(sidecar, fork_path, unit, anchor, window)
+        write_mode: Literal["create", "append", "replace"] = (
+            "create" if window is None else "replace"
         )
-        for table_spec in table_specs
+        keys = unit.keys
+    else:
+        sql = build_junction_render_sql(sidecar, fork_path, unit, anchor, window)
+        write_mode = "create" if window is None else "append"
+        keys = None
+    return QuerySpec(
+        table_name=unit.name,
+        sql=sql,
+        write_mode=write_mode,
+        view_name=None,
+        view_sql=None,
+        keys=keys,
+    )
+
+
+def build_source_query_specs(
+    plan: SourcePlan,
+    window: "Window | None",
+) -> tuple[QuerySpec, ...]:
+    """
+    Compile the plan to one QuerySpec per output table.
+
+    Full-export compile when `window` is None; the windowed compile applies
+    the per-render window membership (state: horizon snapshot without
+    updated_at; event log: append by event_sim_time; junction:
+    extract-on-change with left_at horizon-masking). Connection-free and
+    pure: every data-dependent guard already ran at `build_source_plan` (§
+    1), so this composes SQL only.
+
+    Args:
+        plan: The resolved source plan (built with the matching
+            windowed-ness: a non-None `window` pairs with a
+            `windowed=True` plan, None with `windowed=False`).
+        window: The incremental window, or None for a full export.
+
+    Returns:
+        One spec per output table, declared order; the event log last.
+
+    Raises:
+        ValueError: `window` presence disagrees with the plan's
+            windowed-ness — a caller programming error, never a config
+            validation outcome. Otherwise nothing: the plan already
+            carries every validated fact, the windowed-shape checks
+            included.
+    """
+    if (window is not None) != plan.windowed:
+        raise ValueError(
+            f"window presence ({window is not None}) disagrees with the"
+            f" plan's windowed-ness ({plan.windowed})"
+        )
+
+    specs = [
+        _compile_table_spec(plan.sidecar, plan.fork_path, unit, plan.anchor, window)
+        for unit in plan.tables
     ]
+    if plan.events is not None:
+        log_sql = build_event_log_sql(
+            plan.sidecar, plan.fork_path, plan.events, plan.anchor, window
+        )
+        specs.append(
+            QuerySpec(
+                table_name=plan.events.name,
+                sql=log_sql,
+                write_mode="create" if window is None else "append",
+                view_name=None,
+                view_sql=None,
+                keys=None,
+            )
+        )
+    return tuple(specs)
 
 
 def export_source(
@@ -225,13 +197,14 @@ def export_source(
     """
     Run the source exporter and write the operational dump.
 
-    Builds the full-export source query specs, threading notice_sink to the
-    plan, flattens them to name->SQL, and dispatches to the writer selected
-    by fmt (mirroring export_dimensional's full-export path). When
-    `config.source.declare_keys` is true and `fmt == 'csv'`, emits
-    `keys_not_declarable_csv_notice()` to `notice_sink` once, before any data
-    is written — CSV carries no constraint surface, so the DuckDB-only
-    declaration is dropped for this invocation.
+    Resolves the election (`resolve_election(sidecar, config.keys)`), builds
+    the full-export source plan (`build_source_plan(..., windowed=False,
+    ...)`), compiles it (`build_source_query_specs(plan, None)`), and
+    dispatches to the writer selected by fmt (mirroring export_dimensional's
+    full-export path). When `config.source.declare_keys` is true and
+    `fmt == 'csv'`, emits `keys_not_declarable_csv_notice()` to notice_sink
+    once, before any data is written — CSV carries no constraint surface, so
+    the DuckDB-only declaration is dropped for this invocation.
 
     Args:
         emit: The open emit.
@@ -252,16 +225,26 @@ def export_source(
 
     Raises:
         SourceAnchorRequired: anchor is None.
-        ExportError: The single-branch guard or a source business rule fails.
+        ExportError: The single-branch guard or a source business rule fails
+            (§ build_source_plan).
         ExportRuntimeError: A writer fails.
+        ElectedKeyDuplicate: A corrupted elected key fails the plan-time
+            uniqueness guard.
+        ElectionKindUnknown, ElectionMixedIdentity,
+            ElectionPresentationUndeclared, ElectionSubTypeUnknown,
+            ElectionUnionUnsafe: The election resolution or its gates fail.
         PresentationKeysInvalidError: `declare_keys` is true and the
             sidecar's `presentation_keys` block is present and incoherent.
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """
-    specs = build_source_query_specs(
-        emit, config, anchor, None, notice_sink, base_relations=None
+    resolved_anchor = require_source_anchor(anchor)
+    sidecar = emit.sidecar
+    election = resolve_election(sidecar, config.keys)
+    plan = build_source_plan(
+        emit, config, resolved_anchor, election, windowed=False, notices=notice_sink
     )
+    specs = list(build_source_query_specs(plan, None))
     if declare_keys_active(config) and fmt == "csv":
         notice_sink(keys_not_declarable_csv_notice())
     return write_query_specs(emit, specs, out, fmt)

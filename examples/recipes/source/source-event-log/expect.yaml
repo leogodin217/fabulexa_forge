@@ -1,0 +1,14 @@
+tables:
+  versions:
+    columns: [item_type, item_id, event, occurred_at, changes]
+    row_count: 3
+    contains_rows:
+      - item_type: admission
+        item_id: a001
+        event: create
+      - item_type: admission
+        item_id: a002
+        event: create
+      - item_type: admission
+        item_id: a002
+        event: destroy

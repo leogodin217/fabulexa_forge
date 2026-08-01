@@ -1,0 +1,11 @@
+tables:
+  waiter_log:
+    columns: [item_type, item_id, event, occurred_at, changes]
+    row_count: 3
+    contains_rows:
+      - item_type: queue.waiters
+        item_id: q001
+        event: create
+      - item_type: queue.waiters
+        item_id: q001
+        event: destroy

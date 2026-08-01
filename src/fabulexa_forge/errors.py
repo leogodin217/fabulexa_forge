@@ -172,55 +172,17 @@ class CorruptValidationError(CorruptError):
     source, the failing check ids."""
 
 
-class SourceRecordRolesRequired(ExportError):
-    """A `mode: source` export was run against an emit whose sidecar carries no
-    `record_roles` registry. Classification of untracked kinds requires it; there
-    is no inference fallback — an emit predating the registry is refused."""
-
-
 class SourceHistoryTrackedRequired(ExportError):
     """A `mode: source` export was run against an emit whose sidecar carries no
-    per-column `history_tracked` flags. The change-log/reference/transaction
-    trichotomy is flag-authoritative; there is no history-table inference
-    fallback — an emit predating the flag is refused."""
-
-
-class SourceRoleUnknown(ExportError):
-    """An untracked exported kind — or a declared sub-type of an untracked
-    object-registry kind — has no resolvable entry in `record_roles`. A tracked
-    kind needs no role (tracked-ness dominates); this error names the kind (and
-    sub-type, when applicable)."""
-
-
-class SourceSubtypesUndeclared(ExportError):
-    """An untracked kind's `record_roles` entry is object-valued (role varies by
-    sub-type) but the sidecar declares no `<kind>_type` enum domain to enumerate
-    its split units from."""
-
-
-class SourceExcludeUnresolved(ExportError):
-    """A `source.exclude.kinds` or `source.exclude.tables` entry matches nothing
-    in the open emit's sidecar."""
-
-
-class SourceRenameUnresolved(ExportError):
-    """A `source.rename` entry's `table` (and `sub_type`, when the kind splits)
-    does not resolve to an exported unit, or one of its `columns` keys does not
-    name a source column of that unit."""
-
-
-class SourceRenameSliceOnly(ExportError):
-    """A `source.rename` entry's `columns` key names a policy-omitted
-    `temporal_class: slice_only` column — the column carries no value to
-    deliver under this rename, so the rename is unsatisfiable rather than
-    silently ignored."""
+    per-column `history_tracked` flags. The event log and the windowed state
+    snapshot are flag-authoritative; there is no inference fallback — an emit
+    predating the flag is refused."""
 
 
 class SourceNameCollision(ExportError):
     """Two resolved output tables share a name, or two columns of one resolved
-    output table share a name, after presentation defaults and `source.rename`
-    are applied. Never silently suffixed or dropped — the author resolves it via
-    `source.rename`."""
+    output table share a name, after defaults and `rename` are applied. Never
+    silently suffixed or dropped — the author resolves it via `rename`."""
 
 
 class SourceAnchorRequired(ExportError):
@@ -242,6 +204,66 @@ class SourceUnclassifiedColumn(ExportError):
     """
 
 
+class SourceTableKindUnknown(ExportError):
+    """A declared `kind` has no `records__<kind>` table in the sidecar.
+
+    Raised by `resolve_populations`, the shared population-set resolver
+    consumed by both `tables` entries and `events` sources. The message is
+    prefixed with the declaring unit's label, verbatim — `table '<name>'`
+    for a `tables` entry, `events source #<n>` (1-based, declaration order)
+    for an `events` source.
+    """
+
+
+class SourceTableSubTypeUnknown(ExportError):
+    """A declared `sub_types` entry names a value outside the kind's
+    discriminator domain. Owner-prefixed message, per
+    `SourceTableKindUnknown`."""
+
+
+class SourceSubTypesOnFlatKind(ExportError):
+    """A declaration gives `sub_types` for a kind with no discriminator
+    domain — a flat kind has no populations to address. Owner-prefixed
+    message, per `SourceTableKindUnknown`."""
+
+
+class SourceTableMembershipUnknown(ExportError):
+    """A declared `membership` reference resolves to no
+    `membership__<K>__<p>` table in the sidecar. Owner-prefixed message,
+    per `SourceTableKindUnknown`."""
+
+
+class SourceColumnUnresolved(ExportError):
+    """A `columns` / `rename` / `only` / `ignore` entry names no column or
+    property of its source surface — including a non-elected, unrendered
+    identity surface name, and, under a windowed invocation,
+    `last_mutation_sim_time` (the windowed state render omits it —
+    horizon honesty). The message names the election or the omission
+    reason, not just the entry."""
+
+
+class SourceColumnNotAddressable(ExportError):
+    """A declaration entry names a mechanism column (`fork_path`,
+    `record_index` outside its role as a table's elected identity surface,
+    `ref_index__*`), or a `columns` entry names a state table's *elected*
+    identity surface — identity is election-governed there, not
+    selection-governed."""
+
+
+class SourceSliceOnlyRead(ExportError):
+    """A declaration entry (`columns` / `rename` / `only` / `ignore`) names
+    a non-exempt `temporal_class: slice_only` column — the column carries
+    no deliverable value under the export-wide slice_only policy, so the
+    reference is unsatisfiable rather than silently omitted."""
+
+
+class SourceEventSourceOverlap(ExportError):
+    """Two `events.sources` entries resolve overlapping population sets
+    (membership sources distinct by `(kind, property)`) — each population
+    may be audited by exactly one source, so the total event order stays
+    tie-free and no event is double-logged."""
+
+
 class BaseExcludeUnresolved(ExportError):
     """A `base.exclude.kinds`/`base.exclude.tables` entry matches nothing base emits."""
 
@@ -259,3 +281,53 @@ class BaseRenameSliceOnly(ExportError):
 class BaseNameCollision(ExportError):
     """Two resolved base output tables share a name, or two columns of one output
     table do, after presentation defaults and `base.rename`. Never suffixed."""
+
+
+class ElectionKindUnknown(ExportError):
+    """A `keys` entry names a kind with no records table in the emit."""
+
+
+class ElectionSubTypeUnknown(ExportError):
+    """A `keys` map addresses a sub-type outside the kind's discriminator
+    domain, or addresses a flat kind with a map."""
+
+
+class ElectionPresentationUndeclared(ExportError):
+    """A population elects presentation_id without a presentation_keys
+    entry covering it — or a dimensional edge resolves presentation_id
+    (inherited or explicit) over a source population set with an
+    uncovered population."""
+
+
+class ElectionMixedIdentity(ExportError):
+    """An output table combines populations electing differing surfaces —
+    one table, one identity surface; refused at plan time, naming the
+    table and the (population, surface) pairs."""
+
+
+class ElectionUnionUnsafe(ExportError):
+    """Elected key spaces admit a value collision — among a uniform
+    presentation_id election's populations on one identity column, or
+    across a reference edge's admitted target mix."""
+
+
+class ElectionInheritanceAmbiguous(ExportError):
+    """A dimensional FK without an explicit `target_key` targets a dim
+    whose source population set carries more than one distinct election —
+    nothing coherent to inherit; names the edge and the differing
+    elections."""
+
+
+class ElectionDimKeyDisagrees(ExportError):
+    """A dimensional FK's resolved surface (inherited from the destination
+    dim's source population's election, with no explicit target_key
+    override) is not among the destination dim's declared key columns'
+    sources; names the dim, its key sources, and the elected surface."""
+
+
+class ElectedKeyDuplicate(ExportError):
+    """The render-time uniqueness guard: over a composed identity
+    relation, restricted to the consuming population set, row count,
+    COUNT(DISTINCT record_id), and COUNT(DISTINCT elected value) are not
+    all equal, or an elected value is NULL; names the table or edge and
+    the surface."""

@@ -1,39 +1,68 @@
 # ExportConfig — NHS bundle, source mode (operational OLTP tables)
 # ============================================================
-# `fabulexa-forge export docs/examples/nhs/bundle docs/examples/nhs/source.yaml`
+# `fabulexa-forge export docs/examples/nhs/bundle docs/examples/nhs/source.yaml <out> --fmt duckdb`
 #
-# Source mode classifies every table into a genre from record_roles ×
-# temporal_class, with NO author declaration of genre:
-#   - tracked kinds (a class-`tracked` prop) -> wide CDC CHANGE-LOG tables
-#     (op / changed_at / id / after-image cols). NHS tracked kinds: actor
-#     (status, hai_status, admission_count, ...), journey_instance
-#     (current_state), diary (next_opening), resource (allocated), booking
-#     (status).
-#   - untracked dimension kinds -> REFERENCE tables (entity: wards, theatres,
-#     diagnostics, procedures, meds).
-#   - untracked fact kinds -> TRANSACTION tables.
-#   - membership__resource__holders -> a JUNCTION (interval) table.
+# Source mode DECLARES its own output shape (docs/architecture/source.md): each
+# `tables[]` entry is a `state` table (current-state, one row per record)
+# over a `kind:`, or a `junction` table over a `membership:` reference.
+# History is opt-in via a single polymorphic `events:` log; the tracked-
+# property kinds below (patient, consultant, pathway_episode, diary,
+# booking) audit into it — an explicit declaration, the app's own audit
+# idiom.
 #
-# Source is the first mode that REQUIRES a resolved wallclock anchor (change-log
-# `changed_at` is a real TIMESTAMP). No rebase block is given, so the anchor
-# falls back to the sidecar `runtime` (start 2023-01-01, UTC) — the emit's own
-# clock. Uncomment `rebase:` to override origin/zone.
+# `name:` is author-verbatim — the trust's own OLTP naming, independent of
+# the sidecar's engine-ontology `kind:`:
+#   actor -> patient, resource -> consultant, journey_instance -> pathway_episode,
+#   membership__resource__holders -> consultant_allocation.
+# `booking` and `diary` keep their sidecar names — both are genuine NHS
+# terms (e-RS booking, clinic diary). `entity` keeps its name too: a
+# genuinely polymorphic catalogue (wards / theatres / diagnostics /
+# procedures / medications behind `entity_type`) that source keeps as ONE
+# combined table by declaring `kind: entity` with no `sub_types:` — the
+# per-sub-type split into domain tables is the dimensional config's job.
 #
-# Same two mechanism kinds excluded as base/dimensional (see base.yaml). In
-# source, excluding `tick_decision` also drops the membership table it owns
-# (tick_decision__bindings) — a junction without its owner is not operational.
+# The two simulation-MECHANISM kinds (tick_decision, queue) are simply never
+# declared — omission is source's own exclusion mechanism; a kind is
+# exported only through its own `tables[]` / `events.sources[]` entry.
 #
-# `exclude` drops KINDS. Columns are dropped independently of it: a non-exempt
-# `temporal_class: slice_only` column is ALWAYS auto-omitted with a notice,
-# whatever this config says — here booking.attended_at,
-# journey_instance.state_entry_time / complete / bound_roles / output_roles, and
-# resource.queue. The export's `notice:` lines are the authoritative list.
+# Source is the first mode that REQUIRES a resolved wallclock anchor (the
+# event log's `occurred_at` is a real TIMESTAMP). No rebase block is given,
+# so the anchor falls back to the sidecar `runtime` (start 2023-01-01, UTC)
+# — the emit's own clock. Uncomment `rebase:` to override origin/zone.
+#
+# Columns are never enumerated below: absent `columns:` projects every
+# classified column, and a non-exempt `temporal_class: slice_only` column is
+# ALWAYS auto-omitted with a notice regardless of what this config says —
+# here booking.attended_at, journey_instance.state_entry_time / complete /
+# bound_roles / output_roles, and resource.queue. The export's `notice:`
+# lines are the authoritative list.
 
 mode: source
 
 source:
-  exclude:
-    kinds: [tick_decision, queue]
+  tables:
+    - name: patient
+      kind: actor
+    - name: consultant
+      kind: resource
+    - name: pathway_episode
+      kind: journey_instance
+    - name: booking
+      kind: booking
+    - name: diary
+      kind: diary
+    - name: entity
+      kind: entity
+    - name: consultant_allocation
+      membership: {kind: resource, property: holders}
+  events:
+    name: history
+    sources:
+      - kind: actor
+      - kind: resource
+      - kind: journey_instance
+      - kind: booking
+      - kind: diary
 
 # rebase:
 #   base_date: 2023-01-01

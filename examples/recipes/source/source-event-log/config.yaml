@@ -1,0 +1,42 @@
+# Recipe: source-event-log
+# ============================================================
+# `events: {name, sources: [...]}` declares the single polymorphic event
+# log: one row per audited change, `create` on record birth, `update` on a
+# change to an audited property, `destroy` on record deactivation
+# (source.md § The event log). A `kind:` source with no `only:` / `ignore:`
+# audits the kind's full property set (discriminator-omitted, slice_only
+# policy-omitted) — here just `prop__ward` on `admission`.
+#
+# Column shape (fixed, design doc § The event log):
+#   item_type   — the audited kind's bare name
+#   item_id     — the record's elected identity — the identity JOIN, so it
+#                 is never NULL even on a `destroy` row
+#   event       — create / update / destroy
+#   occurred_at — event_sim_time, wallclock TIMESTAMP
+#   changes     — JSON object, one `"<prop>": [old, new]` entry per changed
+#                 audited property; `[null, v]` on create, `[v, null]` on
+#                 destroy
+#
+# `events` composes freely with `tables:` (both are optional, independent
+# sections) — this recipe declares only `events`, since the log alone is
+# the feature under test (see source-log-only for the config-level "no
+# tables at all" shape).
+#
+# Fixture world (recipe emit):
+#   records__admission — identity + lifecycle kind, one type-1 prop__ward,
+#                        no history tracking:
+#     a001 active (created@1d, never deactivated) — create only
+#     a002 closed (created@1d, deactivated@2d)    — create then destroy
+#
+# Output (3 rows):
+#   a001 create  changes={"ward":[null,"north"]}
+#   a002 create  changes={"ward":[null,"south"]}
+#   a002 destroy changes={"ward":["south",null]}
+
+mode: source
+
+source:
+  events:
+    name: versions
+    sources:
+      - kind: admission

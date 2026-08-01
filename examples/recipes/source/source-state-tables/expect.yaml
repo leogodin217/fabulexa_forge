@@ -1,0 +1,22 @@
+tables:
+  patient:
+    columns: [id, created_at, active, deactivated_at, updated_at, status, name, doctor_id, primary_staff_id, backup_staff_id]
+    row_count: 2
+    contains_rows:
+      # p001 — the CURRENT (latest history) status, not the change log.
+      - id: p001
+        status: discharged
+        name: Alice
+        active: true
+        deactivated_at: null
+      - id: p002
+        status: pending
+        name: Bob
+        active: true
+        deactivated_at: null
+  doctor:
+    columns: [id, created_at, active, deactivated_at, updated_at, name]
+    row_count: 1
+    contains_rows:
+      - id: d001
+        name: Dr. Carter

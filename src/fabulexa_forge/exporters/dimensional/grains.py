@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import DimensionalConfig, TableDecl
+    from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -75,6 +76,7 @@ def _collect_column_exprs_and_joins(
     config: "DimensionalConfig | None",
     sidecar: "Sidecar | None",
     source_table_name: str | None = None,
+    election: "Election | None" = None,
 ) -> tuple[list[str], list[str]]:
     """Collect SELECT expressions and JOIN clauses for all columns.
 
@@ -87,6 +89,8 @@ def _collect_column_exprs_and_joins(
         sidecar: The open emit's sidecar (for fk resolution), or None when no fk.
         source_table_name: The resolved DuckDB source table name, forwarded to
             build_column_expr for value_map WHEN predicate type resolution.
+        election: The resolved election (for fk columns), or None to resolve
+            the all-default election internally.
 
     Returns:
         (col_exprs, join_clauses) — SELECT expressions and deduplicated JOIN clauses.
@@ -105,6 +109,7 @@ def _collect_column_exprs_and_joins(
             config=config,
             sidecar=sidecar,
             source_table_name=source_table_name,
+            election=election,
         )
         col_exprs.append(expr)
         for j in joins:
@@ -123,6 +128,7 @@ def build_records_sql(
     config: "DimensionalConfig | None" = None,
     sidecar: "Sidecar | None" = None,
     extra_col_exprs: "list[str] | None" = None,
+    election: "Election | None" = None,
 ) -> str:
     """Build the SELECT SQL for a records grain (Type-1 dim or fact).
 
@@ -142,6 +148,8 @@ def build_records_sql(
         extra_col_exprs: Additional SELECT-list expressions (already qualified
             against "_grain") appended after the declared columns — used to
             inject the internal raw-ns window-key helper for windowed export.
+        election: The resolved election (for fk columns), or None to resolve
+            the all-default election internally.
 
     Returns:
         A complete, deterministic SELECT statement.
@@ -156,6 +164,7 @@ def build_records_sql(
         config=config,
         sidecar=sidecar,
         source_table_name=source_table_name,
+        election=election,
     )
     if extra_col_exprs:
         col_exprs = [*col_exprs, *extra_col_exprs]
@@ -184,6 +193,7 @@ def build_history_point_sql(
     config: "DimensionalConfig | None" = None,
     sidecar: "Sidecar | None" = None,
     extra_col_exprs: "list[str] | None" = None,
+    election: "Election | None" = None,
 ) -> str:
     """Build the SELECT SQL for a history_point grain.
 
@@ -202,6 +212,8 @@ def build_history_point_sql(
         extra_col_exprs: Additional SELECT-list expressions (already qualified
             against "_grain") appended after the declared columns — used to
             inject the internal raw-ns window-key helper for windowed export.
+        election: The resolved election (for fk columns), or None to resolve
+            the all-default election internally.
 
     Returns:
         A complete, deterministic SELECT statement.
@@ -217,6 +229,7 @@ def build_history_point_sql(
         config=config,
         sidecar=sidecar,
         source_table_name="history",
+        election=election,
     )
     if extra_col_exprs:
         col_exprs = [*col_exprs, *extra_col_exprs]
@@ -296,6 +309,7 @@ def build_history_interval_sql(
     fork_path: str,
     config: "DimensionalConfig | None" = None,
     sidecar: "Sidecar | None" = None,
+    election: "Election | None" = None,
 ) -> str:
     """Build the SELECT SQL for a history_interval grain.
 
@@ -314,6 +328,8 @@ def build_history_interval_sql(
         config: The dimensional config (for fk resolution), or None.
         sidecar: The open emit's sidecar (for fk resolution and derivation); required.
         fork_path: The sole branch fork_path; composes reader relations.
+        election: The resolved election (for fk columns), or None to resolve
+            the all-default election internally.
 
     Returns:
         A complete, deterministic SELECT statement using a CTE.
@@ -355,6 +371,7 @@ def build_history_interval_sql(
         config=config,
         sidecar=sidecar,
         source_table_name="history",
+        election=election,
     )
     select_list = ", ".join(col_exprs)
 
@@ -376,6 +393,7 @@ def build_membership_sql(
     anchor: "EffectiveAnchor | None",
     fork_path: str,
     config: "DimensionalConfig | None" = None,
+    election: "Election | None" = None,
 ) -> str:
     """Build the SELECT SQL for a membership grain.
 
@@ -392,6 +410,8 @@ def build_membership_sql(
         anchor: The resolved EffectiveAnchor, or None.
         fork_path: The sole branch fork_path; composes the reader relation.
         config: The dimensional config (for fk resolution), or None.
+        election: The resolved election (for fk columns), or None to resolve
+            the all-default election internally.
 
     Returns:
         A complete, deterministic SELECT statement.
@@ -406,6 +426,7 @@ def build_membership_sql(
         config=config,
         sidecar=sidecar,
         source_table_name=source_table_name,
+        election=election,
     )
     select_list = ", ".join(col_exprs)
     join_sql = (" " + " ".join(join_clauses)) if join_clauses else ""
@@ -569,6 +590,7 @@ def build_grain_sql(
     fork_path: str,
     config: "DimensionalConfig | None" = None,
     window: "Window | None" = None,
+    election: "Election | None" = None,
 ) -> tuple[str, Literal["create", "append", "replace"], str | None, str | None]:
     """Dispatch a table declaration to the appropriate grain SQL builder.
 
@@ -594,6 +616,8 @@ def build_grain_sql(
             relation instead of naming base tables directly.
         config: The dimensional config (for fk resolution), or None.
         window: The window to filter to, or None for full export.
+        election: The resolved election (for fk columns), or None to resolve
+            the all-default election internally.
 
     Returns:
         (sql, write_mode, view_name, view_sql)
@@ -608,19 +632,31 @@ def build_grain_sql(
             grain = table_decl.source.grain
             if grain == "records":
                 sql = build_records_sql(
-                    table_decl, source_table_name, anchor, fork_path, config, sidecar
+                    table_decl,
+                    source_table_name,
+                    anchor,
+                    fork_path,
+                    config,
+                    sidecar,
+                    election=election,
                 )
             elif grain == "history_point":
                 sql = build_history_point_sql(
-                    table_decl, anchor, fork_path, config, sidecar
+                    table_decl, anchor, fork_path, config, sidecar, election=election
                 )
             elif grain == "history_interval":
                 sql = build_history_interval_sql(
-                    table_decl, anchor, fork_path, config, sidecar
+                    table_decl, anchor, fork_path, config, sidecar, election=election
                 )
             else:
                 sql = build_membership_sql(
-                    table_decl, source_table_name, sidecar, anchor, fork_path, config
+                    table_decl,
+                    source_table_name,
+                    sidecar,
+                    anchor,
+                    fork_path,
+                    config,
+                    election=election,
                 )
         return sql, "create", None, None
 
@@ -630,7 +666,13 @@ def build_grain_sql(
     # Type-1 dim: full snapshot, replace mode, no predicate
     if table_decl.role == "dim" and table_decl.scd == "type1":
         sql = build_records_sql(
-            table_decl, source_table_name, anchor, fork_path, config, sidecar
+            table_decl,
+            source_table_name,
+            anchor,
+            fork_path,
+            config,
+            sidecar,
+            election=election,
         )
         return sql, "replace", None, None
 
@@ -690,6 +732,7 @@ def build_grain_sql(
             config,
             sidecar,
             extra_col_exprs=extra,
+            election=election,
         )
         windowed_sql = _wrap_with_window_predicate(
             full_sql,
@@ -710,7 +753,13 @@ def build_grain_sql(
             [f'"_grain"."{raw_key}" AS "{_WINDOW_KEY_NS_HELPER}"'] if redirect else None
         )
         full_sql = build_history_point_sql(
-            table_decl, anchor, fork_path, config, sidecar, extra_col_exprs=extra
+            table_decl,
+            anchor,
+            fork_path,
+            config,
+            sidecar,
+            extra_col_exprs=extra,
+            election=election,
         )
         windowed_sql = _wrap_with_window_predicate(
             full_sql,

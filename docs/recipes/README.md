@@ -65,7 +65,7 @@ examples/recipes/
 │   ├── config.yaml
 │   └── expect.yaml
 ├── source/                     ← source sub-corpus (container, not a recipe)
-│   └── source-changelog-from-history/
+│   └── source-state-tables/
 │       ├── config.yaml         ← commented ExportConfig (mode: source)
 │       └── expect.yaml         ← output-table assertions (same schema as dimensional)
 ├── streaming/                  ← streaming sub-corpus (container, not a recipe)
@@ -117,11 +117,11 @@ duckdb /tmp/dim_scd2.duckdb -c "SELECT * FROM dim_patient ORDER BY patient_id, v
 ```bash
 fabulexa-forge export \
   /tmp/recipe-emit \
-  examples/recipes/source/source-changelog-from-history/config.yaml \
+  examples/recipes/source/source-state-tables/config.yaml \
   /tmp/source_dump.duckdb \
   --fmt duckdb
 
-duckdb /tmp/source_dump.duckdb -c "SELECT * FROM patient ORDER BY changed_at, id;"
+duckdb /tmp/source_dump.duckdb -c "SELECT * FROM patient ORDER BY created_at, id;"
 ```
 
 **Streaming** — `fabulexa-forge stream <emit_dir> <config_path> --fmt jsonl --sink <stdout|file>`:
@@ -236,9 +236,9 @@ tables:
 ```
 
 The declared table set must equal the exact set of output tables the run produces —
-for a source recipe that means every table `export_source` classifies for that
-config, not just the one genre the recipe is teaching (a source recipe commonly
-narrows this down with `source.exclude` so only the table under test survives).
+for a source recipe that means every table the config declares (`tables` entries
+plus the `events` log when declared); a source recipe declares exactly the tables
+under test, since omission is the grammar's exclusion mechanism.
 
 **Streaming** (`tests/recipes/test_stream_recipes.py`):
 
@@ -318,6 +318,7 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | Recipe | What it teaches |
 |---|---|
 | [`fact-from-history`](../../examples/recipes/fact-from-history/config.yaml) | Fact table from a `history_point` grain — one row per status-change event in the `history` table |
+| [`fact-from-history-interval`](../../examples/recipes/fact-from-history-interval/config.yaml) | Fact table from a `history_interval` grain — one row per state-occupancy interval; the virtual `lead_sim_time` interval end is `NULL` on a series' last (open) interval |
 | [`fact-from-membership`](../../examples/recipes/fact-from-membership/config.yaml) | Fact table from a `membership` grain — one row per membership binding; projects `record_id`, `joined_sim_time`, and `elem__*` slot columns |
 
 **Foreign keys & lookups**
@@ -350,13 +351,12 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 
 | Recipe | What it teaches |
 |---|---|
-| [`source/source-changelog-from-history`](../../examples/recipes/source/source-changelog-from-history/config.yaml) | A bare `mode: source` config (no `source:` section) is a valid full dump; the change-log genre for a history-tracked kind — tracked-ness dominates the kind's warehouse role, so `patient` exports as a wide CDC table (`op`/`changed_at`/`id`/payload) regardless of being a `dimension`-role kind |
-| [`source/source-reference-from-dimension`](../../examples/recipes/source/source-reference-from-dimension/config.yaml) | The reference genre: an untracked `dimension`-role kind exports the faithful current-state records relation (`id`/`created_at`/`active`/`deactivated_at`/`updated_at`/payload), no `op` column |
-| [`source/source-transaction-from-fact`](../../examples/recipes/source/source-transaction-from-fact/config.yaml) | The transaction genre: an untracked `fact`-role kind — the same column shape as reference (confirmed by the run), differing only in the genre label the consumer acts on (join vs. aggregate) |
-| [`source/source-subtype-split`](../../examples/recipes/source/source-subtype-split/config.yaml) | The sub-type split: an untracked kind whose `record_roles` entry is an object splits into one table per declared sub-type (`nurse`, `physician`), each with its own `<kind>_type` discriminator column dropped |
-| [`source/source-junction-from-membership`](../../examples/recipes/source/source-junction-from-membership/config.yaml) | The junction genre: every `membership__<K>__<p>` table exports unconditionally as an association table (`<K>_<p>` default name, `joined_at`/`left_at`, element/member columns stripped of their `elem__`/`member__<f>__` prefixes); an open interval's `left_at` is faithfully null |
-| [`source/source-exclude-kind`](../../examples/recipes/source/source-exclude-kind/config.yaml) | `source.exclude.kinds` drops a kind's own table AND every membership table it owns in one declaration — a junction without its owner is not an operational shape |
-| [`source/source-rename-table`](../../examples/recipes/source/source-rename-table/config.yaml) | `source.rename` overrides one table's derived default output name, keyed by sidecar/source identity (the base table name), never the derived output name |
+| [`source/source-state-tables`](../../examples/recipes/source/source-state-tables/config.yaml) | A `tables` entry with a `kind` address declares the `state` render: one current row per record, unconditionally — a history-tracked kind exports its current values (one row per record, never one per change; CDC-shaped output is streaming's charter) |
+| [`source/source-subtype-split`](../../examples/recipes/source/source-subtype-split/config.yaml) | `sub_types: [...]` narrows a state table to a subset of the kind's discriminator domain — one author-named table per sub-type, each single-sub-type table's constant discriminator column dropped (table identity carries it) |
+| [`source/source-junction-from-membership`](../../examples/recipes/source/source-junction-from-membership/config.yaml) | A `tables` entry with a `membership` address declares the `junction` render: a faithful read of the interval rows (`<K>_id`, `joined_at`/`left_at`, element/member columns prefix-stripped); an open interval's `left_at` is faithfully null |
+| [`source/source-event-log`](../../examples/recipes/source/source-event-log/config.yaml) | The `events` block declares the single polymorphic audit log: `item_type`/`item_id`/`event`/`occurred_at`/`changes`, one `create`/`update`/`destroy` row per audited change with a JSON `[old, new]` changeset; `item_id` never NULL, even on `destroy` |
+| [`source/source-log-only`](../../examples/recipes/source/source-log-only/config.yaml) | A `source:` section declaring only `events` (no `tables`) is a legal, complete config — the audit-stream-only extract; a membership events source audits a junction's fields (`item_type` = `<K>.<property>`, `item_id` = the owner), member references expanding to `<f>_kind`/`<f>_id` entry pairs |
+| [`source/source-columns-rename`](../../examples/recipes/source/source-columns-rename/config.yaml) | Per-table `columns` / `rename` narrow and relabel a table's projection — both keyed on source column names (`prop__<p>`, `created_sim_time`), never derived output names; the identity column always projects and is renamed by its elected surface's contract name |
 
 ### Streaming
 

@@ -1,23 +1,30 @@
-"""Base-mode planning: kind enumeration, presentation, and exclude/rename
-resolution.
+"""Base-mode planning: kind enumeration, presentation, election, and
+exclude/rename resolution.
 
-`build_base_plan` is a pure function of `(sidecar, config)` — no SQL, no emit
-read beyond the sidecar. It applies, in order: (1) enumeration of every
-records-category kind in the sidecar (base classifies nothing — no genre
-trichotomy, no sub-type split); (2) `exclude`; (3) operational presentation
-defaults (prefix-stripped table name, `record_id -> id`, `record_index ->
-<kind>_key`, and per surviving reference edge `ref_index__<p> -> <p>_key`);
-(4) `rename`; (5) the collision and reserved-name checks. See
-`docs/architecture/base.md` for the semantics this module implements
-(no horizon here — render.py's concern).
+`build_base_plan` is a pure function of `(sidecar, config, election)` — no
+SQL, no emit read beyond the sidecar. It applies, in order: (1) enumeration
+of every records-category kind in the sidecar (base classifies nothing — no
+genre trichotomy, no sub-type split); (2) `exclude`; (3) per-kind identity
+election resolution (`check_identity_election` over every sub-typed
+surviving kind's full domain — base never splits, so a mixed election
+refuses) and per reference edge target election resolution
+(`check_edge_union_safety` over the target kind's full domain); (4)
+operational presentation defaults (prefix-stripped table name, the elected
+self identity's contract column name `-> id`, `record_index -> <kind>_key`,
+and per surviving reference edge `ref_index__<p> -> <p>_key`); (5) `rename`;
+(6) the collision and reserved-name checks. See `docs/architecture/base.md`
+for the semantics this module implements (no horizon here — render.py's
+concern) and `docs/architecture/pending/key-election.md` § Rendering per mode
+(Base) for the election semantics.
 
 Layer-direction invariant: imports only the reader, the derivations layer
 (the state-at derivation's column order / presentation-id helpers),
 fabulexa_forge.errors, the mode-neutral reserved_names, notices (for
 `Notice`, and `NoticeSink` TYPE_CHECKING-only), the mode-neutral query_spec
-module (for `TableKeys`), and slice_only modules, config.models
-(TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.*,
-exporters.source.*, or exporters.streaming.*.
+and election modules (`TableKeys`; `Election`, `check_identity_election`,
+`check_edge_union_safety`, `resolve_election`), and slice_only modules,
+config.models (TYPE_CHECKING only except `KeySurface`), and stdlib. Never
+imports exporters.dimensional.*, exporters.source.*, or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -28,7 +35,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from fabulexa_forge.config.models import BaseConfig, ExcludeDecl, RenameEntry
+    from fabulexa_forge.config.models import (
+        BaseConfig,
+        ExcludeDecl,
+        KeySurface,
+        RenameEntry,
+    )
+    from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -40,6 +53,11 @@ from fabulexa_forge.errors import (
     BaseRenameSliceOnly,
     BaseRenameUnresolved,
     ExportError,
+)
+from fabulexa_forge.exporters.election import (
+    check_edge_union_safety,
+    check_identity_election,
+    resolve_election,
 )
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.query_spec import TableKeys
@@ -63,13 +81,30 @@ class ReferenceKey:
 
     Present only for edges that yield a key column in this emit: a property
     omitted by the `slice_only` policy, or one whose target kind has no records
-    table, produces no entry.
+    table, produces no entry. `<p>_key` (the always-on record-index edge key)
+    is unaffected by election; `per_population` / `value_column_shipped` /
+    `rendered_type` resolve the elected `prop__<p>` value column alone.
     """
 
     property_name: str
     """The bare property name — the edge key's default output name stem."""
     target_kind: str
     """The referenced records kind, from the property's sidecar `references`."""
+    per_population: "tuple[tuple[str | None, KeySurface], ...]"
+    """The target kind's full declared domain, each with its resolved
+    election — `(None, surface)` for a flat target kind. Gated pairwise
+    union-safe by `check_edge_union_safety`."""
+    value_column_shipped: bool
+    """Whether `prop__<p>` renders at all. False only when every admitted
+    population elects record_index uniformly — the value would duplicate
+    `<p>_key`, so it is dropped."""
+    rendered_type: str
+    """The `prop__<p>` value column's DuckDB type: the owner's own declared
+    column type when every population elects record_id (unaffected,
+    verbatim), the target's declared `presentation_id` type when uniform
+    presentation_id, `'BIGINT'` when uniform record_index (unused — the
+    column is dropped), else `'VARCHAR'` (a mix rendered per row,
+    record_index values digit-rendered)."""
 
 
 #: Emitted when a reference property's target kind has no records table in the
@@ -92,14 +127,24 @@ class BaseTableSpec:
     has_presentation_id: bool
     """Whether the kind carries presentation_id — drives base's own projection and
     rename of that column in the wrapper (the state-at builder decides for itself)."""
+    identity_surface: "KeySurface"
+    """The kind's own populations' uniform elected identity surface
+    (`check_identity_election`-gated; `'record_id'` under no election).
+    Governs the self id-space slot: `record_id` ships the pair
+    byte-identical to today; `presentation_id` ships the elected value in
+    the id slot (default name `id`, rename key `presentation_id`) and
+    absorbs the standalone `presentation_id` payload column;
+    `record_index` drops the id-space self column entirely."""
     reference_keys: tuple[ReferenceKey, ...]
     """Surviving reference edges that yield a key column, in sidecar
     column-declaration order of their `prop__<p>` columns. Empty when the kind
     has no reference property, or none that survives."""
     column_renames: "Mapping[str, str]"
-    """State-at column identity -> output name; includes the `record_id -> id`,
-    `record_index -> <kind>_key`, and one `ref_index__<p> -> <p>_key` per
-    `reference_keys` entry defaults, each overridable by a `rename` entry."""
+    """State-at column identity -> output name; includes the self identity's
+    `-> id` default (the elected surface's contract column name, absent
+    under `record_index`), `record_index -> <kind>_key`, and one
+    `ref_index__<p> -> <p>_key` per `reference_keys` entry defaults, each
+    overridable by a `rename` entry."""
 
 
 @dataclass(frozen=True)
@@ -239,7 +284,45 @@ def _surviving_properties(sidecar: "Sidecar", kind: str) -> frozenset[str]:
     )
 
 
-def _state_at_identities(properties: frozenset[str], has_pid: bool) -> tuple[str, ...]:
+def _self_identity(identity_surface: "KeySurface") -> str | None:
+    """The state-at identity occupying the self id-space slot, for one election.
+
+    Args:
+        identity_surface: The kind's own resolved identity election.
+
+    Returns:
+        `'record_id'` (today's shape), `'presentation_id'` (the elected
+        value occupies the slot — the standalone payload column absorbed),
+        or None (`record_index`: the id-space self column is dropped).
+    """
+    if identity_surface == "record_index":
+        return None
+    return identity_surface
+
+
+def _dropped_reference_value_props(
+    reference_keys: tuple[ReferenceKey, ...],
+) -> frozenset[str]:
+    """Bare property names whose `prop__<p>` value column the election drops.
+
+    Args:
+        reference_keys: The kind's resolved surviving reference edges.
+
+    Returns:
+        Property names with `value_column_shipped=False` (every admitted
+        target population elects record_index uniformly).
+    """
+    return frozenset(
+        rk.property_name for rk in reference_keys if not rk.value_column_shipped
+    )
+
+
+def _state_at_identities(
+    properties: frozenset[str],
+    has_pid: bool,
+    identity_surface: "KeySurface",
+    reference_keys: tuple[ReferenceKey, ...],
+) -> tuple[str, ...]:
     """The full set of state-at column identities a kind's table carries.
 
     The domain a `rename.columns` key must belong to, and the set collision
@@ -248,16 +331,28 @@ def _state_at_identities(properties: frozenset[str], has_pid: bool) -> tuple[str
     Args:
         properties: The kind's surviving bare property names.
         has_pid: Whether the kind carries `presentation_id`.
+        identity_surface: The kind's own resolved identity election.
+        reference_keys: The kind's resolved surviving reference edges (drive
+            which `prop__<p>` reference columns the election drops).
 
     Returns:
-        `STATE_AT_COLUMNS`, then `presentation_id` when carried, then one
-        `prop__<p>` per property (sorted for determinism — order carries no
+        The self identity (§ `_self_identity`, absent under record_index),
+        then `STATE_AT_COLUMNS[1:]`, then `presentation_id` when carried and
+        not absorbed into the self slot, then one `prop__<p>` per surviving,
+        non-dropped property (sorted for determinism — order carries no
         meaning here; emission order is derived at render).
     """
-    identities: list[str] = list(STATE_AT_COLUMNS)
-    if has_pid:
+    identities: list[str] = []
+    self_identity = _self_identity(identity_surface)
+    if self_identity is not None:
+        identities.append(self_identity)
+    identities.extend(STATE_AT_COLUMNS[1:])
+    if has_pid and identity_surface != "presentation_id":
         identities.append("presentation_id")
-    identities.extend(f"{_PROP_PREFIX}{p}" for p in sorted(properties))
+    dropped = _dropped_reference_value_props(reference_keys)
+    identities.extend(
+        f"{_PROP_PREFIX}{p}" for p in sorted(properties) if p not in dropped
+    )
     return tuple(identities)
 
 
@@ -307,8 +402,100 @@ def _reference_key_target_absent_notice(
     )
 
 
+def _column_type(sidecar: "Sidecar", table_name: str, column_name: str) -> str:
+    """One column's declared DuckDB type.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        table_name: A sidecar table name.
+        column_name: The column to look up.
+
+    Returns:
+        The column's declared DuckDB type.
+
+    Raises:
+        ExportError: `table_name` declares no column named `column_name` — a
+            caller invariant error (callers only look up columns the sidecar
+            is already known to carry).
+    """
+    for col in sidecar.columns(table_name):
+        if col.name == column_name:
+            return col.type
+    raise ExportError(f"table '{table_name}' declares no column '{column_name}'")
+
+
+def _resolve_reference_key_surfaces(
+    sidecar: "Sidecar",
+    election: "Election",
+    kind: str,
+    property_name: str,
+    target_kind: str,
+) -> "tuple[tuple[str | None, KeySurface], ...]":
+    """Gate and resolve one reference edge's admitted target populations.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        election: The resolved election.
+        kind: The referencing table's own records kind (for the error label).
+        property_name: The bare reference property name (for the error label).
+        target_kind: The reference edge's target kind.
+
+    Returns:
+        `(sub_type, surface)` pairs over the target kind's full declared
+        domain, declaration order (a `(None, surface)` singleton for a flat
+        target kind).
+
+    Raises:
+        ElectionUnionUnsafe: The admitted target populations' resolved key
+            spaces contain a pairwise-unsafe pair.
+    """
+    domain = sidecar.subtype_values(target_kind)
+    edge_name = f"records__{kind}.prop__{property_name}"
+    check_edge_union_safety(election, target_kind, domain, edge_name)
+    return tuple((p.sub_type, p.surface) for p in election.populations_for(target_kind))
+
+
+def _resolve_reference_key_rendering(
+    sidecar: "Sidecar",
+    kind: str,
+    property_name: str,
+    target_kind: str,
+    per_population: "tuple[tuple[str | None, KeySurface], ...]",
+) -> tuple[bool, str]:
+    """Resolve one reference edge's `prop__<p>` shipping + rendered type.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The referencing table's own records kind.
+        property_name: The bare reference property name.
+        target_kind: The reference edge's target kind.
+        per_population: The target's gated per-population election
+            (§ `_resolve_reference_key_surfaces`).
+
+    Returns:
+        `(value_column_shipped, rendered_type)` — per the doc's per-edge
+        column table: uniform record_id ships the owner's own declared type
+        (verbatim, unaffected); uniform record_index drops the column
+        (`'BIGINT'`, unused); uniform presentation_id ships the target's
+        declared `presentation_id` type; any other mix ships `'VARCHAR'`
+        (record_index values digit-rendered).
+    """
+    surfaces = {surface for _, surface in per_population}
+    if surfaces == {"record_id"}:
+        owner_table = f"{_RECORDS_PREFIX}{kind}"
+        owner_column = f"{_PROP_PREFIX}{property_name}"
+        return True, _column_type(sidecar, owner_table, owner_column)
+    if surfaces == {"record_index"}:
+        return False, "BIGINT"
+    if surfaces == {"presentation_id"}:
+        target_table = f"{_RECORDS_PREFIX}{target_kind}"
+        return True, _column_type(sidecar, target_table, "presentation_id")
+    return True, "VARCHAR"
+
+
 def _resolve_reference_keys(
     sidecar: "Sidecar",
+    election: "Election",
     kind: str,
     properties: frozenset[str],
     known_records_tables: frozenset[str],
@@ -320,10 +507,14 @@ def _resolve_reference_keys(
     selecting those in the kind's surviving property set that carry a sidecar
     `references` annotation. A property whose target kind has no records table
     in the sidecar yields no entry and one `reference-key-target-absent`
-    notice instead (the id-space column is unaffected).
+    notice instead (the id-space column is unaffected). Every surviving edge
+    is gated (`check_edge_union_safety`) and its `prop__<p>` shipping and
+    rendered type resolved (§ `_resolve_reference_key_rendering`); the
+    always-on `<p>_key` record-index edge key is unaffected by election.
 
     Args:
         sidecar: The open emit's sidecar.
+        election: The resolved election.
         kind: The record kind.
         properties: The kind's surviving bare property names (post `slice_only`).
         known_records_tables: Every `records__<kind>` table name in the sidecar.
@@ -331,6 +522,10 @@ def _resolve_reference_keys(
 
     Returns:
         `ReferenceKey` entries, in sidecar `prop__` column-declaration order.
+
+    Raises:
+        ElectionUnionUnsafe: A surviving edge's admitted target populations'
+            resolved key spaces contain a pairwise-unsafe pair.
     """
     table = f"{_RECORDS_PREFIX}{kind}"
     keys: list[ReferenceKey] = []
@@ -344,7 +539,21 @@ def _resolve_reference_keys(
         if f"{_RECORDS_PREFIX}{target_kind}" not in known_records_tables:
             notice_sink(_reference_key_target_absent_notice(kind, prop, target_kind))
             continue
-        keys.append(ReferenceKey(property_name=prop, target_kind=target_kind))
+        per_population = _resolve_reference_key_surfaces(
+            sidecar, election, kind, prop, target_kind
+        )
+        value_column_shipped, rendered_type = _resolve_reference_key_rendering(
+            sidecar, kind, prop, target_kind, per_population
+        )
+        keys.append(
+            ReferenceKey(
+                property_name=prop,
+                target_kind=target_kind,
+                per_population=per_population,
+                value_column_shipped=value_column_shipped,
+                rendered_type=rendered_type,
+            )
+        )
     return tuple(keys)
 
 
@@ -389,20 +598,29 @@ def _slice_only_omission_notice(kind: str, column_name: str) -> Notice:
 
 
 def _default_column_renames(
-    kind: str, reference_keys: tuple[ReferenceKey, ...]
+    kind: str,
+    identity_surface: "KeySurface",
+    reference_keys: tuple[ReferenceKey, ...],
 ) -> dict[str, str]:
     """The kind's default column-rename map, before any `rename` entry override.
 
     Args:
         kind: The record kind (drives the self key's default name).
+        identity_surface: The kind's own resolved identity election (drives
+            the self id-space slot's rename key — `record_id` or
+            `presentation_id`; absent entirely under `record_index`).
         reference_keys: The kind's resolved surviving reference edges (drive
             each edge key's default name).
 
     Returns:
-        `record_id -> id`, `record_index -> <kind>_key`, and one
+        `<self identity> -> id` (the elected surface's contract column name,
+        omitted under `record_index`), `record_index -> <kind>_key`, and one
         `ref_index__<p> -> <p>_key` per reference key.
     """
-    renames = {"record_id": "id", "record_index": f"{kind}_key"}
+    renames = {"record_index": f"{kind}_key"}
+    self_identity = _self_identity(identity_surface)
+    if self_identity is not None:
+        renames[self_identity] = "id"
     for rk in reference_keys:
         renames[f"ref_index__{rk.property_name}"] = f"{rk.property_name}_key"
     return renames
@@ -410,6 +628,7 @@ def _default_column_renames(
 
 def _resolve_naming(
     kind: str,
+    identity_surface: "KeySurface",
     matched_entry: "RenameEntry | None",
     valid_identities: frozenset[str],
     omitted: frozenset[str],
@@ -419,6 +638,7 @@ def _resolve_naming(
 
     Args:
         kind: The record kind (its default table name).
+        identity_surface: The kind's own resolved identity election.
         matched_entry: The rename entry targeting this kind's `records__<kind>`
             table, or None when unrenamed.
         valid_identities: The kind's full state-at + key column identity set
@@ -431,15 +651,18 @@ def _resolve_naming(
 
     Returns:
         The resolved output table name and the column-rename map (always
-        carrying the `record_id -> id`, `record_index -> <kind>_key`, and
-        per-edge `ref_index__<p> -> <p>_key` defaults, each overridable).
+        carrying the self identity's `-> id` default, `record_index ->
+        <kind>_key`, and per-edge `ref_index__<p> -> <p>_key` defaults, each
+        overridable). A `columns` key naming an identity the election
+        absorbed or dropped is unresolvable — it is not in `valid_identities`.
 
     Raises:
         BaseRenameSliceOnly: A `columns` key names an omitted `slice_only` column.
         BaseRenameUnresolved: A `columns` key is not a state-at or key column
-            identity.
+            identity this emit produces (including one an election absorbed
+            or dropped).
     """
-    column_renames = _default_column_renames(kind, reference_keys)
+    column_renames = _default_column_renames(kind, identity_surface, reference_keys)
     if matched_entry is None:
         return kind, column_renames
 
@@ -462,14 +685,48 @@ def _resolve_naming(
     return name, column_renames
 
 
+def _resolve_identity_surface(
+    sidecar: "Sidecar", election: "Election", kind: str, table_name: str
+) -> "KeySurface":
+    """Resolve one kind's own uniform elected identity surface.
+
+    A flat kind (no discriminator domain) has one population — trivially
+    uniform, no gate needed. A sub-typed kind is gated
+    (`check_identity_election`) over its full declared domain (base never
+    splits, so every surviving sub-typed kind is checked whether or not any
+    `keys` entry addresses it); once gated, every population resolves
+    identically, so any domain member's surface is the kind's answer.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        election: The resolved election.
+        kind: The record kind.
+        table_name: The kind's `records__<kind>` table, for the gate's error.
+
+    Returns:
+        The kind's uniform elected surface (`'record_id'` under no election).
+
+    Raises:
+        ElectionMixedIdentity: The kind's populations elect differing surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election whose
+            populations' key spaces contain a pairwise-unsafe pair.
+    """
+    domain = sidecar.subtype_values(kind)
+    if not domain:
+        return election.surface_for(kind, None)
+    check_identity_election(election, kind, domain, table_name)
+    return election.surface_for(kind, domain[0])
+
+
 def _resolve_specs(
     sidecar: "Sidecar",
+    election: "Election",
     kinds: tuple[str, ...],
     rename: "list[RenameEntry] | None",
     notice_sink: "NoticeSink",
 ) -> tuple[BaseTableSpec, ...]:
-    """Resolve every surviving kind's default naming, then apply matching
-    rename entries.
+    """Resolve every surviving kind's election, default naming, then apply
+    matching rename entries.
 
     The emission point for `slice-only-column-omitted` and
     `reference-key-target-absent`: per kind, computes the omitted set and the
@@ -478,6 +735,7 @@ def _resolve_specs(
 
     Args:
         sidecar: The open emit's sidecar.
+        election: The resolved election.
         kinds: The classified, exclude-filtered kinds.
         rename: The base.rename entries, or None.
         notice_sink: Receiver for slice-only-column-omitted and
@@ -490,7 +748,13 @@ def _resolve_specs(
         BaseRenameSliceOnly: A rename entry's columns key names a
             policy-omitted slice_only column or its ref_index__ shadow.
         BaseRenameUnresolved: A rename entry's table does not match any
-            surviving kind, or one of its columns keys is unresolved.
+            surviving kind, or one of its columns keys is unresolved
+            (including one an election absorbed or dropped).
+        ElectionMixedIdentity: A sub-typed kind's populations elect differing
+            surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election, or a
+            reference edge's admitted target populations, contain a
+            pairwise-unsafe key-space pair.
         TemporalClassUnavailableError: Propagated from the omitted-column scan.
     """
     rename_by_table: dict[str, RenameEntry] = {}
@@ -514,11 +778,12 @@ def _resolve_specs(
 
         properties = _surviving_properties(sidecar, kind)
         has_pid = has_presentation_id(sidecar, kind)
+        identity_surface = _resolve_identity_surface(sidecar, election, kind, table)
         reference_keys = _resolve_reference_keys(
-            sidecar, kind, properties, known_records_tables, notice_sink
+            sidecar, election, kind, properties, known_records_tables, notice_sink
         )
         valid_identities = frozenset(
-            _state_at_identities(properties, has_pid)
+            _state_at_identities(properties, has_pid, identity_surface, reference_keys)
         ) | frozenset(_key_identities(reference_keys))
 
         matched_entry = rename_by_table.get(table)
@@ -526,6 +791,7 @@ def _resolve_specs(
             matched_tables.add(table)
         name, column_renames = _resolve_naming(
             kind,
+            identity_surface,
             matched_entry,
             valid_identities,
             omitted | omitted_ref_index_shadow,
@@ -538,6 +804,7 @@ def _resolve_specs(
                 table_name=name,
                 properties=properties,
                 has_presentation_id=has_pid,
+                identity_surface=identity_surface,
                 reference_keys=reference_keys,
                 column_renames=column_renames,
             )
@@ -571,7 +838,10 @@ def _output_columns(spec: BaseTableSpec) -> tuple[str, ...]:
         (falling back to the raw identity name when unrenamed).
     """
     identities = _state_at_identities(
-        spec.properties, spec.has_presentation_id
+        spec.properties,
+        spec.has_presentation_id,
+        spec.identity_surface,
+        spec.reference_keys,
     ) + _key_identities(spec.reference_keys)
     return tuple(spec.column_renames.get(identity, identity) for identity in identities)
 
@@ -654,16 +924,24 @@ def resolve_base_table_keys(
     """Resolve one base flat table's declared keys from the sidecar alone.
 
     Pure plan-time resolution (design doc § Key resolution per output table,
-    'base' row); the engine calls it only when `declare_keys` is on. The
-    primary key is the record-index self key's post-`rename` output name
-    (`column_renames['record_index']`); `unique` always contains the
-    record-id column's output name (`column_renames['record_id']`), plus the
+    'base' row, extended by § Interplay's `declare_keys` row); the engine
+    calls it only when `declare_keys` is on. Under `record_id` / `record_index`
+    election the primary key is the record-index self key's post-`rename`
+    output name (`column_renames['record_index']`), unchanged; under
+    `presentation_id` election the primary key follows the elected identity
+    column instead (`column_renames['presentation_id']`) — PK-eligible, its
+    table-wide uniqueness guard-established, superseding the always-`UNIQUE`
+    posture for that column alone. `unique` contains the record-id column's
+    output name only under `record_id` election (absorbed/dropped under any
+    other election, so its side claim is not declared), plus the
     `presentation_id` column's output name iff the block claims whole-column
-    uniqueness for the kind: a flat kind's `key` entry (every entry carries a
-    `unique_within`), or a partitioned kind's rollup with a non-None
-    `unique_within`. A kind absent from the block, or an absent block,
-    yields identity keys only. `unique_within` scope ('emit' vs 'branch') is
-    not surfaced — both are table-wide under the single-branch guard.
+    uniqueness for the kind AND the kind's own election is not
+    `presentation_id` (already the primary key there, not doubly declared): a
+    flat kind's `key` entry (every entry carries a `unique_within`), or a
+    partitioned kind's rollup with a non-None `unique_within`. A kind absent
+    from the block, or an absent block, yields identity keys only.
+    `unique_within` scope ('emit' vs 'branch') is not surfaced — both are
+    table-wide under the single-branch guard.
 
     Args:
         sidecar: The open emit's sidecar (claims read via
@@ -680,11 +958,21 @@ def resolve_base_table_keys(
             incoherent (propagated from the accessor; plan-time, before any
             output).
     """
-    primary_key = (spec.column_renames["record_index"],)
-    unique: list[tuple[str, ...]] = [(spec.column_renames["record_id"],)]
+    if spec.identity_surface == "presentation_id":
+        primary_key = (spec.column_renames["presentation_id"],)
+    else:
+        primary_key = (spec.column_renames["record_index"],)
+
+    unique: list[tuple[str, ...]] = []
+    if spec.identity_surface == "record_id":
+        unique.append((spec.column_renames["record_id"],))
 
     presentation_keys = sidecar.presentation_keys()
-    if presentation_keys is not None and spec.kind in presentation_keys.kinds():
+    if (
+        spec.identity_surface != "presentation_id"
+        and presentation_keys is not None
+        and spec.kind in presentation_keys.kinds()
+    ):
         claim = presentation_keys.whole_table_claim(spec.kind)
         if claim.unique_within is not None:
             pid_out = spec.column_renames.get("presentation_id", "presentation_id")
@@ -702,21 +990,33 @@ def build_base_plan(
     sidecar: "Sidecar",
     config: "BaseConfig | None",
     notice_sink: "NoticeSink",
+    *,
+    election: "Election | None" = None,
 ) -> BasePlan:
     """
     Resolve the time-agnostic plan for a base export: one flat table per surviving
-    records kind, its column set, presentation names, and the `slice_only`
-    omissions.
+    records kind, its column set, election, presentation names, and the
+    `slice_only` omissions.
 
     Classifies nothing and reshapes nothing — every non-excluded records kind
     yields exactly one table whose columns are the kind's STATE_AT_COLUMNS with
     `slice_only` properties omitted (one `slice-only-column-omitted` notice each,
-    the discriminator carved out) and presentation names applied. Also resolves
-    each kind's surviving reference properties (a `prop__<p>` carrying a sidecar
-    `references` annotation) to `ReferenceKey` entries; a property whose target
-    kind has no records table in the sidecar yields no entry and one
-    `reference-key-target-absent` notice instead (the id-space column is
-    unaffected). Time selection (end-of-tape vs a horizon) is supplied at
+    the discriminator carved out) and presentation names applied. Base never
+    splits: every surviving sub-typed kind's full domain is gated uniform
+    (`check_identity_election`), stamping `BaseTableSpec.identity_surface`.
+    Also resolves each kind's surviving reference properties (a `prop__<p>`
+    carrying a sidecar `references` annotation) to `ReferenceKey` entries,
+    each gated (`check_edge_union_safety` over the target kind's full
+    domain) and stamped with its per-population election, `prop__<p>`
+    shipping, and rendered type; a property whose target kind has no records
+    table in the sidecar yields no entry and one `reference-key-target-absent`
+    notice instead (the id-space column is unaffected — it is never gated,
+    per the doc's kind-exists consequence). The self-column resolution table
+    (drop the id-space column under `record_index`, the elected value column
+    in the id slot under `presentation_id`, absorption of the standalone
+    `presentation_id` payload column) is applied to `column_renames` keying:
+    the self value column's rename key is the elected surface's contract
+    column name. Time selection (end-of-tape vs a horizon) is supplied at
     render, not here, so the plan is identical for a full, a sliced, and a
     windowed export.
 
@@ -726,25 +1026,36 @@ def build_base_plan(
         config: The `base` section, or None for a bare current-state dump.
         notice_sink: Required caller-supplied sink for omission and
             reference-key-target-absent notices.
+        election: The resolved election, or None to resolve the all-default
+            election internally (every population elects record_id — the
+            caller has no `keys` block to thread, or is an election-free
+            internal/test caller).
 
     Returns:
         A `BasePlan`: one `BaseTableSpec` per surviving kind (output name, bare
-        property set, presentation_id flag, reference keys, column-rename map),
-        ready for `build_base_render_sql` to render at a caller-chosen horizon.
-        Column emission order is fixed (STATE_AT_COLUMNS prefix, presentation_id,
-        then `prop__<p>` in sidecar declaration order, key columns interleaved at
-        render), so it is derived, not stored.
+        property set, presentation_id flag, identity surface, reference keys,
+        column-rename map), ready for `build_base_render_sql` to render at a
+        caller-chosen horizon. Column emission order is fixed (self identity,
+        STATE_AT_COLUMNS[1:], presentation_id, then `prop__<p>` in sidecar
+        declaration order, key columns interleaved at render), so it is
+        derived, not stored.
 
     Raises:
         BaseRenameSliceOnly: A `rename` entry names an omitted `slice_only`
             column or its `ref_index__` shadow identity.
         BaseRenameUnresolved: A `rename` entry's `table` is not a surviving
             `records__<kind>`, or a `columns` key is not a state-at or key
-            column identity this emit actually produces.
+            column identity this emit actually produces (including one an
+            election absorbed or dropped).
         BaseExcludeUnresolved: An `exclude.kinds`/`exclude.tables` entry matches
             nothing base emits.
         BaseNameCollision: Two output tables, or two columns of one output table,
             share a name after presentation defaults and `rename`.
+        ElectionMixedIdentity: A sub-typed kind's surviving populations elect
+            differing identity surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id identity election, or a
+            reference edge's admitted target populations, contain a
+            pairwise-unsafe key-space pair.
         ExportError: A resolved output name is reserved under incremental export
             (`_export_meta`/`_export_windows`/`*__rows`, `__valid_from_ns`,
             `last_mutation_sim_time`) — checked always-on via
@@ -752,13 +1063,17 @@ def build_base_plan(
             so a full export and a later incremental drip on the same target agree.
         TableNotFoundError: A declared `records__<kind>` table is absent.
     """
+    resolved_election = (
+        election if election is not None else resolve_election(sidecar, None)
+    )
+
     kinds = _classify_kinds(sidecar)
 
     exclude = config.exclude if config is not None else None
     kinds = _apply_exclude(kinds, exclude)
 
     rename = config.rename if config is not None else None
-    specs = _resolve_specs(sidecar, kinds, rename, notice_sink)
+    specs = _resolve_specs(sidecar, resolved_election, kinds, rename, notice_sink)
 
     _check_collisions(specs)
     _check_reserved_names(specs)

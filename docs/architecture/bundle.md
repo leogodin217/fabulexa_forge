@@ -278,11 +278,11 @@ Consequences:
 otherwise `constant`; a presentation column is never `slice_only`
 (`contract/base-format.md` § Column temporal semantics → *Which columns carry the
 pair*). Together with the unconditional seed, `history` carries a genesis row for
-every flagged property of every record, presentation sub-picks included — so a
-change-log genre, an SCD-2 dimension, and a CDC stream all see presentation values
+every flagged property of every record, presentation sub-picks included — so an
+audit log, an SCD-2 dimension, and a CDC stream all see presentation values
 version like any other tracked value, and a kind whose only genuinely-changing
-column is a presentation value renders as a change log
-([`source.md`](source.md) § Classification).
+column is a presentation value carries auditable history
+([`source.md`](source.md) § The event log).
 
 **What the emit does not say.** A genesis row's value may be an intrinsic birth
 value or a truncated as-of initial condition whose real history predates the run.

@@ -404,7 +404,7 @@ a scenario. `fabulexa-forge validate` is its only user surface.
 - **C11 and C13 (the temporal-attribute checks) ARE reimplemented** (semantic checks,
   classed with C6/C7/C10). Both skip when no records-category `prop__` column carries
   `history_tracked` — the published additive-field guard. Consumers (the dimensional
-  exporter's tracked-vs-static split, the source exporter's genre predicate) *read*
+  exporter's tracked-vs-static split, the source exporter's audited-set resolution) *read*
   the temporal pair through the reader on an emit they trust to be conformant (as
   they trust C1–C14), and C11/C13 are the checks that warrant that trust. The
   producer's deeper QA guarantees remain out of scope.

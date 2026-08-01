@@ -1,27 +1,49 @@
-"""Per-genre render SQL builders for source-mode export.
+"""Table render SQL builders for source-mode export: `state` and `junction`.
 
-Composes the reader's faithful-read relations (`build_records_relation_sql`,
-`build_membership_relation_sql`) and the row-state-events fold
-(`build_row_state_events_sql`) into the four genre renders `build_source_plan`
-resolves each output table to: change-log (the fold, VARCHAR-cast back to each
-column's sidecar type), reference/transaction (the faithful records relation,
-discriminator-filtered for a split unit), and junction (the faithful
-membership-interval relation). Every structural sim-time column renders
-wallclock through the shared anchor renderer (`render_anchor_timestamp_expr`);
-every render carries its genre's total `ORDER BY` over raw sim-time keys and
-identity — never a rendered timestamp (§ Ordering and determinism).
-`build_snapshot_render_sql` composes the state-at derivation instead, for a
-change-log kind delivered under `change_delivery: snapshot`; the engine
-dispatches to it, not `build_render_sql`. Windowed, it reconstructs at
-`window.end_ns` (`build_state_at_sql`); horizon-less (a full export), it
-reconstructs at the tape's end (`build_state_at_end_sql`) — "the tape's end"
-realized structurally, no horizon ever computed.
+The two declared-table renders `build_source_plan` resolves output tables to
+(`docs/sprints/source-declared-tables/spec.md` § 3b): `build_state_render_sql`
+(one current row per record of a declared table's populations) and
+`build_junction_render_sql` (one row per membership interval). The event log
+is its own render, `exporters/source/events.py` (§ 3c) — composes the
+row-state-events / membership-events folds plus lag/diff/JSON machinery this
+module has no use for. The old genre trichotomy (change-log / reference /
+transaction) and its dispatcher `build_render_sql` are gone with the declared
+grammar; the engine dispatches on the plan unit's own type instead.
 
-Layer-direction invariant: imports the reader, the derivations layer (the
-row-state-events fold and the state-at derivation), fabulexa_forge.anchor,
-fabulexa_forge.errors, the sibling source.columns module, config.models / the
-source plan type (TYPE_CHECKING only), and stdlib. Never imports
-exporters.dimensional.* or exporters.streaming.*.
+Both renders wrap a faithful reader relation (`build_records_relation_sql`,
+`build_membership_relation_sql`) at full export, or a reconstruction
+(`build_state_at_sql`, `state` only) when windowed; every structural sim-time
+column renders wallclock through the shared anchor renderer
+(`render_anchor_timestamp_expr`); every render carries its own total
+`ORDER BY` over raw sim-time keys and identity — never a rendered timestamp
+(§ Ordering and determinism).
+
+Elected identity (`table.identity_surface`, `state` only) and edge
+(`table.edge_surfaces`) columns are rendered via `build_identity_translation_sql`
+(`exporters.election`, § 3a) — the shared per-row identity-translation
+relation — LEFT JOINed onto the render's own relation: the self-identity join
+at the render's own horizon (`_self_identity_join_clause`, mirroring base's
+`_key_join_clauses` pattern — the surface's own value-existence horizon,
+distinct from the horizon-free identity-translation relation an edge joins);
+one join per referencing/member column resolving a non-default surface,
+keyed on `record_id` (a single target kind) or `(member_kind, record_id)`
+via a `UNION ALL` across the admitted kind universe (a junction member
+column — member kind is per-row). A table with every surface at its default
+`record_id` composes byte-identical SQL — no join, no CASE.
+
+Layer-direction invariant: imports the reader, the derivations layer only
+via `build_state_at_sql` (windowed `state` reconstruction), the mode-neutral
+election module (`build_identity_translation_sql`, and the record-index /
+presentation-key horizon dispatchers `_record_index_sql` / `_presentation_key_sql`
+the self-identity join composes, shared with base's renders — doc § module
+placement), fabulexa_forge.anchor, fabulexa_forge._sql, the sibling
+source.columns and source.plan modules (the latter's `_MEMBER_PREFIX` /
+`_MEMBER_ID_SUFFIX` / `_RECORDS_TABLE_PREFIX` name constants at runtime,
+mirroring base's runtime import of `_self_identity`; `SourceEdgeSurface` /
+`SourceStateTablePlan` / `SourceJunctionTablePlan` TYPE_CHECKING only),
+`exporters.populations` (`Population`, TYPE_CHECKING only), config.models
+(TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.* or
+exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -30,17 +52,30 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.exporters.source.plan import SourceTableSpec
+    from fabulexa_forge.config.models import KeySurface
+    from fabulexa_forge.exporters.populations import Population
+    from fabulexa_forge.exporters.source.plan import (
+        SourceEdgeSurface,
+        SourceJunctionTablePlan,
+        SourceStateTablePlan,
+    )
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
+from fabulexa_forge._sql import _sql_literal
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
-from fabulexa_forge.derivations.row_state_events import build_row_state_events_sql
-from fabulexa_forge.derivations.state_at import (
-    build_state_at_end_sql,
-    build_state_at_sql,
+from fabulexa_forge.derivations.state_at import build_state_at_sql
+from fabulexa_forge.exporters.election import (
+    _presentation_key_sql,
+    _record_index_sql,
+    build_identity_translation_sql,
 )
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX
+from fabulexa_forge.exporters.source.plan import (
+    _MEMBER_ID_SUFFIX,
+    _MEMBER_PREFIX,
+    _RECORDS_TABLE_PREFIX,
+)
 from fabulexa_forge.reader.records_columns import structural_instant_columns
 from fabulexa_forge.reader.relations import (
     build_membership_relation_sql,
@@ -48,8 +83,8 @@ from fabulexa_forge.reader.relations import (
 )
 
 #: The records-table structural sim-time columns rendered wallclock in the
-#: reference/transaction render (§ Operational presentation defaults) —
-#: resolved through the reader's structural-temporal surface.
+#: `state` render (§ Operational presentation defaults) — resolved through
+#: the reader's structural-temporal surface.
 _RECORDS_WALLCLOCK_COLUMNS: frozenset[str] = frozenset(
     structural_instant_columns("records")
 )
@@ -67,17 +102,13 @@ _JUNCTION_FIXED_COLUMNS: frozenset[str] = frozenset(
     {"fork_path", "record_id", "joined_sim_time", "left_sim_time"}
 )
 
-#: The change-log fold's fixed prefix columns, rendered verbatim (op,
-#: record_id) or through the anchor renderer (event_sim_time) — never CAST
-#: back to a sidecar type the way a payload/presentation_id column is.
-_CHANGELOG_VERBATIM_COLUMNS: frozenset[str] = frozenset({"op", "record_id"})
-
-#: The state-at derivation's own columns rendered verbatim in the snapshot
-#: render — `record_id` is passthrough, `active` is a native computed boolean
-#: (never codec VARCHAR). `created_sim_time` / `deactivated_at` render
-#: wallclock (via `_RECORDS_WALLCLOCK_COLUMNS`, a superset); every other
-#: column (`presentation_id`, `prop__<p>`) is codec VARCHAR and CASTs back.
-_SNAPSHOT_VERBATIM_COLUMNS: frozenset[str] = frozenset({"record_id", "active"})
+#: The `state-at` derivation's own columns rendered verbatim in a windowed
+#: `state` render — `record_id` is passthrough, `active` is a native computed
+#: boolean (never codec VARCHAR). `created_sim_time` / `deactivated_at`
+#: render wallclock (via `_RECORDS_WALLCLOCK_COLUMNS`, a superset); every
+#: other windowed column (`presentation_id`, `prop__<p>`) is codec VARCHAR
+#: and CASTs back to its sidecar type.
+_STATE_AT_VERBATIM_COLUMNS: frozenset[str] = frozenset({"record_id", "active"})
 
 
 def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:
@@ -104,16 +135,14 @@ def _render_wallclock_column(
 
     A structural sim-time column (a member of `wallclock_columns`) renders
     wallclock through the shared anchor renderer; every other column is a
-    verbatim, aliased passthrough of the source relation's value — including a
-    reference-annotated `prop__` column, which lands id-only and unjoined (the
-    genre's definition; the consumer joins).
+    verbatim, aliased passthrough of the source relation's value.
 
     Args:
         src: The source column name (on the wrapped relation aliased `alias`).
         out: The resolved output column name.
-        alias: The SQL alias of the wrapped faithful-read relation.
+        alias: The SQL alias of the wrapped source relation.
         anchor: The resolved effective anchor.
-        wallclock_columns: The structural sim-time column names for this genre.
+        wallclock_columns: The structural sim-time column names for this render.
 
     Returns:
         A SQL SELECT-list expression fragment ending in `AS "<out>"`.
@@ -160,7 +189,7 @@ def _junction_masked_left_at_expr(
     Args:
         src: The source column name (`left_sim_time`).
         out: The resolved output column name.
-        alias: The SQL alias of the wrapped faithful-read relation.
+        alias: The SQL alias of the wrapped source relation.
         anchor: The resolved effective anchor.
         window: The window whose end_ns is the masking horizon.
 
@@ -175,106 +204,364 @@ def _junction_masked_left_at_expr(
     return render_anchor_timestamp_expr(anchor, masked_source, out)
 
 
-def build_records_render_sql(
+# ---------------------------------------------------------------------------
+# Key election: identity + edge joins
+# ---------------------------------------------------------------------------
+
+#: The self-identity join's table alias (record_index or presentation_id).
+_SELF_IDENTITY_ALIAS = "_self_ident"
+
+
+def _self_identity_join_clause(
     sidecar: "Sidecar",
     fork_path: str,
-    spec: "SourceTableSpec",
-    anchor: "EffectiveAnchor",
-    window: "Window | None",
+    kind: str,
+    identity_surface: "KeySurface",
+    horizon_ns: int | None,
+    join_key_expr: str,
 ) -> str:
-    """Build the reference/transaction render: the faithful records relation.
-
-    Both genres share this one render — differing only in the genre label
-    (role semantics for the consumer, not a schema difference) and, when
-    windowed, in whether the window predicate applies at all. Wraps
-    `build_records_relation_sql` (the reader's faithful, unprojected records
-    read, discriminator-filtered for a split unit) and projects `spec.columns`,
-    rendering the structural sim-time columns wallclock. With a window:
-    transaction filters to `last_mutation_sim_time` in `[window.start_ns,
-    window.end_ns)` (append); reference carries no predicate — a full
-    current-state snapshot every window (replace).
+    """Build the self-identity LEFT JOIN clause, or '' under `record_id`
+    (byte-identical — no join).
 
     Args:
         sidecar: The open emit's sidecar.
         fork_path: The sole branch, from `require_single_branch`.
-        spec: The resolved reference/transaction output table.
-        anchor: The resolved effective anchor.
-        window: The window to filter to (transaction genre only), or None
-            for the full export.
+        kind: The table's record kind.
+        identity_surface: The table's own resolved identity election.
+        horizon_ns: The render's horizon selection.
+        join_key_expr: The qualified `record_id` expression on the render's
+            own relation to join against (e.g. `'"_rec"."record_id"'`).
 
     Returns:
-        A complete SELECT, ordered by `(created_sim_time, record_id)` (raw,
-        never the rendered `created_at`).
+        The LEFT JOIN SQL fragment (leading space), or '' under `record_id`.
     """
-    kind = spec.source_table[len("records__") :]
-    discriminator_filter = (
-        {f"{_PROP_PREFIX}{kind}_type": spec.sub_type}
-        if spec.sub_type is not None
-        else {}
+    if identity_surface == "record_id":
+        return ""
+    relation_sql = (
+        _record_index_sql(sidecar, fork_path, kind, horizon_ns)
+        if identity_surface == "record_index"
+        else _presentation_key_sql(sidecar, fork_path, kind, horizon_ns)
     )
-    relation_sql = build_records_relation_sql(
-        sidecar, fork_path, kind, discriminator_filter
+    return (
+        f' LEFT JOIN ({relation_sql}) AS "{_SELF_IDENTITY_ALIAS}"'
+        f' ON {join_key_expr} = "{_SELF_IDENTITY_ALIAS}"."record_id"'
     )
 
-    select_list = ", ".join(
-        _render_wallclock_column(src, out, "_rec", anchor, _RECORDS_WALLCLOCK_COLUMNS)
-        for src, out in spec.columns
-    )
-    where_clause = ""
-    if window is not None and spec.genre == "transaction":
-        where_clause = (
-            f" WHERE {_half_open_predicate('_rec', 'last_mutation_sim_time', window)}"
+
+def _self_identity_value_expr(identity_surface: "KeySurface") -> str:
+    """The self-identity value expression, reading the join alias.
+
+    Args:
+        identity_surface: The table's own resolved identity election; never
+            `record_id` (callers only invoke this under a non-default
+            election).
+
+    Returns:
+        The qualified value expression on `_SELF_IDENTITY_ALIAS`.
+    """
+    return f'"{_SELF_IDENTITY_ALIAS}"."{identity_surface}"'
+
+
+def _edge_alias(source_column: str) -> str:
+    """The join alias for one referencing/member column's elected relation.
+
+    Args:
+        source_column: The referencing/member column's source identity.
+
+    Returns:
+        A per-column alias, unique among a table's joins.
+    """
+    return f"_edge__{source_column}"
+
+
+def _edge_join_and_expr(
+    sidecar: "Sidecar",
+    fork_path: str,
+    edge: "SourceEdgeSurface",
+    id_expr: str,
+    kind_expr: str | None,
+) -> tuple[str, str] | None:
+    """Resolve one edge's LEFT JOIN clause and CAST-to-rendered_type value expr.
+
+    Composes `build_identity_translation_sql` (`exporters.election`, § 3a) —
+    one relation per admitted kind, horizon-free (elected surfaces are
+    creation-constant). A single-target-kind edge (a reference-annotated
+    `prop__<p>` column, the junction owner column) joins one such relation;
+    a multi-target-kind edge (a junction member field) unions one relation
+    per admitted kind, keyed on `(kind_expr, id_expr)` — the per-row device
+    `<f>_kind` disambiguates.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch, from `require_single_branch`.
+        edge: The resolved edge.
+        id_expr: The qualified raw record-id-valued expression on the
+            render's own relation to join against.
+        kind_expr: The qualified `member__<f>__kind` expression, for a
+            multi-target-kind edge; None for a single-target-kind edge.
+
+    Returns:
+        None when every admitted population elects record_id (byte-identical
+        — no join, the render's own verbatim column already carries the
+        value); else `(join clause, value expression)`, the value CAST to
+        `edge.rendered_type` when it is not `'VARCHAR'`.
+    """
+    all_surfaces = {
+        surface
+        for _, per_population in edge.per_kind_populations
+        for _, surface in per_population
+    }
+    if all_surfaces == {"record_id"}:
+        return None
+
+    alias = _edge_alias(edge.source_column)
+    if len(edge.target_kinds) == 1:
+        kind, per_population = edge.per_kind_populations[0]
+        rel_sql = build_identity_translation_sql(
+            sidecar, fork_path, kind, per_population
         )
+        join = (
+            f' LEFT JOIN ({rel_sql}) AS "{alias}" ON {id_expr} = "{alias}"."record_id"'
+        )
+    else:
+        assert kind_expr is not None, "a member-field edge needs the kind column"
+        parts = []
+        for kind, per_population in edge.per_kind_populations:
+            rel_sql = build_identity_translation_sql(
+                sidecar, fork_path, kind, per_population
+            )
+            parts.append(
+                f'SELECT {_sql_literal(kind)} AS "kind", "record_id", "elected_value"'
+                f' FROM ({rel_sql}) AS "_k"'
+            )
+        union_sql = " UNION ALL ".join(parts)
+        join = (
+            f' LEFT JOIN ({union_sql}) AS "{alias}"'
+            f' ON {kind_expr} = "{alias}"."kind" AND {id_expr} = "{alias}"."record_id"'
+        )
+    value_expr = f'"{alias}"."elected_value"'
+    if edge.rendered_type != "VARCHAR":
+        value_expr = f"CAST({value_expr} AS {edge.rendered_type})"
+    return join, value_expr
+
+
+# ---------------------------------------------------------------------------
+# `state` render
+# ---------------------------------------------------------------------------
+
+
+def _state_needs_population_filter(
+    sidecar: "Sidecar", kind: str, populations: "tuple[Population, ...]"
+) -> bool:
+    """Whether a state table's populations need a discriminator filter.
+
+    False for a flat kind (single population, `sub_type=None` — no
+    discriminator column exists) or when `populations` addresses the kind's
+    full declared domain (the design doc's no-op-filter-not-composed rule).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The table's record kind.
+        populations: The table's resolved population set.
+
+    Returns:
+        True iff a discriminator IN-predicate must be composed.
+    """
+    if populations[0].sub_type is None:
+        return False
+    domain = set(sidecar.subtype_values(kind))
+    return {p.sub_type for p in populations} != domain
+
+
+def build_state_render_sql(
+    sidecar: "Sidecar",
+    fork_path: str,
+    table: "SourceStateTablePlan",
+    anchor: "EffectiveAnchor",
+    window: "Window | None",
+) -> str:
+    """The `state` render: one current row per record of the table's
+    declared populations.
+
+    Full export (`window is None`): the faithful records read
+    (`build_records_relation_sql`), `updated_at` included. Windowed: the
+    state-at reconstruction at the window horizon
+    (`build_state_at_sql(..., horizon_ns=window.end_ns)`), no `updated_at`
+    — the plan already validated the column set against this shape, so
+    this builder never re-checks. Both shapes: discriminator filter to
+    `table.populations` (omitted when the set is the kind's full domain — a
+    no-op filter is not composed), the plan's (source -> output) projection,
+    wallclock rendering of structural instants through the anchor renderer,
+    identity column per `table.identity_surface` (self-identity join for a
+    non-default surface, mirroring the current elected-identity join
+    pattern), reference columns per `table.edge_surfaces` (LEFT JOIN on
+    `build_identity_translation_sql` per non-default edge, CAST to the
+    edge's rendered_type), NULL stays NULL. Total ORDER BY
+    `(created_sim_time, record_id)` — raw keys, never rendered timestamps.
+    A table with every surface at its default composes join-free SQL.
+
+    Args:
+        sidecar: The plan's sidecar.
+        fork_path: The sole branch.
+        table: The resolved state-table unit (from a plan whose
+            windowed-ness matches `window` presence — the engine enforces
+            the pairing; builders trust it).
+        anchor: The resolved wallclock anchor.
+        window: The incremental window, or None for a full export.
+
+    Returns:
+        The render SELECT.
+    """
+    kind = table.kind
+    needs_filter = _state_needs_population_filter(sidecar, kind, table.populations)
+
+    horizon_ns: int | None
+    if window is None:
+        horizon_ns = None
+        base_alias = "_rec"
+        relation_sql = build_records_relation_sql(sidecar, fork_path, kind, {})
+        col_types: dict[str, str] = {}
+    else:
+        horizon_ns = window.end_ns
+        base_alias = "_snap"
+        bare_props = frozenset(
+            src[len(_PROP_PREFIX) :]
+            for src, _ in table.columns
+            if src.startswith(_PROP_PREFIX)
+        )
+        if needs_filter:
+            bare_props = bare_props | {f"{kind}_type"}
+        relation_sql = build_state_at_sql(
+            sidecar, fork_path, kind, bare_props, horizon_ns
+        )
+        col_types = _column_types(sidecar, f"{_RECORDS_TABLE_PREFIX}{kind}")
+
+    joins = [
+        _self_identity_join_clause(
+            sidecar,
+            fork_path,
+            kind,
+            table.identity_surface,
+            horizon_ns,
+            f'"{base_alias}"."record_id"',
+        )
+    ]
+    edge_exprs: dict[str, str] = {}
+    for edge in table.edge_surfaces:
+        resolved = _edge_join_and_expr(
+            sidecar, fork_path, edge, f'"{base_alias}"."{edge.source_column}"', None
+        )
+        if resolved is not None:
+            join_clause, value_expr = resolved
+            joins.append(join_clause)
+            edge_exprs[edge.source_column] = value_expr
+    joins_sql = "".join(joins)
+
+    select_parts: list[str] = []
+    for src, out in table.columns:
+        if src == table.identity_surface and table.identity_surface != "record_id":
+            select_parts.append(
+                f'{_self_identity_value_expr(table.identity_surface)} AS "{out}"'
+            )
+        elif src in edge_exprs:
+            select_parts.append(f'{edge_exprs[src]} AS "{out}"')
+        elif (
+            window is not None
+            and src not in _STATE_AT_VERBATIM_COLUMNS
+            and src not in _RECORDS_WALLCLOCK_COLUMNS
+        ):
+            # presentation_id (non-elected) or a prop__<p> payload column: the
+            # state-at fold's after-image is codec VARCHAR; CAST back.
+            select_parts.append(
+                f'CAST("{base_alias}"."{src}" AS {col_types[src]}) AS "{out}"'
+            )
+        else:
+            select_parts.append(
+                _render_wallclock_column(
+                    src, out, base_alias, anchor, _RECORDS_WALLCLOCK_COLUMNS
+                )
+            )
+    select_list = ", ".join(select_parts)
+
+    where_clause = ""
+    if needs_filter:
+        values = ", ".join(
+            _sql_literal(p.sub_type)
+            for p in table.populations
+            if p.sub_type is not None
+        )
+        where_clause = (
+            f' WHERE "{base_alias}"."{_PROP_PREFIX}{kind}_type" IN ({values})'
+        )
+
     return (
-        f'SELECT {select_list} FROM ({relation_sql}) AS "_rec"'
+        f'SELECT {select_list} FROM ({relation_sql}) AS "{base_alias}"{joins_sql}'
         f"{where_clause}"
-        ' ORDER BY "_rec"."created_sim_time", "_rec"."record_id"'
+        f' ORDER BY "{base_alias}"."created_sim_time", "{base_alias}"."record_id"'
     )
+
+
+# ---------------------------------------------------------------------------
+# `junction` render
+# ---------------------------------------------------------------------------
 
 
 def build_junction_render_sql(
     sidecar: "Sidecar",
     fork_path: str,
-    spec: "SourceTableSpec",
+    table: "SourceJunctionTablePlan",
     anchor: "EffectiveAnchor",
     window: "Window | None",
 ) -> str:
-    """Build the junction render: the faithful membership-interval relation.
+    """The `junction` render: one row per membership interval.
 
-    Wraps `build_membership_relation_sql` (the reader's faithful, unprojected
-    membership read) and projects `spec.columns`, rendering `joined_sim_time`
-    / `left_sim_time` wallclock (`left_at` stays `NULL` while the membership is
-    open — faithful, never fabricated). With a window: extract-on-change — a
-    row is emitted per window in which the interval's join or leave (or both)
-    lands, with `left_at` horizon-masked to `NULL` unless `left_sim_time <
-    window.end_ns` (masking never recomputation). A full export (window=None)
-    carries unmasked `left_at`, one row per interval — unchanged.
+    Carried over from the current junction render in shape (faithful
+    membership relation, wallclock `joined_at` / `left_at` with open
+    intervals NULL, member ids in the target population's elected surface
+    per row) — now projection-aware: renders exactly `table.columns` (the
+    owner column always present; a member pair's two columns project
+    independently; per-row election resolution consults the member kind
+    internally even when `<f>_kind` is omitted). Windowed: extract-on-change
+    over interval activity, `left_at` horizon-masked at `window.end_ns`.
+    Total ORDER BY `(record_id, joined_sim_time, element fields in
+    element-schema declaration order, VARCHAR-compared, NULLS FIRST)`.
 
     Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch, from `require_single_branch`.
-        spec: The resolved junction output table.
-        anchor: The resolved effective anchor.
-        window: The window to filter to, or None for the full export.
+        sidecar: The plan's sidecar.
+        fork_path: The sole branch.
+        table: The resolved junction unit.
+        anchor: The resolved wallclock anchor.
+        window: The incremental window, or None for a full export.
 
     Returns:
-        A complete SELECT, ordered by `(record_id, joined_sim_time,
-        element-field columns in element-schema declaration order, compared
-        as VARCHAR with NULLS FIRST)` — raw sim-time, never `joined_at`.
+        The render SELECT.
     """
-    table = sidecar.table(spec.source_table)
-    owner_kind = table.record_kind
-    property_name = table.property
-    assert owner_kind is not None and property_name is not None, (
-        "membership table must declare record_kind and property"
-    )
     relation_sql = build_membership_relation_sql(
-        sidecar, fork_path, owner_kind, property_name, {}
+        sidecar, fork_path, table.owner_kind, table.property, {}
     )
 
+    joins: list[str] = []
+    edge_exprs: dict[str, str] = {}
+    for edge in table.edge_surfaces:
+        if edge.source_column == "record_id":
+            id_expr = '"_mem"."record_id"'
+            kind_expr = None
+        else:
+            field = edge.source_column[len(_MEMBER_PREFIX) : -len(_MEMBER_ID_SUFFIX)]
+            id_expr = f'"_mem"."member__{field}__id"'
+            kind_expr = f'"_mem"."member__{field}__kind"'
+        resolved = _edge_join_and_expr(sidecar, fork_path, edge, id_expr, kind_expr)
+        if resolved is not None:
+            join_clause, value_expr = resolved
+            joins.append(join_clause)
+            edge_exprs[edge.source_column] = value_expr
+    joins_sql = "".join(joins)
+
     select_parts: list[str] = []
-    for src, out in spec.columns:
-        if src == "left_sim_time" and window is not None:
+    for src, out in table.columns:
+        if src in edge_exprs:
+            select_parts.append(f'{edge_exprs[src]} AS "{out}"')
+        elif src == "left_sim_time" and window is not None:
             select_parts.append(
                 _junction_masked_left_at_expr(src, out, "_mem", anchor, window)
             )
@@ -296,7 +583,7 @@ def build_junction_render_sql(
 
     element_columns = [
         col.name
-        for col in sidecar.columns(spec.source_table)
+        for col in sidecar.columns(table.source_table)
         if col.name not in _JUNCTION_FIXED_COLUMNS
     ]
     order_terms = ['"_mem"."record_id"', '"_mem"."joined_sim_time"']
@@ -305,168 +592,7 @@ def build_junction_render_sql(
     )
 
     return (
-        f'SELECT {select_list} FROM ({relation_sql}) AS "_mem"'
+        f'SELECT {select_list} FROM ({relation_sql}) AS "_mem"{joins_sql}'
         f"{where_clause}"
         f" ORDER BY {', '.join(order_terms)}"
     )
-
-
-def build_changelog_render_sql(
-    sidecar: "Sidecar",
-    fork_path: str,
-    spec: "SourceTableSpec",
-    anchor: "EffectiveAnchor",
-    window: "Window | None",
-) -> str:
-    """Build the change-log render: the row-state-events fold, wallclock-rendered
-    and cast back from the fold's codec VARCHAR to each column's sidecar type.
-
-    A change-log kind is never split (§ The sub-type split): the fold is
-    invoked once per kind, carrying no discriminator predicate, so a `d` row
-    (whose after-image is already `NULL` from the fold) is never misfiled to a
-    sub-type. With a window: filters to `event_sim_time` in `[window.start_ns,
-    window.end_ns)` (append). The fold's property set derives from
-    `spec.columns`' prop__ sources — the pattern the snapshot render already
-    uses — so a plan-narrowed (policy-omitted slice_only columns excluded)
-    spec folds only the delivered properties; the row set (c/u/d and `seq`)
-    is unchanged by the narrowing (column-projection-only invariance).
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch, from `require_single_branch`.
-        spec: The resolved change-log output table.
-        anchor: The resolved effective anchor.
-        window: The window to filter to, or None for the full export.
-
-    Returns:
-        A complete SELECT, ordered by `(event_sim_time, event_class,
-        record_id)` — the fold's own order (raw, never `changed_at`).
-    """
-    kind = spec.source_table[len("records__") :]
-    properties = frozenset(
-        src[len(_PROP_PREFIX) :]
-        for src, _ in spec.columns
-        if src.startswith(_PROP_PREFIX)
-    )
-    fold_sql = build_row_state_events_sql(sidecar, fork_path, kind, properties)
-    col_types = _column_types(sidecar, spec.source_table)
-
-    select_parts: list[str] = []
-    for src, out in spec.columns:
-        if src == "event_sim_time":
-            select_parts.append(
-                render_anchor_timestamp_expr(anchor, '"_fold"."event_sim_time"', out)
-            )
-        elif src in _CHANGELOG_VERBATIM_COLUMNS:
-            select_parts.append(f'"_fold"."{src}" AS "{out}"')
-        else:
-            # presentation_id or a prop__<p> payload column: the fold's
-            # after-image is codec VARCHAR; CAST back to the sidecar type.
-            select_parts.append(f'CAST("_fold"."{src}" AS {col_types[src]}) AS "{out}"')
-
-    select_list = ", ".join(select_parts)
-    where_clause = ""
-    if window is not None:
-        where_clause = (
-            f" WHERE {_half_open_predicate('_fold', 'event_sim_time', window)}"
-        )
-    return (
-        f'SELECT {select_list} FROM ({fold_sql}) AS "_fold"'
-        f"{where_clause}"
-        ' ORDER BY "_fold"."event_sim_time", "_fold"."event_class",'
-        ' "_fold"."record_id"'
-    )
-
-
-def build_snapshot_render_sql(
-    sidecar: "Sidecar",
-    fork_path: str,
-    spec: "SourceTableSpec",
-    anchor: "EffectiveAnchor",
-    window: "Window | None",
-) -> str:
-    """Build the snapshot render: the state-at derivation, windowed or at the
-    tape's end.
-
-    Composes `build_state_at_sql` at `horizon = window.end_ns` when windowed,
-    or `build_state_at_end_sql` (no horizon) for a full export — for a
-    change-log kind delivered under `change_delivery: snapshot`, a full-table
-    reconstruction of every record's as-of state (growing window over window
-    when windowed; `write_mode` is the engine's concern in either case). Two
-    documented deviations from the CDC render: no `updated_at` (there is no
-    per-event timestamp to render), and `active` / `deactivated_at` are the
-    derivation's own rendered columns rather than values read verbatim off the
-    source relation.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch, from `require_single_branch`.
-        spec: The resolved change-log output table (snapshot column shape —
-            `build_source_plan` under `change_delivery: snapshot`).
-        anchor: The resolved effective anchor.
-        window: The window whose exclusive end is the reconstruction horizon,
-            or None to reconstruct at the tape's end (a full export).
-
-    Returns:
-        A complete SELECT, ordered by `(created_sim_time, record_id)` — the
-        derivation's own order (raw, never a rendered timestamp).
-    """
-    kind = spec.source_table[len("records__") :]
-    properties = frozenset(
-        src[len(_PROP_PREFIX) :]
-        for src, _ in spec.columns
-        if src.startswith(_PROP_PREFIX)
-    )
-    state_at_sql = (
-        build_state_at_sql(sidecar, fork_path, kind, properties, window.end_ns)
-        if window is not None
-        else build_state_at_end_sql(sidecar, fork_path, kind, properties)
-    )
-    col_types = _column_types(sidecar, spec.source_table)
-
-    select_parts: list[str] = []
-    for src, out in spec.columns:
-        if src in _SNAPSHOT_VERBATIM_COLUMNS:
-            select_parts.append(f'"_snap"."{src}" AS "{out}"')
-        elif src in _RECORDS_WALLCLOCK_COLUMNS:
-            select_parts.append(
-                _render_wallclock_column(
-                    src, out, "_snap", anchor, _RECORDS_WALLCLOCK_COLUMNS
-                )
-            )
-        else:
-            # presentation_id or a prop__<p> payload column: the fold's
-            # after-image is codec VARCHAR; CAST back to the sidecar type.
-            select_parts.append(f'CAST("_snap"."{src}" AS {col_types[src]}) AS "{out}"')
-
-    select_list = ", ".join(select_parts)
-    return (
-        f'SELECT {select_list} FROM ({state_at_sql}) AS "_snap"'
-        ' ORDER BY "_snap"."created_sim_time", "_snap"."record_id"'
-    )
-
-
-def build_render_sql(
-    sidecar: "Sidecar",
-    fork_path: str,
-    spec: "SourceTableSpec",
-    anchor: "EffectiveAnchor",
-    window: "Window | None",
-) -> str:
-    """Dispatch a resolved output table to its genre's render builder.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch, from `require_single_branch`.
-        spec: The resolved output table.
-        anchor: The resolved effective anchor.
-        window: The window to filter to, or None for the full export.
-
-    Returns:
-        The genre's complete, ordered SELECT.
-    """
-    if spec.genre == "changelog":
-        return build_changelog_render_sql(sidecar, fork_path, spec, anchor, window)
-    if spec.genre == "junction":
-        return build_junction_render_sql(sidecar, fork_path, spec, anchor, window)
-    return build_records_render_sql(sidecar, fork_path, spec, anchor, window)

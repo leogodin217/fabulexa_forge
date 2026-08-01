@@ -6,6 +6,14 @@ from fabulexa_forge.errors import (
     ConfigError,
     CorruptError,
     CorruptValidationError,
+    ElectedKeyDuplicate,
+    ElectionDimKeyDisagrees,
+    ElectionInheritanceAmbiguous,
+    ElectionKindUnknown,
+    ElectionMixedIdentity,
+    ElectionPresentationUndeclared,
+    ElectionSubTypeUnknown,
+    ElectionUnionUnsafe,
     ExporterError,
     ExportError,
     ExportRuntimeError,
@@ -120,3 +128,36 @@ def test_corrupt_validation_error_is_catchable_as_exporter_error() -> None:
         raise CorruptValidationError("business rule failed")
     except ExporterError:
         pass  # expected
+
+
+def test_election_error_classes_subclass_export_error() -> None:
+    """Every election error class subclasses ExportError."""
+    for cls in (
+        ElectionKindUnknown,
+        ElectionSubTypeUnknown,
+        ElectionPresentationUndeclared,
+        ElectionMixedIdentity,
+        ElectionUnionUnsafe,
+        ElectionInheritanceAmbiguous,
+        ElectionDimKeyDisagrees,
+        ElectedKeyDuplicate,
+    ):
+        assert issubclass(cls, ExportError), f"{cls.__name__} must subclass ExportError"
+
+
+def test_election_error_classes_are_catchable_as_exporter_error() -> None:
+    """Election error instances are caught by except ExporterError."""
+    for cls in (
+        ElectionKindUnknown,
+        ElectionSubTypeUnknown,
+        ElectionPresentationUndeclared,
+        ElectionMixedIdentity,
+        ElectionUnionUnsafe,
+        ElectionInheritanceAmbiguous,
+        ElectionDimKeyDisagrees,
+        ElectedKeyDuplicate,
+    ):
+        try:
+            raise cls("election check failed")
+        except ExporterError:
+            pass  # expected

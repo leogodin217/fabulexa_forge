@@ -27,6 +27,13 @@ _SQL_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 # no traversal), so a `groups` target can never escape the jsonl output dir.
 _TOPIC_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
+# ---------------------------------------------------------------------------
+# Key election
+# ---------------------------------------------------------------------------
+
+KeySurface = Literal["record_id", "record_index", "presentation_id"]
+"""The three identity surfaces a population or FK edge may elect."""
+
 
 def _require_sql_identifier(value: str, context: str) -> None:
     """Reject an author-supplied name that is not a plain SQL identifier.
@@ -76,9 +83,11 @@ class FkClause(StrictBaseModel):
     """The membership property name to join against."""
     path: list[str] | None = None
     """Reference-edge hop chain from the grain kind to the target kind."""
-    target_key: Literal["record_id", "presentation_id"] = "record_id"
-    """Which identity to write into the fact FK — the natural record_id,
-    or the warehouse surrogate presentation_id."""
+    target_key: KeySurface | None = None
+    """Which identity surface to write into the FK column. Absent: inherit
+    the destination dim's source population set's election (record_id when
+    it carries none). Present: per-edge override, gated identically over the
+    same population set."""
     as_of: str | None = None
     """For a point-in-time membership FK, the grain column holding the
     firing time T at which membership is resolved."""
@@ -512,62 +521,283 @@ class RenameEntry(StrictBaseModel):
         return self
 
 
-class SourceConfig(StrictBaseModel):
-    """The source-mode section: escape hatches over the full-emit dump."""
+# ---------------------------------------------------------------------------
+# Source declared-table grammar: population-address decl models
+# ---------------------------------------------------------------------------
 
-    exclude: ExcludeDecl | None = None
-    """Kinds and sidecar tables dropped before export."""
-    rename: list[RenameEntry] | None = None
-    """Per-table output-name overrides."""
-    change_delivery: Literal["changelog", "snapshot"] = "changelog"
-    """How change-log-genre kinds deliver: the wide CDC table (default), or
-    full-table snapshots — one per window horizon under a windowed invocation,
-    one at the tape's end in a full export. Participates in the incremental
-    fingerprint."""
-    declare_keys: bool | None = None
-    """Emit declared key constraints (PK/UNIQUE) for the DuckDB writer,
-    resolved from the sidecar's presentation_keys registry. Absent or False
-    -> off (a semantic default 'off', mirroring `slice_at` — not an invented
-    mapping value). Ignored under CSV: a keys-not-declarable-csv notice is
-    emitted instead."""
+
+def _require_nonempty_str(value: str, field_name: str) -> None:
+    """Reject an empty author-supplied label field.
+
+    Args:
+        value: The field's value.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is the empty string.
+    """
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty")
+
+
+def _require_distinct_nonempty_tuple(
+    value: tuple[str, ...] | None, field_name: str
+) -> None:
+    """A tuple field: when present, non-empty, with distinct entries.
+
+    Shared by every declared-table / events-source list-valued field
+    (`sub_types`, `columns`, `only`, `ignore`) — the parse-time rule applies
+    identically to all of them.
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty tuple, or contains a duplicate entry.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for entry in value:
+        if entry in seen:
+            duplicates.append(entry)
+        seen.add(entry)
+    if duplicates:
+        raise ValueError(f"{field_name} entries must be distinct: {duplicates}")
+
+
+def _require_rename_map_valid(value: dict[str, str] | None, field_name: str) -> None:
+    """A rename map: when present, non-empty, with distinct output names.
+
+    Keys (source column names) are already distinct by dict construction;
+    this additionally enforces that two source columns may not rename to
+    the same output name.
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty dict, or two keys share a value.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for target in value.values():
+        if target in seen:
+            duplicates.append(target)
+        seen.add(target)
+    if duplicates:
+        raise ValueError(f"{field_name} values must be distinct: {duplicates}")
+
+
+def _require_exactly_one_population_source(
+    kind: str | None, membership: "MembershipRef | None", label: str
+) -> None:
+    """Exactly one of `kind` / `membership` addresses the declaration's population.
+
+    Args:
+        kind: The declaration's `kind` field.
+        membership: The declaration's `membership` field.
+        label: The declaring unit's message label.
+
+    Raises:
+        ValueError: Both or neither of `kind` / `membership` is set.
+    """
+    if (kind is None) == (membership is None):
+        raise ValueError(f"{label} must set exactly one of 'kind' / 'membership'")
+
+
+def _require_sub_types_only_with_kind(
+    kind: str | None, sub_types: tuple[str, ...] | None, label: str
+) -> None:
+    """`sub_types` only accompanies a `kind` address, never a `membership` one.
+
+    Args:
+        kind: The declaration's `kind` field.
+        sub_types: The declaration's `sub_types` field.
+        label: The declaring unit's message label.
+
+    Raises:
+        ValueError: `sub_types` is set while `kind` is not.
+    """
+    if sub_types is not None and kind is None:
+        raise ValueError(f"{label}: 'sub_types' is only valid together with 'kind'")
+
+
+class MembershipRef(StrictBaseModel):
+    """Addresses one membership table by its contract identity."""
+
+    kind: str
+    """The owning kind `K` of the sidecar `membership__<K>__<property>` table."""
+    property: str
+    """The membership property `p` of the sidecar `membership__<K>__<p>` table."""
+
+
+class SourceTableDecl(StrictBaseModel):
+    """One declared output table: a name, one population source, optional column selection and renames."""  # noqa: E501
+
+    name: str
+    """Author-verbatim output table name."""
+    kind: str | None = None
+    """A records kind, exclusive with `membership` (`table_shape`)."""
+    sub_types: tuple[str, ...] | None = None
+    """Explicit population subset; only valid alongside `kind`. Absent =
+    every declared sub-type."""
+    membership: MembershipRef | None = None
+    """A membership-table address, exclusive with `kind`."""
+    columns: tuple[str, ...] | None = None
+    """Source-column selection; absent = full classified projection."""
+    rename: dict[str, str] | None = None
+    """Source column name -> output name overrides."""
 
     @model_validator(mode="after")
-    def at_least_one_field(self) -> Self:
-        """A present `source` section sets at least one of exclude / rename /
-        declare_keys.
+    def table_shape(self) -> Self:
+        """The declaration's structural shape (design doc § Config Models).
 
         Raises:
-            ValueError: No field was explicitly set (source: {} is not
-                meaningful — omit the section entirely for a bare full dump).
+            ValueError: `name` is empty; not exactly one of `kind` /
+                `membership` is set; `sub_types` is set without `kind`;
+                `sub_types` / `columns` is present-but-empty or carries a
+                duplicate entry; `rename` is present-but-empty or two keys
+                share a target value.
         """
-        if not self.model_fields_set:
+        _require_nonempty_str(self.name, "SourceTableDecl.name")
+        label = f"table {self.name!r}"
+        _require_exactly_one_population_source(self.kind, self.membership, label)
+        _require_sub_types_only_with_kind(self.kind, self.sub_types, label)
+        _require_distinct_nonempty_tuple(self.sub_types, "SourceTableDecl.sub_types")
+        _require_distinct_nonempty_tuple(self.columns, "SourceTableDecl.columns")
+        _require_rename_map_valid(self.rename, "SourceTableDecl.rename")
+        return self
+
+
+class SourceEventSourceDecl(StrictBaseModel):
+    """One audited population set for the event log."""
+
+    kind: str | None = None
+    """A records kind, exclusive with `membership` (`source_shape`)."""
+    sub_types: tuple[str, ...] | None = None
+    """Explicit population subset; only valid alongside `kind`. Absent =
+    every declared sub-type."""
+    membership: MembershipRef | None = None
+    """A membership-table address, exclusive with `kind`."""
+    only: tuple[str, ...] | None = None
+    """Audited-property subset by bare name (element-field name for a
+    membership source); mutually exclusive with `ignore`."""
+    ignore: tuple[str, ...] | None = None
+    """Audited-property exclusion by bare name; mutually exclusive with
+    `only`."""
+
+    @model_validator(mode="after")
+    def source_shape(self) -> Self:
+        """The declaration's structural shape (design doc § Config Models).
+
+        Raises:
+            ValueError: Not exactly one of `kind` / `membership` is set;
+                `sub_types` is set without `kind`; `sub_types` / `only` /
+                `ignore` is present-but-empty or carries a duplicate entry;
+                both `only` and `ignore` are set.
+        """
+        label = "events source"
+        _require_exactly_one_population_source(self.kind, self.membership, label)
+        _require_sub_types_only_with_kind(self.kind, self.sub_types, label)
+        _require_distinct_nonempty_tuple(
+            self.sub_types, "SourceEventSourceDecl.sub_types"
+        )
+        _require_distinct_nonempty_tuple(self.only, "SourceEventSourceDecl.only")
+        _require_distinct_nonempty_tuple(self.ignore, "SourceEventSourceDecl.ignore")
+        if self.only is not None and self.ignore is not None:
+            raise ValueError(f"{label}: 'only' and 'ignore' are mutually exclusive")
+        return self
+
+
+class SourceEventsDecl(StrictBaseModel):
+    """The single polymorphic event log declaration."""
+
+    name: str
+    """Author-verbatim output table name for the log."""
+    sources: tuple[SourceEventSourceDecl, ...]
+    """Audited populations, >= 1 entry, pairwise-disjoint (gated at plan
+    time — `SourceEventSourceOverlap`)."""
+
+    @model_validator(mode="after")
+    def events_shape(self) -> Self:
+        """The declaration's structural shape (design doc § Config Models).
+
+        Raises:
+            ValueError: `name` is empty, or `sources` is empty.
+        """
+        _require_nonempty_str(self.name, "SourceEventsDecl.name")
+        if not self.sources:
+            raise ValueError("SourceEventsDecl.sources must be non-empty (>= 1 entry)")
+        return self
+
+
+class SourceConfig(StrictBaseModel):
+    """mode: source section — the declared app-database shape."""
+
+    tables: tuple[SourceTableDecl, ...] = ()
+    """The declared output tables: `state` (kind) or `junction` (membership)
+    per entry, declaration order. Defaults empty (a log-only config is
+    legal); at least one of `tables` / `events` must be declared."""
+    events: SourceEventsDecl | None = None
+    """The single polymorphic event log declaration; absent = no history
+    exported (a Type-1-only app)."""
+    declare_keys: bool = False
+    """Emit declared key constraints (PK/UNIQUE) for the DuckDB writer,
+    resolved from the sidecar's presentation_keys registry. Off by default —
+    the design doc's own contract default, not an invented value. Ignored
+    under CSV: a keys-not-declarable-csv notice is emitted instead."""
+
+    @model_validator(mode="after")
+    def source_section_required(self) -> Self:
+        """A `source` section declares at least one output: >= 1 entry in
+        `tables`, or an `events` block.
+
+        Raises:
+            ValueError: `tables` is empty and `events` is None — there is no
+                implicit layout to fall back to (`source: {}` is refused).
+        """
+        if not self.tables and self.events is None:
             raise ValueError(
-                "source section must set at least one of exclude / rename /"
-                " declare_keys (an empty source: {} block is not meaningful;"
-                " omit the section for a bare full dump)"
+                "source section must declare at least one output: >= 1 entry"
+                " in 'tables', or an 'events' block"
             )
         return self
 
     @model_validator(mode="after")
-    def entries_disjoint(self) -> Self:
-        """No two rename entries share the same (table, sub_type) target.
+    def table_source_exclusive(self) -> Self:
+        """Cross-declaration checks the per-declaration validators cannot
+        see: `tables[].name` is distinct across the declaration list. Every
+        other rule the design doc's `table_source_exclusive` docstring
+        describes — exactly one of `kind` / `membership`, `sub_types` only
+        with `kind`, non-empty distinct collections, `rename` values
+        distinct, `only`/`ignore` mutually exclusive — is already enforced
+        per-declaration by `SourceTableDecl.table_shape` /
+        `SourceEventSourceDecl.source_shape`; "at most one events block" is
+        structural (`events` is a single optional field, never a list).
 
         Raises:
-            ValueError: Two rename entries target the same (table, sub_type).
+            ValueError: Two `tables` entries share the same `name`.
         """
-        if self.rename is not None:
-            seen: set[tuple[str, str | None]] = set()
-            duplicates: list[tuple[str, str | None]] = []
-            for entry in self.rename:
-                key = (entry.table, entry.sub_type)
-                if key in seen:
-                    duplicates.append(key)
-                seen.add(key)
-            if duplicates:
-                raise ValueError(
-                    "SourceConfig.rename contains more than one entry for the"
-                    f" same (table, sub_type): {duplicates}"
-                )
+        seen: set[str] = set()
+        duplicates: list[str] = []
+        for decl in self.tables:
+            if decl.name in seen:
+                duplicates.append(decl.name)
+            seen.add(decl.name)
+        if duplicates:
+            raise ValueError(
+                f"source.tables contains duplicate table names: {duplicates}"
+            )
         return self
 
 
@@ -759,25 +989,56 @@ class ExportConfig(StrictBaseModel):
     dimensional: DimensionalConfig | None = None
     """The star-schema declaration for the dimensional mode."""
     source: SourceConfig | None = None
-    """The escape-hatch declaration for the source mode; absent means a bare
-    full dump with no exclude/rename."""
+    """The declared app-database shape for the source mode; required when
+    mode='source' (`mode_section_matches`) — there is no implicit bare-dump
+    layout."""
     base: BaseConfig | None = None
     """The escape-hatch + slice declaration for the base mode; absent means a bare
     current-state dump with no exclude/rename/slice_at."""
+    keys: dict[str, KeySurface | dict[str, KeySurface]] | None = None
+    """Per-kind key election. A scalar elects the surface for the whole kind
+    (every population, for a sub-typed kind); a map elects per sub-type.
+    Absent: no election — every mode keys and renders record identity as
+    today. Kind/sub-type existence, registry declaration, and union safety
+    are export-time gates against the sidecar, not parse-time checks (the
+    config is emit-independent)."""
+
+    @model_validator(mode="after")
+    def keys_well_formed(self) -> Self:
+        """`keys` (when present) is non-empty; every per-kind map is non-empty.
+
+        Emit-dependent checks (kind/sub-type existence, registry declaration,
+        union safety) are deliberately not here — the config is emit-independent.
+
+        Raises:
+            ValueError: `keys` is an empty map, or a per-kind map value is empty.
+        """
+        if self.keys is not None:
+            if not self.keys:
+                raise ValueError("keys: must not be empty (omit the field instead)")
+            for kind, election in self.keys.items():
+                if isinstance(election, dict) and not election:
+                    raise ValueError(f"keys.{kind}: per-sub-type map must not be empty")
+        return self
 
     @model_validator(mode="after")
     def mode_section_matches(self) -> Self:
-        """The section named by `mode` matches; the other modes' sections are absent.
+        """The section named by `mode` is present; the other modes' sections
+        are absent.
 
-        `mode='dimensional'` requires the `dimensional` section (unchanged single-arm
-        behavior). `mode='source'` and `mode='base'` have no such requirement — both
-        sections are pure escape hatches, so a bare `mode: source` / `mode: base`
-        (no mode-specific section at all) is a valid full dump. Whichever mode is
-        selected, the *other* modes' sections must be absent.
+        `mode='dimensional'` requires the `dimensional` section (unchanged).
+        `mode='source'` now joins that posture — it requires the `source`
+        section (the bare-dump allowance is removed; `SourceConfig`'s own
+        `source_section_required` validator additionally refuses `source: {}`,
+        since a source config declares its output or is refused at load).
+        `mode='base'` keeps its escape-hatch posture — a bare `mode: base` (no
+        `base` section) stays a valid full dump. Whichever mode is selected,
+        the *other* modes' sections must be absent.
 
         Raises:
-            ValueError: `mode='dimensional'` with the `dimensional` section absent;
-                or any mode with another mode's section present.
+            ValueError: `mode='dimensional'` without `dimensional`;
+                `mode='source'` without `source`; any mode with another
+                mode's section present.
         """
         if self.mode == "dimensional":
             if self.dimensional is None:
@@ -787,6 +1048,8 @@ class ExportConfig(StrictBaseModel):
             if self.base is not None:
                 raise ValueError("mode='dimensional' forbids a 'base' section")
         elif self.mode == "source":
+            if self.source is None:
+                raise ValueError("mode='source' requires a 'source' section")
             if self.dimensional is not None:
                 raise ValueError("mode='source' forbids a 'dimensional' section")
             if self.base is not None:

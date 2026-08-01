@@ -1,9 +1,0 @@
-tables:
-  doctor:
-    columns: [id, created_at, active, deactivated_at, updated_at, name]
-    row_count: 1
-    contains_rows:
-      - id: d001
-        name: Dr. Carter
-        active: true
-        deactivated_at: null

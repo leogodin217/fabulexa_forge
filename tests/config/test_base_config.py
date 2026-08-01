@@ -172,7 +172,10 @@ def test_mode_base_with_source_section_rejected() -> None:
     """mode: base with a source: section is rejected by mode_section_matches."""
     with pytest.raises(ValidationError, match="forbids a 'source' section"):
         ExportConfig.model_validate(
-            {"mode": "base", "source": {"exclude": {"kinds": ["x"]}}}
+            {
+                "mode": "base",
+                "source": {"tables": [{"name": "actors", "kind": "actor"}]},
+            }
         )
 
 
@@ -222,7 +225,13 @@ def test_mode_dimensional_with_base_section_rejected() -> None:
 def test_mode_source_with_base_section_rejected() -> None:
     """mode: source with a base: section is rejected by mode_section_matches."""
     with pytest.raises(ValidationError, match="forbids a 'base' section"):
-        ExportConfig.model_validate({"mode": "source", "base": {"slice_at": 0}})
+        ExportConfig.model_validate(
+            {
+                "mode": "source",
+                "source": {"tables": [{"name": "actors", "kind": "actor"}]},
+                "base": {"slice_at": 0},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------

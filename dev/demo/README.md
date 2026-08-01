@@ -56,7 +56,7 @@ Available presets:
 | `ride-sharing-marketplace` | Ride-sharing marketplace (primary seed) — two-sided market; `driver`/`rider`/`pairing`/`zone_market` strips with live fact→dimension join lag. |
 | `ride-sharing` | Ride-sharing — `actor`/`journey_instance` strips; pure read-back (no consumer join). |
 | `retail` | Retail domain — `customer`/`entity`/`journey_instance` strips; pure read-back (no consumer join). |
-| `nhs` | NHS domain (primarily a non-streaming fixture) — `nhs.actor`/`nhs.diary`/`nhs.journey_instance` strips; pure read-back (no consumer join). |
+| `nhs` | NHS domain (primarily a non-streaming fixture) — `nhs.patient`/`nhs.diary`/`nhs.pathway_episode`/`nhs.consultant` strips; pure read-back (no consumer join). |
 
 Run order with a preset (three terminals, same as the fixture path):
 

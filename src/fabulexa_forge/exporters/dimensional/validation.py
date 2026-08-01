@@ -32,9 +32,11 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import (
         ColumnDecl,
         DimensionalConfig,
+        KeySurface,
         SourceDecl,
         TableDecl,
     )
+    from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -44,8 +46,15 @@ from fabulexa_forge.derivations.reference_resolution import (
     _find_all_reference_paths,
     _path_hint_to_cols,
 )
-from fabulexa_forge.errors import ExportError
+from fabulexa_forge.errors import ElectionDimKeyDisagrees, ExportError
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
+from fabulexa_forge.exporters.dimensional.populations import (
+    dim_key_projects_surface,
+    dim_population_sub_types,
+    resolve_dim_source_populations,
+    resolve_fk_surface,
+)
+from fabulexa_forge.exporters.election import check_edge_union_safety, resolve_election
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.reserved_names import (
     RESERVED_PRESENTATION_COLUMN_NAME,
@@ -1174,6 +1183,55 @@ def check_incremental_filter_column_mutable(
 
 
 # ---------------------------------------------------------------------------
+# Dim-key agreement (key election)
+# ---------------------------------------------------------------------------
+
+
+def check_dim_key_agreement(
+    dim_table_decl: "TableDecl",
+    resolved_surface: "KeySurface",
+    target_key: "KeySurface | None",
+    edge_name: str,
+) -> None:
+    """Gate one FK's resolved surface against its destination dim's declared key.
+
+    Doc § Dim-key agreement: an FK's value is only useful if the destination
+    dim is keyed on the same surface. Applies only to an *inherited*
+    (`target_key is None`) non-`record_id` resolution — an explicit
+    `target_key` is the author's own escape, and `record_id` is the
+    default identity, always agreeable.
+
+    Args:
+        dim_table_decl: The destination dim's output table declaration.
+        resolved_surface: The FK's one resolved surface.
+        target_key: The edge's explicit override, verbatim from FkClause;
+            None when the surface was inherited.
+        edge_name: The referencing table · column identity, for the error.
+
+    Raises:
+        ElectionDimKeyDisagrees: The resolution is inherited and
+            non-default, and no declared key column of `dim_table_decl`
+            sources `from:` the elected contract column; names the dim,
+            its key sources, and the elected surface.
+    """
+    if target_key is not None or resolved_surface == "record_id":
+        return
+    if dim_key_projects_surface(dim_table_decl, resolved_surface):
+        return
+    key_sources = ", ".join(
+        f"{col.name} (from: {col.from_!r})"
+        for col in dim_table_decl.columns
+        if col.name in set(dim_table_decl.key)
+    )
+    raise ElectionDimKeyDisagrees(
+        f"{edge_name}: inherits elected surface '{resolved_surface}' from"
+        f" dim '{dim_table_decl.name}', but its declared key ({key_sources})"
+        f" sources no column from: '{resolved_surface}' — add an explicit"
+        " target_key on the edge, or re-key the dim"
+    )
+
+
+# ---------------------------------------------------------------------------
 # Main validation entry point
 # ---------------------------------------------------------------------------
 
@@ -1184,6 +1242,8 @@ def validate_table(
     sidecar: "Sidecar",
     window: "Window | None",
     notice_sink: "NoticeSink",
+    *,
+    election: "Election | None" = None,
 ) -> str:
     """Run all business rules for a single table declaration.
 
@@ -1193,7 +1253,13 @@ def validate_table(
     ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
     Scd2ColumnModeSupported, LookupColumnSafety, SliceOnlyColumnRefused
     (filter keys, column reads, fk hops), ReservedPresentationName
-    (last_mutation_sim_time — always-on, full export included).
+    (last_mutation_sim_time — always-on, full export included). Per fk
+    column: resolves the destination dim's source population set
+    (`resolve_dim_source_populations`), the edge's one resolved surface
+    (`resolve_fk_surface` — inherited or the explicit `target_key`),
+    `check_edge_union_safety` over that set with the resolved surface as
+    `surface_override`, then `check_dim_key_agreement`; the probe
+    `build_fk_expr` call passes the resolved surface + population set.
 
     When window is not None, also runs the ten incremental gates:
     IncrementalGrainUnsupported, IncrementalElapsedUnsupported,
@@ -1209,12 +1275,26 @@ def validate_table(
         window: The window for windowed export, or None for full export.
         notice_sink: Receiver for plan notices (threaded to
             check_discriminator_value_observed).
+        election: The resolved election, or None to resolve the all-default
+            election internally (every population elects record_id — the
+            caller has no `keys` block to thread, or is an election-free
+            internal/test caller).
 
     Returns:
         The resolved DuckDB source table name.
 
     Raises:
         ExportError: Any business rule fails.
+        ElectionInheritanceAmbiguous: An fk column's `target_key` is absent
+            and the destination dim's source population set carries more
+            than one distinct election.
+        ElectionUnionUnsafe: An fk column's admitted target populations'
+            resolved key spaces contain a pairwise-unsafe pair.
+        ElectionPresentationUndeclared: An fk column resolves
+            presentation_id over a source population set with an uncovered
+            population.
+        ElectionDimKeyDisagrees: An fk column inherits a non-default
+            surface the destination dim's declared key does not project.
         TemporalClassUnavailableError: A consulted column's temporal pair is
             unavailable (non-conformant emit).
     """
@@ -1227,6 +1307,9 @@ def validate_table(
         check_lookup_temporal_safety,
     )
 
+    resolved_election = (
+        election if election is not None else resolve_election(sidecar, None)
+    )
     source = table_decl.source
 
     # --- Table-level rules (always) ---
@@ -1276,6 +1359,23 @@ def validate_table(
         if col_decl.fk is not None:
             target_table_decl = check_fk_target_is_dim(col_decl, table_decl, config)
             target_kind = target_table_decl.source.kind
+            edge_name = f"{table_decl.name}.{col_decl.name}"
+            dim_populations = resolve_dim_source_populations(
+                sidecar, target_kind, target_table_decl.source.filter
+            )
+            resolved_surface = resolve_fk_surface(
+                resolved_election, dim_populations, col_decl.fk.target_key, edge_name
+            )
+            check_edge_union_safety(
+                resolved_election,
+                target_kind,
+                dim_population_sub_types(dim_populations),
+                edge_name,
+                surface_override=resolved_surface,
+            )
+            check_dim_key_agreement(
+                target_table_decl, resolved_surface, col_decl.fk.target_key, edge_name
+            )
             build_fk_expr(
                 col_decl=col_decl,
                 table_decl=table_decl,
@@ -1283,6 +1383,8 @@ def validate_table(
                 anchor_kind=source.kind,
                 target_kind=target_kind,
                 sidecar=sidecar,
+                resolved_surface=resolved_surface,
+                dim_populations=dim_populations,
             )
             check_fk_slice_only(
                 col_decl=col_decl,

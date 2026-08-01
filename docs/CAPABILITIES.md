@@ -30,8 +30,8 @@ row-state-events + membership-events + state-at residents, the single-branch gua
 has shipped, composed by the dimensional, streaming, source, and base modes. All three
 remaining Stage-3 modes have shipped — streaming (`fabulexa-forge stream` —
 `state-changes` `c`/`u`/`d` CDC and `membership-events` `join`/`leave` content),
-source (`mode: source` — the change-log/reference/transaction/junction genre
-trichotomy, `change_delivery: snapshot`), and base (`mode: base` — the flat
+source (`mode: source` — the author-declared app database: `state` / `junction`
+tables plus one polymorphic event log), and base (`mode: base` — the flat
 one-row-per-record projection with an optional `slice_at` point-in-time horizon) —
 as has the Stage-4 corrupter family (`fabulexa-forge corrupt`). Stage 5's
 queue-state export remains planned; its point-in-time prong is retired, delivered
@@ -88,6 +88,13 @@ See [`architecture/reader.md`](architecture/reader.md) and
   columns each sub-type of a sub-typed kind declares — the NULL-disambiguation surface
   (structurally-inapplicable vs value-absent). C14 verifies its consistency; `init`
   reads it to prune per-sub-type column proposals.
+- ✓ **Presentation-keys accessor** — `Sidecar.presentation_keys()` exposes the optional
+  `presentation_keys` block as a typed `PresentationKeys` view (or `None` when absent —
+  "no claims"), strict on read: a present-but-incoherent block raises
+  `PresentationKeysInvalidError` rather than yielding claims a consumer would key on.
+  Beside it, the contract's union-safety algebra (`union_safe`, `combined_claim`) as
+  pure, kind-scoped functions. See [`architecture/reader.md`](architecture/reader.md)
+  § The presentation-keys registry is strict on read.
 
 ---
 
@@ -99,7 +106,7 @@ Each mode reads the same emit and writes a different target shape.
 
 - ✓ **base** *(Stage 3)* — flat single-branch projection: one table per records kind,
   one row per record, every tracked property carrying its reconstituted value. No
-  genre trichotomy and no classification — every records kind yields exactly one
+  declared-table grammar and no classification — every records kind yields exactly one
   table; membership, junction, and fact tables are never emitted. Each table presents
   both encodings of every identity: an integer `<kind>_key` surrogate first (the
   record's `record_index`), the opaque `id` beside it, and after each reference
@@ -135,28 +142,33 @@ Each mode reads the same emit and writes a different target shape.
   Declarative, domain-agnostic config; CSV + DuckDB output. See
   [`architecture/dimensional.md`](architecture/dimensional.md). *Teaches: data
   warehousing, BI, star-schema design.*
-- ✓ **source** *(Stage 3)* — operational OLTP tables: every table classified into a
-  change-log, reference, transaction, or junction genre from `record_roles` ×
-  `temporal_class`, with no author declaration. A tracked kind (any
-  class-`tracked` property) exports as a wide CDC table composing the
-  row-state-events fold — the same derivation streaming replays, landed as a table
-  instead of a stream; an untracked kind exports as a reference (dimension role) or
-  transaction (fact role) table, FKs not joined; a kind whose role varies by
-  sub-type splits into one table per declared sub-type. `membership__<K>__<p>`
-  tables export as junction (interval) tables. Operational presentation defaults
-  (prefix-stripped names, `record_id` → `id`) apply throughout, overridable via
-  `exclude`/`rename`; a name collision fails fast. Source is the first mode that
-  *requires* a resolved wallclock anchor rather than falling back to raw integers.
-  `--next` / `--from` / `--to` compose the cross-mode incremental driver with
-  per-genre window membership (junction rows extract-on-change, `left_at`
-  horizon-masked); `change_delivery: snapshot` switches every change-log kind to
-  periodic full-table snapshots composing a new state-at derivation, for the
-  no-CDC source-system archetype. A source export over a corrupted emit surfaces
-  the corrupter's declared defects unchanged (test-guarded, never special-cased) —
-  the composite `history` table *is* a change log, so the "students build SCD-2
-  themselves" pattern lands naturally. CSV + DuckDB output. See
-  [`architecture/source.md`](architecture/source.md). *Teaches:
-  source-to-warehouse ETL, CDC.*
+- ✓ **source** *(Stage 3)* — the well-architected app database, declared table by
+  table: *things get tables; events get the log.* A source config declares every
+  output table through the declared-table grammar — author-verbatim name, source
+  populations (`kind`, optional `sub_types` subset, or a `membership` reference),
+  optional per-table `columns` / `rename`. A records declaration renders as a
+  `state` thing-table (one current row per record, soft-delete lifecycle:
+  `created_at` / `updated_at` / `active` / `deactivated_at`); a membership
+  declaration as a `junction` association table (`joined_at` / `left_at`, NULL
+  while open); the single `events` block as one polymorphic audit log at event
+  grain (`item_type`, `item_id`, `event`, `occurred_at`, `changes` — a
+  deterministic JSON changeset of `[old, new]` pairs composing the
+  row-state-events and membership-events folds), with `only` / `ignore`
+  audited-property filters per source. Sidecar facts gate declarations (unknown
+  kind / sub-type / membership fails fast); they never decide layout — omission
+  is the exclusion mechanism, and a config declaring no output is a load-time
+  error. Operational presentation defaults (prefix-stripped names,
+  `record_id` → `id`) apply throughout; a name collision fails fast. Source
+  *requires* a resolved wallclock anchor rather than falling back to raw
+  integers. `--next` / `--from` / `--to` compose the cross-mode incremental
+  driver with per-render window membership: per-window state snapshots at the
+  window horizon (state-at derivation, `updated_at` omitted — horizon honesty),
+  the event log appended by `event_sim_time`, junction rows extract-on-change
+  (`left_at` horizon-masked) — the no-CDC nightly-extract archetype whole. A
+  source export over a corrupted emit surfaces the corrupter's declared defects
+  unchanged (test-guarded, never special-cased). CSV + DuckDB output. See
+  [`architecture/source.md`](architecture/source.md). *Teaches: app-database
+  schemas, audit logs, source-to-warehouse ETL.*
 - ◐ **streaming** *(Stage 3)* — `fabulexa-forge stream` replays the base layer as an ordered
   event stream over two content axes. `state-changes` replays `history` + the records spine
   as a `c`/`u`/`d` CDC stream, one event per record state change; `membership-events` replays
@@ -191,17 +203,24 @@ Each mode reads the same emit and writes a different target shape.
   prefix-stripped names with a structural-column collision check.
 - ◐ **Output transforms** — `derived` columns ship (ordinal, value-map, anchored
   timestamp, SCD window); arbitrary per-table transforms beyond these are not.
-- ✓ **`init`** — generate a commented candidate dimensional config by reading the
-  sidecar (`record_roles` for warehouse role, kinds, discriminators, membership tables,
-  `history_tracked`). When the sidecar carries `sub_type_columns`, each per-sub-type
-  stub proposes only that sub-type's declared columns (structurally-inapplicable
-  columns pruned); absent the field, it falls back to the full union.
+- ✓ **`init`** — generate a commented candidate config from the sidecar; `--mode`
+  selects the target (`dimensional`, the default, or `source`). Dimensional reads
+  `record_roles` for warehouse role, kinds, discriminators, membership tables,
+  `history_tracked`; when the sidecar carries `sub_type_columns`, each
+  per-sub-type stub proposes only that sub-type's declared columns
+  (structurally-inapplicable columns pruned); absent the field, it falls back to
+  the full union. Source proposes one state table per records kind (combined,
+  with the per-sub-type split alternative in comments), one junction table per
+  membership table, an `events` stub covering every tracked kind
+  (lifecycle-only kinds and membership sources commented out), and the aligned
+  `keys` block — consuming no `record_roles`; the emitted config always parses
+  and plans clean.
 - ✓ **Incremental drip-feed** — window-at-a-time export, wired for the
   dimensional, source, and base modes: `--next` reads a cursor and emits the next window
   (or `--from`/`--to` runs a stateless range), one calendar period
   (`day`/`week`/`month`, anchor-resolved) or sim-time interval per window.
   Dimensional: append-only facts and SCD-2 version rows (`valid_to` supplied by a
-  view, never materialized); full-snapshot type-1 dims. Source: per-genre window
+  view, never materialized); full-snapshot type-1 dims. Source: per-render window
   membership (see the source mode above). Base: every table reconstructed at the
   window horizon — a full-table snapshot per kind per window. Any mode: a growing DuckDB warehouse
   (cursor atomic with data) or one CSV drop directory per window. See
@@ -221,6 +240,31 @@ Each mode reads the same emit and writes a different target shape.
   notice (source renders, base's flat projection, `init` proposals); `lookup` regated to
   `temporal_class: constant`; one mechanical carve-out for the sub-typed
   discriminator. See [`architecture/slice-only.md`](architecture/slice-only.md).
+- ✓ **Declared keys** *(post-Stage 4)* — opt-in `declare_keys` on the base and source
+  modes: each output table declares a record-identity primary key plus
+  `presentation_id` uniqueness exactly where the sidecar's `presentation_keys` block
+  claims it; DuckDB materializes real `PRIMARY KEY` / `UNIQUE` constraints (full and
+  windowed export alike), CSV records the undeliverable declaration with a
+  `keys-not-declarable-csv` notice, and dimensional `init` annotates its stubs with
+  the claimed natural key. Off by default — output byte-identical; claims are never
+  validated against data. See
+  [`architecture/declared-keys.md`](architecture/declared-keys.md).
+- ✓ **Key election** *(post-Stage 4)* — cross-mode `keys` config block electing, per
+  population (per sub-type for sub-typed kinds, per kind for flat), which of the emit's
+  identity surfaces — `record_id` / `record_index` / `presentation_id` — presents as
+  that population's exported identity, with every referencing column rendered in its
+  *target's* elected surface (re-derived at the export horizon through the record-index
+  / presentation-key join relations). Statically gated against the sidecar's
+  `presentation_keys` registry and the contract's union-safety algebra (one table, one
+  identity surface; edges pairwise union-safe); one render-time uniqueness guard
+  refuses silently-broken joins over corrupted identities. Source renders the elected
+  surface per declared table (the event-log `item_id` as a polymorphic edge); base
+  makes the id-space value surface elective beside its
+  always-on index keys; dimensional FKs inherit the destination dim's election
+  (`fk.target_key` per-edge override, dim-key agreement check); `init` proposes a
+  self-gated `keys` block. Absent the block, output keeps the `record_id` default.
+  Forge never mints — election selects among surfaces the emit carries. See
+  [`architecture/key-election.md`](architecture/key-election.md).
 - ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
   through a required caller-supplied sink; CLI renders one line per notice to stderr,
   off stdout. See [`architecture/notices.md`](architecture/notices.md).
@@ -303,8 +347,8 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   besides `dangle_reference`'s.
 - ✓ **Multi-table class targeting** — a five-way table selector (`table` / `tables` /
   `glob` / `category` / `record_kind`) with exact-or-pattern `columns` entries; one
-  operation, one pooled `amount`, over a whole class of tables — emit-portable genre
-  profiles.
+  operation, one pooled `amount`, over a whole class of tables — emit-portable
+  defect profiles.
 - ✓ **Biased placement** (`placement`, on the three sampling operations) — weight *which*
   units the draw hits: `entity_scoped` (seeded entity subset), `clustered_temporal`
   (sim-time windows), `correlated` (MNAR cross-column weighting); a seeded weighted draw
@@ -340,7 +384,8 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   Kafka group id and initial offset). Behind a `[mixer]` install
   extra composing `[kafka]`. See
   [`architecture/mixer-control-plane.md`](architecture/mixer-control-plane.md).
-- ✓ `fabulexa-forge init` *(Stage 2)* — propose a candidate dimensional config from the sidecar.
+- ✓ `fabulexa-forge init` *(Stage 2)* — propose a candidate config from the sidecar;
+  `--mode dimensional` (default) or `--mode source`.
 - ✓ `fabulexa-forge corrupt` *(Stage 4)* — `fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml>
   --out <out_dir>`: apply a corrupter config, writing the broken `run.duckdb` +
   regenerated `base.json` plus `defects.json` (always written; no suppress flag). See
