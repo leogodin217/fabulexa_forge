@@ -2,7 +2,7 @@
 # ============================================================
 # `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/source.yaml`
 #
-# Source mode DECLARES its own output shape (source-declared-tables): each
+# Source mode DECLARES its own output shape (docs/architecture/source.md): each
 # `tables[]` entry is a `state` table (current-state, one row per record)
 # over a `kind:`. This is a TWO-SIDED COUPLED MARKET (see dimensional.yaml),
 # so the declared tables reflect both sides and the match that joins them:

@@ -2,7 +2,7 @@
 # ============================================================
 # `fabulexa-forge export docs/examples/ride-sharing/bundle docs/examples/ride-sharing/source.yaml`
 #
-# Source mode DECLARES its own output shape (source-declared-tables): each
+# Source mode DECLARES its own output shape (docs/architecture/source.md): each
 # `tables[]` entry is a `state` table (current-state, one row per record)
 # over a `kind:`, or a `junction` table over a `membership:` reference.
 # Every domain-meaningful kind gets its own `state` table, verbatim-named:

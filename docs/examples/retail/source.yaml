@@ -2,7 +2,7 @@
 # ============================================================
 # `fabulexa-forge export docs/examples/retail/bundle docs/examples/retail/source.yaml`
 #
-# Source mode DECLARES its own output shape (source-declared-tables): each
+# Source mode DECLARES its own output shape (docs/architecture/source.md): each
 # `tables[]` entry is a `state` table (current-state, one row per record)
 # over a `kind:`, or a `junction` table over a `membership:` reference.
 # Retail's declarations:
@@ -17,8 +17,8 @@
 #            independent of how many state tables read from it.
 #   COMBINED entity (products + infrastructure) stays ONE `state` table:
 #            declaring bare `kind: entity` (no `sub_types:`) takes the
-#            combined STI shape, matching the single change-log table the
-#            old auto-genre classification produced.
+#            combined STI shape — one table spanning the full
+#            discriminator domain, `entity_type` retained as a column.
 #   PLAIN    journey_instance and tick_decision each get their own table;
 #            tick_decision is untracked (an immutable customer-action
 #            funnel event — a create-only spine, so its `state` table IS

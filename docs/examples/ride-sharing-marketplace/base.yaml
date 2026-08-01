@@ -5,7 +5,7 @@
 # Base mode reconstructs one flat table per records kind at the tape's end:
 # every tracked property (actor.status, actor.zone, entity.demand_pressure,
 # journey_instance.current_state, ...) carries its LATEST history value. No
-# genre split, no sub-type split, no FK joins — the faithful "current state of
+# table classification, no sub-type split, no FK joins — the faithful "current state of
 # every record" landing shape. Each table is the lifecycle prefix (`record_id`
 # presented as `id`, then `created_sim_time`, `active`, `deactivated_at`), then
 # `presentation_id` where the kind carries one, then one presentation-verbatim

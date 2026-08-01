@@ -51,11 +51,9 @@ distinction is not surfaced.
 | Mode · table | Primary key | Unique | Claim source |
 |---|---|---|---|
 | base · per-kind flat table | `<kind>_key` (post-`rename` name) | `id`; `presentation_id` iff claimed | Flat kind: `key` entry. Partitioned kind: the rollup's `unique_within` (absent rollup claim → no declaration) |
-| source · reference / transaction (unsplit) | `id` | `presentation_id` iff claimed | Same whole-table rule as base |
-| source · split unit (per sub-type) | `id` | `presentation_id` iff that sub-type's entry exists | `key_for(kind, sub_type)` — the entry's presence *is* the claim (declared partitions are total non-NULL) |
-| source · change-log (`change_delivery: changelog`) | none | none | Multiple rows per record; the only candidate composite includes a rendered wallclock `TIMESTAMP` whose microsecond precision can collide distinct nanosecond events — no honest key exists post-render |
-| source · change-log snapshot (`change_delivery: snapshot`) | `id` | `presentation_id` iff claimed | Same whole-table rule as base — one row per record at the horizon (tape's end in full export, the window horizon under incremental), so the changelog rationale does not apply. Tracked kinds are never sub-type split, so the per-sub-type rule never arises here |
+| source · state table | `id` (the identity column) | `presentation_id` iff claimed | `combined_claim` over the table's **resolved population set** — the registry algebra applied to exactly the populations the table combines. Degenerate cases: a flat kind's table reads the `key` entry; a single-population table its sub-type's `key_for` entry (the entry's presence *is* the claim — declared partitions are total non-NULL); a full-domain table's derivation equals the kind's rollup by the registry's consistency clause. A proper-subset table derives its own combination, so a subset that excludes a colliding sub-type keeps its claim; a derived no-claim combination declares nothing |
 | source · junction | none | none | The block speaks only to `presentation_id` on records kinds; membership rows carry no claimed key |
+| source · event log | none | none | Event grain — multiple rows per item, and `(item_type, item_id)` is a polymorphic dereference key spanning kinds, not a per-row key; the only candidate composite includes a rendered wallclock `TIMESTAMP` whose microsecond precision can collide distinct nanosecond events — no honest key exists post-render |
 
 A kind absent from the block (legally — its column never minted, or the block
 absent entirely) declares identity keys only. `presentation_id` uniqueness is
@@ -72,7 +70,7 @@ dropped — and side `UNIQUE` declarations follow the surviving columns: a
 non-`record_id` election, the standalone `presentation_id` once absorbed) is
 simply not declared. Election substitutes the column inside the resolution
 table above, never widens it — a table that declares no `PRIMARY KEY`
-(change-log, junction) still declares none, and populations without an
+(the event log, junction) still declares none, and populations without an
 election resolve exactly per the table. One posture is scoped to the elected
 identity column alone: as an *elected identity column*, `presentation_id` is
 PK-eligible — its non-NULL table-wide uniqueness is established by the
@@ -131,10 +129,8 @@ window persist, and DuckDB enforces them on every later insert).
 | Windowed table class | Write regime | Declared |
 |---|---|---|
 | base per-kind flat table | replace — full state-at snapshot per window | Same as full export |
-| source reference / split unit | replace — full current-state snapshot per window | Same as full export |
-| source change-log, `change_delivery: snapshot` | replace — state-at-horizon per window | Per the snapshot row (§ Key resolution) |
-| source transaction | append — `last_mutation_sim_time` lands a row in exactly one window, final | Same as full export |
-| source change-log (`changelog`), junction | append — multiple rows per record; a closed interval re-emits | none (as full export) |
+| source state table | replace — state-at-horizon snapshot per window | Same as full export |
+| source event log, junction | append — the log's event rows are final; a closed interval re-emits | none (as full export) |
 | dimensional (type-1, SCD-2, facts) | — | n/a — dimensional carries no `declare_keys` |
 
 A false claim under incremental surfaces as a rolled-back window: the constraint
@@ -171,9 +167,10 @@ is emitted — the claim is consumed as a key source
 ## Validation Rules
 
 `declare_keys` is an optional boolean on `BaseConfig` and `SourceConfig`; absent
-means off. It carries no cross-field rule — it composes with `slice_at`,
-`change_delivery`, `exclude`, `rename`, and `incremental` without restriction
-(key resolution runs after renames, on output names).
+means off. It carries no cross-field rule — it composes with `slice_at` and
+`exclude` / `rename` (base), the declared `tables` / `events` grammar (source),
+and `incremental` without restriction (key resolution runs after renames, on
+output names).
 
 | Rule | Checks | Error / notice |
 |---|---|---|
@@ -187,11 +184,12 @@ means off. It carries no cross-field rule — it composes with `slice_at`,
   range over non-NULL cells, and SQL `UNIQUE` has exactly those semantics; a
   primary key would reject the NULLs a partitioned kind's undeclared sub-types
   legitimately carry.
-- **Change-log tables declare nothing.** The genre is multiple-rows-per-record,
-  and the only candidate composite key includes a rendered wallclock `TIMESTAMP`
-  whose microsecond precision can collide distinct nanosecond events — declaring
-  a key that render collisions can falsify would be dishonest, so no key is
-  declared post-render.
+- **The event log declares nothing.** Event grain is multiple-rows-per-item,
+  `(item_type, item_id)` is a polymorphic dereference key rather than a per-row
+  key, and the only candidate composite key includes a rendered wallclock
+  `TIMESTAMP` whose microsecond precision can collide distinct nanosecond
+  events — declaring a key that render collisions can falsify would be
+  dishonest, so no key is declared post-render.
 - **Enforcement is the constraint the author opted into.** The contract makes
   data validation optional and forge declines it everywhere: no mode probes
   `presentation_id` values to confirm a claim. The declared-constraint path is
@@ -214,9 +212,10 @@ means off. It carries no cross-field rule — it composes with `slice_at`,
   themselves; only `init`'s advisory comments consult the block.
 - **Within-table keys only — no `FOREIGN KEY` constraints.** Referential
   declarations are a distinct capability with hazards of their own: the
-  incremental replace regime rewrites parent snapshots (reference tables) under
-  their children's persisted rows each window, and an `exclude`-restricted
-  extract legally drops FK targets. Deferred until demand appears (Principle #8).
+  incremental replace regime rewrites parent snapshots (state tables, base's
+  flat tables) under their children's persisted rows each window, and a
+  restricted extract (base `exclude`, source omission) legally drops FK
+  targets. Deferred until demand appears (Principle #8).
 - **No conformance check covers the block's semantic rules.** Conformance is the
   published C1–C14, reimplemented verbatim — forge does not invent a C15.
   Enforcement lives in the strict accessor instead, at the moment claims are

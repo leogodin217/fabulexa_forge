@@ -444,7 +444,7 @@ Every value-carrying records column declares a pair of temporal attributes
 The narrowing from the verbatim string to the typed `TemporalClass` literal
 (`"constant" | "tracked" | "slice_only"`) happens in exactly one place:
 `Sidecar.temporal_class(table_name, column_name)`. Every surface that needs a class
-(the source exporter's genre predicate — see [`source.md`](source.md)) resolves
+(the source exporter's audited-set resolution — see [`source.md`](source.md)) resolves
 through it, so any holder of a sidecar resolves a class without an open connection.
 The accessor raises `TemporalClassUnavailableError` for a column with no usable
 class — three cases, distinguished in the message: the column carries neither
@@ -685,8 +685,8 @@ What the reader deliberately does not own:
   reader validates claims against the sidecar's own registries, never against
   data.
 - **Class policy.** The reader *resolves* a column's class; what a consumer does with
-  it is that consumer's contract. The genre predicate that consults the class is the
-  source exporter's ([`source.md`](source.md)); a policy that refuses or omits a
+  it is that consumer's contract. The audited-set resolution that consults the class
+  is the source exporter's ([`source.md`](source.md)); a policy that refuses or omits a
   `slice_only` column from an export, or a point-in-time fold that leans on the
   genesis guarantee, belongs to the mode or derivation that owns the output shape.
 
@@ -696,7 +696,7 @@ What the reader deliberately does not own:
 |---|---|
 | [`conformance.md`](conformance.md) | The C1–C14 conformance contract that reads through this reader |
 | [`bundle.md`](bundle.md) | Consumer-side orientation to the format — the column temporal classes and the genesis guarantee the temporal accessors surface |
-| [`source.md`](source.md) | The genre predicate — the first consumer of `Sidecar.temporal_class` |
+| [`source.md`](source.md) | The audited-set resolution — the first consumer of `Sidecar.temporal_class` |
 | [`derivations.md`](derivations.md) | The interpretive layer that composes the faithful-read builders — the home for reads that reconstruct versions or resolve references |
 | [`dimensional.md`](dimensional.md) | The first reshaping consumer — uses `query_arrow`, the `history_tracked` flag, and the faithful-read builders |
 | [`corrupters.md`](corrupters.md) | The base-emit-writing consumer — materializes every table via `query_arrow`, reads column metadata and reference targets from the `Sidecar`, and reuses the single-branch guard |

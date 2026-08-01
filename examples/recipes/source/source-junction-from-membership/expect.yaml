@@ -1,5 +1,5 @@
 tables:
-  # The genre under test: junction, from membership__queue__waiters.
+  # The render under test: junction, from membership__queue__waiters.
   queue_waiters:
     columns: [queue_id, joined_at, left_at, priority, patient_kind, patient_id]
     row_count: 2

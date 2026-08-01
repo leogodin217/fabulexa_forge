@@ -4,7 +4,7 @@
 #
 # Base mode reconstructs one flat table per records kind at the tape's end:
 # every tracked property (patient.status, consultant.allocated, ...) carries
-# its LATEST history value. No genre split, no sub-type split, no FK joins —
+# its LATEST history value. No table classification, no sub-type split, no FK joins —
 # the faithful "current state of every record" landing shape. `record_id`
 # presents as `id`; every other column is presentation-verbatim unless renamed.
 #

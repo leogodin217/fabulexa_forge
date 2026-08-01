@@ -151,9 +151,9 @@ Both relations are fan-out-free on a conformant emit (`record_id` unique per
 kind per branch). The relations compose at the same horizon as the table's
 value reconstruction — end-of-tape, `slice_at: T`, or the incremental window's
 end — the modes' horizon-binding rule. A table with no value-reconstruction
-horizon composes the end-of-tape entry point: the full change-log (its span
+horizon composes the end-of-tape entry point: the event log (its span
 *is* the tape) and every dimensional table (the mode is horizonless; FK
-resolution is slice-state). For a windowed change-log the window's horizon and
+resolution is slice-state). For a windowed event log the window's horizon and
 end-of-tape are provably equal — a record's creation precedes its every event —
 so this is one rule, not two.
 
@@ -170,7 +170,7 @@ row count  =  COUNT(DISTINCT record_id)  =  COUNT(DISTINCT elected value)
 ```
 
 with the elected value non-NULL throughout. The check ranges over the join
-relation, never the output rows (a change-log legitimately repeats a record's
+relation, never the output rows (the event log legitimately repeats an item's
 identity once per event; a junction repeats its owner's per binding). The
 population set is, per composed relation, the populations the consumer renders
 *through that relation*: a table's identity column draws from the table's own
@@ -211,8 +211,8 @@ identity column never mixes (the uniformity gate) and a dimensional FK column
 is single-surface by construction. A source or base edge into a mixed-election
 kind decides each row's surface by the target row's population. The deciding
 value is always the **records-spine discriminator column** (`prop__<kind>_type`
-on the target's `records__` table), never a fold after-image: a change-log `d`
-row's after-image discriminator is `NULL`, but its identity join lands on the
+on the target's `records__` table), never a fold after-image: a fold `d` row's
+after-image discriminator is `NULL`, but its identity join lands on the
 records spine where the discriminator is populated. The design relies on an
 invariant the export policy leans on elsewhere: **a row's discriminator value
 is valid at every T** (the same fact that licenses the sub-typed-discriminator
@@ -222,25 +222,35 @@ is temporally honest at any horizon.
 
 ### Rendering: source
 
-The elected surface renders as the table's identity column in every genre, and
-every referencing column renders its target's election:
+Source's tables are author-declared ([`source.md`](source.md) § Populations and
+declared tables); the identity gates run per declared table over its resolved
+population set. The elected surface renders as each state table's identity
+column, and every referencing column renders its target's election:
 
 | Render site | No election / `record_id` | `record_index` | `presentation_id` |
 |---|---|---|---|
-| `id` column (reference / transaction / snapshot / split unit) | `record_id` verbatim | `BIGINT` index via the join | declared type via the join; the standalone `presentation_id` payload column is absorbed (it *is* `id` — emitting both would duplicate a column) |
-| Change-log `id` | fold's `record_id` | post-fold join on the fold's `record_id` at the table's horizon (end-of-tape for a full export) — populated on `d` rows too (identity is not an after-image) | same; the fold's after-image `presentation_id` column is absorbed; its `NULL`-on-`d` behavior is superseded by the identity join |
-| Reference-valued `prop__<p>` → `<p>` (any genre — reference, transaction, snapshot) | verbatim | target's index at the table's horizon | target's `presentation_id` at the table's horizon |
+| State-table `id` | `record_id` verbatim | `BIGINT` index via the join | declared type via the join; the standalone `presentation_id` payload column is absorbed (it *is* `id` — emitting both would duplicate a column) |
+| Reference-valued `prop__<p>` → `<p>` (state render) | verbatim | target's index at the table's horizon | target's `presentation_id` at the table's horizon |
 | Junction owner `<K>_id` | verbatim | owner kind's election, same joins | same |
 | Junction member `<f>_id` | verbatim | per the member row's kind's election (the `<f>_kind` column remains the disambiguator; cross-kind columns carry no uniqueness claim, per the contract's consumer rules) | same |
+| Event-log `item_id` | fold's `record_id` (owner's, for a membership source) | the audited population's election via the identity join — populated on `destroy` rows too (identity is not an after-image) | same |
+| Reference-valued entries inside event-log `changes` | verbatim after-image strings | target's index, translated before the diff's lag | target's `presentation_id`, same |
 
 Absorption is the `presentation_id` election's effect alone: under a
 `record_id` or `record_index` election the standalone `presentation_id`
 payload column ships verbatim.
 
-`rename` addressing follows source identity, so the id column's rename key is
-the elected surface's contract column name (`record_index`, `presentation_id`,
-or `record_id`); a rename keyed on a column the election absorbed or dropped
-is unsatisfiable and errors, the `SourceRenameSliceOnly` posture.
+The event log's `item_id` is a kind-targeted edge render, not a thing-table
+identity column: no identity-uniformity gate applies to it, no gate of any
+kind applies across item-types, and the edge union-safety gate runs per
+item-type over the union of every source addressing it — the full contract is
+[`source.md`](source.md) § The event log.
+
+`rename` addressing follows source identity, so a state table's identity-column
+rename key is the elected surface's contract column name (`record_index`,
+`presentation_id`, or `record_id`); a rename keyed on a surface the election
+absorbs or leaves unrendered is unsatisfiable and errors
+(`SourceColumnUnresolved`, the message naming the election).
 
 ### Rendering: base
 
@@ -398,9 +408,11 @@ degradation just removed.
 
 Mode-awareness falls out of using the mode's own gates: a base proposal
 degrades every partially-declared sub-typed kind to the kind-wide
-`record_index` scalar (base never splits); a source proposal keeps mixed
-per-sub-type maps for split (untracked-only) kinds and degrades unsplit
-tracked kinds; a dimensional proposal keeps mixed maps (its `init` proposes
+`record_index` scalar (base never splits); a source proposal runs the gates
+over its own proposed tables — one combined (full-domain) state table per
+kind, so a partially-declared sub-typed kind degrades the same way, with the
+per-population-tables escape left to the author's edit; a dimensional
+proposal keeps mixed maps (its `init` proposes
 discriminator-filtered dims) and aligns its dim proposals: each proposed dim's
 key column keeps its default name and sources `from:` the population's elected
 surface's contract column — the dim-key agreement check holds by
@@ -556,7 +568,7 @@ uniqueness guard) is the single data-touching rule, raising
 |---|---|
 | [`reader.md`](reader.md) | The strict `presentation_keys` accessor and the union-safety algebra every gate composes |
 | [`derivations.md`](derivations.md) | The record-index and presentation-key join relations elected values resolve through |
-| [`source.md`](source.md) · [`base.md`](base.md) | The kind-targeted modes — identity columns rendered from the election, per-genre / per-table render surfaces |
+| [`source.md`](source.md) · [`base.md`](base.md) | The kind-targeted modes — identity columns rendered from the election, per-declared-table / per-table render surfaces; source's event-log `item_id` edge render |
 | [`dimensional.md`](dimensional.md) | The FK pathfind the resolved surface rides; author-declared keys, `target_key`, `init` stubs |
 | [`declared-keys.md`](declared-keys.md) | The declared primary key follows the elected identity column |
 | [`incremental.md`](incremental.md) | The window driver; elected values are creation-constant merge keys |

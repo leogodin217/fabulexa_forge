@@ -3,10 +3,10 @@
 # `tables: [...]` with a `kind:` address declares the STATE render: one
 # CURRENT row per record of the kind's declared populations, unconditionally
 # — whatever history the kind's properties carry (source.md § The state
-# render). There is no separate change-log genre any more: even a kind with
-# a history-tracked property (`patient`, whose `prop__status` is SCD-2
-# tracked in this fixture) exports as a plain current-value snapshot, one
-# row per record, never one row per change.
+# render). There is no CDC render — that archetype is streaming's charter:
+# even a kind with a history-tracked property (`patient`, whose
+# `prop__status` is SCD-2 tracked in this fixture) exports as a plain
+# current-value snapshot, one row per record, never one row per change.
 #
 # Column shape (full, non-windowed export):
 #   id           — the elected identity surface (record_id by default)

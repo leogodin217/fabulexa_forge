@@ -17,11 +17,11 @@ Public API: [`exporters/base/engine.py`](../../src/fabulexa_forge/exporters/base
 
 The `mode: base` exporter renders the emit as a flat single-branch projection: one
 row per record, reconstituted to current state — or to an as-of-T state — with no
-genre distinction and no change log. Every output table is the state-at
+declared-table grammar and no audit log. Every output table is the state-at
 reconstruction of one records kind, materialized as a table. Where source hands the
-consumer the change log to merge (`MAX`-per-id, `LEAD`) and dimensional hands over a
-reconstructed star, base hands over the already-merged answer: the flat current-truth
-table an incremental-ETL author is building. It reads the same emit as the other
+consumer an app-database schema (thing tables plus an audit log) and dimensional
+hands over a reconstructed star, base hands over the already-merged answer: the flat
+current-truth table an incremental-ETL author is building. It reads the same emit as the other
 modes and composes two derivations-layer residents as its whole engine — state-at for
 every value, the record-index resident for every identity key — and introduces no
 point-in-time reconstruction of its own.
@@ -81,10 +81,10 @@ records__<target>─┴─▶  record-index resident ─▶ self + edge keys ─
 
 ### The flat projection
 
-Base classifies nothing and reshapes nothing: every records-category kind in the
+Base declares nothing and reshapes nothing: every records-category kind in the
 sidecar maps to exactly one flat output table, in sidecar table-declaration order.
-There is no genre trichotomy, no sub-type split, and no membership, junction,
-reference, or fact table. A kind's table opens with its self key, then carries the
+There is no declared-table grammar, no sub-type split, and no membership, junction,
+event-log, or fact table. A kind's table opens with its self key, then carries the
 `STATE_AT_COLUMNS` prefix
 (`record_id`, `created_sim_time`, `active`, `deactivated_at`), then `presentation_id`
 when the kind carries it, then one `prop__<p>` per surviving property in sidecar
@@ -110,8 +110,8 @@ resolves exactly one horizon per invocation:
 `slice_at: T` is **inclusive of T** — an event at exactly `sim_time == T` is reflected,
 so the exclusive state-at horizon is `T + 1`. `slice_at` and `incremental` are mutually
 exclusive (§ Validation Rules). A windowed spec's `write_mode` is `'replace'` (every
-table snapshot-delivered at the window horizon, exactly as source's `change_delivery:
-snapshot`); a full or sliced spec's is `'create'`.
+table snapshot-delivered at the window horizon, exactly as source's windowed
+`state` render); a full or sliced spec's is `'create'`.
 
 ### Lifecycle and mutation columns at a horizon
 
@@ -486,7 +486,7 @@ gating are owned by [`declared-keys.md`](declared-keys.md).
 | Document | Why |
 |---|---|
 | [`derivations.md`](derivations.md) | The state-at and record-index residents base composes as its whole engine — values from the first, key columns from the second |
-| [`source.md`](source.md) | Snapshot delivery (the same state-at composition), the presentation-name posture, and the `slice_only` omission shape base shares |
+| [`source.md`](source.md) | The windowed state snapshot (the same state-at composition), the presentation-name posture, and the `slice_only` omission shape base shares |
 | [`slice-only.md`](slice-only.md) · [`notices.md`](notices.md) | The reused omission policy and the channel its notices flow through |
 | [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — declared primary-key / uniqueness constraints on base's flat tables |
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — the elective id-space value surface beside the always-on index keys, and the gates base's plan runs |
