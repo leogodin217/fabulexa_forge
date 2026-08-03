@@ -20,10 +20,13 @@ import sys
 from pathlib import Path
 
 # The fixture builder lives under tests/ (an implicit namespace package). Put the
-# repo root on sys.path so `tests.recipes` resolves regardless of the cwd Make uses.
+# repo root on sys.path so `tests.recipes` resolves regardless of the cwd Make uses,
+# and tests/ itself so the fixture's bare `_support` imports resolve the same way
+# they do under pytest (which inserts tests/ as a rootdir).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(_REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT))
+for _p in (_REPO_ROOT, _REPO_ROOT / "tests"):
+    if str(_p) not in sys.path:
+        sys.path.insert(0, str(_p))
 
 from tests.recipes._recipe_fixture import build_recipe_emit  # noqa: E402
 
