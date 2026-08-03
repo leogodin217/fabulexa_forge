@@ -52,10 +52,39 @@
 # journey_instance.state_entry_time / complete / bound_roles / output_roles,
 # and consultant.queue appear nowhere here.
 #
+# Generator parameters are DROPPED, on purpose, and this is the note that keeps
+# them from being added back as "attributes we already have":
+#   dim_consultant.quality_rating   a per-clinician score, 20 distinct values
+#                                   over 30 named consultants. A simulator input;
+#                                   attaching one to a named individual would be
+#                                   a governance problem in a real trust.
+#   dim_appointment_book.no_show_rate  0.12 on 5 of 15 books. The most dangerous
+#                                   of the set: the actual DNA rate computable
+#                                   from fact_booking lands within about a point
+#                                   of it, so a consumer has every reason to
+#                                   report the parameter as a measurement.
+#   ...min_lead, ...window          empty on all 15 books.
+#   ...horizon, ...booking_discipline, ...on_overflow
+#                                   one distinct value across all 15 — a global
+#                                   engine setting materialized per row, carrying
+#                                   no analytic information.
+#   ...slot_interval                3 values, but raw sim-time ns (~17h, ~58h).
+#                                   An engine tick scale, not a clinic slot.
+# What survives on the book is book_type + main_specialty, which is the honest
+# extent of its real catalogue content.
+#
+# capacity is KEPT. It is a real job-plan attribute and the denominator
+# fact_consultant_allocation needs to express utilisation — the analysis that
+# fact exists for.
+#
 # Timestamps: no `rebase:` block, so the effective anchor is the sidecar's own
 # `runtime` (2023-01-01T00:00 UTC). `derived: {timestamp: ...}` columns render
 # wallclock TIMESTAMP through it; their `_ns` siblings keep the raw BIGINT
-# sim-time ns for exact arithmetic.
+# sim-time ns for exact arithmetic. The `_ns` columns are NOT redundant with the
+# timestamps: DuckDB TIMESTAMP is microsecond-precision, and 96% of
+# fact_pathway_state.entered_ns is not microsecond-aligned, so the rendered
+# timestamp truncates real precision. Two of them (entered_ns, allocated_ns) are
+# also declared grain keys.
 
 mode: dimensional
 
@@ -119,8 +148,10 @@ dimensional:
         - {name: entity_code, from: prop__entity_code}
         - {name: main_specialty, from: prop__main_specialty}
         - {name: grade, from: prop__grade}
+        # capacity is the denominator fact_consultant_allocation needs for
+        # utilisation/caseload — kept. quality_rating is DROPPED: see the
+        # generator-parameter note in the header.
         - {name: capacity, from: prop__capacity}
-        - {name: quality_rating, from: prop__quality_rating}
 
     # --- dims: the entity catalogue split per sub-type (sidecar sub_type_columns) ---
     - name: dim_ward
@@ -217,16 +248,12 @@ dimensional:
         kind: diary
       key: [book_id]
       columns:
+        # Every scheduler setting the diary carries is DROPPED — see the
+        # generator-parameter note in the header. What is left is the book's
+        # real catalogue identity, and it is the whole of it.
         - {name: book_id, from: record_id}
         - {name: book_type, from: prop__diary_type}
         - {name: main_specialty, from: prop__main_specialty}
-        - {name: slot_interval, from: prop__slot_interval}
-        - {name: horizon, from: prop__horizon}
-        - {name: min_lead, from: prop__min_lead}
-        - {name: booking_discipline, from: prop__booking_discipline}
-        - {name: on_overflow, from: prop__on_overflow}
-        - {name: no_show_rate, from: prop__no_show_rate}
-        - {name: window, from: prop__window}
 
     # --- fact: booking (records grain) — one row per appointment booking ---
     - name: fact_booking

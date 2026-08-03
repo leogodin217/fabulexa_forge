@@ -30,6 +30,7 @@ from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
 from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
+    build_event_tie_test_emit,
     build_events_test_emit,
     build_windowed_source_test_emit,
     windowed_test_windows,
@@ -473,3 +474,82 @@ class TestWindowed:
         }
         v001_update = _row_for(rows, "v001", "update")
         assert _changes(v001_update) == {"status": ["open", "closed"]}
+
+
+# ---------------------------------------------------------------------------
+# Before-image ordering: coincident update and destroy
+# ---------------------------------------------------------------------------
+
+
+class TestCoincidentUpdateAndDestroy:
+    """A record whose change and deactivation share one sim_time.
+
+    The fold emits two events at that instant (event_class 1 and 2). The
+    before-image LAG must break the tie on `event_class`; ordering on
+    `event_sim_time` alone leaves the pair orderable either way, and the
+    swap corrupts BOTH rows — the update reads the destroy's nulled
+    after-image, the destroy reads the pre-update value.
+    """
+
+    @staticmethod
+    def _log() -> SourceEventLogPlan:
+        return SourceEventLogPlan(
+            name="audit_log",
+            sources=(_ticket_source(("status",), sub_types=("bug",)),),
+            item_id_type="VARCHAR",
+        )
+
+    def test_lag_window_breaks_the_tie_on_event_class(self, tmp_path: Path) -> None:
+        """The compiled lag window orders by (event_sim_time, event_class).
+
+        Asserted on the SQL rather than only on results: a tie resolved by
+        chance would let a result-only test pass against the broken order.
+        """
+        emit_dir = build_event_tie_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(
+                emit.sidecar, fork_path, self._log(), anchor, None
+            )
+        assert 'ORDER BY "_valued"."event_sim_time", "_valued"."event_class"' in sql, (
+            "the before-image LAG must carry a total order within a record"
+        )
+
+    def test_before_images_chain_through_the_tied_pair(self, tmp_path: Path) -> None:
+        """create -> update -> destroy each carry the prior committed value."""
+        emit_dir = build_event_tie_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(
+                emit.sidecar, fork_path, self._log(), anchor, None
+            )
+            rows = _rows(emit, sql)
+
+        assert _changes(_row_for(rows, "t900", "create")) == {"status": [None, "open"]}
+        assert _changes(_row_for(rows, "t900", "update")) == {
+            "status": ["open", "closed"]
+        }
+        assert _changes(_row_for(rows, "t900", "destroy")) == {
+            "status": ["closed", None]
+        }
+
+    def test_the_update_and_destroy_do_share_an_instant(self, tmp_path: Path) -> None:
+        """Guards the fixture itself: without the tie the test above is vacuous."""
+        emit_dir = build_event_tie_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(
+                emit.sidecar, fork_path, self._log(), anchor, None
+            )
+            rows = _rows(emit, sql)
+
+        assert (
+            _row_for(rows, "t900", "update")["occurred_at"]
+            == _row_for(rows, "t900", "destroy")["occurred_at"]
+        )

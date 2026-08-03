@@ -10,7 +10,8 @@
 #   stream.yaml       -> fabulexa-forge stream ... --sink file   (CDC replay, dry run)
 #
 # Configs are committed to git; the datasets this writes are NOT — everything
-# lands under out/exports/<name>/<mode>/, which is gitignored (repo-root /out/).
+# lands under docs/examples/<name>/exports/<mode>/, which is gitignored
+# (docs/examples/*/exports/).
 #
 # Usage:
 #   tools/run_all_exports.sh [example ...]      # default: all examples
@@ -24,7 +25,6 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 FMT="${FMT:-duckdb}"          # duckdb | csv  — export + stream output format
-OUT_ROOT="out/exports"
 RUN_STREAM=1
 EXAMPLES=()
 
@@ -64,24 +64,26 @@ for ex in "${EXAMPLES[@]}"; do
   fi
   echo "======================== ${ex} ========================"
 
+  out_root="docs/examples/${ex}/exports"
+
   for mode in base source dimensional; do
     cfg="docs/examples/${ex}/${mode}.yaml"
     [[ -f "$cfg" ]] || { echo "---- ${mode}: (no config)"; continue; }
-    mkdir -p "${OUT_ROOT}/${ex}"
+    mkdir -p "$out_root"
     if [[ "$FMT" == "duckdb" ]]; then
       # DuckDB output is a single file at the out path — must not pre-exist as a dir.
-      out="${OUT_ROOT}/${ex}/${mode}.duckdb"
+      out="${out_root}/${mode}.duckdb"
       rm -rf "$out"
     else
       # CSV output is a directory of per-table files.
-      out="${OUT_ROOT}/${ex}/${mode}"
+      out="${out_root}/${mode}"
       rm -rf "$out"; mkdir -p "$out"
     fi
     run "$mode" uv run fabulexa-forge export "$bundle" "$cfg" "$out" --fmt "$FMT"
   done
 
   if [[ "$RUN_STREAM" -eq 1 && -f "docs/examples/${ex}/stream.yaml" ]]; then
-    out="${OUT_ROOT}/${ex}/stream"
+    out="${out_root}/stream"
     rm -rf "$out"; mkdir -p "$out"
     run "stream" uv run fabulexa-forge stream "$bundle" "docs/examples/${ex}/stream.yaml" \
         --fmt jsonl --sink file --out "$out" --fast
@@ -89,5 +91,5 @@ for ex in "${EXAMPLES[@]}"; do
 done
 
 echo "========================================================"
-echo "ran ${RAN} config(s), ${FAILURES} failure(s); output under ${OUT_ROOT}/"
+echo "ran ${RAN} config(s), ${FAILURES} failure(s); output under docs/examples/*/exports/"
 exit "$FAILURES"

@@ -366,7 +366,13 @@ def _build_records_arm_sql(
     `source.populations` through the records-spine discriminator; recodes
     op c/u/d -> create/update/destroy. Old values are a per-record LAG over
     the fold's own audited after-images (translated first where a change
-    edge applies); `changes` is the full object (`build_changes_object_expr`)
+    edge applies), ordered by `(event_sim_time, event_class)` — the fold's
+    own canonical order, and total within a record because the fold emits at
+    most one event per (record_id, event_sim_time, event_class). Ordering on
+    `event_sim_time` alone would be non-deterministic: a record whose update
+    and deactivation land on the same sim_time has two events at that
+    instant, and swapping them silently corrupts both before-images.
+    `changes` is the full object (`build_changes_object_expr`)
     for create/destroy rows, the differing-only object
     (`_build_diff_changes_expr`) for update rows — an update row touching no
     audited property is dropped. `item_id` joins the source's `item_surface`
@@ -435,7 +441,8 @@ def _build_records_arm_sql(
     lag_selects = [
         (
             f'LAG("_valued"."_val__{prop}") OVER (PARTITION BY "_valued"."record_id"'
-            f' ORDER BY "_valued"."event_sim_time") AS "_old__{prop}"'
+            f' ORDER BY "_valued"."event_sim_time", "_valued"."event_class")'
+            f' AS "_old__{prop}"'
         )
         for prop in source.audited_properties
     ]

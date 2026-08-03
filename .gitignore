@@ -33,3 +33,7 @@ docs/examples/*/bundle/
 # (finding: ship-real-producer-datasets-outside-git); the small text sidecar
 # and atlas are committed beside it
 docs/examples/*/published/run.duckdb
+
+# per-example export/stream output (tools/run_all_exports.sh) — generated
+# datasets, never committed
+docs/examples/*/exports/

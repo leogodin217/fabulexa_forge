@@ -51,3 +51,28 @@ binding and don't restate it.
 - When delegating to subagents, cap output: "Final response under 2000
   characters. Outcomes, not process." Honor anti-gravity — never delegate
   whole-file read-and-summarize.
+
+## Legibility
+
+Density is not the goal — being understood on the first read is. A response the
+user has to decode is a failed response, however correct it is.
+
+- **Nothing the user hasn't seen may be referenced.** Option letters, labels,
+  and shorthand you invented while reasoning — or in a prompt you sent to a
+  subagent — do not exist for the reader. Name the thing, not the label.
+- **Relay a consultant's conclusion in your own words.** Findings from
+  `/consult`, subagents, or another package's docs arrive in that source's
+  vocabulary. Translate before relaying; don't paste its terms of art.
+- **Gloss internal vocabulary on first use** — one clause, inline. Applies to
+  cross-package and cross-repo terms alike.
+- **Lead with the consequence, then the mechanism.** "Downstream can't join
+  these two records" before "the property declares no element schema."
+- **A recommendation is an imperative sentence**, not an entry in a ranked set.
+  One thing to do → say "Do X" once, and why. Real alternatives → describe each
+  in prose and say which you'd pick and what it costs.
+- **Lists are read in the order written.** Never present a ranking whose order
+  contradicts its own labels or numbering.
+- **Separate what you found, what you'd do, and what you need decided.** Label
+  them as such; don't interleave them under topical headers.
+- `path:line` citations belong at the end of the claim they support, and only
+  when the user would plausibly open them. They are not proof of work.

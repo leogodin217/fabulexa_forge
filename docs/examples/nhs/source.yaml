@@ -3,39 +3,80 @@
 # `fabulexa-forge export docs/examples/nhs/bundle docs/examples/nhs/source.yaml <out> --fmt duckdb`
 #
 # Source mode DECLARES its own output shape (docs/architecture/source.md): each
-# `tables[]` entry is a `state` table (current-state, one row per record)
-# over a `kind:`, or a `junction` table over a `membership:` reference.
-# History is opt-in via a single polymorphic `events:` log; the tracked-
-# property kinds below (patient, consultant, pathway_episode, diary,
-# booking) audit into it — an explicit declaration, the app's own audit
-# idiom.
+# `tables[]` entry is a `state` table (current-state, one row per record) over a
+# `kind:`, or a `junction` table over a `membership:` reference. History is opt-in
+# through the single polymorphic `events:` log — an explicit declaration, the
+# app's own audit idiom.
 #
-# `name:` is author-verbatim — the trust's own OLTP naming, independent of
-# the sidecar's engine-ontology `kind:`:
-#   actor -> patient, resource -> consultant, journey_instance -> pathway_episode,
-#   membership__resource__holders -> consultant_allocation.
-# `booking` and `diary` keep their sidecar names — both are genuine NHS
-# terms (e-RS booking, clinic diary). `entity` keeps its name too: a
-# genuinely polymorphic catalogue (wards / theatres / diagnostics /
-# procedures / medications behind `entity_type`) that source keeps as ONE
-# combined table by declaring `kind: entity` with no `sub_types:` — the
-# per-sub-type split into domain tables is the dimensional config's job.
+# `name:` is author-verbatim, and that is the whole point: the bundle's `kind:`
+# values are the simulator's ontology, not the trust's schema. The mapping this
+# config applies, taken from the atlas and `sub_type_columns`:
 #
-# The two simulation-MECHANISM kinds (tick_decision, queue) are simply never
-# declared — omission is source's own exclusion mechanism; a kind is
-# exported only through its own `tables[]` / `events.sources[]` entry.
+#   actor                   -> patient
+#   resource/consultant     -> consultant
+#   journey_instance        -> pathway_episode
+#   diary                   -> appointment_book
+#   entity/ward             -> ward
+#   entity/theatre          -> theatre
+#   entity/diagnostic       -> diagnostic_test
+#   entity/procedure        -> procedure
+#   entity/medication       -> medication
+#   membership holders      -> consultant_allocation
+#   the event log           -> audit_log
 #
-# Source is the first mode that REQUIRES a resolved wallclock anchor (the
-# event log's `occurred_at` is a real TIMESTAMP). No rebase block is given,
-# so the anchor falls back to the sidecar `runtime` (start 2023-01-01, UTC)
-# — the emit's own clock. Uncomment `rebase:` to override origin/zone.
+# `booking` keeps its sidecar name — it is a genuine NHS term (an e-RS booking),
+# not engine vocabulary that happens to read well.
 #
-# Columns are never enumerated below: absent `columns:` projects every
-# classified column, and a non-exempt `temporal_class: slice_only` column is
-# ALWAYS auto-omitted with a notice regardless of what this config says —
-# here booking.attended_at, journey_instance.state_entry_time / complete /
-# bound_roles / output_roles, and resource.queue. The export's `notice:`
-# lines are the authoritative list.
+#   SPLIT  entity -> five tables. `sub_type_columns` partitions the catalogue into
+#          ward / theatre / diagnostic / procedure / medication, and they are
+#          genuinely different things: a ward has beds and a cost per bed-day, a
+#          theatre has sessions per day, a procedure has an OPCS-4 code and a
+#          tariff. One combined table would be a mostly-NULL union no trust's
+#          database would ship — and it would be named after the simulator
+#          besides. This config previously kept it combined on the grounds that
+#          splitting was "the dimensional config's job"; the app database is
+#          exactly where these are five separate tables.
+#   KEPT   appointment_book stays ONE table across its three sub-types. Measured:
+#          cancer_clinic, operating_list and outpatient_clinic declare an
+#          IDENTICAL column set in `sub_type_columns`, so conforming them costs no
+#          NULL columns and `diary_type` carries the distinction — the same
+#          judgment dimensional.yaml makes for dim_appointment_book.
+#
+# The two simulation-MECHANISM kinds (tick_decision, queue) are never declared —
+# omission is source's own exclusion mechanism, so a kind is exported only through
+# its own `tables[]` / `events.sources[]` entry.
+#
+# COLUMNS: `sub_types:` narrows the ROWS a table draws but NOT its columns —
+# absent `columns:`, each catalogue table would still carry the whole entity
+# kind's column set, so `ward` would show a tariff and an OPCS-4 code at 100%
+# NULL. Each split table therefore enumerates `columns:` from its own
+# `sub_type_columns` partition, prefixed by the record lifecycle the source
+# archetype wants — created_sim_time, active, deactivated_at,
+# last_mutation_sim_time, which render as created_at, active, deactivated_at,
+# updated_at. Tables that are not split keep the full projection.
+#
+# A `temporal_class: slice_only` column is auto-omitted with a notice whatever
+# this config says — here booking.attended_at, pathway_episode's state_entry_time
+# / complete / bound_roles / output_roles, and consultant.queue. The export's
+# `notice:` lines are the authoritative list.
+#
+# Several columns come out largely empty, and each is faithful rather than a
+# config defect — worth knowing so they are not mistaken for the sub-type leakage
+# the split above fixes:
+#   - `deactivated_at` is set only where something retires. Measured: 87 of 15,060
+#     patients and 46,045 of 47,184 pathway episodes, and no consultant, catalogue
+#     item or appointment book at all.
+#   - `min_lead` and `window` are empty for all 15 appointment books, and
+#     `no_show_rate` is carried only by the 5 outpatient clinics. All three
+#     columns are declared for every diary sub-type; this run simply never assigns
+#     them. That is value-absent, not structurally inapplicable.
+#   - `consultant_allocation.on_preempted_rule` is empty for all 12,414
+#     allocations: preemption is a mechanism this run never exercises.
+#
+# Source is the first mode that REQUIRES a resolved wallclock anchor (the log's
+# `occurred_at` is a real TIMESTAMP). No rebase block is given, so the anchor
+# falls back to the sidecar `runtime` (start 2023-01-01, UTC) — the emit's own
+# clock. Uncomment `rebase:` to override origin/zone.
 
 mode: source
 
@@ -49,14 +90,45 @@ source:
       kind: journey_instance
     - name: booking
       kind: booking
-    - name: diary
+    - name: appointment_book
       kind: diary
-    - name: entity
+
+    # --- the reference catalogue, one table per sub-type ---
+    - name: ward
       kind: entity
+      sub_types: [ward]
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__entity_code, prop__name, prop__main_specialty, prop__ward_type,
+                prop__total_beds, prop__cost_per_bed_day, prop__site_code]
+    - name: theatre
+      kind: entity
+      sub_types: [theatre]
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__entity_code, prop__name, prop__main_specialty, prop__theatre_specialty,
+                prop__sessions_per_day]
+    - name: diagnostic_test
+      kind: entity
+      sub_types: [diagnostic]
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__entity_code, prop__name, prop__main_specialty, prop__test_type,
+                prop__turnaround_days, prop__cost]
+    - name: procedure
+      kind: entity
+      sub_types: [procedure]
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__entity_code, prop__name, prop__main_specialty, prop__specialty_group,
+                prop__hrg_code, prop__tariff, prop__complexity]
+    - name: medication
+      kind: entity
+      sub_types: [medication]
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__entity_code, prop__name, prop__main_specialty, prop__specialty_group,
+                prop__drug_class]
+
     - name: consultant_allocation
       membership: {kind: resource, property: holders}
   events:
-    name: history
+    name: audit_log
     sources:
       - kind: actor
       - kind: resource

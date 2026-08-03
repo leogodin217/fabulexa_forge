@@ -1,0 +1,85 @@
+# Continuous integration — lint, typecheck, and the test suite.
+#
+# What is NOT here, and why: the gates under `tools/qa/` all read a base-layer
+# bundle, and `docs/examples/*/bundle/` is gitignored (the binaries ship as
+# release artifacts, not in git). A CI checkout has no bundle, so wiring those
+# gates here would only wire a permanent skip. They stay local tools; run them
+# by hand against a real bundle before a release.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A new push to the same ref supersedes whatever is still running for it.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: lint + typecheck + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      # The version in .python-version; uv provisions it rather than relying on
+      # whatever the runner image ships.
+      - name: Install Python
+        run: uv python install
+
+      # --locked: fail if uv.lock does not satisfy pyproject.toml, rather than
+      # silently resolving something the lock never pinned.
+      - name: Sync the environment
+        run: uv sync --locked
+
+      - name: Check
+        run: make check
+
+  kafka:
+    name: kafka integration rig
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Sync the environment
+        run: uv sync --locked
+
+      # These tests skip when no broker answers on localhost:9092, so without
+      # this step the job would be green and vacuous.
+      - name: Start the broker
+        run: make kafka-up
+
+      # Assert the rig's own skip predicate is false before trusting a green
+      # run — compose reporting healthy is about the container, not about the
+      # host-published port the tests actually dial.
+      - name: Verify the broker is reachable from the host
+        run: |
+          uv run python -c "
+          from tests.integration.kafka._harness import bootstrap_servers, skip_reason
+          reason = skip_reason(bootstrap_servers())
+          raise SystemExit(reason or 0)
+          "
+
+      - name: Run the rig
+        run: make kafka-it
+
+      - name: Stop the broker
+        if: always()
+        run: make kafka-down
