@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import _sql_literal
+from fabulexa_forge._sql import _sql_literal, render_predicate_condition
 from fabulexa_forge.reader.errors import TableNotFoundError
 
 # The six fixed history columns, in the order the history table always carries.
@@ -34,86 +34,35 @@ _HISTORY_FIXED_COLS: tuple[str, ...] = (
 _WRITTEN_BY_PREFIX = "written_by_"
 
 
-_INTEGER_TYPES: frozenset[str] = frozenset(
-    {
-        "TINYINT",
-        "SMALLINT",
-        "INTEGER",
-        "BIGINT",
-        "HUGEINT",
-        "UTINYINT",
-        "USMALLINT",
-        "UINTEGER",
-        "UBIGINT",
-        "UHUGEINT",
-    }
-)
-_FLOAT_TYPES: frozenset[str] = frozenset({"DOUBLE", "FLOAT", "REAL"})
-
-
-def _render_typed_literal(value: str, sql_type: str) -> str:
-    """Render a scalar value as a SQL literal typed to sql_type.
-
-    Matches the behaviour of columns.render_typed_literal so filter predicates
-    built here are byte-identical to those the grain builders formerly authored:
-    VARCHAR → single-quoted; integer / float / BOOLEAN / DECIMAL → CAST form;
-    unknown type → VARCHAR fallback (the reader has no ExportError dependency).
-
-    Args:
-        value: The string representation of the value.
-        sql_type: The DuckDB type of the column.
-
-    Returns:
-        A SQL literal string.
-    """
-    escaped = value.replace("'", "''")
-    upper = sql_type.upper()
-
-    if upper == "VARCHAR" or upper.startswith("VARCHAR("):
-        return f"'{escaped}'"
-
-    if upper in _INTEGER_TYPES:
-        return f"CAST('{escaped}' AS {sql_type})"
-
-    if upper in _FLOAT_TYPES:
-        return f"CAST('{escaped}' AS {sql_type})"
-
-    if upper == "BOOLEAN":
-        return f"CAST('{escaped}' AS {sql_type})"
-
-    if upper.startswith("DECIMAL(") or upper.startswith("NUMERIC("):
-        return f"CAST('{escaped}' AS {sql_type})"
-
-    # Unknown type: fall back to VARCHAR literal (the reader never raises ExportError)
-    return f"'{escaped}'"
-
-
 def build_records_relation_sql(
     sidecar: "Sidecar",
     fork_path: str,
     kind: str,
-    discriminator_filter: Mapping[str, str],
+    discriminator_filter: Mapping[str, str | list[str]],
 ) -> str:
     """Build a faithful SELECT over records__<kind>.
 
-    The relation is filtered to fork_path and to the discriminator predicate
-    (each filter literal typed per the column's sidecar DuckDB type); its
-    columns are the kind's full sidecar column list, unprojected; it carries no
-    ORDER BY (the caller's representation step orders). No reshaping: the rows
-    are the records-table rows that match.
+    The relation is filtered to fork_path and to the predicate — each entry
+    rendered by `render_predicate_condition` against the column's sidecar
+    type, all entries AND-joined. Columns are the kind's full sidecar column
+    list, unprojected; no ORDER BY.
 
     Args:
         sidecar: The open emit's sidecar (schema and column-type source).
         fork_path: The sole branch, from require_single_branch.
         kind: The record kind; resolves to the records__<kind> table.
-        discriminator_filter: Column -> required value; empty mapping selects all.
+        discriminator_filter: Column -> required value or list of
+            alternatives; an empty mapping selects all rows.
 
     Returns:
-        A complete SELECT producing the kind's records, filtered, in no declared
-        order.
+        A complete SELECT producing the kind's matching records, in no
+        declared order.
 
     Raises:
         TableNotFoundError: records__<kind> is not in the sidecar.
+        ExportError: a predicate column's sidecar type is not one the shared
+            typed-literal renderer recognizes (§ Consolidating the literal
+            renderers).
     """
     table_name = f"records__{kind}"
     cols = sidecar.columns(table_name)  # raises TableNotFoundError if absent
@@ -128,8 +77,7 @@ def build_records_relation_sql(
     ]
     for col_name, value in discriminator_filter.items():
         sql_type = col_types.get(col_name, "VARCHAR")
-        literal = _render_typed_literal(value, sql_type)
-        conditions.append(f'"{col_name}" = {literal}')
+        conditions.append(render_predicate_condition(col_name, value, sql_type, None))
 
     where = " AND ".join(conditions)
     return f'SELECT {col_list} FROM "{table_name}" WHERE {where}'
@@ -140,28 +88,25 @@ def build_history_relation_sql(
     fork_path: str,
     kind: str,
     property_name: str,
-    value_filter: str | None,
+    value_filter: str | list[str] | None,
 ) -> str:
     """Build a faithful SELECT over history for one (kind, property[, value]).
 
     Filtered to fork_path, kind, property_name, and — when value_filter is not
-    None — value. The value comparison is a raw VARCHAR literal against
-    history.value (always VARCHAR per contract), not type-coerced per a source
-    column's DuckDB type the way the records / membership builders type their
-    filter literals. This matches today's history-point grain, whose value filter
-    is rendered as the raw literal `"value" = '<v>'` (grains.py) and was never
-    type-coerced — so the relocation is byte-identical, including for a value:
-    filter on a non-VARCHAR source property. Columns are the six fixed history
-    columns plus the written_by_* provenance columns when the sidecar lists them;
-    no ORDER BY.
+    None — value. The value comparison goes through `render_predicate_condition`
+    with `sql_type: VARCHAR` (`history.value` is VARCHAR by contract), yielding
+    the raw literals it renders today rather than a coercion against a source
+    property's type; a list renders `IN` over those same raw literals. Columns
+    are the six fixed history columns plus the written_by_* provenance columns
+    when the sidecar lists them; no ORDER BY.
 
     Args:
         sidecar: The open emit's sidecar.
         fork_path: The sole branch, from require_single_branch.
         kind: The record kind to filter history to.
         property_name: The property to filter history to.
-        value_filter: A required value to additionally filter on (matched as a raw
-            VARCHAR literal against history.value), or None for no value filter.
+        value_filter: A required value or non-empty list of alternatives
+            matched against history.value, or None for no value filter.
             Callers pass None explicitly.
 
     Returns:
@@ -194,7 +139,9 @@ def build_history_relation_sql(
         f'"property" = {_sql_literal(property_name)}',
     ]
     if value_filter is not None:
-        conditions.append(f'"value" = {_sql_literal(value_filter)}')
+        conditions.append(
+            render_predicate_condition("value", value_filter, "VARCHAR", None)
+        )
 
     where = " AND ".join(conditions)
     return f'SELECT {col_list} FROM "history" WHERE {where}'
@@ -205,28 +152,32 @@ def build_membership_relation_sql(
     fork_path: str,
     owner_kind: str,
     property_name: str,
-    where_predicate: Mapping[str, str],
+    where_predicate: Mapping[str, str | list[str]],
 ) -> str:
     """Build a faithful SELECT over the membership table for (owner_kind, property).
 
     Resolves membership__<owner_kind>__<property_name> from the sidecar, filtered
-    to fork_path and to the where predicate over elem__ columns (literals typed per
-    sidecar column type). Columns are the membership table's full sidecar column
-    list; no ORDER BY.
+    to fork_path and to the predicate over elem__ columns, each entry rendered by
+    `render_predicate_condition` against the column's sidecar type. Columns are
+    the membership table's full sidecar column list; no ORDER BY.
 
     Args:
         sidecar: The open emit's sidecar.
         fork_path: The sole branch, from require_single_branch.
-        owner_kind: The binding owner's record kind.
-        property_name: The collection-struct property naming the membership table.
-        where_predicate: elem__ column -> required value; empty mapping selects all.
+        owner_kind: The membership owner kind.
+        property_name: The membership property naming the table.
+        where_predicate: Element column -> required value or list of
+            alternatives; an empty mapping selects all rows.
 
     Returns:
-        A complete SELECT producing the membership rows, filtered, in no declared
-        order.
+        A complete SELECT producing the matching membership rows, in no
+        declared order.
 
     Raises:
-        TableNotFoundError: membership__<owner_kind>__<property_name> is absent.
+        TableNotFoundError: the membership table is not in the sidecar.
+        ExportError: a predicate column's sidecar type is not one the shared
+            typed-literal renderer recognizes (§ Consolidating the literal
+            renderers).
     """
     table_name = f"membership__{owner_kind}__{property_name}"
     cols = sidecar.columns(table_name)  # raises TableNotFoundError if absent
@@ -239,8 +190,7 @@ def build_membership_relation_sql(
     ]
     for col_name, value in where_predicate.items():
         sql_type = col_types.get(col_name, "VARCHAR")
-        literal = _render_typed_literal(value, sql_type)
-        conditions.append(f'"{col_name}" = {literal}')
+        conditions.append(render_predicate_condition(col_name, value, sql_type, None))
 
     where = " AND ".join(conditions)
     return f'SELECT {col_list} FROM "{table_name}" WHERE {where}'

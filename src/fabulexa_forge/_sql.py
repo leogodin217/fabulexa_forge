@@ -120,3 +120,52 @@ def render_typed_literal(value: str, sql_type: str) -> str:
         return f"'{escaped}'"
 
     return f"CAST('{escaped}' AS {sql_type})"
+
+
+def render_predicate_condition(
+    column: str,
+    value: str | list[str],
+    sql_type: str,
+    alias: str | None,
+) -> str:
+    """Render one config predicate entry as a SQL condition.
+
+    A `str` is a scalar and renders `= <literal>`; a `list` is a set of
+    alternatives and renders `IN (<literal>, ...)` preserving element order.
+    Discrimination is on `isinstance(value, str)` — never on `Sequence`, which
+    a `str` itself satisfies. Every element is typed by `render_typed_literal`
+    against `sql_type`, so a list is exactly the scalar rule applied
+    element-wise.
+
+    The one predicate-rendering authority: no module outside this one renders
+    `=` or `IN` over a config predicate value.
+
+    Args:
+        column: The predicate column name, quoted through `quote_identifier`.
+        value: The required value — a scalar, or a non-empty list of
+            alternatives. Emptiness is a parse-time failure and is not
+            re-checked here.
+        sql_type: The column's DuckDB type from the sidecar, used to type each
+            literal. `VARCHAR` yields the raw single-quoted literal, which is
+            how the `history.value` surface gets its untyped comparison — a
+            caller's type choice, not a mode of this function.
+        alias: A relation alias to qualify the column with, or None for an
+            unqualified condition. Only the point-in-time membership foreign
+            key needs one; every other caller passes None explicitly.
+
+    Returns:
+        One SQL condition, unparenthesized, suitable for AND-joining with
+        sibling conditions.
+
+    Raises:
+        ExportError: `sql_type` is not a recognized DuckDB type. Raised by
+            `render_typed_literal`, which never falls back to VARCHAR.
+    """
+    quoted_column = quote_identifier(column)
+    qualified = quoted_column if alias is None else f"{alias}.{quoted_column}"
+
+    if isinstance(value, str):
+        return f"{qualified} = {render_typed_literal(value, sql_type)}"
+
+    literals = ", ".join(render_typed_literal(element, sql_type) for element in value)
+    return f"{qualified} IN ({literals})"

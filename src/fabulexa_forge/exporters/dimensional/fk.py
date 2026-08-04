@@ -28,11 +28,11 @@ if TYPE_CHECKING:
     )
     from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar
 
+from fabulexa_forge._sql import render_predicate_condition
 from fabulexa_forge.derivations.reference_resolution import (
     _collect_reference_columns,
     _find_all_reference_paths,
     _path_hint_to_cols,
-    _render_typed_literal,
     build_membership_edge_sql,
     build_reference_path_sql,
     get_fork_path_from_sidecar,
@@ -699,8 +699,10 @@ def build_point_in_time_membership_fk_expr(
         _check_where_columns_exist(where, mem_table_name, sidecar, table_decl, col_decl)
         mem_col_types = {c.name: c.type for c in sidecar.columns(mem_table_name)}
         for where_col, value in where.items():
-            literal = _render_typed_literal(value, mem_col_types[where_col])
-            extra_where += f'   AND h."{where_col}" = {literal}\n'
+            condition = render_predicate_condition(
+                where_col, value, mem_col_types[where_col], "h"
+            )
+            extra_where += f"   AND {condition}\n"
 
     # INT64 max sentinel for open-interval containment
     _INT64_MAX = 9223372036854775807
