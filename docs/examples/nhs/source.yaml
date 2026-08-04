@@ -21,6 +21,8 @@
 #   entity/diagnostic       -> diagnostic_test
 #   entity/procedure        -> procedure
 #   entity/medication       -> medication
+#   tick_decision           -> clinical_event
+#   membership bindings     -> clinical_event_binding
 #   membership holders      -> consultant_allocation
 #   the event log           -> audit_log
 #
@@ -42,9 +44,30 @@
 #          NULL columns and `diary_type` carries the distinction — the same
 #          judgment dimensional.yaml makes for dim_appointment_book.
 #
-# The two simulation-MECHANISM kinds (tick_decision, queue) are never declared —
-# omission is source's own exclusion mechanism, so a kind is exported only through
-# its own `tables[]` / `events.sources[]` entry.
+# `queue` is the one simulation-mechanism kind and is never declared — omission
+# is source's own exclusion mechanism, so a kind is exported only through its own
+# `tables[]` / `events.sources[]` entry.
+#
+#   RESTORED tick_decision -> clinical_event (115,289 rows). An earlier revision
+#            omitted it as "engine bookkeeping" from the kind name alone;
+#            `record_roles` declares it a fact kind and its decision_type values
+#            ARE the clinical event stream (ed_arrival, triage, admission,
+#            surgery_performed, ...). One table, not per-process tables: source
+#            narrows rows by `sub_types:` only and tick_decision has none — and
+#            a single clinical-event spine is a shape a real EPR does ship (an
+#            ADT/event message table). The per-process partition is the
+#            dimensional config's star. clinical_event is untracked (an
+#            immutable create-only spine — every prop is temporal_class
+#            constant), so its `state` table IS the full record and it carries
+#            no `events:` source, exactly like retail's customer_action.
+#   JUNCTION clinical_event_binding — which catalogue item (ward, theatre,
+#            test, procedure, medication) a clinical event acted on, under
+#            role_name (dx_test / admitted_meds / spell_ward /
+#            surgery_procedure / surgery_theatre), pick-indexed where a
+#            decision binds several (up to three medications). The only place
+#            the base layer records the event -> catalogue linkage; its
+#            left_at is empty for all 23,505 rows because a binding is never
+#            released once made.
 #
 # COLUMNS: `sub_types:` narrows the ROWS a table draws but NOT its columns —
 # absent `columns:`, each catalogue table would still carry the whole entity
@@ -125,6 +148,10 @@ source:
                 prop__entity_code, prop__name, prop__main_specialty, prop__specialty_group,
                 prop__drug_class]
 
+    - name: clinical_event
+      kind: tick_decision
+    - name: clinical_event_binding
+      membership: {kind: tick_decision, property: bindings}
     - name: consultant_allocation
       membership: {kind: resource, property: holders}
   events:
