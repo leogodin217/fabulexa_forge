@@ -39,6 +39,7 @@ from fabulexa_forge.config.models import (
 from fabulexa_forge.errors import ElectionPresentationUndeclared, ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.fk import check_fk_slice_only
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.reader.emit import open_emit
 from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -1529,6 +1530,133 @@ def test_target_key_presentation_id_undeclared_population_raises(
                 notice_sink=discard_notice_sink,
                 base_relations=None,
             )
+
+
+# ---------------------------------------------------------------------------
+# List-filtered dim source population: FK closure over a subset
+# ---------------------------------------------------------------------------
+
+_THREE_SUBTYPE_ACTOR_COLUMNS = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+
+def build_three_subtype_actor_emit(tmp_path: Path) -> Path:
+    """actor split consultant/registrar/nurse; journey_instance references
+    one actor each. a1 consultant, a2 registrar, a3 nurse; j1 -> a1
+    (in-set), j2 -> a2 (in-set), j3 -> a3 (out-of-set for a
+    consultant+registrar list filter)."""
+    import duckdb
+
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__actor", _THREE_SUBTYPE_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("records__journey_instance", _JOURNEY_COLUMNS))
+    for record_id, index, actor_type in (
+        ("a1", 0, "consultant"),
+        ("a2", 1, "registrar"),
+        ("a3", 2, "nurse"),
+    ):
+        conn.execute(
+            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+            ["trunk", record_id, 10, True, 10, index, actor_type],
+        )
+    for record_id, index, actor_id in (
+        ("j1", 0, "a1"),
+        ("j2", 1, "a2"),
+        ("j3", 2, "a3"),
+    ):
+        conn.execute(
+            'INSERT INTO "records__journey_instance" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+            ["trunk", record_id, 20, True, 20, index, actor_id, index],
+        )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__actor", "records", _THREE_SUBTYPE_ACTOR_COLUMNS, 3, "actor"
+            ),
+            _table_spec(
+                "records__journey_instance",
+                "records",
+                _JOURNEY_COLUMNS,
+                3,
+                "journey_instance",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+        extra={
+            "enum_domains": {
+                "actor": {"actor_type": ["consultant", "registrar", "nurse"]}
+            },
+        },
+    )
+    return tmp_path
+
+
+def test_list_filtered_dim_fk_in_set_resolves_out_of_set_null(tmp_path: Path) -> None:
+    """A dim filtered to `["consultant", "registrar"]`, under an elected
+    non-record_id surface, restricts the FK's identity relation to that
+    subset: in-set owners (j1, j2) resolve, the out-of-set owner (j3, nurse)
+    resolves NULL — closure, no dangling reference."""
+    emit_dir = build_three_subtype_actor_emit(tmp_path)
+    config = DimensionalConfig(
+        tables=[
+            TableDecl(
+                name="dim_actor_clinical",
+                role="dim",
+                scd="type1",
+                key=["actor_index"],
+                source=SourceDecl(
+                    grain="records",
+                    kind="actor",
+                    filter={"prop__actor_type": ["consultant", "registrar"]},
+                ),
+                columns=[_from_col("actor_index", "record_index")],
+            ),
+            _fact(
+                "fact_journey",
+                "records",
+                "journey_instance",
+                [
+                    _from_col("record_id", "record_id"),
+                    _fk_col("actor_id", "dim_actor_clinical", "reference"),
+                ],
+            ),
+        ]
+    )
+    with open_emit(emit_dir) as emit:
+        election = resolve_election(
+            emit.sidecar,
+            {"actor": {"consultant": "record_index", "registrar": "record_index"}},
+        )
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+            election=election,
+        )
+        fact_spec = next(s for s in specs if s.table_name == "fact_journey")
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+
+    by_id = dict(zip(rows["record_id"], rows["actor_id"]))
+    assert by_id["j1"] == 0
+    assert by_id["j2"] == 1
+    assert by_id["j3"] is None
 
 
 # ---------------------------------------------------------------------------

@@ -47,6 +47,17 @@ phases:
           - "tests/exporters/dimensional/test_scd2_source_filter.py"
           - "tests/exporters/dimensional/test_export_dimensional.py"
   3:
-    status: pending
+    status: complete
     name: "Dim source population subset"
     demo: "docs/sprints/list-valued-predicates/demos/phase_3_dim_population_subset.py"
+    steps:
+      - kind: source
+        summary: "Widen resolve_dim_source_populations to select the discriminator conjunct's value set (scalar singleton or list elements in config order); per-element domain gate; strict-subset proper_subset; create the demo"
+        files:
+          - "src/fabulexa_forge/exporters/dimensional/populations.py"
+      - kind: author
+        summary: "List selection + per-element domain gate + full-domain no-restriction tests; subset inheritance / ambiguity at FK-render level; fact FK closure over a list-filtered dim"
+        files:
+          - "tests/exporters/dimensional/test_populations.py"
+          - "tests/exporters/dimensional/test_election_fk.py"
+          - "tests/exporters/dimensional/test_fk.py"
