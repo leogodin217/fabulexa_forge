@@ -25,8 +25,11 @@
 #            carries the discriminator instead.
 #   DIM->T1  consultant: init proposed SCD-2 because `allocated` (patients
 #            currently held) is history-tracked. That is operational STATE,
-#            not a slowly-changing attribute — dropped; the dim is Type-1
-#            reference data (capacity, grade, specialty).
+#            not a slowly-changing attribute — the dim is Type-1 reference
+#            data (capacity, grade, specialty), and the caseload timeline
+#            enters the star at its own grain as fact_consultant_caseload
+#            (the same judgment ride-sharing-marketplace's fact_loyalty_band
+#            cites as its precedent).
 #   DIM->T1  appointment_book: same logic — `next_opening` (the book's next
 #            free slot) is operational state, not a dim attribute; dropped,
 #            and the dim is Type-1.
@@ -36,13 +39,16 @@
 #            the bundle (~171k transitions) — so the kind enters the star as
 #            fact_pathway_state (below), not as a dimension.
 #
-# Facts — one per grain family, which is what the bundle really carries:
+# Facts — every grain family the bundle carries:
 #   fact_booking             (records grain)          appointment bookings
 #   fact_pathway_state       (history_interval grain) one row per state-occupancy
 #                            interval of a care episode — time-in-state analytics
 #                            (ED 4-hour breaches, 2WW waits, LoS by state)
 #   fact_consultant_allocation (membership grain)     one row per interval a
 #                            patient held a consultant — utilisation/caseload
+#   fact_consultant_caseload (history_interval grain) one row per constant-caseload
+#                            interval of a consultant — caseload-as-it-stood, read
+#                            via interval join from fact_consultant_allocation
 #
 # SCD-2 kept where a genuine attribute versions over time: dim_patient
 # (clinical flags: status, hai_status, referrals, fft, ...).
@@ -133,7 +139,8 @@ dimensional:
         - {name: valid_from, derived: {scd_window: valid_from}}
         - {name: valid_to, derived: {scd_window: valid_to}}
 
-    # --- dim: consultant — Type-1 (allocated = state, dropped; queue = slice_only) ---
+    # --- dim: consultant — Type-1 (allocated = state -> fact_consultant_caseload;
+    #     queue = slice_only) ---
     - name: dim_consultant
       role: dim
       scd: type1
@@ -319,3 +326,29 @@ dimensional:
         # NULL while the patient still holds the consultant at tape's end.
         - {name: released_at, derived: {timestamp: {source: left_sim_time}}}
         - {name: allocated_ns, from: joined_sim_time}
+
+    # --- fact: consultant caseload (history_interval grain) — one row per
+    #     constant-caseload interval of a consultant. `allocated` is operational
+    #     state (see the DIM->T1 note), so it enters the star at its own grain;
+    #     caseload-as-it-stood at any event is a three-predicate interval join:
+    #       JOIN fact_consultant_caseload c ON c.consultant_id = f.consultant_id
+    #                            AND f.allocated_ns >= c.entered_ns
+    #                            AND (c.exited_ns IS NULL OR f.allocated_ns < c.exited_ns)
+    - name: fact_consultant_caseload
+      role: fact
+      source:
+        grain: history_interval
+        kind: resource
+        property: allocated
+      key: [consultant_id, entered_ns]
+      columns:
+        - {name: consultant_id, from: record_id}
+        # history.value arrives VARCHAR: the history_interval grain's `from:
+        # value` does not cast back to the sidecar type (BIGINT here) — cast at
+        # query time.
+        - {name: caseload, from: value}
+        - {name: entered_at, derived: {timestamp: {source: sim_time}}}
+        # NULL on the consultant's current (open) caseload interval.
+        - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
+        - {name: entered_ns, from: sim_time}
+        - {name: exited_ns, from: lead_sim_time}
