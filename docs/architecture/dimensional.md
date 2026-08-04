@@ -149,6 +149,16 @@ Discriminator values come from `SELECT DISTINCT` or the config — never from
 `enum_domains`. Sub-type discriminators *are* in `enum_domains` and drive Type-1 dim
 splits.
 
+Every predicate value in the grammar — records `filter`, membership `where`,
+history-point `value`, a membership FK's `where`, and an elapsed correlation's
+`other_where` — is a scalar or a non-empty list of alternatives, compiling to `=`
+or `IN` under one rule ([`row-predicates.md`](row-predicates.md)). A list is what
+projects several discriminator values into one named table:
+`{prop__decision_type: [ed_arrival, triage, ed_assessment]}` yields the domain's
+own grouping — a clinical-process dataset spanning several decision types — where
+a scalar would force one table per value. Entries over distinct columns are
+AND-joined, so a list on one column composes freely with a scalar on another.
+
 ### Projectable columns per grain
 
 `from:` and `correlation:` read a column **directly off the grain source** — there is
@@ -273,14 +283,43 @@ An anchor record with no FK value on some rows — e.g. a `history` grain keyed 
 the FK. This is a documented limitation, never fabricated: a discharge history row
 cannot reach `journey_instance`, so its `spell_id` FK is `NULL`.
 
+**The destination dim's source population set.** An `fk` edge joins the
+destination dim's population-restricted identity relation, so the set exists to
+keep FK output closed over its target: an owner outside it resolves to `NULL`
+rather than to a key the dim does not contain. The set must therefore be exactly
+what the dim's `filter` selects — a wider set would let a fact render a key value
+its dim excludes, a dangling reference (Principle #4).
+
+For a dim on a sub-typed kind, the discriminator conjunct's **value set** — a
+scalar's singleton, or a list's elements in config order — selects exactly those
+populations; absent a discriminator conjunct, the set is the kind's whole
+population set. Selection is by value set where rendering is by form, so a
+one-element list renders `IN` and selects the same populations as the scalar, and
+the two reads of the conjunct never disagree on rows. Every element must be a
+declared sub-type of the kind's domain — the refusal is per element and names the
+offending one, because a population that cannot exist fails loudly rather than
+resolving to an empty set (Principle #7). A restriction spine is composed exactly
+when the selected set is a *strict* subset of the declared domain, so a list
+naming the full domain in any order composes none, identical to omitting the
+conjunct. Further conjuncts narrow rows *within* the selected set, never the set
+itself. On a kind that is not sub-typed, a discriminator-named conjunct is an
+ordinary column conjunct in either form.
+[`resolve_dim_source_populations`](../../src/fabulexa_forge/exporters/dimensional/populations.py)
+is the resolver; every consumer of the set — foreign-key surface inheritance, the
+edge union-safety gate, the identity-relation restriction spine, the uniqueness
+guard's dim-side leg, and the dim-key agreement check — ranges over any non-empty
+declared subset.
+
 **The FK identity surface.** Which identity surface the resolved FK column
 *carries* is the key-election surface's contract
 ([`key-election.md`](key-election.md) § Rendering: dimensional). In brief:
 `fk.target_key` accepts `record_id` / `record_index` / `presentation_id`;
-absent, the edge inherits the election of the destination dim's **source
-population set** (the dim's `source.kind`, narrowed by the `filter`'s
-discriminator conjunct), refusing at plan time when that set carries more than
-one distinct election (`ElectionInheritanceAmbiguous`). A non-`record_id`
+absent, the edge inherits the election of the destination dim's source
+population set, refusing at plan time when that set carries more than
+one distinct election (`ElectionInheritanceAmbiguous`; a subset spanning differing
+elections hits it exactly as a full multi-election domain does, and its remedies —
+filter to a single sub-type, unify the election, set an explicit `target_key` —
+all apply). A non-`record_id`
 surface resolves through the record-index or presentation-key join relation
 restricted to that population set — an out-of-set target renders `NULL` — and
 `presentation_id` resolution requires every admitted population
@@ -718,6 +757,10 @@ fields matching the grain (`property` required for history/membership, `filter` 
 on records, `where` only on membership, `value` only on `history_point`); membership
 FK fields (`where`/`member_field`/`property`) only on `via: membership` and `path`
 only on `via: reference`; a `lookup` `path` only with its `to` set; and non-empty collections.
+Predicate values carry their own well-formedness rule — non-empty, duplicate-free —
+on the value type rather than on the models
+([`row-predicates.md`](row-predicates.md) § Validation Rules), and `other_where`,
+the grammar's one required predicate mapping, must name at least one entry.
 
 The `SingleBranch` guard is the derivations layer's `require_single_branch`
 ([`derivations.md`](derivations.md)), invoked from `export_dimensional` before the
@@ -734,7 +777,8 @@ error message. The remaining business rules run against the sidecar in
 | `FkTargetIsDim` | Each `fk.to` names a declared `role: dim` table |
 | `ReferencePathResolvable` | A `via: reference` FK has exactly one `references` `prop__` chain from the anchor kind to the dim's source kind, or a `path` hint naming one (each entry a `references` column whose target is the next hop) |
 | `MembershipEdgeResolvable` | A `via: membership` FK resolves to exactly one `membership__<kind>__<property>` table (`property` names it when the kind owns several); every `where` column is a real `elem__` column; `member_field` is a reference field (inferred when unique); some rows' `member__<member_field>__kind` equals the dim's source kind |
-| `DiscriminatorValueObserved` | A records `filter` value is among the kind's observed `enum_domains` values for that property (a notice, not an error — a declared-but-unobserved value yields an empty table; emitted as a `discriminator-value-unobserved` [`Notice`](notices.md) through the caller's sink). A property absent from `enum_domains` (e.g. a modelling discriminator like `decision_type`) carries no observed-value set, so its filter is not checked |
+| `DiscriminatorValueObserved` | Each element of a records `filter` value is among the kind's observed `enum_domains` values for that property — evaluated per element, one `discriminator-value-unobserved` [`Notice`](notices.md) per unobserved element, in config element order. A notice, never an error: a declared-but-unobserved value is a legitimate way to write a config against a family of emits. The message states the table will be empty for a scalar and for a list no element of which was observed; for a partially-observed list, where the observed elements still contribute rows, it says only that the element contributes no rows. A property absent from `enum_domains` (e.g. a modelling discriminator like `decision_type`) carries no observed-value set, so its filter is not checked |
+| Dim-population domain gate | Every element of a sub-typed dim's discriminator conjunct is a declared sub-type of the kind's domain — per element, naming the offending one (§ Foreign keys). Distinct from `DiscriminatorValueObserved`: the domain is the declared sub-type registry rather than the observed-value set, and an out-of-domain population is an error, not a notice |
 | `SliceOnlyColumnRefused` | No config-referenced value-read resolves to a non-exempt `temporal_class: slice_only` column ([`slice-only.md`](slice-only.md)). The surface list is exhaustive over the grammar: `from`, `correlation`, records `filter` keys, `value_map.from`, `derived: timestamp` `source`, `derived: elapsed` `correlate_on` / `start_source` / `end_source` / `other_where` keys, `fk via: reference` resolved-path hop columns (the check runs over the hops the resolution actually traverses), `fk via: membership` `member_path` hop columns and `as_of`. (`lookup` reads are `LookupColumnSafety`'s. Membership element predicates and history-grain scoping are outside the population — those columns carry no class.) Always-on, full export included |
 | `OrdinalRefsSiblings` | `ordinal.partition_by` / `order_by` name sibling output columns of the same table |
 | `TimestampSourceAvailable` | Each `derived: timestamp`'s `source` is available on the table's grain: an instant-carrying structural column of the grain's table category (resolved through the reader's structural-temporal surface, not a private list), the grain's virtual interval-end column where the grain defines one, or a `prop__<name>` present on the grain's projectable surface (§ Timestamp source) |
@@ -905,6 +949,7 @@ What the dimensional exporter deliberately does not own:
 | [`derivations.md`](derivations.md) | The interpretive layer this mode composes — versioned-intervals and reference-resolution; the source of the shared `require_single_branch` guard |
 | [`playback.md`](playback.md) | The seam whose tier-2 `state` compiles this mode over a truncated tape via `base_relations`; the presentation-name posture's companion |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — `query_arrow`, the `history_tracked` flag, the faithful-read builders, the per-type decode contract |
+| [`row-predicates.md`](row-predicates.md) | The scalar-or-list grammar and rendering authority the mode's five predicate surfaces share |
 | [`conformance.md`](conformance.md) | The C1–C14 contract the input is trusted to satisfy |
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — FK `target_key` semantics, inheritance, the dim-key agreement check, `init`'s `keys` proposal |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The config grammar these semantics bind |

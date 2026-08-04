@@ -215,6 +215,19 @@ Each mode reads the same emit and writes a different target shape.
   (lifecycle-only kinds and membership sources commented out), and the aligned
   `keys` block — consuming no `record_roles`; the emitted config always parses
   and plans clean.
+- ✓ **List-valued row predicates** *(dimensional)* — every predicate value in the
+  dimensional grammar (`source.filter`, `source.where`, `source.value`, a membership
+  `fk.where`, `derived.elapsed.other_where`) is a scalar or a non-empty list of
+  alternatives, compiling to `=` or `IN` through one rendering authority. A list is
+  what groups several discriminator values into one named table — the domain's own
+  shape (an NHS "Emergency Care" dataset spanning several decision types) instead of
+  one table per value or one undifferentiated table. Equality and set membership
+  only; entries over distinct columns are AND-joined. On a sub-typed dim's
+  discriminator the value set also selects the dim's source population set, keeping
+  FK output closed over its target. See
+  [`architecture/row-predicates.md`](architecture/row-predicates.md).
+  *Teaches: authoring warehouse subject areas that don't line up 1:1 with source
+  event types.*
 - ✓ **Incremental drip-feed** — window-at-a-time export, wired for the
   dimensional, source, and base modes: `--next` reads a cursor and emits the next window
   (or `--from`/`--to` runs a stateless range), one calendar period

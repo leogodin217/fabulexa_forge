@@ -39,7 +39,7 @@ tests in [`tests/exporters/test_notices.py`](../../tests/exporters/test_notices.
 | `code` | Emitted by | Meaning |
 |---|---|---|
 | `slice-only-column-omitted` | source plan (per unit × column), base plan (per kind × column), `init` (per kind × column) | A `slice_only` column was dropped from an auto-projected surface (see [`slice-only.md`](slice-only.md)) |
-| `discriminator-value-unobserved` | dimensional validation | A records `filter` value is not among the kind's observed `enum_domains` values; the table will be empty |
+| `discriminator-value-unobserved` | dimensional validation (per unobserved predicate element) | A records `filter` element is not among the kind's observed `enum_domains` values. The message states the table will be empty when no element was observed; when a list's other elements were observed, it states only that this element contributes no rows (see [`dimensional.md`](dimensional.md) § Validation Rules) |
 | `reference-key-target-absent` | base plan (per kind × property) | A reference property's target kind has no records table in the emit, so no index-space key column is produced for that edge; the id-space column is unaffected (see [`base.md`](base.md) § Record-index key columns) |
 | `keys-not-declarable-csv` | base / source full-export entry path, each incremental driver invocation (once per invocation, before data) | `declare_keys` met a resolved `csv` format: the data is identical and the key declaration undeliverable — CSV carries no constraint surface (see [`declared-keys.md`](declared-keys.md)) |
 
