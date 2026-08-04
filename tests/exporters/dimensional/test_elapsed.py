@@ -82,6 +82,24 @@ def _make_col(unit: str = "minutes") -> ColumnDecl:
     )
 
 
+def _make_col_with_other_where(
+    other_where: dict[str, str | list[str]], unit: str = "minutes"
+) -> ColumnDecl:
+    """Build a wait_minutes ColumnDecl with an explicit other_where predicate."""
+    return ColumnDecl(
+        name="wait_minutes",
+        derived=DerivedSpec(
+            elapsed=ElapsedSpec(
+                correlate_on="prop__journey_instance",
+                other_where=other_where,
+                start_source="last_mutation_sim_time",
+                end_source="last_mutation_sim_time",
+                unit=unit,  # type: ignore[arg-type]
+            )
+        ),
+    )
+
+
 def _build_db(tmp_path: Path, rows: list[tuple]) -> Path:
     """Create a DuckDB with tick_decision rows and return its path.
 
@@ -182,6 +200,40 @@ def test_elapsed_duplicate_arrivals_picks_min(tmp_path: Path) -> None:
     assert len(result) == 1
     # (2_700_000_000_100 - 100) / 60_000_000_000 = 2_700_000_000_000 / 60B = 45.0
     assert result[0][0] == pytest.approx(45.0)
+
+
+# ---------------------------------------------------------------------------
+# List-valued other_where widens the counterpart set
+# ---------------------------------------------------------------------------
+
+
+def test_elapsed_list_other_where_widens_counterpart_set(tmp_path: Path) -> None:
+    """A list-valued other_where admits rows from either decision_type; earliest wins.
+
+    A triage row (sim_time=50) and an ed_arrival row (sim_time=200) are both
+    candidates once other_where lists both types; the earlier of the two
+    (triage, 50) is the one correlated — earliest-start-wins, unchanged.
+    """
+    rows = [
+        ("trunk", "r1", "j1", "ed_arrival", 200),
+        ("trunk", "r2", "j1", "triage", 50),
+        ("trunk", "r3", "j1", "ed_assessment", 2_700_000_000_050),
+    ]
+    db_path = _build_db(tmp_path, rows)
+    col = _make_col_with_other_where({"prop__decision_type": ["ed_arrival", "triage"]})
+    sidecar = _make_sidecar()
+    result = _run_elapsed_sql(db_path, col, sidecar)
+    assert len(result) == 1
+    # (2_700_000_000_050 - 50) / 60_000_000_000 = 45.0
+    assert result[0][0] == pytest.approx(45.0)
+
+
+def test_build_elapsed_expr_list_other_where_renders_in(tmp_path: Path) -> None:
+    """List-valued other_where renders an IN condition in the counterpart JOIN."""
+    col = _make_col_with_other_where({"prop__decision_type": ["ed_arrival", "triage"]})
+    sidecar = _make_sidecar()
+    _, joins = build_elapsed_expr(col, _TABLE, sidecar)
+    assert "IN ('ed_arrival', 'triage')" in joins[0]
 
 
 # ---------------------------------------------------------------------------

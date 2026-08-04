@@ -27,6 +27,7 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.validation import (
+    check_discriminator_value_observed,
     check_excluded_kind_not_sourced,
     check_excluded_table_not_sourced,
     check_key_columns_declared,
@@ -399,15 +400,116 @@ def test_discriminator_value_observed_emits_notice(tmp_path: Path) -> None:
             kind="entity",
             filter={"prop__entity_type": "nonexistent_type"},
         )
-        from fabulexa_forge.exporters.dimensional.validation import (
-            check_discriminator_value_observed,
-        )
-
         sink = RecordingNoticeSink()
         check_discriminator_value_observed(src, emit.sidecar, sink)
         assert len(sink.notices) == 1
         assert sink.notices[0].code == "discriminator-value-unobserved"
         assert "nonexistent_type" in sink.notices[0].message
+
+
+# ---------------------------------------------------------------------------
+# DiscriminatorValueObserved — the five-row notice matrix
+# (§ The unobserved-value notice). Each row uses a bare enum_domains-only
+# sidecar, since check_discriminator_value_observed reads only source.kind /
+# source.filter and sidecar.enum_domains() — no table data is consulted.
+# ---------------------------------------------------------------------------
+
+
+def _enum_domains_sidecar(
+    enum_domains: dict[str, dict[str, list[str]]] | None,
+) -> Sidecar:
+    """A bare sidecar carrying only (optionally) an enum_domains registry."""
+    return _bare_sidecar(tables=[], enum_domains=enum_domains)
+
+
+_OBSERVED_ENTITY_TYPES = {"entity": {"entity_type": ["consultant", "nurse"]}}
+
+
+def test_discriminator_scalar_observed_emits_no_notice() -> None:
+    """Row 1: a scalar filter value that is observed emits zero notices."""
+    sidecar = _enum_domains_sidecar(_OBSERVED_ENTITY_TYPES)
+    src = SourceDecl(
+        grain="records", kind="entity", filter={"prop__entity_type": "consultant"}
+    )
+    sink = RecordingNoticeSink()
+    check_discriminator_value_observed(src, sidecar, sink)
+    assert sink.notices == []
+
+
+def test_discriminator_scalar_unobserved_emits_one_notice_table_empty() -> None:
+    """Row 2: a scalar filter value that is unobserved emits one notice, the
+    'table will be empty' wording verbatim."""
+    sidecar = _enum_domains_sidecar(_OBSERVED_ENTITY_TYPES)
+    src = SourceDecl(
+        grain="records", kind="entity", filter={"prop__entity_type": "admin"}
+    )
+    sink = RecordingNoticeSink()
+    check_discriminator_value_observed(src, sidecar, sink)
+    assert len(sink.notices) == 1
+    assert sink.notices[0].code == "discriminator-value-unobserved"
+    assert sink.notices[0].message == (
+        "discriminator value 'admin' not observed for 'entity.prop__entity_type';"
+        " table will be empty"
+    )
+
+
+def test_discriminator_list_wholly_unobserved_emits_one_notice_per_element() -> None:
+    """Row 3: a list with no element observed emits one notice per element,
+    each keeping the 'table will be empty' wording — the table really is
+    empty."""
+    sidecar = _enum_domains_sidecar(_OBSERVED_ENTITY_TYPES)
+    src = SourceDecl(
+        grain="records",
+        kind="entity",
+        filter={"prop__entity_type": ["admin", "guest"]},
+    )
+    sink = RecordingNoticeSink()
+    check_discriminator_value_observed(src, sidecar, sink)
+    assert [n.code for n in sink.notices] == ["discriminator-value-unobserved"] * 2
+    assert [n.message for n in sink.notices] == [
+        "discriminator value 'admin' not observed for 'entity.prop__entity_type';"
+        " table will be empty",
+        "discriminator value 'guest' not observed for 'entity.prop__entity_type';"
+        " table will be empty",
+    ]
+
+
+def test_discriminator_list_partially_observed_emits_one_notice_per_unobserved() -> (
+    None
+):
+    """Row 4: a list with some elements observed emits one notice per
+    unobserved element only, in config element order, with the weaker
+    'it contributes no rows' wording — the table is not, in fact, empty."""
+    sidecar = _enum_domains_sidecar(_OBSERVED_ENTITY_TYPES)
+    src = SourceDecl(
+        grain="records",
+        kind="entity",
+        filter={"prop__entity_type": ["consultant", "admin", "nurse", "guest"]},
+    )
+    sink = RecordingNoticeSink()
+    check_discriminator_value_observed(src, sidecar, sink)
+    assert all(n.code == "discriminator-value-unobserved" for n in sink.notices)
+    assert [n.message for n in sink.notices] == [
+        "discriminator value 'admin' not observed for 'entity.prop__entity_type';"
+        " it contributes no rows",
+        "discriminator value 'guest' not observed for 'entity.prop__entity_type';"
+        " it contributes no rows",
+    ]
+
+
+@pytest.mark.parametrize("value", ["admin", ["admin", "guest"]], ids=["scalar", "list"])
+def test_discriminator_column_absent_from_registry_emits_no_notice(
+    value: str | list[str],
+) -> None:
+    """Row 5: the filtered column carries no observed-value set in
+    enum_domains -> zero notices, for either the scalar or list form."""
+    sidecar = _enum_domains_sidecar(None)
+    src = SourceDecl(
+        grain="records", kind="entity", filter={"prop__entity_type": value}
+    )
+    sink = RecordingNoticeSink()
+    check_discriminator_value_observed(src, sidecar, sink)
+    assert sink.notices == []
 
 
 # ---------------------------------------------------------------------------
@@ -647,13 +749,16 @@ def _elapsed_col(
     end_source: str = "last_mutation_sim_time",
     other_where: dict[str, str] | None = None,
 ) -> ColumnDecl:
-    """Build a wait_minutes ColumnDecl with elapsed spec, harmless defaults."""
+    """Build a wait_minutes ColumnDecl with elapsed spec, harmless defaults.
+
+    `other_where` defaults to a harmless non-empty entry — ElapsedSpec now
+    requires `other_where` non-empty (Breaking Changes)."""
     return ColumnDecl(
         name="wait",
         derived=DerivedSpec(
             elapsed=ElapsedSpec(
                 correlate_on=correlate_on,
-                other_where=other_where or {},
+                other_where=other_where or {"last_mutation_sim_time": "0"},
                 start_source=start_source,
                 end_source=end_source,
                 unit="minutes",

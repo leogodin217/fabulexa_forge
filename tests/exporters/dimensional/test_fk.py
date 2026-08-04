@@ -675,6 +675,49 @@ def test_membership_fk_where_selects_role(tmp_path: Path) -> None:
     assert actor_by_decision["d002"] == "a002"
 
 
+def test_membership_fk_where_list_selects_multiple_roles(tmp_path: Path) -> None:
+    """via:membership: a list-valued where narrows to any of the listed roles."""
+    emit_dir = build_reference_chain_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        config = DimensionalConfig(
+            tables=[
+                _dim("dim_actor", "actor", [_from_col("record_id", "record_id")]),
+                _fact(
+                    "fact_decision",
+                    "records",
+                    "decision",
+                    [
+                        _from_col("record_id", "record_id"),
+                        _fk_col(
+                            "actor_id",
+                            "dim_actor",
+                            "membership",
+                            where={"elem__role": ["consultant", "nurse"]},
+                        ),
+                    ],
+                ),
+            ]
+        )
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        fact_spec = next(s for s in specs if s.table_name == "fact_decision")
+        assert "IN (" in fact_spec.sql
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+
+    # d001 has consultant binding -> a001; d002 has nurse binding -> a002;
+    # d003 has no binding at all -> NULL. Both listed roles resolve.
+    actor_by_decision = dict(zip(rows["record_id"], rows["actor_id"]))
+    assert actor_by_decision["d001"] == "a001"
+    assert actor_by_decision["d002"] == "a002"
+    assert actor_by_decision["d003"] is None
+
+
 def test_membership_null_for_different_member_kind(tmp_path: Path) -> None:
     """Membership row whose member__actor__kind != target kind emits NULL."""
     emit_dir = build_reference_chain_emit(tmp_path)
@@ -2046,8 +2089,8 @@ def build_pit_membership_where_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _resolve_pit_owner_with_where(emit_dir: Path, role: str) -> object:
-    """Resolve d001's PIT owner_id FK filtered by elem__role == role."""
+def _resolve_pit_owner_with_where(emit_dir: Path, role: str | list[str]) -> object:
+    """Resolve d001's PIT owner_id FK filtered by elem__role against role."""
     with open_emit(emit_dir) as emit:
         config = DimensionalConfig(
             tables=[
@@ -2096,6 +2139,19 @@ def test_pit_membership_where_no_match_is_null(tmp_path: Path) -> None:
     """PIT membership FK `where` matching no hold resolves to NULL (not unfiltered)."""
     emit_dir = build_pit_membership_where_emit(tmp_path)
     assert _resolve_pit_owner_with_where(emit_dir, "nonexistent") is None
+
+
+def test_pit_membership_where_list_matches_any_listed_role(tmp_path: Path) -> None:
+    """PIT membership FK: a list-valued `where` matches any listed elem__ value.
+
+    ['secondary', 'nonexistent'] resolves identically to the scalar
+    'secondary' — only the real role has a matching hold, and the list widens
+    the candidate set rather than requiring every element to match.
+    """
+    emit_dir = build_pit_membership_where_emit(tmp_path)
+    assert (
+        _resolve_pit_owner_with_where(emit_dir, ["secondary", "nonexistent"]) == "o001"
+    )
 
 
 def test_pit_membership_where_presentation_id_projects_surrogate(

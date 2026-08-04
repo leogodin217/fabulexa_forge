@@ -408,7 +408,7 @@ def _find_member_field(
 
 
 def _check_where_columns_exist(
-    where: dict[str, str],
+    where: dict[str, str | list[str]],
     mem_table_name: str,
     sidecar: "Sidecar",
     table_decl: "TableDecl",

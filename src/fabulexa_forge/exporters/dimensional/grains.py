@@ -173,7 +173,9 @@ def build_records_sql(
     # Compose the reader relation: the format authors no base-table SQL.
     # discriminator_filter from source.filter; the reader relation handles
     # the fork_path predicate internally.
-    discriminator_filter: dict[str, str] = dict(source.filter) if source.filter else {}
+    discriminator_filter: dict[str, str | list[str]] = (
+        dict(source.filter) if source.filter else {}
+    )
     reader_sql = build_records_relation_sql(
         sidecar=sidecar,
         fork_path=fork_path,
@@ -433,7 +435,9 @@ def build_membership_sql(
 
     # Compose the reader relation first — this raises TableNotFoundError if the
     # table is absent, surfacing it before any other sidecar lookup.
-    where_predicate: dict[str, str] = dict(source.where) if source.where else {}
+    where_predicate: dict[str, str | list[str]] = (
+        dict(source.where) if source.where else {}
+    )
     reader_sql = build_membership_relation_sql(
         sidecar=sidecar,
         fork_path=fork_path,

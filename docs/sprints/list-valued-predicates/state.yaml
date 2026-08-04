@@ -2,7 +2,7 @@ sprint: list-valued-predicates
 parent_branch: keys_and_modes_qa
 baseline_sha: 1a2ee19204c07c92ea4be936ea12a7f68f25c093
 started: 2026-08-03
-current_phase: 2
+current_phase: 3
 capabilities:
   - dimensional: [list-valued-predicates, dim-population-subset, per-element-notice]
   - reader: [widened-relation-builders]
@@ -26,7 +26,7 @@ phases:
           - "tests/derivations/test_reference_resolution.py"
           - "tests/reader/test_relations.py"
   2:
-    status: pending
+    status: complete
     name: "Config envelope + dimensional plumbing + per-element notice"
     demo: "docs/sprints/list-valued-predicates/demos/phase_2_list_predicates_export.py"
     steps:

@@ -1185,3 +1185,119 @@ def test_varchar_filter_predicate_stays_quoted(tmp_path: Path) -> None:
         table = emit.query_arrow(specs[0].sql, ())
 
         assert table.num_rows == 1
+
+
+# ---------------------------------------------------------------------------
+# List-valued predicates (list-valued-predicates sprint, Phase 2)
+# ---------------------------------------------------------------------------
+
+
+def test_records_grain_filter_list_selects_multiple_subtypes(tmp_path: Path) -> None:
+    """records grain with a list filter renders IN and selects every listed value."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        config = DimensionalConfig(
+            tables=[
+                TableDecl(
+                    name="dim_staff",
+                    role="dim",
+                    scd="type1",
+                    source=SourceDecl(
+                        grain="records",
+                        kind="entity",
+                        filter={"prop__entity_type": ["consultant", "nurse"]},
+                    ),
+                    key=["id"],
+                    columns=[
+                        _from_col("id", "record_id"),
+                        _from_col("etype", "prop__entity_type"),
+                    ],
+                )
+            ]
+        )
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        assert "IN (" in specs[0].sql
+        table = emit.query_arrow(specs[0].sql, ())
+        assert table.num_rows == 2
+        assert set(table.column("etype").to_pylist()) == {"consultant", "nurse"}
+
+
+def test_membership_grain_where_list_predicate(tmp_path: Path) -> None:
+    """membership grain with a list where predicate selects every listed elem__ value."""
+    emit_dir = _build_typed_predicate_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        config = DimensionalConfig(
+            tables=[
+                TableDecl(
+                    name="fact_roles",
+                    role="fact",
+                    source=SourceDecl(
+                        grain="membership",
+                        kind="journey",
+                        property="roles",
+                        where={"elem__role_name": ["surgeon", "nurse"]},
+                    ),
+                    key=["record_id"],
+                    columns=[
+                        _from_col("record_id", "record_id"),
+                        _from_col("role_name", "elem__role_name"),
+                    ],
+                )
+            ]
+        )
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        assert "IN (" in specs[0].sql
+        table = emit.query_arrow(specs[0].sql, ())
+        assert table.num_rows == 2
+        assert set(table.column("role_name").to_pylist()) == {"surgeon", "nurse"}
+
+
+def test_history_point_grain_value_list_filter(tmp_path: Path) -> None:
+    """history_point grain with a list value filter selects every listed value."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        config = DimensionalConfig(
+            tables=[
+                TableDecl(
+                    name="fact_terminal_states",
+                    role="fact",
+                    source=SourceDecl(
+                        grain="history_point",
+                        kind="journey_instance",
+                        property="state",
+                        value=["waiting", "completed"],
+                    ),
+                    key=["record_id"],
+                    columns=[
+                        _from_col("record_id", "record_id"),
+                        _from_col("state_val", "value"),
+                    ],
+                )
+            ]
+        )
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        assert "IN (" in specs[0].sql
+        table = emit.query_arrow(specs[0].sql, ())
+        assert table.num_rows == 2
+        assert set(table.column("state_val").to_pylist()) == {"waiting", "completed"}

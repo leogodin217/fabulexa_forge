@@ -6,6 +6,8 @@ parses successfully — the invariants are tested, not the library.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from pydantic import ValidationError
 
@@ -20,9 +22,13 @@ from fabulexa_forge.config.models import (
     IncrementalConfig,
     RebaseConfig,
     SourceDecl,
+    StrictBaseModel,
     TableDecl,
     ValueMapSpec,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -418,6 +424,196 @@ def test_elapsed_spec_unknown_field_raises() -> None:
     """An unknown extra field on ElapsedSpec raises (extra='forbid')."""
     with pytest.raises(ValidationError):
         ElapsedSpec.model_validate({**_ELAPSED_PAYLOAD, "bogus": "x"})
+
+
+def test_elapsed_other_where_empty_mapping_rejected() -> None:
+    """`other_where: {}` is rejected at parse time.
+
+    The grammar's sole *required* predicate mapping: an empty mapping renders
+    no condition at all, a degenerate correlation the elapsed subquery cannot
+    express (Breaking Changes).
+    """
+    with pytest.raises(ValidationError, match="other_where must name at least one"):
+        ElapsedSpec.model_validate({**_ELAPSED_PAYLOAD, "other_where": {}})
+
+
+def test_elapsed_other_where_one_entry_accepted() -> None:
+    """`other_where` with exactly one predicate entry is accepted."""
+    spec = ElapsedSpec.model_validate(
+        {**_ELAPSED_PAYLOAD, "other_where": {"state": "ed_arrival"}}
+    )
+    assert spec.other_where == {"state": "ed_arrival"}
+
+
+# ---------------------------------------------------------------------------
+# PredicateValue — scalar-or-list well-formedness across the five surfaces
+#
+# `filter` / `where` / `value` (SourceDecl), `where` (FkClause), and
+# `other_where` (ElapsedSpec) all carry PredicateValue and therefore the one
+# shared rule (§ Config Models). Each parametrized case supplies a builder
+# that embeds a predicate value into a grain-appropriate payload for its
+# model, an accessor reading the parsed value back out, and the dotted field
+# path the malformed-value error must name.
+# ---------------------------------------------------------------------------
+
+
+def _source_filter_payload(value: object) -> dict[str, object]:
+    return {"grain": "records", "kind": "actor", "filter": {"prop__x": value}}
+
+
+def _source_where_payload(value: object) -> dict[str, object]:
+    return {
+        "grain": "membership",
+        "kind": "actor",
+        "property": "roles",
+        "where": {"elem__x": value},
+    }
+
+
+def _source_value_payload(value: object) -> dict[str, object]:
+    return {
+        "grain": "history_point",
+        "kind": "actor",
+        "property": "status",
+        "value": value,
+    }
+
+
+def _fk_where_payload(value: object) -> dict[str, object]:
+    return {"to": "dim_x", "via": "membership", "where": {"elem__x": value}}
+
+
+def _elapsed_other_where_payload(value: object) -> dict[str, object]:
+    return {**_ELAPSED_PAYLOAD, "other_where": {"state": value}}
+
+
+_PREDICATE_SURFACES = [
+    pytest.param(
+        SourceDecl,
+        _source_filter_payload,
+        lambda m: m.filter["prop__x"],
+        "filter.prop__x",
+        id="source_filter",
+    ),
+    pytest.param(
+        SourceDecl,
+        _source_where_payload,
+        lambda m: m.where["elem__x"],
+        "where.elem__x",
+        id="source_where",
+    ),
+    pytest.param(
+        SourceDecl,
+        _source_value_payload,
+        lambda m: m.value,
+        "value",
+        id="source_value",
+    ),
+    pytest.param(
+        FkClause,
+        _fk_where_payload,
+        lambda m: m.where["elem__x"],
+        "where.elem__x",
+        id="fk_where",
+    ),
+    pytest.param(
+        ElapsedSpec,
+        _elapsed_other_where_payload,
+        lambda m: m.other_where["state"],
+        "other_where.state",
+        id="elapsed_other_where",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "model_cls,payload_fn,accessor,field_path", _PREDICATE_SURFACES
+)
+def test_predicate_value_scalar_accepted_on_all_five_surfaces(
+    model_cls: type[StrictBaseModel],
+    payload_fn: "Callable[[object], dict[str, object]]",
+    accessor: "Callable[[object], object]",
+    field_path: str,
+) -> None:
+    """A scalar predicate value is accepted on every PredicateValue surface."""
+    model = model_cls.model_validate(payload_fn("a"))
+    assert accessor(model) == "a"
+
+
+@pytest.mark.parametrize(
+    "model_cls,payload_fn,accessor,field_path", _PREDICATE_SURFACES
+)
+def test_predicate_value_list_accepted_on_all_five_surfaces(
+    model_cls: type[StrictBaseModel],
+    payload_fn: "Callable[[object], dict[str, object]]",
+    accessor: "Callable[[object], object]",
+    field_path: str,
+) -> None:
+    """A non-empty, duplicate-free list predicate value is accepted on every
+    PredicateValue surface, preserving config element order."""
+    model = model_cls.model_validate(payload_fn(["a", "b", "c"]))
+    assert accessor(model) == ["a", "b", "c"]
+
+
+@pytest.mark.parametrize(
+    "model_cls,payload_fn,accessor,field_path", _PREDICATE_SURFACES
+)
+def test_predicate_value_empty_list_rejected_names_field_path(
+    model_cls: type[StrictBaseModel],
+    payload_fn: "Callable[[object], dict[str, object]]",
+    accessor: "Callable[[object], object]",
+    field_path: str,
+) -> None:
+    """An empty list is rejected at parse time, naming the offending field's
+    path (an empty predicate selects nothing; omit the entry or the table)."""
+    with pytest.raises(ValidationError, match=field_path):
+        model_cls.model_validate(payload_fn([]))
+
+
+@pytest.mark.parametrize(
+    "model_cls,payload_fn,accessor,field_path", _PREDICATE_SURFACES
+)
+def test_predicate_value_duplicate_element_rejected_names_element(
+    model_cls: type[StrictBaseModel],
+    payload_fn: "Callable[[object], dict[str, object]]",
+    accessor: "Callable[[object], object]",
+    field_path: str,
+) -> None:
+    """A list carrying a repeated element is rejected at parse time, naming
+    both the field's path and the repeated element rather than silently
+    deduplicating."""
+    with pytest.raises(ValidationError, match=rf"{field_path}[\s\S]*'a'"):
+        model_cls.model_validate(payload_fn(["a", "b", "a"]))
+
+
+def test_predicate_value_per_entry_rule_reports_offending_entry_empty() -> None:
+    """An empty-list entry among sibling valid entries in a `filter` mapping
+    reports only that entry's field path; the well-formed sibling is
+    unaffected — the rule rides the type and applies per dict entry."""
+    with pytest.raises(ValidationError, match=r"filter\.prop__bad") as exc_info:
+        SourceDecl.model_validate(
+            {
+                "grain": "records",
+                "kind": "actor",
+                "filter": {"prop__good": "x", "prop__bad": []},
+            }
+        )
+    assert "prop__good" not in str(exc_info.value)
+
+
+def test_predicate_value_per_entry_rule_reports_offending_entry_duplicate() -> None:
+    """A duplicate-bearing entry among sibling valid entries in a `where`
+    mapping reports only that entry's field path."""
+    with pytest.raises(ValidationError, match=r"where\.elem__bad") as exc_info:
+        SourceDecl.model_validate(
+            {
+                "grain": "membership",
+                "kind": "actor",
+                "property": "roles",
+                "where": {"elem__good": ["x", "y"], "elem__bad": ["p", "p"]},
+            }
+        )
+    assert "elem__good" not in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------

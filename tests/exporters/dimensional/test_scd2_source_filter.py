@@ -123,8 +123,52 @@ def _build_split_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _build_three_subtype_emit(tmp_path: Path) -> Path:
+    """Emit with three actor_type sub-types: patient (2 versions), staff (1),
+    visitor (1) — for list-filter semi-join restriction tests."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__actor", _ACTOR_COLUMNS))
+    actor_rows: list[tuple[object, ...]] = [
+        ("trunk", "a001", 5, True, None, 20, 0, "Alice", "discharged", "patient"),
+        ("trunk", "s001", 5, True, None, 15, 1, "Sam", "active", "staff"),
+        ("trunk", "v001", 5, True, None, 5, 2, "Vic", "browsing", "visitor"),
+    ]
+    for row in actor_rows:
+        conn.execute(
+            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            list(row),
+        )
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    history_rows: list[tuple[object, ...]] = [
+        ("trunk", "actor", "a001", "status", 10, "admitted"),
+        ("trunk", "actor", "a001", "status", 20, "discharged"),
+        ("trunk", "actor", "s001", "status", 15, "active"),
+        ("trunk", "actor", "v001", "status", 5, "browsing"),
+    ]
+    for hist_row in history_rows:
+        conn.execute('INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)', list(hist_row))
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__actor",
+                "records",
+                _ACTOR_COLUMNS,
+                len(actor_rows),
+                record_kind="actor",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, len(history_rows)),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
+    return tmp_path
+
+
 def _make_scd2_decl(
-    filter_: dict[str, str] | None,
+    filter_: dict[str, str | list[str]] | None,
     extra_columns: list[ColumnDecl] | None = None,
 ) -> TableDecl:
     """A dim_patient scd: type2 decl, optionally discriminator-filtered."""
@@ -217,6 +261,33 @@ def test_scd2_windowed_rows_honor_source_filter(tmp_path: Path) -> None:
     rows = result.to_pydict()
     assert result.num_rows == 2
     assert set(rows["id"]) == {"a001"}
+
+
+def test_scd2_full_export_honors_list_filter(tmp_path: Path) -> None:
+    """A list filter on the discriminator restricts to the listed sub-types.
+
+    The versioned-intervals semi-join composed from a two-value list matches
+    exactly patient + staff rows, excluding visitor.
+    """
+    emit_dir = _build_three_subtype_emit(tmp_path)
+    config = DimensionalConfig(
+        tables=[_make_scd2_decl({"prop__actor_type": ["patient", "staff"]})]
+    )
+    with open_emit(emit_dir) as emit:
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    # a001 (patient): 2 versions; s001 (staff): 1 version. v001 (visitor) absent.
+    assert result.num_rows == 3
+    assert set(rows["id"]) == {"a001", "s001"}
 
 
 # ---------------------------------------------------------------------------
