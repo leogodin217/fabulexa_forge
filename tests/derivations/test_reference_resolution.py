@@ -3,8 +3,10 @@
 Covers:
   - build_reference_path_sql: zero-hop, single-hop, multi-hop; terminal_projection
     'record_id' and 'prop__<p>'; fan-out-free; unresolvable → NULL; invalid terminal.
-  - build_membership_edge_sql: member_kind narrowing; where predicate; not fan-out-free;
-    missing table → ExportError; bad member_field → ExportError.
+  - build_membership_edge_sql: member_kind narrowing; scalar and list-valued where
+    predicate (list renders IN); not fan-out-free; missing table → ExportError;
+    bad member_field → ExportError; a where_predicate column whose sidecar type
+    passes a naive prefix test but fails the shared anchored grammar → ExportError.
   - Shared helpers (_collect_reference_columns, _find_all_reference_paths,
     _path_hint_to_cols): BFS, zero-hop, ambiguous path, path-hint validation.
 """
@@ -19,17 +21,18 @@ import pytest
 from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
+from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.derivations.reference_resolution import (
     REFERENCE_RESOLUTION_COLUMNS,
     _collect_reference_columns,
     _find_all_reference_paths,
     _path_hint_to_cols,
-    _render_typed_literal,
     build_membership_edge_sql,
     build_reference_path_sql,
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.sidecar import Sidecar
 
 # ---------------------------------------------------------------------------
 # Emit / sidecar builders
@@ -110,100 +113,6 @@ def _build_emit(
         schema_valid=schema_valid,
     )
     return tmp_path
-
-
-# ---------------------------------------------------------------------------
-# _render_typed_literal — the module-local mirror of
-# exporters.dimensional.columns.render_typed_literal
-# ---------------------------------------------------------------------------
-
-
-def test_render_typed_literal_varchar_single_quoted() -> None:
-    """VARCHAR (and VARCHAR(n)) values render single-quoted, no CAST."""
-    assert _render_typed_literal("lead", "VARCHAR") == "'lead'"
-    assert _render_typed_literal("lead", "VARCHAR(32)") == "'lead'"
-
-
-@pytest.mark.parametrize(
-    "sql_type",
-    [
-        "TINYINT",
-        "SMALLINT",
-        "INTEGER",
-        "BIGINT",
-        "HUGEINT",
-        "UTINYINT",
-        "USMALLINT",
-        "UINTEGER",
-        "UBIGINT",
-        "UHUGEINT",
-    ],
-)
-def test_render_typed_literal_integer_family_cast(sql_type: str) -> None:
-    """Every integer-family type renders as CAST('<value>' AS <type>)."""
-    assert _render_typed_literal("7", sql_type) == f"CAST('7' AS {sql_type})"
-
-
-@pytest.mark.parametrize("sql_type", ["DOUBLE", "FLOAT", "REAL"])
-def test_render_typed_literal_float_family_cast(sql_type: str) -> None:
-    """Every float-family type renders as CAST('<value>' AS <type>)."""
-    assert _render_typed_literal("1.5", sql_type) == f"CAST('1.5' AS {sql_type})"
-
-
-def test_render_typed_literal_boolean_cast() -> None:
-    """BOOLEAN renders as CAST('<value>' AS BOOLEAN)."""
-    assert _render_typed_literal("true", "BOOLEAN") == "CAST('true' AS BOOLEAN)"
-
-
-def test_render_typed_literal_decimal_numeric_cast() -> None:
-    """DECIMAL(...) / NUMERIC(...) prefixes render as CAST with the full type."""
-    assert (
-        _render_typed_literal("9.99", "DECIMAL(10,2)")
-        == "CAST('9.99' AS DECIMAL(10,2))"
-    )
-    assert (
-        _render_typed_literal("9.99", "NUMERIC(8,3)") == "CAST('9.99' AS NUMERIC(8,3))"
-    )
-
-
-def test_render_typed_literal_escapes_quotes_inside_cast() -> None:
-    """Single quotes in the value are '' escaped, in and out of a CAST."""
-    assert _render_typed_literal("o'brien", "VARCHAR") == "'o''brien'"
-    assert _render_typed_literal("o'1", "BIGINT") == "CAST('o''1' AS BIGINT)"
-
-
-def test_render_typed_literal_unrecognized_type_raises() -> None:
-    """An unrecognized SQL type raises ExportError — no silent VARCHAR fallback."""
-    with pytest.raises(ExportError, match="unrecognized SQL type"):
-        _render_typed_literal("x", "TIMESTAMP")
-
-
-def test_render_typed_literal_matches_dimensional_sibling() -> None:
-    """The local mirror stays byte-identical to the exporters.dimensional copy.
-
-    The module docstring pins the two implementations as byte-identical; a
-    divergence in either direction fails here.
-    """
-    from fabulexa_forge.exporters.dimensional.columns import render_typed_literal
-
-    cases = [
-        ("lead", "VARCHAR"),
-        ("lead", "VARCHAR(32)"),
-        ("7", "BIGINT"),
-        ("7", "UINTEGER"),
-        ("1.5", "DOUBLE"),
-        ("true", "BOOLEAN"),
-        ("9.99", "DECIMAL(10,2)"),
-        ("9.99", "NUMERIC(8,3)"),
-        ("o'brien", "VARCHAR"),
-    ]
-    for value, sql_type in cases:
-        assert _render_typed_literal(value, sql_type) == render_typed_literal(
-            value, sql_type
-        ), f"divergence for {(value, sql_type)}"
-
-    with pytest.raises(ExportError):
-        render_typed_literal("x", "TIMESTAMP")
 
 
 # ---------------------------------------------------------------------------
@@ -607,6 +516,77 @@ def test_build_membership_edge_sql_with_where_predicate(tmp_path: Path) -> None:
         )
         result = emit.query(sql, ())
     assert result == [("team1", "p001")]
+
+
+def test_build_membership_edge_sql_list_where_predicate_renders_in(
+    tmp_path: Path,
+) -> None:
+    """A list-valued where_predicate entry renders `IN` and admits every listed
+    alternative — while excluding a role not in the list."""
+    mem_rows: list[tuple[Any, ...]] = [
+        ("trunk", "team1", "lead", "p001", "person"),
+        ("trunk", "team1", "member", "p002", "person"),
+        ("trunk", "team1", "observer", "p003", "person"),
+    ]
+    owner_rows: list[tuple[Any, ...]] = [_prefix_values("team1", 0)]
+    emit_dir = _build_membership_emit(tmp_path, mem_rows, owner_rows)
+    with open_emit(emit_dir) as emit:
+        sql = build_membership_edge_sql(
+            sidecar=emit.sidecar,
+            fork_path="trunk",
+            owner_kind="team",
+            property_name="members",
+            member_field="person",
+            member_kind="person",
+            where_predicate={"elem__role": ["lead", "member"]},
+        )
+        result = emit.query(sql, ())
+    assert "\"elem__role\" IN ('lead', 'member')" in sql
+    assert set(result) == {("team1", "p001"), ("team1", "p002")}
+
+
+def test_build_membership_edge_sql_prefix_passing_type_refused() -> None:
+    """A where_predicate column whose sidecar type passes a naive `DECIMAL(`
+    prefix test but fails the shared anchored grammar is refused — the
+    consolidation onto the authority closes the prefix-match hole the deleted
+    fork carried. Building the SQL raises before any query executes, so this
+    is a bare Sidecar (no emit/DuckDB DDL, which the malicious type string
+    would break anyway)."""
+    mem_cols: list[dict[str, object]] = [
+        _identity_column("fork_path", "VARCHAR"),
+        _identity_column("record_id", "VARCHAR"),
+        {
+            "name": "elem__weird",
+            "type": "DECIMAL(10,2)) FROM read_csv('/etc/passwd') --",
+        },
+        {"name": "member__person__id", "type": "VARCHAR"},
+        {"name": "member__person__kind", "type": "VARCHAR"},
+    ]
+    sidecar = Sidecar.from_raw(
+        {
+            "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+            "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
+            "tables": [
+                _table_spec(
+                    "membership__team__members",
+                    "membership",
+                    mem_cols,
+                    0,
+                    property_name="members",
+                ),
+            ],
+        }
+    )
+    with pytest.raises(ExportError, match="unrecognized SQL type"):
+        build_membership_edge_sql(
+            sidecar=sidecar,
+            fork_path="trunk",
+            owner_kind="team",
+            property_name="members",
+            member_field="person",
+            member_kind="person",
+            where_predicate={"elem__weird": "1"},
+        )
 
 
 def test_build_membership_edge_sql_bigint_where_predicate_cast(tmp_path: Path) -> None:
