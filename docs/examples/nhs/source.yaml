@@ -68,6 +68,20 @@
 #            the base layer records the event -> catalogue linkage; its
 #            left_at is empty for all 23,505 rows because a binding is never
 #            released once made.
+#   GRAIN    patient keeps the person, not the episode (QA F9). The actor
+#            kind carries per-episode state and pre-assigned routing flags
+#            as single scalars on the patient row, and a one-row-per-patient
+#            table asked to hold per-episode facts asserts contradictions:
+#            procedure_code on all 15,060 patients while
+#            surgical_indicated='no' on 13,290; 1,575 recorded FFT outcomes
+#            under fft_invited='no'; an admission_disposition on every
+#            patient while only 1,951 were ever admitted. `columns:`
+#            therefore narrows patient to identity, demographics and the
+#            constant clinical attributes the atlas names. Nothing is lost:
+#            every tracked change (status, hai_status, fft_outcome, ...) is
+#            in audit_log — actor is an events source, and the app's own
+#            audit idiom is exactly where an EPR keeps state history — and
+#            the clinical narrative is clinical_event / pathway_episode.
 #
 # COLUMNS: `sub_types:` narrows the ROWS a table draws but NOT its columns —
 # absent `columns:`, each catalogue table would still carry the whole entity
@@ -76,7 +90,8 @@
 # `sub_type_columns` partition, prefixed by the record lifecycle the source
 # archetype wants — created_sim_time, active, deactivated_at,
 # last_mutation_sim_time, which render as created_at, active, deactivated_at,
-# updated_at. Tables that are not split keep the full projection.
+# updated_at. Tables that are not split keep the full projection — except
+# patient, which enumerates for grain reasons (the GRAIN note above).
 #
 # A `temporal_class: slice_only` column is auto-omitted with a notice whatever
 # this config says — here booking.attended_at, pathway_episode's state_entry_time
@@ -107,6 +122,11 @@ source:
   tables:
     - name: patient
       kind: actor
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__forename, prop__surname, prop__full_name, prop__birth_date,
+                prop__gender_code, prop__ethnic_category, prop__imd_decile,
+                prop__gp_practice_code, prop__primary_condition, prop__comorbidity_count,
+                prop__frailty_band]
     - name: consultant
       kind: resource
     - name: pathway_episode
