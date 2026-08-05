@@ -82,6 +82,23 @@
 #            in audit_log — actor is an events source, and the app's own
 #            audit idiom is exactly where an EPR keeps state history — and
 #            the clinical narrative is clinical_event / pathway_episode.
+#   PARAM    quality_rating is DROPPED from consultant (QA F5's open half).
+#            The governance argument is the one that transfers to an
+#            operational dump: a per-named-clinician quality score (20
+#            distinct values over 30 named consultants) is not a column a
+#            trust's PAS carries beside grade and capacity — appraisal data
+#            is governed elsewhere — and it is a generator input besides.
+#            The appointment_book scheduler columns are KEPT, decided the
+#            other way: per-clinic booking rules (horizon, discipline,
+#            on_overflow, an expected no_show_rate for overbooking
+#            planning) are exactly what a scheduling system stores on a
+#            clinic template, and in a config-shaped operational table
+#            "planning parameter" is the honest reading. The dimensional
+#            star deleted them because a consumer would report the
+#            parameter as a measurement; that argument does not transfer
+#            here. slot_interval stays too — its values are raw sim-time
+#            ns (an engine scale, ~17h/~58h), faithful bundle content, so
+#            nobody should read them as clinic slot lengths.
 #
 # COLUMNS: `sub_types:` narrows the ROWS a table draws but NOT its columns —
 # absent `columns:`, each catalogue table would still carry the whole entity
@@ -91,7 +108,8 @@
 # archetype wants — created_sim_time, active, deactivated_at,
 # last_mutation_sim_time, which render as created_at, active, deactivated_at,
 # updated_at. Tables that are not split keep the full projection — except
-# patient, which enumerates for grain reasons (the GRAIN note above).
+# patient (grain, the GRAIN note) and consultant (governance, the PARAM
+# note), which enumerate.
 #
 # A `temporal_class: slice_only` column is auto-omitted with a notice whatever
 # this config says — here booking.attended_at, pathway_episode's state_entry_time
@@ -129,6 +147,9 @@ source:
                 prop__frailty_band]
     - name: consultant
       kind: resource
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__capacity, prop__allocated, prop__retiring, prop__entity_code,
+                prop__main_specialty, prop__grade]
     - name: pathway_episode
       kind: journey_instance
     - name: booking
