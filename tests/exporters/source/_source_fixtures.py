@@ -1610,6 +1610,105 @@ def build_event_tie_test_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def build_event_log_suppressed_update_test_emit(tmp_path: Path) -> Path:
+    """Build an emit whose sole audited property is once reasserted at its
+    current value — a genuine no-op history write.
+
+    The row-state-events fold fires a 'u' event at every distinct history
+    sim_time of an audited property, whether or not the value actually
+    changed. When it does not, the event-log render's diff drops the whole
+    row (empty `changes`), and `id`'s ROW_NUMBER — assigned beneath the
+    window predicate and the arm's own suppression filter — must stay dense
+    across the drop: the surviving rows' `id` values are still consecutive
+    integers, with no gap left where the suppressed row would have sat.
+
+    - records__ticket: t600 (bug), tracked status. created@100ms status=open
+        priority=1; status changes to 'closed'@150ms (a real change, kept);
+        status reasserted 'closed'@180ms (no-op — old and new both
+        'closed', dropped); deactivated@250ms. t601 (bug): created@120ms
+        status=pending priority=9; never changes; stays active.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__ticket", _TICKET_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__ticket" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "t600",
+            100 * _MS,
+            False,
+            250 * _MS,
+            180 * _MS,
+            0,
+            "bug",
+            "closed",
+            1,
+            None,
+            None,
+        ],
+    )
+    conn.execute(
+        'INSERT INTO "records__ticket" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "t601",
+            120 * _MS,
+            True,
+            120 * _MS,
+            1,
+            "bug",
+            "pending",
+            9,
+            None,
+            None,
+        ],
+    )
+
+    for record_id, property_name, sim_time, value in (
+        ("t600", "status", 100 * _MS, "open"),
+        ("t600", "priority", 100 * _MS, "1"),
+        ("t600", "status", 150 * _MS, "closed"),
+        ("t600", "status", 180 * _MS, "closed"),
+        ("t601", "status", 120 * _MS, "pending"),
+        ("t601", "priority", 120 * _MS, "9"),
+    ):
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "ticket", record_id, property_name, sim_time, value],
+        )
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__ticket", "records", _TICKET_COLUMNS, 2, record_kind="ticket"
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 6),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra={
+            "enum_domains": {"ticket": {"ticket_type": ["bug", "feature"]}},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
 def build_split_actor_presentation_id_emit(
     tmp_path: Path, *, duplicate_within_consultant: bool = False
 ) -> Path:

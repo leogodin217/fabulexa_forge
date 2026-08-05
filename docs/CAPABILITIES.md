@@ -151,9 +151,11 @@ Each mode reads the same emit and writes a different target shape.
   `created_at` / `updated_at` / `active` / `deactivated_at`); a membership
   declaration as a `junction` association table (`joined_at` / `left_at`, NULL
   while open); the single `events` block as one polymorphic audit log at event
-  grain (`item_type`, `item_id`, `event`, `occurred_at`, `changes` — a
+  grain (`id`, `item_type`, `item_id`, `event`, `occurred_at`, `changes` — a
   deterministic JSON changeset of `[old, new]` pairs composing the
-  row-state-events and membership-events folds), with `only` / `ignore`
+  row-state-events and membership-events folds, keyed by a dense tape-anchored
+  `id` that publishes the log's total order and is its primary key under
+  `declare_keys`), with `only` / `ignore`
   audited-property filters per source. Sidecar facts gate declarations (unknown
   kind / sub-type / membership fails fast); they never decide layout — omission
   is the exclusion mechanism, and a config declaring no output is a load-time

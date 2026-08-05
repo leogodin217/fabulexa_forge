@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import KeySurface
     from fabulexa_forge.exporters.populations import Population
+    from fabulexa_forge.exporters.query_spec import TableKeys
     from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -105,6 +106,10 @@ class SourceEventLogPlan:
     """The junction-member-column type rule's verdict over the union of
     every source's `item_surface`: the common declared type when all
     agree, else 'VARCHAR' (record_index digit-rendered)."""
+    keys: "TableKeys | None"
+    """The log's declared keys: `PRIMARY KEY (id)` under `declare_keys`,
+    None when it is off. A constant of the mode — `id` is true by
+    construction, so there is nothing to resolve from the emit."""
 
 
 # ---------------------------------------------------------------------------
@@ -708,10 +713,24 @@ def build_event_log_sql(
     item_type, event_class, record_id, membership fields in
     element-schema declaration order, VARCHAR-compared, NULLS FIRST)`.
 
+    `id` is the event's 1-based position in that order over every row the
+    log emits for the whole tape, across every source — a ROW_NUMBER,
+    never a value-based rank: rows tying the order key take consecutive
+    numbers. The outermost ORDER BY is `ORDER BY id`, not a restatement of
+    the key: the two agree wherever the key is injective, and where it is
+    not (a contract-permitted duplicate membership interval, a corrupter's
+    duplicated records row) only the former keeps the emitted row order
+    monotone in `id`.
+
     Windowed: append rows with `event_sim_time` in [window.start_ns,
     window.end_ns), computed over the full fold — the lag's previous
     after-image may predate the window; membership selects rows, never
-    alters content.
+    alters content. `id` is assigned at its own query level *beneath* the
+    window predicate, so an event's number is invariant across
+    invocations; SQL evaluates WHERE before window functions, so a
+    ROW_NUMBER beside the predicate in one SELECT would number only the
+    surviving rows. It sits above the arms' update suppression, so a
+    suppressed update consumes no number and `id` stays dense.
 
     Args:
         sidecar: The plan's sidecar.
@@ -733,17 +752,27 @@ def build_event_log_sql(
     ]
     union_sql = " UNION ALL ".join(arms)
 
+    order_key = (
+        '"_log"."event_sim_time", "_log"."item_type", "_log"."event_class",'
+        ' "_log"."_order_record_id", "_log"."_order_fields" NULLS FIRST'
+    )
+    numbered_sql = (
+        f'SELECT ROW_NUMBER() OVER (ORDER BY {order_key}) AS "id",'
+        ' "_log"."item_type", "_log"."item_id", "_log"."event",'
+        ' "_log"."occurred_at", "_log"."changes", "_log"."event_sim_time"'
+        f' FROM ({union_sql}) AS "_log"'
+    )
+
     where_clause = ""
     if window is not None:
         where_clause = (
-            f' WHERE "_log"."event_sim_time" >= {window.start_ns}'
-            f' AND "_log"."event_sim_time" < {window.end_ns}'
+            f' WHERE "_numbered"."event_sim_time" >= {window.start_ns}'
+            f' AND "_numbered"."event_sim_time" < {window.end_ns}'
         )
 
     return (
-        'SELECT "item_type", "item_id", "event", "occurred_at", "changes"'
-        f' FROM ({union_sql}) AS "_log"'
+        'SELECT "id", "item_type", "item_id", "event", "occurred_at", "changes"'
+        f' FROM ({numbered_sql}) AS "_numbered"'
         f"{where_clause}"
-        ' ORDER BY "_log"."event_sim_time", "_log"."item_type", "_log"."event_class",'
-        ' "_log"."_order_record_id", "_log"."_order_fields" NULLS FIRST'
+        ' ORDER BY "id"'
     )

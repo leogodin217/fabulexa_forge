@@ -203,6 +203,7 @@ idiom. Fixed columns; the author names the table, not the columns:
 
 | Column | Content |
 |---|---|
+| `id` | `BIGINT`, the audit table's key. The event's 1-based position in the log's total order (below) over the **whole tape** — every row the log emits, across every source, one counter. A row-number, never a value-based rank: two rows tying the order key take consecutive numbers. Assigned above changeset resolution (a suppressed update consumes no number, so `id` is dense) and beneath the window predicate (so an event's number does not depend on which window or invocation exported it). The log's emitted row order is `ORDER BY id` |
 | `item_type` | The population's contract identity: the kind name for records sources, `<K>.<property>` for membership sources. Sidecar-derived, independent of which thing-tables are declared |
 | `item_id` | For a records source: the record's identity in its own population's elected surface (`record_id` verbatim absent an election); on destroy rows the value comes from the identity join relation, not the fold's nulled after-image, so it is never NULL. For a membership source: the **owner** record's identity in the owner kind's election — the junction-owner-column render, per-row resolved for a sub-typed owner. Column type per the junction-member-column rule over the union of every source's resolved surfaces: the common declared type when all agree, else `VARCHAR` with `record_index` digit-rendered |
 | `event` | `create` / `update` / `destroy` — deterministic recode of the folds' ops (`c`/`u`/`d`; `join` → `create`, `leave` → `destroy` of a membership in the named collection, recorded against the owner — `item_type` is what separates collection changes from the owner's own lifecycle rows) |
@@ -277,7 +278,32 @@ share an item-type, so their elections must be union-safe *jointly* — two
 bare-counter siblings both electing `presentation_id` are refused whether
 declared in one source or split across two (`ElectionUnionUnsafe`, naming the
 item-type). A mixed election within one item-type is legal exactly when
-union-safe. The log declares no keys under `declare_keys`.
+union-safe. Under `declare_keys` the log declares `PRIMARY KEY (id)` — `id` is
+per-row unique by construction, so the key stands on the render rather than on a
+contract guarantee or an author's claim ([`declared-keys.md`](declared-keys.md)
+§ Key resolution per output table).
+
+**`id` numbers this log's configured events.** It is the event's position among
+the rows *this* log emits, not an absolute address for an event in the emit.
+Narrowing the audited set with `only` / `ignore` suppresses update rows, and a
+suppressed row consumes no number, so two configs over one emit number
+differently. The guarantee is per-export monotonicity, not cross-export
+identity — an application's audit-table key numbers what that application chose
+to audit and is not comparable to another's.
+
+**`id` is not a `seq`.** Three sequence numbers exist in the package and they
+are deliberately distinct. The log's `id` orders by `(event_sim_time,
+item_type, event_class, record_id, membership field tail)` over the log's
+configured event set; the [stream](streaming.md)'s `seq` and the
+[playback seam](playback.md)'s `seq` order by the seam's canonical order over
+their own selections. The log and the stream differ only in the relative
+priority of `event_class` and the source identity — both are deterministic,
+both resolve the update-before-destroy tie identically (within one record the
+source identity is constant), and they interleave distinct item types at one
+instant differently. The log reports its own emitted row order rather than
+adopting the seam's: a table whose key is not monotone in its own rows is not
+what an audit table is. Hence `id`, the audit-table key, not `seq`, the seam's
+word for a per-selection canonical position.
 
 **Cross-kind legality.** The log is the one tabular output spanning kinds. This
 does not breach same-kind-only tabular combination: that rule governs
@@ -293,7 +319,11 @@ is creation-constant, so the filter is temporally honest at every event time),
 the same device the `state` render's population filter composes. Sources resolve
 to **pairwise-disjoint** population sets (membership sources distinct by
 `(kind, property)`) — one audit stream per population, so no event is
-double-logged and the total order stays tie-free; an overlap is
+double-logged and no two *sources* contribute rows colliding on the order key.
+Within one source the key still ties exactly where the input permits duplicate
+rows (the contract's byte-identical membership intervals; a corrupter's
+duplicated records rows), which is why the log's key is `id` and not a composite
+of the rendered columns. An overlap is
 `SourceEventSourceOverlap` at plan time. A kind may be audited without having a
 declared state table and vice versa — the log is its own declaration. Absent
 `events` block: no log, and the emit's history is dropped from the export —
@@ -314,7 +344,7 @@ The source-mode summary:
 | Mixed-election kind | Legal — declare per-population tables; each table's populations elect uniformly |
 | Reference / junction-member columns | Render the target population's elected surface per row (kind-targeted mode semantics; the edge union-safety gate unchanged) |
 | Event log `item_id` / `changes` | Kind-targeted edge renders: the edge gate runs per item-type over the union of its sources' addressed populations, and per audited reference property over its target — no gate across item-types (§ The event log) |
-| `declare_keys` | State tables declare the identity-column primary key; `presentation_id` uniqueness follows `combined_claim` over the table's **resolved population set** — the registry algebra applied to exactly the populations the table combines ([`declared-keys.md`](declared-keys.md) § Key resolution per output table). Junction and event-log tables declare nothing |
+| `declare_keys` | State tables declare the identity-column primary key; `presentation_id` uniqueness follows `combined_claim` over the table's **resolved population set** — the registry algebra applied to exactly the populations the table combines ([`declared-keys.md`](declared-keys.md) § Key resolution per output table). The event log declares `PRIMARY KEY (id)`; junction tables declare nothing |
 
 ### The `slice_only` posture
 
@@ -388,7 +418,7 @@ nondeterministic):
 |---|---|
 | `state` | `(created_sim_time, record_id)` |
 | `junction` | `(record_id, joined_sim_time, field columns in element-schema declaration order, VARCHAR-compared, NULLS FIRST)` |
-| event log | `(event_sim_time, item_type, event_class, record_id, membership fields in element-schema declaration order, VARCHAR-compared, NULLS FIRST)` — the folds' raw keys (`event_class` is the folds' own ordering ordinal) with `item_type` interposed to disambiguate across sources |
+| event log | `id`, which is the row-number of `(event_sim_time, item_type, event_class, record_id, membership fields in element-schema declaration order, VARCHAR-compared, NULLS FIRST)` — the folds' raw keys (`event_class` is the folds' own ordering ordinal) with `item_type` interposed to disambiguate across sources. Sorting by the ordinal rather than restating the key is what keeps emitted row order monotone in `id` where the key ties (§ The event log) |
 
 ### Delivery
 
@@ -415,6 +445,24 @@ tables. No corrupter-aware branch exists in the source mode; the guarantee holds
 by construction, verified by
 [`tests/integration/test_corrupt_source.py`](../../tests/integration/test_corrupt_source.py).
 
+The event log numbers whatever emit it is given. Removed history rows and
+dropped events renumber densely; added rows — a duplicated record, a phantom
+insert — take numbers of their own. Two consequences follow. The log's `id` is
+dense, monotone, and per-row unique whatever the emit, because the render
+constructs it, so the declared primary key survives a corrupted emit where a
+contract-guarantee key would not: a duplicated `record_id` lands as two
+distinctly-numbered rows rather than a load failure. But determinism under the
+order key's ties is scoped to a conformant emit. A `duplicate_rows` copy in
+`mutation` mode shares its original's `(record_id, created_sim_time)` with
+different property values, so the two `create` events tie the order key
+completely and render *different* `changes`; which takes the lower `id` is
+observable. The arbitrariness belongs to the order key, not to the ordinal —
+the two rows tie the key whether or not it is published as a column — and
+growing the key to cover a corrupted emit's non-unique `record_id` would be the
+mode branching on damage.
+Over a corrupted emit the export is as deterministic as the emit it was given,
+and `defects.json` names the injected duplicate.
+
 ### Incremental composition
 
 `--next` / `--from` / `--to` work over source exports through the cross-mode
@@ -427,7 +475,7 @@ membership tests run on raw sim-time ns, half-open `[start_ns, end_ns)`.
 | Render | Window key | Behavior per window |
 |---|---|---|
 | `state` | — (snapshot class) | One full-table snapshot per window, reconstructed at the window horizon through the state-at derivation: rows with `created_sim_time < end_ns`; tracked properties as-of the horizon; `constant` properties current (the declared temporal-honesty exception); lifecycle horizon-rendered (`active` / `deactivated_at`); **no `updated_at`** — `last_mutation_sim_time` at a past horizon is not faithfully reconstructible, so the column is omitted rather than fabricated. `replace` in DuckDB, re-emitted per CSV drop |
-| event log | `event_sim_time` | Append event rows with key ∈ window, computed over the full fold — the `changes` lag's previous after-image may predate the window; window membership selects rows, never alters their content (events are immutable and final) |
+| event log | `event_sim_time` | Append event rows with key ∈ window, computed over the full fold — the `changes` lag's previous after-image may predate the window; window membership selects rows, never alters their content (events are immutable and final). `id` is assigned over the whole tape beneath the window predicate, so a window's rows carry the `id` values a full export of the same tape gives them; because the order is time-major, those values form a contiguous ascending block (§ `id` under incremental below) |
 | `junction` | activity (`joined_sim_time`, `left_sim_time`) | Extract-on-change, `left_at` horizon-masked (below) |
 
 A full (non-incremental) export renders `state` as the current records read
@@ -441,6 +489,21 @@ windowed-ness is an invocation fact, so the caller passes it to
 shape this invocation actually delivers. The incremental estate is the
 real-world archetype whole: nightly full extracts of app tables plus an appended
 audit log plus upsert-shaped junction activity — the no-CDC teaching shape.
+
+**`id` under incremental.** The log's numbering is anchored at the tape's start,
+not the window's. The number is assigned over the log's whole-tape row set and
+the window predicate applied afterward, so an event carries the same `id`
+whichever invocation exports it, and a re-run reproduces it. Successive windows
+from the tape's first event concatenate into a dense prefix `1 .. N` with no
+renumbering and no overlap; an empty window contributes no rows and consumes no
+number. A range export starting mid-tape (`--from` after the first event) begins
+above 1, and the front gap is the honest report that earlier events exist and
+were not exported — tape-anchoring is what makes the number stable, and
+window-local numbering would trade that away. The rendered SQL therefore places
+the numbering at its own query level *beneath* the window predicate: SQL
+evaluates `WHERE` before window functions, so a row-number computed beside the
+predicate would silently yield window-local numbers, a failure invisible on a
+full export where the two forms agree.
 
 **Junction extract-on-change.** A membership interval emits a row in each window
 containing membership *activity* — its join, its leave, or both:
@@ -504,7 +567,14 @@ parses and plans clean, the key-election `init` self-gating posture.
    raw leak into output.
 3. **Faithful reshaping.** Every output value traces to a base-layer value or a
    deterministic recoding of one (a cast, a wallclock render, a horizon mask, a
-   lag over fold output); the mode fabricates nothing (CLAUDE.md Principle #3).
+   lag over fold output, a row-number over an order those same values
+   determine); the mode fabricates nothing (CLAUDE.md Principle #3). The
+   row-number is the one recoding that is a function of a row's *position*
+   among the others rather than of its own cells, and it is inside the
+   principle because the line the principle draws is invention, not arity: the
+   lag also reaches outside the row, and a row-number reaches no further than
+   the `ORDER BY` the render computes and emits under. The position is
+   published, not manufactured.
    A source export over a corrupted emit surfaces the corrupter's declared
    defects unchanged, never manufacturing new ones.
 4. **Wallclock rendering requires a resolved anchor.** Unlike other modes'
@@ -512,20 +582,40 @@ parses and plans clean, the key-election `init` self-gating posture.
    emit ns offsets.
 5. **Total order over raw sim-time, never rendered timestamps.** Every emitted
    table carries a deterministic `ORDER BY` over raw ns keys and identity, so
-   microsecond truncation in wallclock rendering cannot introduce ties.
+   microsecond truncation in wallclock rendering cannot introduce ties. The
+   event log sorts by `id` rather than restating its key, which does not weaken
+   this: `id` is the row-number *of* that raw-ns order, computed over the raw
+   keys and never over the rendered `occurred_at`.
 6. **No event is double-logged.** Event-log sources resolve pairwise-disjoint
-   population sets, so each population feeds exactly one audit stream and the
-   log's total order is tie-free.
-7. **Windowed `state` is horizon-honest.** The per-window snapshot reconstructs
+   population sets, so each population feeds exactly one audit stream and no two
+   sources contribute rows colliding on the log's order key. The key is total
+   *up to permitted duplicates*, not unconditionally: within one source it ties
+   exactly where the input permits duplicate rows — the contract's
+   byte-identical membership intervals, a corrupter's duplicated records rows.
+7. **The log's `id` is total, dense, and tape-anchored.** It is 1-based and
+   gapless over a full export; monotone in emitted row order in every export and
+   every window, which the outermost `ORDER BY id` mechanizes where the order
+   key itself ties; invariant across which window or invocation exported the
+   event; and per-row unique by construction, including across the ties in
+   invariant 6. Constructed values cannot be falsified by the data, which is
+   what makes the declared primary key honest over a corrupted emit.
+8. **Over a conformant emit every log column is a function of the order key.**
+   Two rows tying the key therefore render identically, so which takes the lower
+   `id` cannot change the emitted bytes. This binds any column added to the log
+   later: either it is a function of the key, or the key grows to cover it. It
+   is scoped to conformant emits because a corrupter's conflicting duplicate
+   falsifies it by construction (§ Corrupter composition).
+9. **Windowed `state` is horizon-honest.** The per-window snapshot reconstructs
    at the window horizon through the state-at derivation; `updated_at` is
    omitted rather than fabricated, and a declaration naming it under a windowed
    invocation is refused, never silently dropped.
-8. **Determinism.** Same emit + export config + code version → identical output
-   (CLAUDE.md § Key Invariants). `init` output is likewise a pure function of
-   `(emit, code version)` and always parses and plans clean.
-9. **`slice_only` omission is column-projection-only.** Row sets, ordering, and
-   window membership are invariant under the policy; omission never suppresses
-   an output table ([`slice-only.md`](slice-only.md)).
+10. **Determinism.** Same emit + export config + code version → identical output
+    (CLAUDE.md § Key Invariants). `init` output is likewise a pure function of
+    `(emit, code version)` and always parses and plans clean. Where the log's
+    order key ties, determinism rests on invariant 8.
+11. **`slice_only` omission is column-projection-only.** Row sets, ordering, and
+    window membership are invariant under the policy; omission never suppresses
+    an output table ([`slice-only.md`](slice-only.md)).
 
 ## Validation Rules
 
@@ -570,7 +660,8 @@ for a `tables` entry, `events source #<n>` (1-based, declaration order) for an
 `declare_keys` (`SourceConfig`, optional boolean, default false) is the opt-in
 key-declaration capability: state tables declare the identity-column primary key
 plus `presentation_id` uniqueness per `combined_claim` over the table's resolved
-population set; junction and event-log tables declare nothing. Resolution rules,
+population set; the event log declares `PRIMARY KEY (id)`; junction tables
+declare nothing. Resolution rules,
 writer semantics, CSV posture, and incremental gating are owned by
 [`declared-keys.md`](declared-keys.md).
 
@@ -584,6 +675,29 @@ writer semantics, CSV posture, and incremental gating are owned by
   two sub-types into one table, split a kind, or choose which tables exist.
   The declared-table grammar puts the lever in the config; sidecar facts answer
   only "may this declaration resolve?".
+- **The log publishes its order in a column.** A relation has no inherent row
+  order, so an order expressed only as physical row order is lost the moment a
+  consumer loads the export and re-`SELECT`s it. None of the rendered values
+  recovers it: `occurred_at` is a wallclock `TIMESTAMP` whose microsecond
+  precision collides distinct nanosecond events, and `event` is a word, not an
+  ordinal — sorting by `(occurred_at, event)` puts `destroy` before `update`
+  alphabetically, the exact inverse of the computed order. The before-images do
+  not supply it either: recovering the order from them means deducing, per tied
+  pair, that a destroy's old value equals the preceding update's new value, and
+  membership events carry no chained before-image to deduce from at all. A
+  consumer replaying the log to reconstruct state would get wrong answers with
+  nothing in the data to signal it. `id` is the ActiveRecord audit-log idiom:
+  `paper_trail`, `audited`, and Django's `auditlog` all key their polymorphic
+  versions table by an auto-incrementing `id`, and this log matches that table
+  column-for-column — `id` is the key every one of them orders by.
+- **The outermost sort is `ORDER BY id`, not a restatement of the key.** The two
+  agree wherever the key is injective, and the key is not injective everywhere
+  (invariant 6). For a tied pair, a sort restating the key is free to emit `n+1`
+  ahead of `n` — falsifying monotonicity, and costing byte-stability even over a
+  conformant emit, since two rows identical in all five non-ordinal columns
+  still emit as two distinct byte sequences depending on which the sort put
+  first. Sorting by the ordinal removes the freedom, because the ordinal is
+  total where the key is not.
 - **Things get tables; events get the log.** A real application's schema
   contains thing tables and an audit log — not per-kind wide CDC dumps. A
   per-kind CDC table is an *extraction* artifact: what a CDC tool produces

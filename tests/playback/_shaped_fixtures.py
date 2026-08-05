@@ -777,3 +777,26 @@ def state_source_shape_config() -> ExportConfig:
             )
         ),
     )
+
+
+def state_source_events_shape_config() -> ExportConfig:
+    """A log-only source shape over build_state_test_emit whose `events`
+    block mixes a records source (widget) and a membership source
+    (widget.parts) — the prefix-property test's fixture: membership
+    reasons from its own row (no lag), unlike a records source's backward
+    lag, so the tape-prefix property is exercised for both kinds in one
+    log."""
+    return ExportConfig(
+        mode="source",
+        source=SourceConfig(
+            events=SourceEventsDecl(
+                name="widget_versions",
+                sources=(
+                    SourceEventSourceDecl(kind="widget"),
+                    SourceEventSourceDecl(
+                        membership=MembershipRef(kind="widget", property="parts")
+                    ),
+                ),
+            )
+        ),
+    )

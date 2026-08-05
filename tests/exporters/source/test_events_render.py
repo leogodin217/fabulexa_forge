@@ -30,6 +30,7 @@ from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
 from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
+    build_event_log_suppressed_update_test_emit,
     build_event_tie_test_emit,
     build_events_test_emit,
     build_windowed_source_test_emit,
@@ -46,7 +47,7 @@ if TYPE_CHECKING:
 
 def _rows(emit: "Emit", sql: str) -> list[dict[str, object]]:
     """Execute sql and zip every row against the event log's fixed columns."""
-    columns = ("item_type", "item_id", "event", "occurred_at", "changes")
+    columns = ("id", "item_type", "item_id", "event", "occurred_at", "changes")
     return [dict(zip(columns, row)) for row in emit.query(sql, ())]
 
 
@@ -155,7 +156,7 @@ class TestRecordsSourceCreateUpdateDestroy:
             change_edges=(_agent_record_index_edge("prop__assignee_id"),),
         )
         return SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="VARCHAR"
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
         )
 
     def test_create_every_audited_property_null_to_value(self, tmp_path: Path) -> None:
@@ -236,7 +237,7 @@ class TestSubTypesNarrowedRecordsSource:
             ("status",), sub_types=("bug",), item_surface=(("bug", "record_id"),)
         )
         log = SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="VARCHAR"
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
         )
         emit_dir = build_events_test_emit(tmp_path)
         with open_emit(emit_dir) as emit:
@@ -256,7 +257,7 @@ class TestEmptyAuditedSet:
             (), sub_types=("bug",), item_surface=(("bug", "record_id"),)
         )
         log = SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="VARCHAR"
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
         )
         emit_dir = build_events_test_emit(tmp_path)
         with open_emit(emit_dir) as emit:
@@ -279,7 +280,7 @@ class TestItemIdTypeRule:
             item_surface=(("bug", "record_index"), ("feature", "record_index")),
         )
         log = SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="BIGINT"
+            name="versions", sources=(source,), item_id_type="BIGINT", keys=None
         )
         emit_dir = build_events_test_emit(tmp_path)
         with open_emit(emit_dir) as emit:
@@ -312,7 +313,7 @@ class TestMembershipSource:
             change_edges=(_agent_record_index_edge("member__party__id"),),
         )
         return SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="VARCHAR"
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
         )
 
     def test_join_creates_leave_destroys_field_expansion(self, tmp_path: Path) -> None:
@@ -387,6 +388,7 @@ class TestTotalOrderTieFree:
             name="versions",
             sources=(ticket_source, watchers_source),
             item_id_type="VARCHAR",
+            keys=None,
         )
         emit_dir = build_events_test_emit(tmp_path)
         with open_emit(emit_dir) as emit:
@@ -426,7 +428,7 @@ class TestDeterminism:
     def test_two_renders_produce_identical_sql(self, tmp_path: Path) -> None:
         source = _ticket_source(("status", "priority"))
         log = SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="VARCHAR"
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
         )
         emit_dir = build_events_test_emit(tmp_path)
         with open_emit(emit_dir) as emit:
@@ -457,7 +459,7 @@ class TestWindowed:
             change_edges=(),
         )
         log = SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="VARCHAR"
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
         )
         emit_dir = build_windowed_source_test_emit(tmp_path)
         _, w1, _ = windowed_test_windows()
@@ -474,6 +476,114 @@ class TestWindowed:
         }
         v001_update = _row_for(rows, "v001", "update")
         assert _changes(v001_update) == {"status": ["open", "closed"]}
+
+
+# ---------------------------------------------------------------------------
+# `id`: dense ROW_NUMBER, suppression-transparent, tape-anchored under a window
+# ---------------------------------------------------------------------------
+
+
+class TestEventLogId:
+    def test_full_export_id_runs_dense_and_monotone(self, tmp_path: Path) -> None:
+        """A full export's `id` is 1..N with no gaps, ascending in emitted
+        row order (rows already arrive `ORDER BY "id"`)."""
+        ticket_source = _ticket_source(("status", "priority"))
+        watchers_source = SourceEventSourcePlan(
+            item_type="ticket.watchers",
+            kind="ticket",
+            property="watchers",
+            populations=(
+                Population(kind="ticket", sub_type="bug"),
+                Population(kind="ticket", sub_type="feature"),
+            ),
+            audited_properties=("note", "party"),
+            item_surface=_RECORD_ID_SURFACE,
+            change_edges=(_agent_record_index_edge("member__party__id"),),
+        )
+        log = SourceEventLogPlan(
+            name="versions",
+            sources=(ticket_source, watchers_source),
+            item_id_type="VARCHAR",
+            keys=None,
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        ids = [r["id"] for r in rows]
+        assert ids == list(range(1, len(rows) + 1))
+
+    def test_suppressed_update_consumes_no_id_density_holds(
+        self, tmp_path: Path
+    ) -> None:
+        """A reasserted-at-its-current-value update is dropped (empty
+        `changes`), yet the surviving rows' `id` values stay consecutive —
+        the ROW_NUMBER sits beneath the arm's own suppression filter, so the
+        dropped row never reserved a number to begin with."""
+        source = _ticket_source(("status",))
+        log = SourceEventLogPlan(
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+        )
+        emit_dir = build_event_log_suppressed_update_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        # No no-op update survives: exactly one 'update' row for t600.
+        updates = [r for r in rows if r["item_id"] == "t600" and r["event"] == "update"]
+        assert len(updates) == 1
+        assert _changes(updates[0]) == {"status": ["open", "closed"]}
+
+        ids = [r["id"] for r in rows]
+        assert ids == list(range(1, len(rows) + 1))
+
+    def test_windowed_ids_match_full_export_as_a_contiguous_block(
+        self, tmp_path: Path
+    ) -> None:
+        """A window's rows carry the same `id` values they carry in a full
+        export — `id` is tape-anchored, never renumbered per window — and
+        those ids form one contiguous ascending block within the full
+        export's numbering."""
+        source = SourceEventSourcePlan(
+            item_type="visit",
+            kind="visit",
+            property=None,
+            populations=(Population(kind="visit", sub_type=None),),
+            audited_properties=("status", "priority"),
+            item_surface=((None, "record_id"),),
+            change_edges=(),
+        )
+        log = SourceEventLogPlan(
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+        )
+        emit_dir = build_windowed_source_test_emit(tmp_path)
+        _, w1, _ = windowed_test_windows()
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            full_sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            full_rows = _rows(emit, full_sql)
+            window_sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, w1)
+            window_rows = _rows(emit, window_sql)
+
+        by_id = {r["id"]: (r["item_id"], r["event"]) for r in full_rows}
+        window_ids = sorted(r["id"] for r in window_rows)
+
+        # Every windowed row's id, and its (item_id, event) identity, agree
+        # with the full export's numbering for that same id — not renumbered.
+        for row in window_rows:
+            assert by_id[row["id"]] == (row["item_id"], row["event"])
+
+        # The window's ids form one contiguous ascending block.
+        assert window_ids == list(range(window_ids[0], window_ids[0] + len(window_ids)))
 
 
 # ---------------------------------------------------------------------------
@@ -497,6 +607,7 @@ class TestCoincidentUpdateAndDestroy:
             name="audit_log",
             sources=(_ticket_source(("status",), sub_types=("bug",)),),
             item_id_type="VARCHAR",
+            keys=None,
         )
 
     def test_lag_window_breaks_the_tie_on_event_class(self, tmp_path: Path) -> None:

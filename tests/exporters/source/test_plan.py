@@ -41,6 +41,7 @@ from fabulexa_forge.errors import (
 )
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.populations import Population
+from fabulexa_forge.exporters.query_spec import TableKeys
 from fabulexa_forge.exporters.source.plan import (
     SourceJunctionTablePlan,
     SourceStateTablePlan,
@@ -929,8 +930,9 @@ def test_declared_keys_junction_declares_nothing(tmp_path: Path) -> None:
     assert not hasattr(unit, "keys")
 
 
-def test_declared_keys_event_log_declares_nothing(tmp_path: Path) -> None:
-    """The event-log plan unit carries no `keys` field at all."""
+def test_declared_keys_event_log_declares_id_primary_key(tmp_path: Path) -> None:
+    """Under `declare_keys`, the event-log plan unit carries `PRIMARY KEY
+    (id)` — a constant of the mode, since `id` is true by construction."""
     plan = _open_plan(
         build_source_keys_emit(tmp_path),
         _config(
@@ -941,4 +943,19 @@ def test_declared_keys_event_log_declares_nothing(tmp_path: Path) -> None:
         ),
     )
     assert plan.events is not None
-    assert not hasattr(plan.events, "keys")
+    assert plan.events.keys == TableKeys(primary_key=("id",), unique=())
+
+
+def test_declared_keys_off_event_log_carries_no_keys(tmp_path: Path) -> None:
+    """With `declare_keys` off, the event-log plan unit's `keys` is None."""
+    plan = _open_plan(
+        build_source_keys_emit(tmp_path),
+        _config(
+            events=SourceEventsDecl(
+                name="versions", sources=(SourceEventSourceDecl(kind="visit"),)
+            ),
+            declare_keys=False,
+        ),
+    )
+    assert plan.events is not None
+    assert plan.events.keys is None

@@ -282,7 +282,7 @@ def test_event_log_item_id_renders_elected_presentation_id(tmp_path: Path) -> No
             plan.sidecar, fork_path, plan.events, plan.anchor, None
         )
         rows = emit.query(sql, ())
-    item_ids = {row[1] for row in rows}
+    item_ids = {row[2] for row in rows}
     assert item_ids == {"DAY_001", "NIGHT_001"}
 
 
@@ -310,7 +310,7 @@ def test_event_log_item_id_renders_elected_record_index_cast(tmp_path: Path) -> 
             plan.sidecar, fork_path, plan.events, plan.anchor, None
         )
         rows = emit.query(sql, ())
-    item_ids = {row[1] for row in rows}
+    item_ids = {row[2] for row in rows}
     assert item_ids == {0, 1}
     assert all(isinstance(v, int) for v in item_ids)
 
