@@ -1,4 +1,5 @@
 {
   "repo": "forge",
-  "startup": "role-architect"
+  "startup": "understand",
+  "startup_args": "architecture"
 }
