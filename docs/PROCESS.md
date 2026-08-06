@@ -173,7 +173,7 @@ A folded doc — merged or new — targets the canonical section spine in `.clau
 Mechanical steps after the redistribution decision:
 
 1. Write the new / merged content into its destination doc(s); update the `docs/architecture/README.md` reading order and status table.
-2. Resolve Obsidian forward-notes for the shipped area (`note list --tags forward-note --area export`, then `note status … complete/answered`).
+2. Resolve Obsidian forward-notes for the shipped area (`note list --forward --area export`, then `note status … complete/answered`).
 3. Delete the `pending/<name>.md` file.
 4. Run `note lint` to catch broken `related-notes` wikilinks.
 
