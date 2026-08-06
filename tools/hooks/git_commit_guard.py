@@ -1,0 +1,1 @@
+../../../leos_claude_starter/tools/hooks/git_commit_guard.py

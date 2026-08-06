@@ -28,3 +28,15 @@ repos:
         language: system
         pass_filenames: false
         files: \.(py|toml)$
+
+  # Adoption gate: every understand-bundle selector resolves and the repo-shape
+  # declaration is valid (ADOPTION.md in leos_claude_starter). Runs on any
+  # markdown change because a renamed heading anywhere can break a selector.
+  - repo: local
+    hooks:
+      - id: understand-check
+        name: understand bundles (--check)
+        entry: python3 .claude/skills/understand/load.py . --check
+        language: system
+        pass_filenames: false
+        files: \.md$

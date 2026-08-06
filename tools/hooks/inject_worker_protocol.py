@@ -1,0 +1,1 @@
+../../../leos_claude_starter/tools/hooks/inject_worker_protocol.py

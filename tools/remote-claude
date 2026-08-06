@@ -2,7 +2,7 @@
 # Launch and drive claude_fabulexa sessions in detached tmux panes, so a
 # remote-controlled session can start worktree-bound runs (/implement-sprint)
 # without a local terminal. Mirrors the claude_fabulexa alias:
-#   claude --dangerously-skip-permissions --system-prompt-file .claude/fabulexa-system-prompt.md
+#   claude --dangerously-skip-permissions --system-prompt-file .claude/custom-system-prompt.md
 set -euo pipefail
 
 usage() {
@@ -63,7 +63,7 @@ launch)
     claude_bin="$(command -v claude)"
     tmux new-session -d -s "$session" -c "$dir" -x 200 -y 50 \
         "$claude_bin" --dangerously-skip-permissions \
-        --system-prompt-file .claude/fabulexa-system-prompt.md "$@"
+        --system-prompt-file .claude/custom-system-prompt.md "$@"
     tmux set-window-option -t "$session" remain-on-exit on
     echo "launched $session in $dir"
     echo "  peek: tools/remote-claude peek ${session#claude-}"

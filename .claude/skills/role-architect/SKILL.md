@@ -60,7 +60,7 @@ def function_name(
 
 ## Code Navigation
 
-Code navigation is cclsp-first — follow `.claude/skills/worker-protocol.md` § Code Navigation (backend: basedpyright; all nav tools work, including `get_incoming_calls`/`get_outgoing_calls` for call chains and `find_workspace_symbols` to locate a symbol by name). Reserve Grep for non-symbol text only (concepts, TODOs, regex, YAML).
+Code navigation is cclsp-first — follow `.claude/worker-protocol.md` § Code Navigation (backend: basedpyright; all nav tools work, including `get_incoming_calls`/`get_outgoing_calls` for call chains and `find_workspace_symbols` to locate a symbol by name). Reserve Grep for non-symbol text only (concepts, TODOs, regex, YAML).
 
 ## Finding Tracking
 

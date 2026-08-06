@@ -102,6 +102,19 @@ Non-negotiable. Every decision must be checkable against these.
 7. **No invented mapping values.** The exporter never invents the grain, keys, or
    target schema the author must specify. Missing required export config = error at
    load time, not a silent default or fallback.
+
+   ```python
+   grain = config.grain or "event"  # WRONG — invents the fact grain
+   fmt: str = "csv"                 # WRONG — Pydantic default lets a missing YAML key work
+   slice_at: int | None = None      # fine — absence detection; the code must then
+                                    # genuinely take the tape's-end path, not substitute
+   _EVENT_LOG_FIRST_ID = 1          # fine — mode-definitional (the log's published contract)
+   ```
+
+   Sidecar values are *sourced*, not invented; values a mode's published contract
+   fixes are mode-definitional, not knobs; test/fixture/internal-helper arguments
+   are ordinary Python. Full scope test + reject/accept examples:
+   `.claude/worker-protocol.md` § The Config Boundary.
 8. **No future scaffolding.** No stub modules, no-op loops, or `# TODO` placeholders
    for features that don't exist yet. Add code when the feature lands.
 9. **Breaking changes are acceptable — internally.** Greenfield package; redesign
@@ -122,6 +135,67 @@ Non-negotiable. Every decision must be checkable against these.
 | Integrity preserved | Exporters emit no dangling/forward references; monotonic time survives the reshape. |
 | Version-gated input | Unknown `base_format_version` → refuse to interpret. |
 | Single coupling | The bundle + vendored `contract/` is the only interface; no dependency on the bundle's producer. |
+
+---
+
+## Anti-Patterns
+
+Concrete patterns to avoid and detect during review.
+
+### Backward-Compatibility Violations (breaking-changes principle)
+
+Internally greenfield — these shouldn't exist. (The base-format contract is the
+one external surface: adapting to its version bumps is versioning, not a shim.)
+
+| Pattern | Example | Fix |
+|---|---|---|
+| Renamed unused vars | `_old_name = new_name` | Delete the alias |
+| Re-exported symbols | `from .new import X as OldX` | Update callers |
+| Deprecation warnings | `warnings.warn("deprecated")` | Remove old code |
+| Compatibility shims | `def old_func(): return new_func()` | Update callers |
+| Removal comments | `# removed: old_field` | Just delete it |
+
+### Boundary Violations (reader-first principle)
+
+| Pattern | Fix |
+|---|---|
+| Opening `run.duckdb` or parsing `base.json` outside the reader | Read through the one base reader |
+| Hard-coded table or column lists | Read the sidecar |
+| Column lists derived from the spec instead of `base.json` | The sidecar is per-emit authoritative; the spec is the minimum |
+
+### Over-Engineering
+
+| Pattern | Example | Fix |
+|---|---|---|
+| One-use abstractions | `class BaseX` with a single subclass | Inline it |
+| Impossible error handling | Validating internal inputs | Trust internal code |
+| Defensive copies | `list(x)` for already-owned data | Remove copy |
+| Premature helpers | `_format_x()` called once | Inline it |
+
+### Dead Code
+
+| Pattern | Detection |
+|---|---|
+| Unused imports | Linter |
+| Uncalled functions | `find_references` — not grep |
+| Unreachable branches | `if False:` or impossible conditions |
+| Commented-out code | Delete it (git has history) |
+
+---
+
+## Phase Status
+
+| Stage | Scope | Status |
+|---|---|---|
+| 1 | Reader + conformance (C1–C14), trunk-only | Shipped |
+| 2 | Dimensional exporter, config envelope, CSV/DuckDB writers, anchor, `export` + `init` | Shipped |
+| 3 | Source + base + streaming exporters, derivations layer, incremental driver, playback, mixer | Shipped |
+| 4 | Corrupter family + defect manifest | Shipped |
+| 5 | Queue-state export (`membership__*` → wait time, FIFO/priority) | Planned — next |
+
+Per-feature status lives in `docs/architecture/README.md` § Status (authoritative);
+keep this table in step when a stage ships. Multi-branch / provenance export is
+parked pending a contract extension.
 
 ---
 
