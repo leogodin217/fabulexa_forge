@@ -756,7 +756,10 @@ source mode; exactly one `derived` sub-field; `scd` set iff `role == dim`; sourc
 fields matching the grain (`property` required for history/membership, `filter` only
 on records, `where` only on membership, `value` only on `history_point`); membership
 FK fields (`where`/`member_field`/`property`) only on `via: membership` and `path`
-only on `via: reference`; a `lookup` `path` only with its `to` set; and non-empty collections.
+only on `via: reference`; `fk.where` refused on a membership-grain table's plain
+membership fk (the grain row already is the binding, so there is nothing left for
+the predicate to narrow — `source.where` narrows rows there; the point-in-time
+`as_of` form keeps `where`); a `lookup` `path` only with its `to` set; and non-empty collections.
 Predicate values carry their own well-formedness rule — non-empty, duplicate-free —
 on the value type rather than on the models
 ([`row-predicates.md`](row-predicates.md) § Validation Rules), and `other_where`,

@@ -258,9 +258,7 @@ def main() -> int:
             )
             continue
         surface, target_key = resolved
-        results.append(
-            check_fk(con, table, column, fk_decl["to"], target_key, surface)
-        )
+        results.append(check_fk(con, table, column, fk_decl["to"], target_key, surface))
 
     failures = [r for r in results if r["fail"]]
     ungated = [r for r in results if not r["gated"]]

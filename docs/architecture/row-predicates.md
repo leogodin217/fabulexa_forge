@@ -221,10 +221,13 @@ are indifferent to the value's form.
   *damage*, and an operation's declared impact is computed from what it matched, so
   its shape is a question about corrupter blast radius rather than about predicate
   expressiveness ([`corrupters.md`](corrupters.md)).
-- **A membership-grain `fk.where` is inert.** When a table's own grain is
-  `membership`, a `via: membership` foreign key reads the member id off the grain
-  row itself; there is no separate edge relation to narrow, so the clause has no
-  meaning and is accepted-and-ignored, in either value form.
+- **A membership-grain `fk.where` is refused.** When a table's own grain is
+  `membership`, a plain `via: membership` foreign key reads the member id off the
+  grain row itself; there is no separate edge relation to narrow, so the clause
+  has no meaning in either value form. `TableDecl` rejects the combination at
+  parse time and points the author at `source.where` — the surface that narrows a
+  membership grain's rows. The point-in-time form (`as_of`) correlates its own
+  membership subquery and keeps `where`.
 - **`init` proposes scalars.** It proposes sub-type splits, which are genuine
   one-value splits.
 - **Streaming, the writers, and the mixer read none of these fields.** Tier-2
