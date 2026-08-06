@@ -11,17 +11,21 @@
 # Every output name below is the domain's; every claim in this log was re-derived
 # against THIS emit (counts as measured, not inherited from a sibling config).
 #
+# The governing curation rule: the star models what a real retail site's
+# instrumentation could observe. The simulator's internal machinery — state-machine
+# occupancies, the ops bot's monitoring journey — is how the emit was GENERATED,
+# not data a warehouse would hold. Observable clickstream and entity state stay;
+# engine mechanism goes.
+#
 # Curation decisions (the author judgment init can't make):
 #
-#   SPLIT    actor -> dim_customer only. `sub_type_columns.actor` partitions into
-#            customer (22 columns) and ops (2: presentation_id, prop__component).
-#            Measured: 11,468 customers, 1 ops agent. The ops row is the storefront
-#            monitor bot — a single automated agent whose ONLY analytical output is
-#            the health status it writes onto the storefront host, which is already
-#            a first-class dimension below (dim_storefront). It gets no dimension of
-#            its own: a 1-row dim of a simulation mechanism is not a business entity.
-#            NOTE `prop__store` is a CUSTOMER column, not an ops column — projecting
-#            it on an ops dim would export all-NULL.
+#   SPLIT    actor -> dim_customer / dim_ops_agent, by prop__actor_type.
+#            `sub_type_columns.actor` partitions into customer (22 columns) and
+#            ops (2: presentation_id, prop__component) with no overlap beyond
+#            presentation_id. Measured: 11,468 customers, 1 ops agent. Each dim
+#            projects exactly its own sub-type's columns; NO output table mixes
+#            the two concepts (see SEPARATE below). NOTE `prop__store` is a
+#            CUSTOMER column — projecting it on the ops dim would export all-NULL.
 #   SPLIT    entity -> dim_product / dim_storefront. `sub_type_columns.entity`
 #            partitions into product (11 columns) and infrastructure (5), with NO
 #            overlap beyond presentation_id. Measured: 193 products, 1 storefront
@@ -31,40 +35,72 @@
 #            history-tracked, SCD-2 over the conformed table turns a 194-entity
 #            catalogue into 308 rows, 115 of them versions of the single server.
 #            Split, each dim projects exactly its own sub-type's columns.
+#   SEPARATE customer tables carry only customer activity. The single
+#            storefront_ops journey is the monitoring loop, and its rows
+#            previously left dangling references on the customer tables (the ops
+#            agent is not in dim_customer; the storefront host is not in
+#            dim_product). Each customer-side table now filters to its concept:
+#              - dim_session: filter prop__journey_type = shopping_session
+#                (measured: 31,518 of 31,519 journey_instance rows)
+#              - fact_customer_action: filter prop__decision_type IN the six
+#                shopping actions (measured: 122,669 of 122,670 tick_decisions;
+#                the excluded row is the ops journey's single `store_bound`
+#                decision — tick_decision carries no journey column, and
+#                decision_type partitions the two journeys exactly)
+#              - fact_action_product: where elem__role_name IN the three product
+#                roles (measured: 92,709 of 92,710 bindings; the excluded row is
+#                the ops journey's single `store`-role binding to the host)
+#            Every FK now resolves completely — no dangling references remain.
+#   DROPPED  the ops journey's mechanism rows (1 session, 1 store_bound decision,
+#            1 store binding). The monitoring loop is engine mechanism; its
+#            business-visible OUTPUT is the storefront health timeline, which IS
+#            exported — dim_storefront's SCD-2 versions. The ops AGENT itself
+#            stays exported (dim_ops_agent), so the actor kind is fully covered.
+#   DROPPED  journey_instance's current_state history (previously exported as a
+#            fact_session_state occupancy fact, 399,872 rows). The state machine
+#            is how the simulator generates shopper behaviour, not something a
+#            retail site's instrumentation records: measured, its milestone
+#            entries duplicate the clickstream exactly (browsing = visit,
+#            31,518 = 31,518; checkout = begin_checkout, 2,365 = 2,365; the
+#            1,778 purchased sessions = the 1,778 sessions with a purchase
+#            action), ~60% of its rows are gate/loop decision states
+#            (browse_view_gate, browse_cart_gate, browse_loop, browse_advance),
+#            and the remainder (considering entries, the *_stop abandonment
+#            terminals) is engine-internal knowledge — a real site never observes
+#            "the customer is considering" or an explicit abandon event; sessions
+#            just go quiet. Abandonment is inferred by sessionization over
+#            fact_customer_action (last action + no purchase), exactly as a real
+#            warehouse does it.
 #   DIM->T1  dim_product is Type-1: every value-carrying column in the product
 #            partition is `temporal_class: constant` (presentation_id is an
 #            identity column and carries none). Nothing versions.
+#   DIM->T1  dim_ops_agent is Type-1: prop__component is `temporal_class:
+#            constant`. One row — the storefront monitor bot.
 #   SCD-2    dim_storefront: `status` and `error_rate` are the only `tracked`
 #            columns in the entity kind, and they are the incident timeline the
 #            atlas is built around (five storefront degradations across the run,
 #            during which checkout completion collapses). 115 versions of one host.
 #   SCD-2    dim_customer: `total_purchases` is `tracked` — the lifetime order
 #            count genuinely versions per completed order.
-#   FACT     journey_instance -> fact_session_state, NOT a dimension. Measured:
-#            31,519 sessions against 399,872 `current_state` history rows — 12.7
-#            versions per session. Its only tracked property is a state-machine
-#            position, so its value IS the state timeline: funnel dwell time,
-#            time-to-cart, time-to-checkout, abandonment stage. Modeled as an SCD-2
-#            dimension that timeline becomes 400k dimension rows that every fact
-#            must point-in-time join; at history_interval grain it is one row per
-#            state occupancy with entered/exited on it. `record_roles` declares
-#            journey_instance a `dimension` — the registry describes the
-#            simulation's ontology, and this is the author call it cannot make.
 #   DIM      dim_session keeps what genuinely does NOT version about a session
 #            (its customer, its journey type, its handle) as a thin Type-1 dim, so
-#            the facts have an unambiguous single-row session to join.
+#            the facts have an unambiguous single-row session to join. Its
+#            journey_type is not projected: after the SEPARATE filter it is the
+#            constant 'shopping_session'.
 #   FACT     tick_decision -> fact_customer_action. The atlas is explicit that this
 #            is an event-grain "customer actions" dataset and tick_decision IS that
 #            event: one row per funnel action (view / cart / compare / checkout /
-#            purchase in `decision_type`). A real fact, not engine bookkeeping.
+#            purchase in `decision_type`). A real fact, not engine bookkeeping —
+#            and the ONLY behavioural fact: it is the site's observable
+#            clickstream.
 #   BRIDGE   the product binding is NOT an FK on fact_customer_action. The
 #            `bindings` membership carries a MULTI-PICK role — `compared_products`
 #            binds TWO products to one comparison decision (measured 7,846 binding
 #            rows), ordered by elem__pick_index — and dimensional.md § "Membership-
 #            grain facts (multi-pick)" is explicit that a multi-pick role's fact
 #            grain must be the BINDING, not the owner. So the bindings become their
-#            own binding-grain fact, fact_action_product, carrying all 92,710
-#            bindings for every role; dropping a compared product to force 1:1
+#            own binding-grain fact, fact_action_product, carrying all 92,709
+#            product-role bindings; dropping a compared product to force 1:1
 #            would be a fidelity violation.
 #   KEYS     entity/product elects presentation_id. The bundle's record_id for
 #            products mixes two upstream id-assignment schemes (measured: 44
@@ -73,42 +109,19 @@
 #            key space for the product sub-type, unique within the emit. Electing
 #            it keys dim_product on the SKU and renders fact_action_product's
 #            inherited FK in the same surface. actor is NOT elected: its ids are
-#            already uniform (11,468 64-char customers), and the two lookup-built
-#            customer_id fact columns render prop__actor verbatim (a lookup
+#            already uniform (11,468 64-char customers), and the customer_id fact
+#            column built by `lookup` renders prop__actor verbatim (a lookup
 #            projects prop__ columns only), so re-keying dim_customer on CUST_
-#            would break those joins. journey_instance carries no registry claim.
+#            would break that join. journey_instance carries no registry claim.
 #   DROPPED  journey_instance.output_roles — engine role bookkeeping, no domain
 #            meaning. journey_instance's slice_only columns (state_entry_time,
 #            complete, bound_roles) are not projectable in any mode; in dimensional
 #            naming one is a hard refusal, so they simply appear nowhere here.
 #
-# The single storefront_ops journey (measured: 1 session, 116 state rows, 1
-# tick_decision, 1 `store` binding) is a monitoring loop, not retail activity. It is
-# NOT dropped — dropping rows to tidy a shape is a fidelity violation — but it is
-# labeled: `journey_type` rides on both facts, so
-# `where journey_type = 'shopping_session'` isolates the funnel (122,669 of 122,670
-# actions; 399,756 of 399,872 state rows).
-#
-# One consequence of splitting the dims is worth stating exactly, because it is easy
-# to assume the opposite: an `fk` under the DEFAULT election writes the referenced
-# record's id whether or not that record survives the destination dim's filter. So
-# the ops monitoring loop leaves two rows carrying an id that joins to nothing:
-#   - dim_session.customer_id and fact_customer_action.customer_id carry the ops
-#     AGENT (its actor is not a customer, so it is not in dim_customer).
-# The third such edge is rendered differently by the election above:
-#   - fact_action_product.product_id resolves presentation_id restricted to
-#     dim_product's source population set, and the one `store`-role binding points
-#     at the storefront HOST (infrastructure — outside the set), so that row
-#     renders NULL rather than a dangling id (the out-of-set posture; the raw
-#     record is still reachable through the base/source exports).
-# Every other FK resolves completely: 0 unresolved session_id, 0 unresolved
-# storefront_id, and 122,669 of 122,670 actions match a dim_customer version through
-# the point-in-time join below.
-#
 # TIME: the sidecar carries a `runtime` anchor (2022-03-01T00:00:00 UTC), so no
 # `rebase:` block is needed. `derived: {timestamp: ...}` renders wallclock
 # TIMESTAMPs through it; `_ns` siblings keep raw sim-time BIGINT for exact
-# arithmetic. Both facts carry a wallclock event time, so the point-in-time join
+# arithmetic. The fact carries a wallclock event time, so the point-in-time join
 # against the SCD-2 dims' valid_from/valid_to is actually writable:
 #   JOIN dim_customer d ON f.customer_id = d.customer_id
 #                      AND f.occurred_at >= d.valid_from
@@ -162,6 +175,24 @@ dimensional:
         - {name: valid_from, derived: {scd_window: valid_from}}
         - {name: valid_to, derived: {scd_window: valid_to}}
 
+    # --- dim: ops_agent (the storefront monitor bot) — Type-1, one row.
+    #     The actor kind's other sub-type; projects exactly the ops partition of
+    #     sub_type_columns. Its monitoring JOURNEY is dropped as engine mechanism
+    #     (see the header); its output — the host's health timeline — is
+    #     dim_storefront's SCD-2 versions. ---
+    - name: dim_ops_agent
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: ops}
+      key: [agent_id]
+      columns:
+        - {name: agent_id, from: record_id}
+        - {name: agent_code, from: presentation_id}
+        - {name: component, from: prop__component}
+
     # --- dim: product (the catalogue) — Type-1, every column constant ---
     - name: dim_product
       role: dim
@@ -210,29 +241,34 @@ dimensional:
         - {name: valid_from, derived: {scd_window: valid_from}}
         - {name: valid_to, derived: {scd_window: valid_to}}
 
-    # --- dim: session — Type-1, only what does NOT version about a session.
-    #     The session's STATE timeline is fact_session_state, not this table. ---
+    # --- dim: session — Type-1, shopping sessions only (see SEPARATE).
+    #     Only what does NOT version about a session; its state-machine timeline
+    #     is engine mechanism and is not exported (see the header). ---
     - name: dim_session
       role: dim
       scd: type1
       source:
         grain: records
         kind: journey_instance
+        filter: {prop__journey_type: shopping_session}
       key: [session_id]
       columns:
         - {name: session_id, from: record_id}
-        # On the single storefront_ops session this carries the ops agent's id,
-        # which is not in dim_customer (see the header note on unresolved FKs).
         - {name: customer_id, fk: {to: dim_customer, via: reference}}
-        - {name: journey_type, from: prop__journey_type}
         - {name: customer_handle, from: prop__customer_handle}
 
-    # --- fact: customer_action (the funnel event) — grain: one tick_decision ---
+    # --- fact: customer_action (the funnel event) — grain: one tick_decision.
+    #     The site's observable clickstream, filtered to the six shopping
+    #     actions (see SEPARATE). ---
     - name: fact_customer_action
       role: fact
       source:
         grain: records
         kind: tick_decision
+        filter:
+          prop__decision_type:
+            [visit, product_view, add_to_cart,
+             product_comparison, begin_checkout, purchase]
       key: [action_id]
       columns:
         - {name: action_id, from: record_id}
@@ -240,7 +276,6 @@ dimensional:
         # the shopper, reached by hopping the session's actor reference — so the
         # funnel is attributable to a customer without a two-step join
         - {name: customer_id, lookup: {to: journey_instance, property: actor}}
-        - {name: journey_type, lookup: {to: journey_instance, property: journey_type}}
         - {name: action_type, from: prop__decision_type}
         - {name: context, from: prop__context}
         # wallclock event time, so this fact is point-in-time joinable against the
@@ -248,23 +283,23 @@ dimensional:
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
         - {name: occurred_at_ns, from: created_sim_time}
 
-    # --- fact: action_product (the binding bridge) — grain: one binding ---
-    #     Single-pick roles contribute one row; the multi-pick compared_products
-    #     role contributes one row per compared product, keyed by pick_index, so
-    #     BOTH compared products survive.
+    # --- fact: action_product (the binding bridge) — grain: one binding,
+    #     product roles only (see SEPARATE). Single-pick roles contribute one
+    #     row; the multi-pick compared_products role contributes one row per
+    #     compared product, keyed by pick_index, so BOTH compared products
+    #     survive. ---
     - name: fact_action_product
       role: fact
       source:
         grain: membership
         kind: tick_decision
         property: bindings           # membership__tick_decision__bindings
+        where:
+          elem__role_name: [viewed_product, carted_product, compared_products]
       key: [action_id, product_id, pick_index]
       columns:
         - {name: action_id, from: record_id}
         # Inherits entity/product's presentation_id election: SKU_xxxxx values.
-        # On the one `store`-role binding the target is the storefront host —
-        # outside dim_product's population set — so this renders NULL (see the
-        # header note on the out-of-set posture).
         - name: product_id
           fk:
             to: dim_product
@@ -275,26 +310,4 @@ dimensional:
         - {name: bound_at, derived: {timestamp: {source: joined_sim_time}}}
         - {name: bound_at_ns, from: joined_sim_time}
         # left_sim_time is not projected: no product binding is ever released
-        # within the run, so the column is empty for all 92,710 rows.
-
-    # --- fact: session_state (history_interval grain) — one row per state
-    #     occupancy of a session. THE funnel-timing fact: dwell time per stage,
-    #     time-to-cart, time-to-checkout, which stage an abandoned session died in.
-    - name: fact_session_state
-      role: fact
-      source:
-        grain: history_interval
-        kind: journey_instance
-        property: current_state
-      key: [session_id, entered_ns]
-      columns:
-        - {name: session_id, from: record_id}
-        # zero-hop self-lookups: both are type-1 properties of the session itself
-        - {name: customer_id, lookup: {property: actor}}
-        - {name: journey_type, lookup: {property: journey_type}}
-        - {name: state, from: value}
-        - {name: entered_at, derived: {timestamp: {source: sim_time}}}
-        # lead_sim_time = LEAD(sim_time): NULL on the session's last (open) state
-        - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
-        - {name: entered_ns, from: sim_time}
-        - {name: exited_ns, from: lead_sim_time}
+        # within the run, so the column is empty for all 92,709 rows.
