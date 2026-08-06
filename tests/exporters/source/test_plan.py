@@ -35,6 +35,7 @@ from fabulexa_forge.errors import (
     SourceColumnUnresolved,
     SourceEventSourceOverlap,
     SourceHistoryTrackedRequired,
+    SourceItemTypeCollision,
     SourceKindLabelCollision,
     SourceKindLabelUnknown,
     SourceNameCollision,
@@ -667,7 +668,7 @@ def test_audited_set_only_narrows(tmp_path: Path) -> None:
         ),
     )
     assert plan.events is not None
-    assert plan.events.sources[0].audited_properties == ("status",)
+    assert plan.events.sources[0].audited_properties == (("status", "status"),)
 
 
 def test_audited_set_ignore_widens_by_subtraction(tmp_path: Path) -> None:
@@ -683,7 +684,7 @@ def test_audited_set_ignore_widens_by_subtraction(tmp_path: Path) -> None:
         ),
     )
     assert plan.events is not None
-    assert plan.events.sources[0].audited_properties == ("status",)
+    assert plan.events.sources[0].audited_properties == (("status", "status"),)
 
 
 def test_audited_set_membership_element_fields(tmp_path: Path) -> None:
@@ -703,7 +704,10 @@ def test_audited_set_membership_element_fields(tmp_path: Path) -> None:
         ),
     )
     assert plan.events is not None
-    assert plan.events.sources[0].audited_properties == ("role_name", "actor")
+    assert plan.events.sources[0].audited_properties == (
+        ("role_name", "role_name"),
+        ("actor", "actor"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1047,3 +1051,357 @@ def test_kind_labels_label_equals_unlabeled_kind_name_raises(tmp_path: Path) -> 
                 kind_labels={"actor": "location"},
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# events: item-type resolution (design doc § Item-type resolution, one test
+# per row)
+# ---------------------------------------------------------------------------
+
+
+def _events_plan(
+    tmp_path: Path,
+    sources: "tuple[SourceEventSourceDecl, ...]",
+    *,
+    kind_labels: "dict[str, str] | None" = None,
+) -> "SourcePlan":
+    """Build a `versions` events-only plan over `build_source_test_emit`."""
+    return _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            events=SourceEventsDecl(name="versions", sources=sources),
+            kind_labels=kind_labels,
+        ),
+    )
+
+
+def test_item_type_declared_override_wins(tmp_path: Path) -> None:
+    """A declared `item_type` wins over the kind-label / verbatim default."""
+    plan = _events_plan(
+        tmp_path, (SourceEventSourceDecl(kind="visit", item_type="episode"),)
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].item_type == "episode"
+
+
+def test_item_type_records_label(tmp_path: Path) -> None:
+    """A records source's labeled kind resolves to the label."""
+    plan = _events_plan(
+        tmp_path,
+        (SourceEventSourceDecl(kind="visit"),),
+        kind_labels={"visit": "encounter"},
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].item_type == "encounter"
+
+
+def test_item_type_records_verbatim(tmp_path: Path) -> None:
+    """A records source's unlabeled kind resolves verbatim (today's
+    behavior)."""
+    plan = _events_plan(tmp_path, (SourceEventSourceDecl(kind="visit"),))
+    assert plan.events is not None
+    assert plan.events.sources[0].item_type == "visit"
+
+
+def test_item_type_membership_owner_labeled(tmp_path: Path) -> None:
+    """A membership source's owner-kind label produces `<label(K)>.<property>`."""
+    plan = _events_plan(
+        tmp_path,
+        (
+            SourceEventSourceDecl(
+                membership=MembershipRef(kind="visit", property="team")
+            ),
+        ),
+        kind_labels={"visit": "encounter"},
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].item_type == "encounter.team"
+
+
+def test_item_type_membership_owner_verbatim(tmp_path: Path) -> None:
+    """A membership source's unlabeled owner kind produces `<K>.<property>`
+    (today's behavior)."""
+    plan = _events_plan(
+        tmp_path,
+        (
+            SourceEventSourceDecl(
+                membership=MembershipRef(kind="visit", property="team")
+            ),
+        ),
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].item_type == "visit.team"
+
+
+# ---------------------------------------------------------------------------
+# events: item-type distinctness (design doc § Item-type distinctness, one
+# test per row)
+# ---------------------------------------------------------------------------
+
+
+def test_item_type_two_records_sources_one_kind_sharing_is_legal(
+    tmp_path: Path,
+) -> None:
+    """Two records sources of one kind resolving one item-type is legal —
+    the joint union-safety-gate group, today's shape for a kind split across
+    sources."""
+    plan = _events_plan(
+        tmp_path,
+        (
+            SourceEventSourceDecl(kind="actor", sub_types=("consultant",)),
+            SourceEventSourceDecl(kind="actor", sub_types=("nurse",)),
+        ),
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].item_type == "actor"
+    assert plan.events.sources[1].item_type == "actor"
+
+
+def test_item_type_two_records_sources_different_kinds_sharing_refused(
+    tmp_path: Path,
+) -> None:
+    """Two records sources of different kinds resolving one item-type is
+    refused."""
+    with pytest.raises(
+        SourceItemTypeCollision,
+        match=(
+            "events: sources #1 and #2 resolve one item_type 'shared' over"
+            " two audited item spaces"
+        ),
+    ):
+        _events_plan(
+            tmp_path,
+            (
+                SourceEventSourceDecl(kind="visit", item_type="shared"),
+                SourceEventSourceDecl(kind="location", item_type="shared"),
+            ),
+        )
+
+
+def test_item_type_membership_sharing_any_source_refused(tmp_path: Path) -> None:
+    """A membership source resolving the same item-type as any other source
+    (its own owner's included) is refused."""
+    with pytest.raises(SourceItemTypeCollision, match="sources #1 and #2"):
+        _events_plan(
+            tmp_path,
+            (
+                SourceEventSourceDecl(kind="visit"),
+                SourceEventSourceDecl(
+                    membership=MembershipRef(kind="visit", property="team"),
+                    item_type="visit",
+                ),
+            ),
+        )
+
+
+def test_item_type_two_records_sources_one_kind_differing_is_legal(
+    tmp_path: Path,
+) -> None:
+    """Two records sources of one kind resolving *different* item-types is
+    legal — the union-safety gate re-partitions and runs per resolved
+    item-type separately."""
+    plan = _events_plan(
+        tmp_path,
+        (
+            SourceEventSourceDecl(
+                kind="actor", sub_types=("consultant",), item_type="clinician"
+            ),
+            SourceEventSourceDecl(kind="actor", sub_types=("nurse",)),
+        ),
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].item_type == "clinician"
+    assert plan.events.sources[1].item_type == "actor"
+
+
+def test_item_type_records_equals_another_kinds_rendered_name_refused(
+    tmp_path: Path,
+) -> None:
+    """A records source's item-type equal to another kind's rendered name is
+    refused — including an unaudited, undeclared kind (whole-universe
+    range)."""
+    with pytest.raises(
+        SourceItemTypeCollision,
+        match="events source #1: item_type 'shift' collides with kind 'shift'",
+    ):
+        _events_plan(
+            tmp_path, (SourceEventSourceDecl(kind="visit", item_type="shift"),)
+        )
+
+
+def test_item_type_membership_equals_any_kinds_rendered_name_refused(
+    tmp_path: Path,
+) -> None:
+    """A membership source's item-type equal to the rendered name of any
+    kind (its owner's included) is refused."""
+    with pytest.raises(
+        SourceItemTypeCollision,
+        match="events source #1: item_type 'visit' collides with kind 'visit'",
+    ):
+        _events_plan(
+            tmp_path,
+            (
+                SourceEventSourceDecl(
+                    membership=MembershipRef(kind="visit", property="team"),
+                    item_type="visit",
+                ),
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# events: `changes` key resolution via `rename` (design doc § `changes` key
+# resolution, one test per row)
+# ---------------------------------------------------------------------------
+
+
+def test_rename_key_resolves_to_output_key(tmp_path: Path) -> None:
+    """A renamed audited property's pair uses the entry's value as the
+    `changes` output key."""
+    plan = _events_plan(
+        tmp_path,
+        (SourceEventSourceDecl(kind="visit", rename={"status": "state"}),),
+    )
+    assert plan.events is not None
+    assert ("status", "state") in plan.events.sources[0].audited_properties
+
+
+def test_unrenamed_property_keeps_its_bare_name(tmp_path: Path) -> None:
+    """An audited property without a `rename` entry keeps its bare name as
+    the output key."""
+    plan = _events_plan(
+        tmp_path,
+        (SourceEventSourceDecl(kind="visit", rename={"status": "state"}),),
+    )
+    assert plan.events is not None
+    assert ("priority", "priority") in plan.events.sources[0].audited_properties
+
+
+def test_membership_reference_field_rename_addresses_bare_name(
+    tmp_path: Path,
+) -> None:
+    """A membership reference field's `rename` entry (and its `only`) key on
+    the bare field name `f`, resolving the pair's output key."""
+    plan = _events_plan(
+        tmp_path,
+        (
+            SourceEventSourceDecl(
+                membership=MembershipRef(kind="visit", property="team"),
+                only=("role_name", "actor"),
+                rename={"actor": "member"},
+            ),
+        ),
+    )
+    assert plan.events is not None
+    assert plan.events.sources[0].audited_properties == (
+        ("role_name", "role_name"),
+        ("actor", "member"),
+    )
+
+
+def test_rename_value_colliding_with_unrenamed_bare_name_refused(
+    tmp_path: Path,
+) -> None:
+    """A `rename` value colliding with another property's unrenamed bare
+    name raises SourceNameCollision with the "changes key collision"
+    message."""
+    with pytest.raises(SourceNameCollision, match="changes key collision"):
+        _events_plan(
+            tmp_path,
+            (SourceEventSourceDecl(kind="visit", rename={"status": "priority"}),),
+        )
+
+
+def test_rename_value_colliding_with_membership_pair_expansion_refused(
+    tmp_path: Path,
+) -> None:
+    """A `rename` value colliding with a membership reference pair's
+    expanded `_kind` / `_id` name raises SourceNameCollision."""
+    with pytest.raises(SourceNameCollision, match="changes key collision"):
+        _events_plan(
+            tmp_path,
+            (
+                SourceEventSourceDecl(
+                    membership=MembershipRef(kind="visit", property="team"),
+                    rename={"role_name": "actor_kind"},
+                ),
+            ),
+        )
+
+
+def test_rename_key_not_a_property_of_its_source_refused(tmp_path: Path) -> None:
+    """A `rename` key naming no property of its source raises
+    SourceColumnUnresolved."""
+    with pytest.raises(SourceColumnUnresolved, match="not a column of its source"):
+        _events_plan(
+            tmp_path,
+            (SourceEventSourceDecl(kind="visit", rename={"bogus": "x"}),),
+        )
+
+
+def test_rename_key_excluded_by_only_refused(tmp_path: Path) -> None:
+    """A `rename` key naming a property excluded by `only` raises
+    SourceColumnUnresolved — the entry is unsatisfiable, never a silent
+    ignore."""
+    with pytest.raises(SourceColumnUnresolved, match="not a column of its source"):
+        _events_plan(
+            tmp_path,
+            (
+                SourceEventSourceDecl(
+                    kind="visit", only=("status",), rename={"priority": "prio"}
+                ),
+            ),
+        )
+
+
+def test_rename_key_naming_non_exempt_slice_only_refused(tmp_path: Path) -> None:
+    """A `rename` key naming a non-exempt `slice_only` property raises
+    SourceSliceOnlyRead."""
+    with pytest.raises(SourceSliceOnlyRead):
+        _open_plan(
+            build_slice_only_source_emit(tmp_path),
+            _config(
+                events=SourceEventsDecl(
+                    name="versions",
+                    sources=(
+                        SourceEventSourceDecl(
+                            kind="patient", rename={"loyalty_tier": "tier"}
+                        ),
+                    ),
+                ),
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
+# events: `kind_labels` threading
+# ---------------------------------------------------------------------------
+
+
+def test_kind_labels_thread_onto_every_event_source_plan(tmp_path: Path) -> None:
+    """The resolved `kind_labels` map threads onto every event-source plan,
+    declaration order."""
+    plan = _events_plan(
+        tmp_path,
+        (
+            SourceEventSourceDecl(kind="visit"),
+            SourceEventSourceDecl(
+                membership=MembershipRef(kind="visit", property="team")
+            ),
+        ),
+        kind_labels={"actor": "clinician", "visit": "encounter"},
+    )
+    assert plan.events is not None
+    expected = (("actor", "clinician"), ("visit", "encounter"))
+    assert plan.events.sources[0].kind_labels == expected
+    assert plan.events.sources[1].kind_labels == expected
+
+
+def test_kind_labels_absent_resolves_empty_on_every_event_source_plan(
+    tmp_path: Path,
+) -> None:
+    """No `kind_labels` declared -> every event-source plan carries the
+    empty tuple."""
+    plan = _events_plan(tmp_path, (SourceEventSourceDecl(kind="visit"),))
+    assert plan.events is not None
+    assert plan.events.sources[0].kind_labels == ()

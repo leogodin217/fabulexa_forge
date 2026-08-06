@@ -58,6 +58,7 @@ from fabulexa_forge.errors import (
     SourceColumnUnresolved,
     SourceEventSourceOverlap,
     SourceHistoryTrackedRequired,
+    SourceItemTypeCollision,
     SourceKindLabelCollision,
     SourceKindLabelUnknown,
     SourceNameCollision,
@@ -1300,6 +1301,25 @@ def _validate_event_property_name(
         )
 
 
+def _records_bare_property_names(
+    sidecar: "Sidecar", source_table: str
+) -> frozenset[str]:
+    """Every real `prop__` bare property name of a records table.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        source_table: The kind's `records__<kind>` table.
+
+    Returns:
+        Bare property names, unordered.
+    """
+    return frozenset(
+        col.name[len(_PROP_PREFIX) :]
+        for col in sidecar.columns(source_table)
+        if col.name.startswith(_PROP_PREFIX)
+    )
+
+
 def _resolve_records_audited_properties(
     sidecar: "Sidecar",
     kind: str,
@@ -1332,20 +1352,18 @@ def _resolve_records_audited_properties(
         TemporalClassUnavailableError: Propagated.
     """
     source_table = f"{_RECORDS_TABLE_PREFIX}{kind}"
-    all_bare_names: list[str] = []
+    all_bare_set = _records_bare_property_names(sidecar, source_table)
     candidates: list[str] = []
     for col in sidecar.columns(source_table):
         name = col.name
         if not name.startswith(_PROP_PREFIX):
             continue
         bare = name[len(_PROP_PREFIX) :]
-        all_bare_names.append(bare)
         if is_non_exempt_slice_only(sidecar, kind, name):
             notice_sink(_slice_only_notice(owner, name))
             continue
         candidates.append(bare)
 
-    all_bare_set = frozenset(all_bare_names)
     if only is not None:
         for name in only:
             _validate_event_property_name(name, all_bare_set, sidecar, kind, owner)
@@ -1357,6 +1375,108 @@ def _resolve_records_audited_properties(
         excluded = frozenset(ignore)
         return tuple(c for c in candidates if c not in excluded)
     return tuple(candidates)
+
+
+def _apply_records_property_rename(
+    audited: tuple[str, ...],
+    rename: "dict[str, str] | None",
+    all_bare_names: frozenset[str],
+    sidecar: "Sidecar",
+    kind: str,
+    owner: str,
+) -> tuple[tuple[str, str], ...]:
+    """Resolve a records source's (bare name, changes output key) pairs via `rename`.
+
+    A key already in the (narrowed) audited set resolves directly. A key
+    absent from it is diagnosed via `_validate_event_property_name` for a
+    specific error when one applies (not a real property, or a non-exempt
+    slice_only property), else refused as narrowed-away by `only` /
+    `ignore` with the same "not a column of its source" message.
+
+    Args:
+        audited: The source's resolved (narrowed) audited bare names,
+            sidecar column-declaration order.
+        rename: The source's `rename` map, or None.
+        all_bare_names: Every real `prop__` bare property name of the kind.
+        sidecar: The open emit's sidecar.
+        kind: The audited kind.
+        owner: The declaring events source's message label.
+
+    Returns:
+        (bare name, output key) pairs, `audited` order; output key equals
+        the bare name absent a rename entry.
+
+    Raises:
+        SourceColumnUnresolved: A rename key is not a real property, or is
+            excluded by `only` / `ignore`.
+        SourceSliceOnlyRead: A rename key names a non-exempt slice_only
+            property.
+    """
+    if rename is None:
+        return tuple((name, name) for name in audited)
+    audited_set = frozenset(audited)
+    for key in rename:
+        if key in audited_set:
+            continue
+        _validate_event_property_name(key, all_bare_names, sidecar, kind, owner)
+        raise SourceColumnUnresolved(f"{owner}: '{key}' not a column of its source")
+    return tuple((name, rename.get(name, name)) for name in audited)
+
+
+def _apply_membership_field_rename(
+    audited: tuple[str, ...],
+    rename: "dict[str, str] | None",
+    owner: str,
+) -> tuple[tuple[str, str], ...]:
+    """Resolve a membership source's (bare field, output key) pairs via `rename`.
+
+    Args:
+        audited: The source's resolved (narrowed) audited bare field
+            names, element-schema order.
+        rename: The source's `rename` map, or None.
+        owner: The declaring events source's message label.
+
+    Returns:
+        (bare field name, output key) pairs, `audited` order; output key
+        equals the bare name absent a rename entry. A reference field's
+        pair expands at render to `<key>_kind` / `<key>_id`.
+
+    Raises:
+        SourceColumnUnresolved: A rename key is not a real field, or is
+            excluded by `only` / `ignore`.
+    """
+    if rename is None:
+        return tuple((name, name) for name in audited)
+    audited_set = frozenset(audited)
+    for key in rename:
+        if key in audited_set:
+            continue
+        raise SourceColumnUnresolved(f"{owner}: '{key}' not a column of its source")
+    return tuple((name, rename.get(name, name)) for name in audited)
+
+
+def _check_source_changes_key_collision(owner: str, keys: tuple[str, ...]) -> None:
+    """Enforce SourceNameCollision over one source's resolved `changes` keys.
+
+    A membership reference field's expanded `<key>_kind` / `<key>_id` pair
+    is included in `keys` — the check runs over the final, per-source
+    `changes` key surface, never the raw (bare, output-key) pairs.
+
+    Args:
+        owner: The declaring events source's message label.
+        keys: The source's final `changes` keys, in output order.
+
+    Raises:
+        SourceNameCollision: Two keys collide.
+    """
+    counts: dict[str, int] = {}
+    for key in keys:
+        counts[key] = counts.get(key, 0) + 1
+    duplicates = sorted(k for k, count in counts.items() if count > 1)
+    if duplicates:
+        raise SourceNameCollision(
+            f"{owner}: changes key collision: {duplicates}; resolve via rename"
+        )
 
 
 def _membership_field_names(sidecar: "Sidecar", table_name: str) -> tuple[str, ...]:
@@ -1476,6 +1596,57 @@ def _resolve_records_change_edges(
     return tuple(edges)
 
 
+def _membership_reference_fields(
+    sidecar: "Sidecar", table_name: str, fields: "tuple[str, ...]"
+) -> frozenset[str]:
+    """Which of a membership source's fields are reference-valued.
+
+    A reference field is backed by a `member__<f>__kind` / `member__<f>__id`
+    column pair; a scalar field by a single `elem__<f>` column. Drives both
+    the change-edge resolution and the `changes` key expansion (a reference
+    field's pair renders as `<key>_kind` / `<key>_id`).
+
+    Args:
+        sidecar: The open emit's sidecar.
+        table_name: The `membership__<K>__<p>` table.
+        fields: The candidate bare field names.
+
+    Returns:
+        The subset of `fields` that are reference-valued.
+    """
+    names = {col.name for col in sidecar.columns(table_name)}
+    return frozenset(
+        field
+        for field in fields
+        if f"member__{field}__kind" in names and f"member__{field}__id" in names
+    )
+
+
+def _membership_changes_keys(
+    reference_fields: frozenset[str],
+    audited_pairs: "tuple[tuple[str, str], ...]",
+) -> tuple[str, ...]:
+    """A membership source's final `changes` key set, pair-expansion applied.
+
+    Args:
+        reference_fields: The source's reference-valued bare field names
+            (§ `_membership_reference_fields`).
+        audited_pairs: The resolved (bare field, output key) pairs.
+
+    Returns:
+        `<output>` for a scalar field, `<output>_kind` and `<output>_id`
+        for a reference field, `audited_pairs` order.
+    """
+    keys: list[str] = []
+    for field, output in audited_pairs:
+        if field in reference_fields:
+            keys.append(f"{output}_kind")
+            keys.append(f"{output}_id")
+        else:
+            keys.append(output)
+    return tuple(keys)
+
+
 def _resolve_membership_change_edges(
     sidecar: "Sidecar",
     election: Election,
@@ -1501,19 +1672,47 @@ def _resolve_membership_change_edges(
     Raises:
         ElectionUnionUnsafe: Propagated from `_resolve_member_field_edge`.
     """
-    names = {col.name for col in sidecar.columns(table_name)}
+    reference_fields = _membership_reference_fields(sidecar, table_name, audited_fields)
     edges: list[SourceEdgeSurface] = []
     for field in audited_fields:
-        id_col = f"member__{field}__id"
-        kind_col = f"member__{field}__kind"
-        if id_col not in names or kind_col not in names:
+        if field not in reference_fields:
             continue
+        id_col = f"member__{field}__id"
         edges.append(
             _resolve_member_field_edge(
                 sidecar, election, known_kinds, id_col, f"{owner}.{field}_id"
             )
         )
     return tuple(edges)
+
+
+def _resolve_event_source_item_type(
+    decl: "SourceEventSourceDecl",
+    kind_labels_map: "dict[str, str]",
+    kind: str,
+    property_name: "str | None",
+) -> str:
+    """Resolve one events source's item-type: override -> label -> verbatim.
+
+    Args:
+        decl: The events source declaration.
+        kind_labels_map: The resolved `source.kind_labels` as kind -> label.
+        kind: The audited kind (records source) or owner kind `<K>`
+            (membership source).
+        property_name: The membership property, or None for a records
+            source.
+
+    Returns:
+        `decl.item_type` verbatim when declared; else the kind's label
+        (owner-half-labeled `<label(K)>.<property>` for a membership
+        source), or `kind` verbatim when unlabeled.
+    """
+    if decl.item_type is not None:
+        return decl.item_type
+    label = kind_labels_map.get(kind, kind)
+    if property_name is None:
+        return label
+    return f"{label}.{property_name}"
 
 
 def _build_event_source_plan(
@@ -1524,6 +1723,7 @@ def _build_event_source_plan(
     decl: "SourceEventSourceDecl",
     owner: str,
     notice_sink: "NoticeSink",
+    kind_labels: "tuple[tuple[str, str], ...]",
 ) -> SourceEventSourcePlan:
     """Resolve one `events.sources[]` declaration to a `SourceEventSourcePlan`.
 
@@ -1536,20 +1736,26 @@ def _build_event_source_plan(
         decl: The events source declaration.
         owner: The declaring source's message label (`events source #<n>`).
         notice_sink: Receiver for slice-only-column-omitted notices.
+        kind_labels: The resolved `source.kind_labels` map (§
+            `_resolve_kind_labels`) — item-type default resolution and the
+            render's `<f>_kind` entry labeling.
 
     Returns:
         The resolved source, item_surface un-gated (the item-type
-        union-safety gate runs separately, over every source sharing an
-        item_type).
+        union-safety gate runs separately, over every source sharing a
+        resolved item_type).
 
     Raises:
         SourceTableKindUnknown, SourceTableSubTypeUnknown,
             SourceSubTypesOnFlatKind, SourceTableMembershipUnknown:
             Population resolution fails.
-        SourceColumnUnresolved, SourceSliceOnlyRead: An `only` / `ignore`
-            entry is unresolved.
+        SourceColumnUnresolved, SourceSliceOnlyRead: An `only` / `ignore` /
+            `rename` entry is unresolved.
+        SourceNameCollision: Two audited properties (or a membership pair's
+            expanded `_kind` / `_id` names) resolve one `changes` key.
         ElectionUnionUnsafe: A change-edge gate fails.
     """
+    kind_labels_map = dict(kind_labels)
     if decl.kind is not None:
         kind = decl.kind
         populations = resolve_populations(sidecar, owner, kind, decl.sub_types)
@@ -1557,18 +1763,27 @@ def _build_event_source_plan(
         audited = _resolve_records_audited_properties(
             sidecar, kind, decl.only, decl.ignore, owner, notice_sink
         )
+        all_bare_names = _records_bare_property_names(sidecar, source_table)
+        audited_pairs = _apply_records_property_rename(
+            audited, decl.rename, all_bare_names, sidecar, kind, owner
+        )
+        _check_source_changes_key_collision(
+            owner, tuple(output for _, output in audited_pairs)
+        )
         change_edges = _resolve_records_change_edges(
             sidecar, election, source_table, audited, known_kinds_set, owner
         )
         item_surface = tuple(
             (p.sub_type, election.surface_for(kind, p.sub_type)) for p in populations
         )
+        item_type = _resolve_event_source_item_type(decl, kind_labels_map, kind, None)
         return SourceEventSourcePlan(
-            item_type=kind,
+            item_type=item_type,
             kind=kind,
             property=None,
             populations=populations,
-            audited_properties=audited,
+            audited_properties=audited_pairs,
+            kind_labels=kind_labels,
             item_surface=item_surface,
             change_edges=change_edges,
         )
@@ -1588,6 +1803,11 @@ def _build_event_source_plan(
     audited = _resolve_membership_audited_fields(
         sidecar, table_name, decl.only, decl.ignore, owner
     )
+    audited_pairs = _apply_membership_field_rename(audited, decl.rename, owner)
+    reference_fields = _membership_reference_fields(sidecar, table_name, audited)
+    _check_source_changes_key_collision(
+        owner, _membership_changes_keys(reference_fields, audited_pairs)
+    )
     change_edges = _resolve_membership_change_edges(
         sidecar, election, table_name, known_kinds, audited, owner
     )
@@ -1595,11 +1815,14 @@ def _build_event_source_plan(
         (p.sub_type, election.surface_for(owner_kind, p.sub_type)) for p in populations
     )
     return SourceEventSourcePlan(
-        item_type=f"{owner_kind}.{property_name}",
+        item_type=_resolve_event_source_item_type(
+            decl, kind_labels_map, owner_kind, property_name
+        ),
         kind=owner_kind,
         property=property_name,
         populations=populations,
-        audited_properties=audited,
+        audited_properties=audited_pairs,
+        kind_labels=kind_labels,
         item_surface=item_surface,
         change_edges=change_edges,
     )
@@ -1644,6 +1867,101 @@ def _check_events_source_overlap(sources: tuple[SourceEventSourcePlan, ...]) -> 
                     f"events: sources overlap on population '{source.item_type}'"
                 )
             seen_membership[key] = None
+
+
+def _check_item_type_pairwise_distinctness(
+    sources: "tuple[SourceEventSourcePlan, ...]",
+) -> None:
+    """Enforce SourceItemTypeCollision's pairwise sharing rule.
+
+    Two records sources of one kind may share one resolved item-type (the
+    joint union-safety-gate group, today's shape for a kind split across
+    sources); any other sharing is refused — two records sources of
+    different kinds, or a membership source sharing any other source's
+    item-type (its own owner's included).
+
+    Args:
+        sources: The resolved events sources, declaration order (1-based
+            index = declaration order).
+
+    Raises:
+        SourceItemTypeCollision: Two sources illegally share a resolved
+            item-type.
+    """
+    seen: dict[str, tuple[int, SourceEventSourcePlan]] = {}
+    for index, source in enumerate(sources, start=1):
+        prior = seen.get(source.item_type)
+        if prior is None:
+            seen[source.item_type] = (index, source)
+            continue
+        prior_index, prior_source = prior
+        legal = (
+            source.property is None
+            and prior_source.property is None
+            and source.kind == prior_source.kind
+        )
+        if not legal:
+            raise SourceItemTypeCollision(
+                f"events: sources #{prior_index} and #{index} resolve one"
+                f" item_type '{source.item_type}' over two audited item spaces"
+            )
+
+
+def _check_item_type_rendered_name_collision(
+    sources: "tuple[SourceEventSourcePlan, ...]",
+    known_kinds: "tuple[str, ...]",
+    kind_labels_map: "dict[str, str]",
+) -> None:
+    """Enforce SourceItemTypeCollision's rendered-kind-name clause.
+
+    Ranges over the emit's whole kind universe (every sidecar records
+    kind), not just declared sources or labeled kinds — the same range as
+    the label injectivity check, for the same reason.
+
+    Args:
+        sources: The resolved events sources, declaration order.
+        known_kinds: Every kind with a declared records table in the emit.
+        kind_labels_map: The resolved `source.kind_labels` as kind -> label.
+
+    Raises:
+        SourceItemTypeCollision: A records source's item-type equals
+            another kind's rendered name, or a membership source's
+            item-type equals any kind's rendered name (its owner's
+            included).
+    """
+    rendered = {kind: kind_labels_map.get(kind, kind) for kind in known_kinds}
+    for index, source in enumerate(sources, start=1):
+        for kind, name in rendered.items():
+            if source.property is None and kind == source.kind:
+                continue
+            if source.item_type == name:
+                raise SourceItemTypeCollision(
+                    f"events source #{index}: item_type '{source.item_type}'"
+                    f" collides with kind '{kind}'"
+                )
+
+
+def _check_item_type_distinctness(
+    sources: "tuple[SourceEventSourcePlan, ...]",
+    known_kinds: "tuple[str, ...]",
+    kind_labels: "tuple[tuple[str, str], ...]",
+) -> None:
+    """Enforce the design doc's whole item-type distinctness table.
+
+    Runs before the per-item-type union-safety gate (§ design doc "no layer
+    outranks another — override, label, and verbatim name are one
+    vocabulary that must not contradict itself").
+
+    Args:
+        sources: The resolved events sources, declaration order.
+        known_kinds: Every kind with a declared records table in the emit.
+        kind_labels: The resolved `source.kind_labels` map.
+
+    Raises:
+        SourceItemTypeCollision: Either distinctness clause fails.
+    """
+    _check_item_type_pairwise_distinctness(sources)
+    _check_item_type_rendered_name_collision(sources, known_kinds, dict(kind_labels))
 
 
 def _check_item_type_union_safety(
@@ -1719,6 +2037,7 @@ def _build_event_log_plan(
     decl: "SourceEventsDecl",
     declare_keys: bool,
     notice_sink: "NoticeSink",
+    kind_labels: "tuple[tuple[str, str], ...]",
 ) -> SourceEventLogPlan:
     """Resolve the `events` declaration to a `SourceEventLogPlan`.
 
@@ -1731,6 +2050,8 @@ def _build_event_log_plan(
             state table's, the log's key resolves nothing from the emit —
             `id` is true by construction — so it is a constant of the mode.
         notice_sink: Receiver for slice-only-column-omitted notices.
+        kind_labels: The resolved `source.kind_labels` map (§
+            `_resolve_kind_labels`), threaded onto every source.
 
     Returns:
         The resolved event-log plan.
@@ -1739,9 +2060,13 @@ def _build_event_log_plan(
         SourceTableKindUnknown, SourceTableSubTypeUnknown,
             SourceSubTypesOnFlatKind, SourceTableMembershipUnknown:
             A source's population resolution fails.
-        SourceColumnUnresolved, SourceSliceOnlyRead: An `only` / `ignore`
-            entry is unresolved.
+        SourceColumnUnresolved, SourceSliceOnlyRead: An `only` / `ignore` /
+            `rename` entry is unresolved.
+        SourceNameCollision: A source's resolved `changes` keys collide.
         SourceEventSourceOverlap: Two sources resolve overlapping populations.
+        SourceItemTypeCollision: Two sources illegally share a resolved
+            item-type, or a resolved item-type collides with a kind's
+            rendered name.
         ElectionUnionUnsafe: An item-type or change-edge gate fails.
     """
     known_kinds_set = frozenset(known_kinds)
@@ -1754,10 +2079,12 @@ def _build_event_log_plan(
             source_decl,
             f"events source #{index}",
             notice_sink,
+            kind_labels,
         )
         for index, source_decl in enumerate(decl.sources, start=1)
     )
     _check_events_source_overlap(sources)
+    _check_item_type_distinctness(sources, known_kinds, kind_labels)
     _check_item_type_union_safety(election, sources)
     item_id_type = _resolve_log_item_id_type(sidecar, sources)
     return SourceEventLogPlan(
@@ -2235,7 +2562,11 @@ def build_source_plan(
             kind in the sidecar.
         SourceKindLabelCollision: a label equals an unlabeled kind's own
             name — kind -> rendered name is not injective.
-        SourceNameCollision: duplicate output table or column names.
+        SourceItemTypeCollision: two events sources illegally share a
+            resolved item-type, or a resolved item-type collides with a
+            kind's rendered name.
+        SourceNameCollision: duplicate output table or column names, or a
+            source's resolved `changes` keys collide.
         ElectionMixedIdentity, ElectionUnionUnsafe: the identity gates
             per declared table; the edge gates per referencing column and
             per event-log item-type.
@@ -2297,6 +2628,7 @@ def build_source_plan(
             source_config.events,
             declare_keys,
             notices,
+            kind_labels,
         )
 
     _check_output_collisions(tables_t, events_plan)

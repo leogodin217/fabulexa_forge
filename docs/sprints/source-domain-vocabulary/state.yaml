@@ -2,7 +2,7 @@ sprint: source-domain-vocabulary
 parent_branch: keys_and_modes_qa
 baseline_sha: 86d70ec1de945e78c795b373eb17c78c2d62b627
 started: 2026-08-06
-current_phase: 3
+current_phase: 4
 capabilities:
   - source-exporter: [kind-labels, event-source-item-type, event-source-rename]
   - recipes: [source-domain-vocabulary]
@@ -19,7 +19,7 @@ phases:
     name: "Kind labels: validation + junction rendering"
     demo: "docs/sprints/source-domain-vocabulary/demos/phase_2_junction_labels.py"
   3:
-    status: pending
+    status: complete
     name: "Events path: resolved item-types + changes keys"
     demo: "docs/sprints/source-domain-vocabulary/demos/phase_3_events_vocabulary.py"
     steps:
