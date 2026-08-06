@@ -1,0 +1,55 @@
+tables:
+  # The junction's owner — declared alongside the junction because
+  # expect.yaml's table-set check is exact.
+  queue:
+    columns: [id, created_at, active, deactivated_at, updated_at, name]
+    row_count: 1
+
+  # The junction render: member__patient__kind cells labeled "person".
+  queue_waiters:
+    columns: [queue_id, joined_at, left_at, priority, patient_kind, patient_id]
+    row_count: 2
+    contains_rows:
+      - queue_id: q001
+        priority: "2"
+        patient_kind: person
+        patient_id: p001
+      - queue_id: q001
+        priority: "1"
+        patient_kind: person
+        patient_id: p002
+        left_at: null
+
+  # The event log: item_type override + rename (admission), item_type
+  # label default + labeled *_kind changes entries (queue.waiters).
+  versions:
+    columns: [id, item_type, item_id, event, occurred_at, changes]
+    row_count: 6
+    contains_rows:
+      # admission source — item_type override "encounter", rename ward -> department
+      - item_type: encounter
+        item_id: a001
+        event: create
+        changes: '{"department":[null,"north"]}'
+      - item_type: encounter
+        item_id: a002
+        event: create
+        changes: '{"department":[null,"south"]}'
+      - item_type: encounter
+        item_id: a002
+        event: destroy
+        changes: '{"department":["south",null]}'
+      # queue.waiters membership source — item_type labeled "station.waiters",
+      # patient_kind changes entries labeled "person"
+      - item_type: station.waiters
+        item_id: q001
+        event: create
+        changes: '{"priority":[null,"2"],"patient_kind":[null,"person"],"patient_id":[null,"p001"]}'
+      - item_type: station.waiters
+        item_id: q001
+        event: destroy
+        changes: '{"priority":["2",null],"patient_kind":["person",null],"patient_id":["p001",null]}'
+      - item_type: station.waiters
+        item_id: q001
+        event: create
+        changes: '{"priority":[null,"1"],"patient_kind":[null,"person"],"patient_id":[null,"p002"]}'

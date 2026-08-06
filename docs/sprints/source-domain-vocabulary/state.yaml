@@ -34,6 +34,6 @@ phases:
         files:
           - "tests/exporters/source/test_plan.py"
   4:
-    status: pending
+    status: complete
     name: "Recipe: source-domain-vocabulary"
     demo: "docs/sprints/source-domain-vocabulary/demos/phase_4_recipe.py"

@@ -1,0 +1,65 @@
+# Recipe: source-domain-vocabulary
+# ============================================================
+# `source.kind_labels` renames engine kind names wherever a kind name
+# renders as a *value* — an events source's default item-type, a `<f>_kind`
+# entry inside `changes`, and a junction `member__<f>__kind` cell — never
+# identity values, table names, or sub-type discriminator values (source.md
+# § Domain vocabulary). This recipe declares two labels and exercises all
+# three call sites at once, plus the two per-source overrides
+# (`item_type`, `rename`) that sit alongside the map:
+#
+#   kind_labels: {queue: station, patient: person}
+#
+# - `tables: [queue, queue_waiters]` — the junction render (unchanged
+#   shape from source-junction-from-membership) now projects
+#   `member__patient__kind` through the label: `patient_kind` cells read
+#   `person`, never `patient`.
+# - `events.sources[0]` (`kind: admission`) declares an explicit
+#   `item_type: encounter` override (wins over admission's own — unlabeled
+#   — kind name) and a `rename: {ward: department}` (the `changes` key
+#   `ward` becomes `department`).
+# - `events.sources[1]` (`membership: {kind: queue, property: waiters}`)
+#   declares neither override: its item-type defaults to
+#   `<label(queue)>.<property>` = `station.waiters`, and its `patient`
+#   reference field's expanded `patient_kind` changes-entry renders through
+#   the same `patient -> person` label the junction uses.
+#
+# Fixture world (recipe emit):
+#   records__admission — a001 active (create only), a002 closed (create
+#     then destroy), one type-1 prop__ward.
+#   records__queue / membership__queue__waiters — owner q001; p001 closed
+#     interval (joined@1d, left@2d), p002 open interval (joined@2d).
+#
+# Output:
+#   queue        — 1 row, the junction's owner.
+#   queue_waiters — 2 rows; patient_kind = "person" on both (labeled).
+#   versions     — 6 rows: 3 admission (item_type "encounter", changes
+#     keyed "department") + 3 queue-waiters (item_type "station.waiters",
+#     changes keyed "priority"/"patient_kind"/"patient_id", the *_kind
+#     values labeled "person").
+
+mode: source
+
+source:
+  kind_labels:
+    queue: station
+    patient: person
+
+  tables:
+    - name: queue
+      kind: queue
+    - name: queue_waiters
+      membership:
+        kind: queue
+        property: waiters
+
+  events:
+    name: versions
+    sources:
+      - kind: admission
+        item_type: encounter
+        rename:
+          ward: department
+      - membership:
+          kind: queue
+          property: waiters
