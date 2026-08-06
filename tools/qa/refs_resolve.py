@@ -9,16 +9,24 @@ identifier columns (`from: prop__driver_id`, `from: presentation_id`, ...)
 are not foreign keys and must not be flagged.
 
 Per `docs/architecture/dimensional.md` ("Foreign keys — the labeled-edge
-pathfind"), an `fk:` resolves to the target dim's grain `record_id`. What the
-target *names* that column is the author's choice: it is whichever of the
-target's columns declares `from: record_id`, and it is frequently not `id`
-(`dim_patient` calls it `patient_id`). This script therefore reads the target
-key column out of the config rather than assuming a name.
+pathfind") and `key-election.md`, an `fk:` resolves to the target dim's
+ELECTED identity surface: `record_id` by default, or whichever of
+`record_id` / `record_index` / `presentation_id` the config's `keys:` block
+elects for the target's source population — overridable per edge by
+`fk.target_key`. What the target *names* that column is the author's choice:
+it is whichever of the target's columns declares `from: <that surface>`, and
+it is frequently not `id` (`dim_patient` calls it `patient_id`). This script
+therefore resolves the surface the way the exporter does (target_key wins;
+else the election inherited from the target dim's population set; else
+`record_id`) and reads the key column name out of the config rather than
+assuming either.
 
-That assumption is exactly what rotted here once before: the script hard-coded
-`id`, key election moved the name, and every dimensional example reported a
-BinderException as though it were a referential defect. Hence the second rule
-below — a checker that cannot run says so, and never says "defect".
+That discipline exists because this script rotted twice along the same axis:
+first it hard-coded the key column NAME `id`, then it hard-coded the key
+column SOURCE `from: record_id` — and key election moved both out from under
+it, turning checkable edges into BinderExceptions or UNGATED reports. Hence
+the second rule below — a checker that cannot run says so, and never says
+"defect".
 
 base/source auto modes declare no `fk:` (they are mechanical prop__ ->
 column maps, not FK-aware); for those this script reports "no declared FKs"
@@ -53,9 +61,9 @@ import yaml
 #: an unreadable dataset as an invariant violation.
 UNGATED_EXIT = 3
 
-#: The grain-key source column every dimensional table projects under a name of
-#: the author's choosing. An `fk:` always points at this column of its target.
-_GRAIN_KEY_SOURCE = "record_id"
+#: The default identity surface a population presents when the config's
+#: `keys:` block elects nothing for it.
+_DEFAULT_SURFACE = "record_id"
 
 
 def load_config(path: str) -> dict:
@@ -63,63 +71,102 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(f)
 
 
-def dimensional_fk_maps(cfg: dict) -> list[tuple[str, str, str]]:
-    """Return [(table, column, target_table)] for every `fk:`-declared column
-    in dimensional mode."""
+def dimensional_fk_maps(cfg: dict) -> list[tuple[str, str, dict]]:
+    """Return [(table, column, fk_decl)] for every `fk:`-declared column
+    in dimensional mode. `fk_decl` is the raw fk mapping (carries `to` and
+    the optional per-edge `target_key` override)."""
     out = []
     for tbl in cfg["dimensional"]["tables"]:
         table = tbl["name"]
         for col in tbl["columns"]:
             if "fk" in col:
-                out.append((table, col["name"], col["fk"]["to"]))
+                out.append((table, col["name"], col["fk"]))
     return out
 
 
-def target_key_columns(cfg: dict) -> dict[str, list[str]]:
-    """Return {table_name: [columns declaring `from: record_id`]}.
+def elected_surface(cfg: dict, target_decl: dict) -> tuple[str | None, str | None]:
+    """Resolve the identity surface `target_decl`'s population set elects.
 
-    A well-formed dimensional table projects its grain key exactly once, so each
-    list normally holds one name. Zero and many are both reported rather than
-    guessed at — see `resolve_target_key`.
+    Mirrors the exporter's inheritance rule (key-election.md): no `keys:`
+    entry for the kind -> record_id; a scalar election -> that surface for
+    every population of the kind; a per-sub-type map -> resolved over the
+    dim's own sub-type population set (its `prop__<kind>_type` filter),
+    unlisted sub-types defaulting to record_id.
+
+    Returns:
+        (surface, None) when one coherent surface resolves, or (None, reason)
+        when this checker cannot know it (no filter to name the population
+        set, or the set elects differing surfaces). A reason is never a data
+        defect.
     """
-    return {
-        tbl["name"]: [
-            col["name"]
-            for col in tbl["columns"]
-            if col.get("from") == _GRAIN_KEY_SOURCE
-        ]
-        for tbl in cfg["dimensional"]["tables"]
-    }
+    source = target_decl.get("source") or {}
+    kind = source.get("kind")
+    election = (cfg.get("keys") or {}).get(kind)
+    if election is None:
+        return _DEFAULT_SURFACE, None
+    if isinstance(election, str):
+        return election, None
+    # Per-sub-type map: the surface depends on which sub-types the dim holds.
+    discriminator = f"prop__{kind}_type"
+    sub_types = (source.get("filter") or {}).get(discriminator)
+    if sub_types is None:
+        return None, (
+            f"kind {kind!r} carries a per-sub-type `keys:` election but the"
+            f" target dim declares no {discriminator} filter, so its population"
+            " set (and elected surface) is unknown to this checker"
+        )
+    if not isinstance(sub_types, list):
+        sub_types = [sub_types]
+    resolved = {s: election.get(s, _DEFAULT_SURFACE) for s in sub_types}
+    surfaces = set(resolved.values())
+    if len(surfaces) > 1:
+        pairs = ", ".join(f"{s}={v}" for s, v in sorted(resolved.items()))
+        return None, (
+            f"target dim's population set for kind {kind!r} elects differing"
+            f" surfaces ({pairs}); nothing coherent to inherit"
+        )
+    return surfaces.pop(), None
 
 
 def resolve_target_key(
-    target: str, keys_by_table: dict[str, list[str]]
-) -> tuple[str | None, str | None]:
-    """Resolve `target`'s grain-key column name.
+    fk_decl: dict, tables_by_name: dict[str, dict], cfg: dict
+) -> tuple[tuple[str, str] | None, str | None]:
+    """Resolve the target's key surface and key column name for one fk edge.
 
     Returns:
-        (column_name, None) when exactly one column projects the grain key, or
-        (None, reason) when the FK cannot be checked. A reason is never a data
-        defect — it means this gate has nothing to say about that edge.
+        ((surface, column_name), None) when the edge's surface resolves and
+        exactly one target column projects it, or (None, reason) when the FK
+        cannot be checked. A reason is never a data defect — it means this
+        gate has nothing to say about that edge.
     """
-    if target not in keys_by_table:
+    target = fk_decl["to"]
+    if target not in tables_by_name:
         return None, (
             f"target table {target!r} is not declared in this config, so its key"
             " column is unknown"
         )
-    keys = keys_by_table[target]
+    surface = fk_decl.get("target_key")
+    if surface is None:
+        surface, reason = elected_surface(cfg, tables_by_name[target])
+        if surface is None:
+            return None, reason
+    keys = [
+        col["name"]
+        for col in tables_by_name[target]["columns"]
+        if col.get("from") == surface
+    ]
     if not keys:
         return None, (
-            f"target table {target!r} projects no `from: {_GRAIN_KEY_SOURCE}`"
-            " column, so it exposes no grain key to point at"
+            f"target table {target!r} projects no `from: {surface}`"
+            " column, so it exposes no key in the edge's elected surface"
         )
     if len(keys) > 1:
         return None, (
-            f"target table {target!r} projects `from: {_GRAIN_KEY_SOURCE}` under"
+            f"target table {target!r} projects `from: {surface}` under"
             f" {len(keys)} names ({', '.join(sorted(keys))}); which one an fk"
             " means is ambiguous"
         )
-    return keys[0], None
+    return (surface, keys[0]), None
 
 
 def check_fk(
@@ -128,12 +175,14 @@ def check_fk(
     column: str,
     target: str,
     target_key: str,
+    surface: str,
 ) -> dict:
     result = {
         "table": table,
         "column": column,
         "target": target,
         "target_key": target_key,
+        "surface": surface,
     }
     predicate = (
         f'from "{table}" where "{column}" is not null'
@@ -186,29 +235,32 @@ def main() -> int:
 
     if mode == "dimensional":
         fk_maps = dimensional_fk_maps(cfg)
-        keys_by_table = target_key_columns(cfg)
+        tables_by_name = {tbl["name"]: tbl for tbl in cfg["dimensional"]["tables"]}
     elif mode in ("base", "source"):
         fk_maps = []
-        keys_by_table = {}
+        tables_by_name = {}
     else:
         raise SystemExit(f"refs_resolve.py: unsupported export mode {mode!r}")
 
     results = []
-    for table, column, target in fk_maps:
-        target_key, reason = resolve_target_key(target, keys_by_table)
-        if target_key is None:
+    for table, column, fk_decl in fk_maps:
+        resolved, reason = resolve_target_key(fk_decl, tables_by_name, cfg)
+        if resolved is None:
             results.append(
                 {
                     "table": table,
                     "column": column,
-                    "target": target,
+                    "target": fk_decl["to"],
                     "gated": False,
                     "reason": reason,
                     "fail": False,
                 }
             )
             continue
-        results.append(check_fk(con, table, column, target, target_key))
+        surface, target_key = resolved
+        results.append(
+            check_fk(con, table, column, fk_decl["to"], target_key, surface)
+        )
 
     failures = [r for r in results if r["fail"]]
     ungated = [r for r in results if not r["gated"]]
