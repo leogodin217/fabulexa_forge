@@ -6,8 +6,10 @@
 # every tracked property (entity.status, journey_instance.current_state,
 # actor.total_purchases) carries its LATEST history value. No table
 # classification, no sub-type split, no FK joins — the faithful "current state of every record"
-# landing shape. `record_id` presents as `id`; every other column is
-# presentation-verbatim (`prop__*` keeps its prefix).
+# landing shape. On journey_instance and tick_decision `record_id` presents as
+# `id`; actor and entity elect presentation_id (KEYS below), so their `id` is
+# the business key. Every other column is presentation-verbatim (`prop__*`
+# keeps its prefix).
 #
 # The only author decision here is which kinds to drop — and unlike the NHS
 # bundle, retail drops no kind. NHS excluded two simulation-MECHANISM kinds
@@ -29,6 +31,20 @@
 # prop__bound_roles); each is omitted with a `slice-only-column-omitted` notice,
 # not an error.
 #
+# KEYS: actor and entity elect presentation_id. The registry declares every
+# population of both kinds (CUST_/OPS_ and SKU_/INFRA_ counter key spaces,
+# unique within the emit) — required, because base never splits a kind: one
+# table spans all its sub-types, so the election must be uniform and the
+# spanned key spaces pairwise union-safe (they are: distinct non-empty
+# prefixes). Motivation: the bundle's record_id for products mixes two
+# upstream id-assignment schemes (44 short integers, 149 64-char hashes);
+# under the election the id-space value column carries the uniform business
+# key instead, and reference columns into these kinds (journey_instance's
+# prop__actor) render the same surface. The `<kind>_key` index keys ship
+# regardless — election chooses the id-space VALUE surface beside them.
+# journey_instance and tick_decision keep the default: the former carries no
+# registry claim, the latter's claim is a bare counter with nothing to gain.
+#
 # Anchor: a `rebase:` block is optional for base — omitted here, but this emit's
 # sidecar CARRIES a `runtime` anchor (2022-03-01T00:00:00 UTC), so the effective
 # anchor resolves from the sidecar and the framework/lifecycle columns
@@ -39,3 +55,8 @@
 # and no `rebase:` is the case where lifecycle columns stay raw BIGINT ns.
 
 mode: base
+
+# Uniform shorthand: every declared sub-type of the kind elects the surface.
+keys:
+  actor: presentation_id
+  entity: presentation_id

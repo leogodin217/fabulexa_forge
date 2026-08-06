@@ -17,7 +17,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import render_typed_literal
+from fabulexa_forge._sql import render_predicate_condition, render_typed_literal
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.election import resolve_election
@@ -312,8 +312,9 @@ def build_elapsed_expr(
         # disc_col existence is guaranteed by check_elapsed_columns_exist at
         # validate_table; hard lookup fails loud if that invariant is ever bypassed.
         col_type = col_types[disc_col]
-        literal = render_typed_literal(disc_val, col_type)
-        where_parts.append(f'"{disc_col}" = {literal}')
+        where_parts.append(
+            render_predicate_condition(disc_col, disc_val, col_type, None)
+        )
     where_sql = " AND ".join(where_parts)
 
     join_clause = (

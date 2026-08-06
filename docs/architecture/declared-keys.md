@@ -53,7 +53,7 @@ distinction is not surfaced.
 | base · per-kind flat table | `<kind>_key` (post-`rename` name) | `id`; `presentation_id` iff claimed | Flat kind: `key` entry. Partitioned kind: the rollup's `unique_within` (absent rollup claim → no declaration) |
 | source · state table | `id` (the identity column) | `presentation_id` iff claimed | `combined_claim` over the table's **resolved population set** — the registry algebra applied to exactly the populations the table combines. Degenerate cases: a flat kind's table reads the `key` entry; a single-population table its sub-type's `key_for` entry (the entry's presence *is* the claim — declared partitions are total non-NULL); a full-domain table's derivation equals the kind's rollup by the registry's consistency clause. A proper-subset table derives its own combination, so a subset that excludes a colliding sub-type keeps its claim; a derived no-claim combination declares nothing |
 | source · junction | none | none | The block speaks only to `presentation_id` on records kinds; membership rows carry no claimed key |
-| source · event log | none | none | Event grain — multiple rows per item, and `(item_type, item_id)` is a polymorphic dereference key spanning kinds, not a per-row key; the only candidate composite includes a rendered wallclock `TIMESTAMP` whose microsecond precision can collide distinct nanosecond events — no honest key exists post-render |
+| source · event log | `id` | none | Construction. `(item_type, item_id)` is a polymorphic dereference key spanning kinds, not a per-row key, and the only candidate composite of the rendered columns includes a wallclock `TIMESTAMP` whose microsecond precision can collide distinct nanosecond events — so no honest key exists *among the rendered values*. `id` is the render's own row-number over the log's total order: per-row unique by construction and immune to that truncation ([`source.md`](source.md) § The event log) |
 
 A kind absent from the block (legally — its column never minted, or the block
 absent entirely) declares identity keys only. `presentation_id` uniqueness is
@@ -130,7 +130,8 @@ window persist, and DuckDB enforces them on every later insert).
 |---|---|---|
 | base per-kind flat table | replace — full state-at snapshot per window | Same as full export |
 | source state table | replace — state-at-horizon snapshot per window | Same as full export |
-| source event log, junction | append — the log's event rows are final; a closed interval re-emits | none (as full export) |
+| source event log | append — event rows are final | `PRIMARY KEY (id)`, declared at first-window table creation. The append-class gate is satisfied: an event row lands in exactly one window (`event_sim_time` falls in exactly one half-open window) and is final, and `id` is tape-anchored, so later windows insert strictly higher, never-colliding values |
+| source junction | append — a closed interval re-emits | none (as full export) |
 | dimensional (type-1, SCD-2, facts) | — | n/a — dimensional carries no `declare_keys` |
 
 A false claim under incremental surfaces as a rolled-back window: the constraint
@@ -154,9 +155,17 @@ is emitted — the claim is consumed as a key source
 
 1. **Determinism.** Key resolution is a pure function of (sidecar, config); no
    data participates. Same emit + config + code → identical declarations.
-2. **Claims are read, never invented.** No declaration exists without either a
-   contract guarantee (identity keys) or a block claim (`presentation_id`).
-   Absence of a claim degrades to absence of a declaration, never to probing.
+2. **Claims are read, never invented.** No declaration exists without a contract
+   guarantee (identity keys), a block claim (`presentation_id`), or construction
+   (the source event log's `id`). Absence of a claim degrades to absence of a
+   declaration, never to probing. Construction is admitted as a third ground
+   because it introduces no probing of data to discover uniqueness — the render
+   assigns the values and assigns them distinct — which is the practice this
+   invariant exists to forbid. It is the strongest of the three: a contract
+   guarantee can be falsified by a corrupted emit and a claim can be falsified by
+   the data, so both can surface as a loud load failure, whereas a constructed
+   key cannot be falsified at all. `TableKeys` records the columns and nothing
+   about which ground a declaration stands on.
 3. **Declarations never change data.** Under any `declare_keys` value the rows,
    columns, ordering, and typing of every output are identical; only DDL differs.
    (Corollary: the tier-2 playback bridging equivalence is untouched — playback

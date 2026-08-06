@@ -112,11 +112,13 @@ def _build_notice_emit(tmp_path: Path, slice_at: int = 250) -> Path:
     return emit_dir
 
 
-def _config_with_filter(value: str, *, with_incremental: bool = False) -> ExportConfig:
+def _config_with_filter(
+    value: str | list[str], *, with_incremental: bool = False
+) -> ExportConfig:
     """Build a type-1 dim config filtering entity records on entity_type.
 
     Args:
-        value: The prop__entity_type filter value.
+        value: The prop__entity_type filter value — a scalar or a list.
         with_incremental: If True, include a sim_period_ns incremental block.
 
     Returns:
@@ -219,6 +221,56 @@ def test_discriminator_observed_emits_zero_notices(tmp_path: Path) -> None:
         )
 
     assert sink.notices == []
+
+
+def test_discriminator_list_wholly_unobserved_emits_one_notice_per_element(
+    tmp_path: Path,
+) -> None:
+    """A list filter with no element observed -> one notice per element,
+    end-to-end through the compile, each keeping the verbatim 'table will be
+    empty' wording (§ The unobserved-value notice matrix, row 3)."""
+    emit_dir = _build_notice_emit(tmp_path)
+    config = _config_with_filter(["admin", "guest"])
+    assert config.dimensional is not None
+    sink = RecordingNoticeSink()
+
+    with open_emit(emit_dir) as emit:
+        build_query_specs(
+            emit, config.dimensional, None, None, sink, base_relations=None
+        )
+
+    assert [n.code for n in sink.notices] == ["discriminator-value-unobserved"] * 2
+    assert [n.message for n in sink.notices] == [
+        "discriminator value 'admin' not observed for"
+        " 'entity.prop__entity_type'; table will be empty",
+        "discriminator value 'guest' not observed for"
+        " 'entity.prop__entity_type'; table will be empty",
+    ]
+
+
+def test_discriminator_list_partially_observed_emits_weaker_wording(
+    tmp_path: Path,
+) -> None:
+    """A list filter with some elements observed -> one notice per unobserved
+    element only, in config element order, end-to-end through the compile,
+    with the weaker 'it contributes no rows' wording — the table is not, in
+    fact, empty (§ The unobserved-value notice matrix, row 4)."""
+    emit_dir = _build_notice_emit(tmp_path)
+    config = _config_with_filter(["consultant", "admin"])
+    assert config.dimensional is not None
+    sink = RecordingNoticeSink()
+
+    with open_emit(emit_dir) as emit:
+        build_query_specs(
+            emit, config.dimensional, None, None, sink, base_relations=None
+        )
+
+    assert len(sink.notices) == 1
+    assert sink.notices[0].code == "discriminator-value-unobserved"
+    assert sink.notices[0].message == (
+        "discriminator value 'admin' not observed for"
+        " 'entity.prop__entity_type'; it contributes no rows"
+    )
 
 
 def test_build_query_specs_notice_sequence_deterministic(tmp_path: Path) -> None:

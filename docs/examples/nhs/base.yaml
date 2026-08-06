@@ -10,14 +10,18 @@
 #
 # Author decisions here:
 #
-#   EXCLUDE  the two simulation-MECHANISM kinds — engine bookkeeping, not
-#            clinical data:
-#              tick_decision — the engine's per-tick rule-firing log.
-#              queue         — an internal wait-queue mechanism record.
+#   EXCLUDE  queue — an internal wait-queue mechanism record (scheduler
+#            state, no clinical row grain).
+#   RESTORED tick_decision -> clinical_event (115,289 rows). An earlier
+#            revision excluded it as "the engine's per-tick rule-firing log"
+#            from the kind name alone; `record_roles` declares it a fact kind
+#            and its decision_type values ARE the clinical event stream
+#            (ed_arrival, triage, admission, surgery_performed, ...).
 #   RENAME   engine-ontology kind names to the domain's:
 #              actor            -> patient
 #              resource         -> consultant
 #              journey_instance -> pathway_episode
+#              tick_decision    -> clinical_event
 #            `booking` and `diary` keep their names — both are genuine NHS
 #            terms (e-RS booking, clinic diary). `entity` keeps its name too:
 #            it is a genuinely polymorphic catalogue (wards / theatres /
@@ -43,8 +47,9 @@ mode: base
 
 base:
   exclude:
-    kinds: [tick_decision, queue]
+    kinds: [queue]
   rename:
     - {table: records__actor, name: patient}
     - {table: records__resource, name: consultant}
     - {table: records__journey_instance, name: pathway_episode}
+    - {table: records__tick_decision, name: clinical_event}

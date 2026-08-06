@@ -157,6 +157,56 @@ class TestResolveDimSourcePopulations:
         with pytest.raises(ExportError, match="not a declared sub-type"):
             resolve_dim_source_populations(sidecar, "entity", {"prop__entity_type": 7})
 
+    def test_list_conjunct_selects_exactly_its_elements_in_config_order(self) -> None:
+        sidecar = _entity_sidecar()
+        result = resolve_dim_source_populations(
+            sidecar, "entity", {"prop__entity_type": ["gamma", "alpha"]}
+        )
+        assert result == DimSourcePopulations(
+            kind="entity", populations=("gamma", "alpha"), proper_subset=True
+        )
+
+    def test_one_element_list_matches_scalar_population_set(self) -> None:
+        sidecar = _entity_sidecar()
+        list_result = resolve_dim_source_populations(
+            sidecar, "entity", {"prop__entity_type": ["alpha"]}
+        )
+        scalar_result = resolve_dim_source_populations(
+            sidecar, "entity", {"prop__entity_type": "alpha"}
+        )
+        assert list_result == scalar_result
+        assert list_result == DimSourcePopulations(
+            kind="entity", populations=("alpha",), proper_subset=True
+        )
+
+    def test_full_domain_list_in_any_order_is_not_a_proper_subset(self) -> None:
+        sidecar = _entity_sidecar()
+        result = resolve_dim_source_populations(
+            sidecar, "entity", {"prop__entity_type": ["gamma", "alpha", "beta"]}
+        )
+        assert result == DimSourcePopulations(
+            kind="entity",
+            populations=("gamma", "alpha", "beta"),
+            proper_subset=False,
+        )
+
+    def test_list_with_out_of_domain_element_raises_naming_it(self) -> None:
+        sidecar = _entity_sidecar()
+        with pytest.raises(ExportError, match="'delta'") as exc_info:
+            resolve_dim_source_populations(
+                sidecar, "entity", {"prop__entity_type": ["alpha", "delta"]}
+            )
+        assert "not a declared sub-type" in str(exc_info.value)
+
+    def test_list_conjunct_on_non_sub_typed_kind_is_ordinary_conjunct(self) -> None:
+        sidecar = _entity_sidecar()
+        result = resolve_dim_source_populations(
+            sidecar, "widget", {"prop__widget_type": ["anything", "else"]}
+        )
+        assert result == DimSourcePopulations(
+            kind="widget", populations=(None,), proper_subset=False
+        )
+
 
 # ---------------------------------------------------------------------------
 # resolve_fk_surface

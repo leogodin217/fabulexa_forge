@@ -147,7 +147,9 @@ def build_scd2_sql(
 
     # discriminator_filter from source.filter — a discriminator-split scd: type2
     # dim must contain only the filtered sub-type's rows.
-    discriminator_filter: dict[str, str] = dict(source.filter) if source.filter else {}
+    discriminator_filter: dict[str, str | list[str]] = (
+        dict(source.filter) if source.filter else {}
+    )
 
     # Compose the versioned-intervals derivation.
     derivation_sql = build_versioned_intervals_sql(
@@ -247,7 +249,9 @@ def build_scd2_rows_sql(
 
     # discriminator_filter from source.filter — a discriminator-split scd: type2
     # dim must contain only the filtered sub-type's rows.
-    discriminator_filter: dict[str, str] = dict(source.filter) if source.filter else {}
+    discriminator_filter: dict[str, str | list[str]] = (
+        dict(source.filter) if source.filter else {}
+    )
 
     # Compose the versioned-intervals derivation.
     derivation_sql = build_versioned_intervals_sql(

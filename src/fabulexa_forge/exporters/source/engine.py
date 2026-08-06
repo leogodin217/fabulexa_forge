@@ -150,7 +150,9 @@ def build_source_query_specs(
         window: The incremental window, or None for a full export.
 
     Returns:
-        One spec per output table, declared order; the event log last.
+        One spec per output table, declared order; the event log last. The
+        log's `keys` is its plan unit's — `PRIMARY KEY (id)` under
+        `declare_keys`, else None.
 
     Raises:
         ValueError: `window` presence disagrees with the plan's
@@ -180,7 +182,7 @@ def build_source_query_specs(
                 write_mode="create" if window is None else "append",
                 view_name=None,
                 view_sql=None,
-                keys=None,
+                keys=plan.events.keys,
             )
         )
     return tuple(specs)

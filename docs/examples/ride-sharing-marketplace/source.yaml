@@ -1,52 +1,103 @@
 # ExportConfig — ride-sharing marketplace, source mode (operational OLTP tables)
 # ============================================================
-# `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/source.yaml`
+# `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/source.yaml <out> --fmt duckdb`
 #
 # Source mode DECLARES its own output shape (docs/architecture/source.md): each
-# `tables[]` entry is a `state` table (current-state, one row per record)
-# over a `kind:`. This is a TWO-SIDED COUPLED MARKET (see dimensional.yaml),
-# so the declared tables reflect both sides and the match that joins them:
+# `tables[]` entry is a `state` table (current-state, one row per record) over a
+# `kind:`. History is opt-in through the single polymorphic `events:` log.
 #
-#   SPLIT  actor -> driver + rider, two `state` tables over the same
-#          `kind: actor` (the shared wide records table, `actor_type`
-#          discriminator), each narrowed by its own `sub_types:`. Both
-#          still share the one `actor` audit stream below.
-#   PLAIN  entity (zone_market — this market's one declared sub-type),
-#          journey_instance (trip/session FSM), and pairing (the
-#          rider<->driver match record — untracked, so it carries no
-#          `events` source) each get their own table.
+# This is a TWO-SIDED COUPLED MARKET (see dimensional.yaml), so the declared
+# tables are both sides, the zones they move through, and the match that joins
+# them. `name:` is author-verbatim, and the bundle's `kind:` values are the
+# simulator's ontology, not a marketplace's schema:
 #
-# History is opt-in via the single polymorphic `events:` log; TRACKED-NESS
-# decides who is worth auditing: actor (status, zone, ride_count,
-# loyalty_band, session_earnings), entity (demand_pressure,
-# supply_pressure — the surge signals), journey_instance (current_state).
+#   actor/rider             -> rider
+#   actor/driver            -> driver
+#   entity/zone_market      -> zone
+#   journey_instance        -> agent_journey
+#   pairing                 -> match
+#   the event log           -> audit_log
 #
-# Source is the first mode that REQUIRES a resolved wallclock anchor (the
-# event log's `occurred_at` is a real TIMESTAMP). No rebase block is given,
-# so the anchor falls back to the sidecar `runtime` — the emit's own clock.
-# Uncomment `rebase:` to override origin/zone.
+#   SPLIT  actor -> rider + driver, two `state` tables over the same `kind: actor`
+#          (one shared wide records table, `actor_type` discriminator), each
+#          narrowed by its own `sub_types:`. Measured 2,552 riders and 1,987
+#          drivers, and `sub_type_columns` gives them 23 and 20 columns
+#          respectively — overlapping on identity, status, zone, loyalty_band and
+#          basic contact, but disjoint on everything that matters (the rider's
+#          account, payment card and home address; the driver's vehicle, licence
+#          plate and strategy).
+#   PLAIN  zone (this market's one entity sub-type), agent_journey (both
+#          lifecycles — measured 6,582 rider journeys and 1,987 driver journeys),
+#          and match — the rider<->driver pairing record. `match` is untracked, so
+#          it carries no `events` source. Its domain name comes straight from the
+#          atlas ("tied by an actor-to-actor match"); `pairing` is the simulator's
+#          word for it.
 #
-# Like base, this bundle declares NO mechanism kinds (no tick_decision, no
-# queue) — every kind here is operational domain data, declared above.
+# Every kind here is operational domain data — this bundle declares no mechanism
+# kinds (no tick_decision, no queue) and no membership tables at all, so there are
+# no junctions to declare.
+#
+# COLUMNS: `sub_types:` narrows the ROWS a table draws but NOT its columns —
+# absent `columns:`, `rider` would carry the driver's vehicle_make and
+# license_plate at 100% NULL and `driver` would carry the rider's payment_card the
+# same way. Both therefore enumerate `columns:` from their own partition, prefixed
+# by the record lifecycle the source archetype wants — created_sim_time, active,
+# deactivated_at, last_mutation_sim_time, rendering as created_at, active,
+# deactivated_at, updated_at. `agent_journey` enumerates too, to drop
+# `output_roles` and `bound_roles` (internal coupling bookkeeping, opaque, no
+# domain meaning). `zone` and `match` keep the full projection.
+#
+# A `temporal_class: slice_only` column is auto-omitted with a notice whatever
+# this config says — here agent_journey's state_entry_time and complete. The
+# export's `notice:` lines are the authoritative list.
+#
+# `deactivated_at` comes out largely empty, and that is faithful: measured, 1,981
+# of 1,987 drivers log off and are deactivated, while no rider and no zone ever
+# is — riders lapse out of the market by reaching a terminal journey state, not by
+# being retired as records.
+#
+# History is opt-in and tracked-ness decides who is audited: actor (status, zone,
+# ride_count, loyalty_band, session_earnings), entity (demand_pressure /
+# supply_pressure — the per-zone surge signals), journey_instance (current_state).
+#
+# Source is the first mode that REQUIRES a resolved wallclock anchor (the log's
+# `occurred_at` is a real TIMESTAMP). No rebase block is given, so the anchor
+# falls back to the sidecar `runtime` (start 2026-01-09, UTC) — the emit's own
+# clock. Uncomment `rebase:` to override origin/zone.
 
 mode: source
 
 source:
   tables:
-    - name: driver
-      kind: actor
-      sub_types: [driver]
     - name: rider
       kind: actor
       sub_types: [rider]
-    - name: zone_market
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__account_id, prop__first_name, prop__last_name, prop__email, prop__phone,
+                prop__date_of_birth, prop__home_street, prop__home_state, prop__home_place_city,
+                prop__home_place_subdivision, prop__home_place_postal_code,
+                prop__home_place_area_code, prop__payment_card, prop__app_user_agent,
+                prop__propensity, prop__status, prop__zone, prop__dest_zone,
+                prop__ride_count, prop__loyalty_band]
+    - name: driver
+      kind: actor
+      sub_types: [driver]
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__driver_id, prop__full_name, prop__first_name, prop__last_name,
+                prop__phone, prop__date_of_birth, prop__vehicle_make, prop__vehicle_model,
+                prop__vehicle_year, prop__vehicle_color, prop__license_plate,
+                prop__strategy, prop__status, prop__zone, prop__base_zone,
+                prop__session_earnings, prop__loyalty_band]
+    - name: zone
       kind: entity
-    - name: journey_instance
+    - name: agent_journey
       kind: journey_instance
-    - name: pairing
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__actor, prop__journey_type, prop__current_state]
+    - name: match
       kind: pairing
   events:
-    name: history
+    name: audit_log
     sources:
       - kind: actor
       - kind: entity

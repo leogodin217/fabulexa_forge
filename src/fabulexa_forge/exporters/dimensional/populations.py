@@ -65,8 +65,9 @@ def resolve_dim_source_populations(
     Implements the doc's set rule verbatim: the filter grammar is an
     equality conjunction over records columns, so at most one conjunct can
     address the synthesized discriminator `prop__<source_kind>_type`; when
-    present it selects exactly that sub-type's population (further
-    conjuncts narrow rows within it, never the set); absent, the set is the
+    present, its value set — a scalar's singleton, or a list's elements in
+    config order — selects exactly those populations (further conjuncts
+    narrow rows within the set, never the set); absent, the set is the
     kind's whole population set — the full declared domain for a sub-typed
     kind, the `(None,)` whole-table population for a flat kind. A
     `prop__<kind>_type` conjunct on a kind whose `subtype_values` is empty
@@ -86,14 +87,16 @@ def resolve_dim_source_populations(
             TableDecl; None when the dim declares none.
 
     Returns:
-        The resolved population set.
+        The resolved population set, populations in selection order.
 
     Raises:
-        ExportError: The discriminator conjunct's value is not a string in
-            the kind's declared domain — the dim's scope selects a
-            population that cannot exist, which on any election-consuming
-            path must fail loudly rather than resolve to an empty set
-            (Principle #7). (Reachable only when the kind is sub-typed.)
+        ExportError: An element of the discriminator conjunct's value set
+            is not a string in the kind's declared domain — evaluated per
+            element, naming the offending element. The dim's scope selects
+            a population that cannot exist, which on any election-
+            consuming path must fail loudly rather than resolve to an
+            empty set (Principle #7). (Reachable only when the kind is
+            sub-typed.)
     """
     domain = sidecar.subtype_values(source_kind)
     if not domain:
@@ -108,14 +111,19 @@ def resolve_dim_source_populations(
             kind=source_kind, populations=domain, proper_subset=False
         )
 
-    if not isinstance(conjunct, str) or conjunct not in domain:
-        raise ExportError(
-            f"dim source kind '{source_kind}': filter.{discriminator_col}="
-            f"{conjunct!r} is not a declared sub-type of the kind's discriminator"
-            f" domain {list(domain)}"
-        )
+    elements = conjunct if isinstance(conjunct, list) else [conjunct]
+    for element in elements:
+        if not isinstance(element, str) or element not in domain:
+            raise ExportError(
+                f"dim source kind '{source_kind}': filter.{discriminator_col}="
+                f"{element!r} is not a declared sub-type of the kind's discriminator"
+                f" domain {list(domain)}"
+            )
+    populations = cast("tuple[str, ...]", tuple(elements))
     return DimSourcePopulations(
-        kind=source_kind, populations=(conjunct,), proper_subset=len(domain) > 1
+        kind=source_kind,
+        populations=populations,
+        proper_subset=set(populations) != set(domain),
     )
 
 

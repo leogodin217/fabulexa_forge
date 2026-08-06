@@ -14,7 +14,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, write_emit
+from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.anchor import resolve_effective_anchor
@@ -30,7 +30,10 @@ from fabulexa_forge.config.models import (
     TimestampSpec,
 )
 from fabulexa_forge.errors import ExportRuntimeError
-from fabulexa_forge.exporters.dimensional.engine import export_dimensional
+from fabulexa_forge.exporters.dimensional.engine import (
+    build_query_specs,
+    export_dimensional,
+)
 from fabulexa_forge.reader.emit import open_emit
 
 # ---------------------------------------------------------------------------
@@ -527,3 +530,143 @@ def test_records_grain_instant_columns_validate_and_export(tmp_path: Path) -> No
     assert still_active[1] == datetime(2024, 1, 1, 0, 0, 0)
     assert still_active[2] is None
     assert still_active[3] == datetime(2024, 1, 1, 0, 0, 30)
+
+
+# ---------------------------------------------------------------------------
+# List-valued predicates (list-valued-predicates sprint, Phase 2): the
+# motivating multi-process fact table, end-to-end.
+# ---------------------------------------------------------------------------
+
+_TICK_DECISION_COLUMNS = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__decision_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+]
+
+
+def _build_multi_process_emit(tmp_path: Path) -> Path:
+    """Emit with five tick_decision rows spanning five discriminator values.
+
+    Mirrors the design doc's motivating NHS scenario: several clinical
+    processes distinguished by prop__decision_type, none declared in
+    enum_domains (a modelling discriminator, not a sub-type tag).
+    """
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__tick_decision", _TICK_DECISION_COLUMNS))
+
+    decision_types = [
+        "ed_arrival",
+        "triage",
+        "ed_assessment",
+        "ed_diagnosis",
+        "surgery_performed",
+    ]
+    for i, decision_type in enumerate(decision_types):
+        conn.execute(
+            'INSERT INTO "records__tick_decision" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+            ["trunk", f"td{i:03d}", i, True, i, i, decision_type],
+        )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__tick_decision",
+                "records",
+                _TICK_DECISION_COLUMNS,
+                len(decision_types),
+                record_kind="tick_decision",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+    )
+    return tmp_path
+
+
+def _make_multi_process_config() -> DimensionalConfig:
+    """Group four decision types into one fact table; a scalar sibling table."""
+    fact_emergency_care = TableDecl(
+        name="fact_emergency_care",
+        role="fact",
+        source=SourceDecl(
+            grain="records",
+            kind="tick_decision",
+            filter={
+                "prop__decision_type": [
+                    "ed_arrival",
+                    "triage",
+                    "ed_assessment",
+                    "ed_diagnosis",
+                ]
+            },
+        ),
+        key=["ed_event_id"],
+        columns=[
+            ColumnDecl(name="ed_event_id", **{"from": "record_id"}),
+            ColumnDecl(name="milestone", **{"from": "prop__decision_type"}),
+        ],
+    )
+    fact_surgery = TableDecl(
+        name="fact_surgery",
+        role="fact",
+        source=SourceDecl(
+            grain="records",
+            kind="tick_decision",
+            filter={"prop__decision_type": "surgery_performed"},
+        ),
+        key=["event_id"],
+        columns=[
+            ColumnDecl(name="event_id", **{"from": "record_id"}),
+            ColumnDecl(name="milestone", **{"from": "prop__decision_type"}),
+        ],
+    )
+    return DimensionalConfig(tables=[fact_emergency_care, fact_surgery])
+
+
+def test_multi_process_fact_table_from_list_filter_end_to_end(tmp_path: Path) -> None:
+    """A three-plus-value list filter exports one table grouping every listed
+    process; a scalar-filtered sibling table renders its byte-identical `=`
+    form alongside it (the motivating case, § Purpose)."""
+    emit_dir = _build_multi_process_emit(tmp_path / "emit")
+    config = _make_multi_process_config()
+
+    with open_emit(emit_dir) as emit:
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        emergency_spec = next(s for s in specs if s.table_name == "fact_emergency_care")
+        surgery_spec = next(s for s in specs if s.table_name == "fact_surgery")
+
+        assert "IN (" in emergency_spec.sql
+        emergency_rows = emit.query_arrow(emergency_spec.sql, ()).to_pydict()
+
+        assert " = " in surgery_spec.sql
+        assert "IN (" not in surgery_spec.sql
+        surgery_rows = emit.query_arrow(surgery_spec.sql, ()).to_pydict()
+
+    assert set(emergency_rows["milestone"]) == {
+        "ed_arrival",
+        "triage",
+        "ed_assessment",
+        "ed_diagnosis",
+    }
+    assert len(emergency_rows["ed_event_id"]) == 4
+    assert surgery_rows["milestone"] == ["surgery_performed"]

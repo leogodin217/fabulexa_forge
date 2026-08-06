@@ -100,7 +100,7 @@ def _make_junction_unit() -> SourceJunctionTablePlan:
 def _make_event_log_unit() -> SourceEventLogPlan:
     """Build a standalone SourceEventLogPlan for the pure classification
     helper — never compiled; only the type discriminates."""
-    return SourceEventLogPlan(name="t", sources=(), item_id_type="VARCHAR")
+    return SourceEventLogPlan(name="t", sources=(), item_id_type="VARCHAR", keys=None)
 
 
 # ---------------------------------------------------------------------------

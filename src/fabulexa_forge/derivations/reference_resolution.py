@@ -14,71 +14,18 @@ validation rules and the derivation share exactly one implementation — the
 "resolvable?" answer is the same function in both call sites.
 
 Layer-direction invariant: imports only the reader, fabulexa_forge.errors,
-and stdlib. Never imports exporters.* or config.
+fabulexa_forge._sql, and stdlib. Never imports exporters.* or config.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Mapping
 
 if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import ColumnSpec, Sidecar
 
+from fabulexa_forge._sql import render_predicate_condition
 from fabulexa_forge.errors import ExportError
-
-# ---------------------------------------------------------------------------
-# Private literal-rendering helper (mirrors exporters.dimensional.columns so
-# this module stays below the exporters layer — no cross-layer import needed).
-# ---------------------------------------------------------------------------
-
-_INTEGER_TYPES = {
-    "TINYINT",
-    "SMALLINT",
-    "INTEGER",
-    "BIGINT",
-    "HUGEINT",
-    "UTINYINT",
-    "USMALLINT",
-    "UINTEGER",
-    "UBIGINT",
-    "UHUGEINT",
-}
-_FLOAT_TYPES = {"DOUBLE", "FLOAT", "REAL"}
-
-
-def _render_typed_literal(value: str, sql_type: str) -> str:
-    """Render a scalar value as a SQL literal typed to sql_type.
-
-    Byte-identical to exporters.dimensional.columns.render_typed_literal.
-    Mirrored here so this module never imports from exporters.*.
-
-    VARCHAR (or VARCHAR( prefix) → single-quoted with '' escaping.
-    Integer / float / DECIMAL / BOOLEAN families → CAST('<escaped>' AS <type>).
-    Unknown types → raise ExportError.
-    """
-    escaped = value.replace("'", "''")
-    upper = sql_type.upper()
-
-    if upper == "VARCHAR" or upper.startswith("VARCHAR("):
-        return f"'{escaped}'"
-
-    if upper in _INTEGER_TYPES:
-        return f"CAST('{escaped}' AS {sql_type})"
-
-    if upper in _FLOAT_TYPES:
-        return f"CAST('{escaped}' AS {sql_type})"
-
-    if upper == "BOOLEAN":
-        return f"CAST('{escaped}' AS {sql_type})"
-
-    if upper.startswith("DECIMAL(") or upper.startswith("NUMERIC("):
-        return f"CAST('{escaped}' AS {sql_type})"
-
-    raise ExportError(
-        f"render_typed_literal: unrecognized SQL type '{sql_type}'"
-        " — no silent VARCHAR fallback"
-    )
-
 
 #: The two fixed columns every reference-path derivation SELECT produces.
 REFERENCE_RESOLUTION_COLUMNS: tuple[str, ...] = ("record_id", "resolved")
@@ -333,14 +280,16 @@ def build_membership_edge_sql(
     property_name: str,
     member_field: str,
     member_kind: str,
-    where_predicate: dict[str, str],
+    where_predicate: Mapping[str, str | list[str]],
 ) -> str:
     """Build the membership-edge derivation SELECT.
 
     Reproduces today's LEFT JOIN over the membership table, narrowing by
     member__<field>__kind = member_kind (the interpretive act that keeps
     this out of the faithful membership relation). Projects record_id (owner)
-    and member__<field>__id as resolved. Not fan-out-free: cardinality is the
+    and member__<field>__id as resolved. Not fan-out-free: an owner matching
+    several member rows yields several result rows, and a list-valued
+    predicate can admit more of them than a scalar — narrowing is the
     author's responsibility via where_predicate.
 
     Args:
@@ -350,14 +299,18 @@ def build_membership_edge_sql(
         property_name: The collection-struct property naming the membership table.
         member_field: The member field name (the <f> in member__<f>__id).
         member_kind: The target member record kind to narrow on.
-        where_predicate: elem__ column -> required value; empty for no extra filter.
+        where_predicate: Element column -> required value or list of
+            alternatives; an empty mapping applies no narrowing.
 
     Returns:
         A complete SELECT producing (record_id, resolved) — record_id is the owner,
         resolved is member__<field>__id.
 
     Raises:
-        ExportError: member_field produces a column not found on the membership table.
+        ExportError: the membership table, member_field, or a predicate column
+            is unresolvable, or a predicate column's sidecar type is not one
+            the shared typed-literal renderer recognizes (§ Consolidating
+            the literal renderers).
     """
     from fabulexa_forge.reader.errors import TableNotFoundError
 
@@ -393,8 +346,7 @@ def build_membership_edge_sql(
                 f" not found on '{mem_table}'"
             )
         sql_type = col_types[col_name]
-        literal = _render_typed_literal(value, sql_type)
-        conditions.append(f'"{col_name}" = {literal}')
+        conditions.append(render_predicate_condition(col_name, value, sql_type, None))
 
     where = " AND ".join(conditions)
     return (

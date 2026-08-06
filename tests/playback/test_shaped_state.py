@@ -32,6 +32,7 @@ from ._shaped_fixtures import (
     fk_hop_shape_config,
     state_dimensional_shape_config,
     state_junction_shape_config,
+    state_source_events_shape_config,
     state_source_shape_config,
     state_test_table_specs,
 )
@@ -248,6 +249,66 @@ def test_interior_t_matches_materialized_truncated_emit_source(
     assert set(stated) == set(oracle_by_name)
     for name, table in stated.items():
         assert table.table.to_pydict() == oracle_by_name[name]
+
+
+# ---------------------------------------------------------------------------
+# The event log's `id` at an interior T: tape-anchored prefix, membership
+# sources included. Records-source correctness leans on the before-image
+# lag being backward-looking (truncation cannot change a value at or before
+# its own event's sim_time); a membership source has no lag — a join/leave
+# renders its payload from its own row — so this is a distinct claim.
+# ---------------------------------------------------------------------------
+
+
+def test_state_event_log_is_the_full_exports_exact_leading_prefix_id_included(
+    tmp_path: "Path",
+) -> None:
+    """A shape whose `events` block mixes a records source (widget) and a
+    membership source (widget.parts): the horizon relation at an interior T
+    is exactly the full export's leading prefix — same row count as the
+    full export's rows through T, every surviving row identical to its
+    full-export counterpart on every column including `id` (row-for-row,
+    not just "same ids present") — and `id` is dense 1..M within it.
+
+    T=12 is chosen so membership events fall on both sides: bolt's join (5)
+    and nut's join (2) are <= T; nut's leave (15) is > T (masked — the
+    interval reads still-open at T=12, so no 'destroy' row for it survives).
+    """
+    emit_dir = build_state_test_emit(tmp_path)
+    config = state_source_events_shape_config()
+    at_sim_time = 12
+    with open_emit(emit_dir) as emit:
+        head = _open_source(emit, config)
+        stated = _tables_by_name(head.state(at_sim_time))
+        full_specs = _direct_source_full_specs(emit, config)
+        full_tables = {
+            query_spec_output_name(spec): emit.query_arrow(spec.sql, ())
+            for spec in full_specs
+        }
+
+    assert config.source is not None
+    assert config.source.events is not None
+    log_name = config.source.events.name
+    full_rows = full_tables[log_name].to_pylist()
+    stated_rows = stated[log_name].table.to_pylist()
+
+    # Fixture guard: membership events genuinely straddle T — else the
+    # membership half of the claim is untested.
+    assert any(
+        r["item_type"] == "widget.parts" and r["event"] == "create" for r in stated_rows
+    )
+    assert any(
+        r["item_type"] == "widget.parts" and r["event"] == "destroy" for r in full_rows
+    )
+    assert not any(
+        r["item_type"] == "widget.parts" and r["event"] == "destroy"
+        for r in stated_rows
+    )
+    assert 0 < len(stated_rows) < len(full_rows)
+
+    # The exact-leading-prefix claim: row-for-row, id included.
+    assert stated_rows == full_rows[: len(stated_rows)]
+    assert [r["id"] for r in stated_rows] == list(range(1, len(stated_rows) + 1))
 
 
 # ---------------------------------------------------------------------------

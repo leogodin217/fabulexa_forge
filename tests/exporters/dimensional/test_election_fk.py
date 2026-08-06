@@ -38,6 +38,7 @@ from fabulexa_forge.config.models import (
 from fabulexa_forge.errors import (
     ElectedKeyDuplicate,
     ElectionDimKeyDisagrees,
+    ElectionInheritanceAmbiguous,
     ElectionPresentationUndeclared,
     ElectionUnionUnsafe,
     IncrementalFingerprintMismatch,
@@ -62,8 +63,11 @@ def _fk_col(name: str, to: str, via: str, **kwargs: object) -> ColumnDecl:
     return ColumnDecl(name=name, fk=FkClause(to=to, via=via, **kwargs))
 
 
-def _dim_entity(name: str, key_from: str, sub_type: str | None = None) -> TableDecl:
-    """A dim over `entity`, optionally filtered to one discriminator value."""
+def _dim_entity(
+    name: str, key_from: str, sub_type: str | list[str] | None = None
+) -> TableDecl:
+    """A dim over `entity`, optionally filtered to one or several discriminator
+    values (a scalar or a list conjunct)."""
     return TableDecl(
         name=name,
         role="dim",
@@ -427,6 +431,130 @@ def test_correlation_column_stays_verbatim_record_id_space(tmp_path: Path) -> No
     assert by_id["b2"] == "e2"
     assert by_id["b3"] is None
     assert by_id["b4"] == "e999"  # dangled — correlation never resolves it
+
+
+# ---------------------------------------------------------------------------
+# List-valued dim source population filter: subset inheritance / ambiguity
+# ---------------------------------------------------------------------------
+
+
+def build_three_subtype_emit(tmp_path: Path) -> Path:
+    """entity split alpha/beta/gamma + booking referencing one entity each.
+
+    e1 alpha, e2 beta, e3 gamma. b1 -> e1, b2 -> e2, b3 -> e3. A dim filtered
+    to `["alpha", "beta"]` selects a proper subset excluding gamma; b3's
+    owner (gamma) is out-of-set."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__entity", _ENTITY_COLUMNS))
+    conn.execute(_create_ddl("records__booking", _BOOKING_COLUMNS))
+
+    for record_id, index, sub_type in (
+        ("e1", 0, "alpha"),
+        ("e2", 1, "beta"),
+        ("e3", 2, "gamma"),
+    ):
+        conn.execute(
+            'INSERT INTO "records__entity" VALUES (?, ?, NULL, ?, ?, NULL, ?, ?, ?)',
+            ["trunk", record_id, 10, True, 10, index, sub_type],
+        )
+    for booking_id, index, entity_id in (
+        ("b1", 0, "e1"),
+        ("b2", 1, "e2"),
+        ("b3", 2, "e3"),
+    ):
+        conn.execute(
+            'INSERT INTO "records__booking" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+            [
+                "trunk",
+                booking_id,
+                20 + index,
+                True,
+                20 + index,
+                index,
+                entity_id,
+                index,
+            ],
+        )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec("records__entity", "records", _ENTITY_COLUMNS, 3, "entity"),
+            _table_spec("records__booking", "records", _BOOKING_COLUMNS, 3, "booking"),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
+        extra={
+            "enum_domains": {"entity": {"entity_type": ["alpha", "beta", "gamma"]}},
+        },
+    )
+    return tmp_path
+
+
+def test_list_filtered_subset_electing_one_surface_inherits_it(tmp_path: Path) -> None:
+    """A dim filtered to a two-element list subset (alpha, beta), both
+    electing record_index, inherits it: in-set owners resolve, the
+    out-of-set (gamma) owner is NULL."""
+    emit_dir = build_three_subtype_emit(tmp_path)
+    config = DimensionalConfig(
+        tables=[
+            _dim_entity("dim_entity_ab", "record_index", sub_type=["alpha", "beta"]),
+            _fact_booking(_fk_col("entity_id", "dim_entity_ab", "reference")),
+        ]
+    )
+    with open_emit(emit_dir) as emit:
+        election = resolve_election(
+            emit.sidecar, {"entity": {"alpha": "record_index", "beta": "record_index"}}
+        )
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+            election=election,
+        )
+        fact_spec = next(s for s in specs if s.table_name == "fact_booking")
+        rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
+
+    by_id = dict(zip(rows["booking_key"], rows["entity_id"]))
+    assert by_id["b1"] == 0
+    assert by_id["b2"] == 1
+    assert by_id["b3"] is None
+
+
+def test_list_filtered_subset_electing_differing_surfaces_raises_ambiguous(
+    tmp_path: Path,
+) -> None:
+    """A dim filtered to a two-element list subset (alpha, beta) electing
+    differing surfaces without an override raises the existing
+    ElectionInheritanceAmbiguous, unchanged message."""
+    emit_dir = build_three_subtype_emit(tmp_path)
+    config = DimensionalConfig(
+        tables=[
+            _dim_entity("dim_entity_ab", "record_index", sub_type=["alpha", "beta"]),
+            _fact_booking(_fk_col("entity_id", "dim_entity_ab", "reference")),
+        ]
+    )
+    with open_emit(emit_dir) as emit:
+        election = resolve_election(
+            emit.sidecar, {"entity": {"alpha": "record_index", "beta": "record_id"}}
+        )
+        with pytest.raises(ElectionInheritanceAmbiguous) as exc_info:
+            build_query_specs(
+                emit,
+                config,
+                None,
+                None,
+                notice_sink=discard_notice_sink,
+                base_relations=None,
+                election=election,
+            )
+    message = str(exc_info.value)
+    assert "alpha=record_index" in message
+    assert "beta=record_id" in message
 
 
 # ---------------------------------------------------------------------------

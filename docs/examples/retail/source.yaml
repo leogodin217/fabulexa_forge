@@ -1,66 +1,143 @@
 # ExportConfig — retail (TechMart) bundle, source mode (operational OLTP tables)
 # ============================================================
-# `fabulexa-forge export docs/examples/retail/bundle docs/examples/retail/source.yaml`
+# `fabulexa-forge export docs/examples/retail/bundle docs/examples/retail/source.yaml <out> --fmt duckdb`
 #
 # Source mode DECLARES its own output shape (docs/architecture/source.md): each
-# `tables[]` entry is a `state` table (current-state, one row per record)
-# over a `kind:`, or a `junction` table over a `membership:` reference.
-# Retail's declarations:
+# `tables[]` entry is a `state` table (current-state, one row per record) over a
+# `kind:`, or a `junction` table over a `membership:` reference. History is opt-in
+# through the single polymorphic `events:` log.
 #
-#   SPLIT    actor -> customer + ops, two `state` tables over the same
-#            `kind: actor` (the SI wide records table, `actor_type`
-#            discriminator), each narrowed by its own `sub_types:` — the
-#            per-sub-type split alternative `init` shows in comments, taken
-#            up here because customer and ops are genuinely separate
-#            operational tables, not two views of one. Both still share the
-#            one `actor` audit stream below — the log's population is
-#            independent of how many state tables read from it.
-#   COMBINED entity (products + infrastructure) stays ONE `state` table:
-#            declaring bare `kind: entity` (no `sub_types:`) takes the
-#            combined STI shape — one table spanning the full
-#            discriminator domain, `entity_type` retained as a column.
-#   PLAIN    journey_instance and tick_decision each get their own table;
-#            tick_decision is untracked (an immutable customer-action
-#            funnel event — a create-only spine, so its `state` table IS
-#            the full record) and so carries no `events:` source.
-#   JUNCTION membership__tick_decision__bindings -> which product each
-#            customer action was bound to.
+# `name:` is author-verbatim, and that is the whole point: the bundle's `kind:`
+# values are the simulator's ontology, not TechMart's schema. No table below is
+# named `entity`, `actor`, `journey_instance` or `tick_decision` — an app database
+# has products and shopping sessions, not entities and journey instances. The
+# mapping this config applies, taken from the atlas and `sub_type_columns`:
 #
-# History is opt-in via the single polymorphic `events:` log; TRACKED-NESS
-# decides who is worth auditing, independent of the state-table split above:
-# actor (prop__total_purchases), entity (prop__status / prop__error_rate),
-# journey_instance (prop__current_state).
+#   actor/customer          -> customer
+#   actor/ops               -> ops_agent
+#   entity/product          -> product
+#   entity/infrastructure   -> storefront
+#   journey_instance        -> shopping_session
+#   tick_decision           -> customer_action
+#   membership bindings     -> action_product
+#   the event log           -> audit_log
 #
-# No kinds are omitted — retail has no simulation-mechanism kind to drop
-# (see base.yaml; `tick_decision` is real event data here, and there is no
-# `queue`).
+#   SPLIT  actor -> customer + ops_agent, two `state` tables over the same
+#          `kind: actor`, each narrowed by its own `sub_types:`. They are
+#          genuinely separate operational tables, not two views of one — measured
+#          11,468 shoppers against a single ops agent, and `sub_type_columns`
+#          gives them disjoint columns (the shopper's commercial and demographic
+#          attributes; the agent's monitored component).
+#   SPLIT  entity -> product + storefront, for the same reason: the partition
+#          gives product 11 columns and infrastructure 5, overlapping only on
+#          presentation_id. Measured 193 products against 1 storefront host. One
+#          combined catalogue table would be NULL for the other's columns on every
+#          row — a shape no app database would ship.
+#   PLAIN  journey_instance -> shopping_session, tick_decision -> customer_action.
+#          customer_action is untracked (an immutable funnel event — a create-only
+#          spine, so its `state` table IS the full record) and therefore carries no
+#          `events:` source.
+#   JUNCTION action_product — which product each customer action was bound to.
+#            Its owner record (the decision) is mechanism, but the binding itself
+#            is domain data: it is the only place the base layer records which
+#            product a view / cart / comparison acted on.
 #
-# Source is the first mode that REQUIRES a resolved wallclock anchor (the
-# event log's `occurred_at` and the junction's `joined_at`/`left_at` are
-# real TIMESTAMPs). No rebase block is given, so the anchor falls back to
-# the sidecar `runtime` (start 2022-03-01, UTC) — the emit's own clock.
-# Uncomment `rebase:` to override.
+# The audit log is named `audit_log`, not `history`: `history` is the base layer's
+# own table name, and reusing it inside the exported app database invites exactly
+# the confusion this mode exists to avoid. Tracked-ness decides who is audited,
+# independent of the state-table split above — actor (total_purchases), entity
+# (status / error_rate), journey_instance (current_state).
+#
+# No kinds are omitted: retail has no simulation-mechanism kind to drop (there is
+# no `queue`, and `tick_decision` is real event data here).
+#
+# Source is the first mode that REQUIRES a resolved wallclock anchor (the log's
+# `occurred_at` and the junction's `joined_at` / `left_at` are real TIMESTAMPs).
+# No rebase block is given, so the anchor falls back to the sidecar `runtime`
+# (start 2022-03-01, UTC) — the emit's own clock. Uncomment `rebase:` to override.
+#
+# COLUMNS: `sub_types:` narrows the ROWS a table draws, but it does NOT narrow the
+# columns — absent `columns:`, a sub-typed table still projects the whole kind's
+# column set, so `product` would carry the storefront's status / error_rate /
+# primary_ip / domain at 100% NULL and `storefront` would carry every product
+# column the same way (verified by exporting it both ways). So each sub-typed
+# table enumerates `columns:` from that sub-type's `sub_type_columns` partition,
+# prefixed by the record lifecycle the source archetype wants — created_sim_time,
+# active, deactivated_at, last_mutation_sim_time, which render as created_at,
+# active, deactivated_at, updated_at. Tables whose kind has no sub-types keep the
+# full projection.
+#
+# A `temporal_class: slice_only` column is auto-omitted with a notice whatever
+# this config says; the export's `notice:` lines are the authoritative list.
+#
+# KEYS: actor and entity elect presentation_id — the app database presents its
+# business identifiers, not the engine's internal record ids. The registry
+# declares all four populations (CUST_/OPS_/SKU_/INFRA_ counter key spaces,
+# unique within the emit, pairwise union-safe), which matters here because the
+# bundle's record_id for products mixes two upstream id-assignment schemes (44
+# short integers, 149 64-char hashes). Under the election each state table's
+# `id` IS the presentation key (the standalone presentation_id column is
+# absorbed — emitting both would duplicate it), and every referencing column
+# renders its target's surface: shopping_session.actor -> CUST_/OPS_,
+# customer.store -> INFRA_, the action_product member column -> SKU_ (INFRA_ on
+# the one store-role binding), audit_log.item_id -> the audited population's
+# key. journey_instance carries no registry claim and tick_decision's claim is
+# a bare counter, so both keep record_id; their tables and edges are unchanged.
+#
+# Two columns are largely empty, and both are faithful rather than defects. The
+# soft-delete `deactivated_at` is set only where something actually retires:
+# measured, 13 of 193 products are withdrawn from the catalogue and 31,502 of
+# 31,519 shopping sessions have ended, while no customer, storefront, ops agent or
+# customer action is ever deactivated. And `action_product.left_at` is empty for
+# all 92,710 rows because a product binding is never released once made.
 
 mode: source
+
+# Uniform shorthand: every declared sub-type of the kind elects the surface.
+keys:
+  actor: presentation_id
+  entity: presentation_id
 
 source:
   tables:
     - name: customer
       kind: actor
       sub_types: [customer]
-    - name: ops
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__first_name, prop__last_name, prop__name, prop__email, prop__username,
+                prop__phone, prop__birth_date, prop__street_address, prop__place_city,
+                prop__place_subdivision, prop__place_postal_code, prop__place_area_code,
+                prop__country, prop__acquisition_source, prop__tier, prop__segment,
+                prop__income, prop__store, prop__total_purchases]
+    - name: ops_agent
       kind: actor
       sub_types: [ops]
-    - name: entity
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__component]
+    - name: product
       kind: entity
-    - name: journey_instance
+      sub_types: [product]
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__product_name, prop__category, prop__price_cents, prop__margin,
+                prop__popularity, prop__identity_brand, prop__identity_line,
+                prop__identity_naming_style, prop__identity_tier, prop__designator]
+    - name: storefront
+      kind: entity
+      sub_types: [infrastructure]
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__status, prop__error_rate, prop__primary_ip, prop__domain]
+    # journey_instance is not sub-typed; `columns:` here drops `output_roles`,
+    # which is engine role bookkeeping with no domain meaning.
+    - name: shopping_session
       kind: journey_instance
-    - name: tick_decision
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__actor, prop__journey_type, prop__current_state, prop__customer_handle]
+    - name: customer_action
       kind: tick_decision
-    - name: tick_decision_bindings
+    - name: action_product
       membership: {kind: tick_decision, property: bindings}
   events:
-    name: history
+    name: audit_log
     sources:
       - kind: actor
       - kind: entity

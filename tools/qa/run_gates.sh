@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs gates 1-4 (scd2_windows, refs_resolve, trace_domain, determinism)
-# across every example + mode dataset under out/exports/, prints a
+# across every example + mode dataset under docs/examples/*/exports/, prints a
 # per-dataset status matrix, and exits nonzero if any gate failed.
 #
 # A gate cell is one of:
@@ -91,7 +91,7 @@ for ex in "${EXAMPLES[@]}"; do
 
   for mode in base source dimensional; do
     cfg="docs/examples/${ex}/${mode}.yaml"
-    ds="out/exports/${ex}/${mode}.duckdb"
+    ds="docs/examples/${ex}/exports/${mode}.duckdb"
     [[ -f "$cfg" ]] || continue
     ROWS+=("${ex}/${mode}")
 

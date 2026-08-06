@@ -1,6 +1,6 @@
 tables:
   versions:
-    columns: [item_type, item_id, event, occurred_at, changes]
+    columns: [id, item_type, item_id, event, occurred_at, changes]
     row_count: 3
     contains_rows:
       - item_type: admission

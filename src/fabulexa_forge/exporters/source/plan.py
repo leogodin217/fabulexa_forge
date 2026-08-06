@@ -1660,6 +1660,7 @@ def _build_event_log_plan(
     election: Election,
     known_kinds: "tuple[str, ...]",
     decl: "SourceEventsDecl",
+    declare_keys: bool,
     notice_sink: "NoticeSink",
 ) -> SourceEventLogPlan:
     """Resolve the `events` declaration to a `SourceEventLogPlan`.
@@ -1669,6 +1670,9 @@ def _build_event_log_plan(
         election: The resolved election.
         known_kinds: Every kind with a declared records table in the emit.
         decl: The `events` declaration.
+        declare_keys: Whether the log declares `PRIMARY KEY (id)`. Unlike a
+            state table's, the log's key resolves nothing from the emit —
+            `id` is true by construction — so it is a constant of the mode.
         notice_sink: Receiver for slice-only-column-omitted notices.
 
     Returns:
@@ -1700,7 +1704,10 @@ def _build_event_log_plan(
     _check_item_type_union_safety(election, sources)
     item_id_type = _resolve_log_item_id_type(sidecar, sources)
     return SourceEventLogPlan(
-        name=decl.name, sources=sources, item_id_type=item_id_type
+        name=decl.name,
+        sources=sources,
+        item_id_type=item_id_type,
+        keys=TableKeys(primary_key=("id",), unique=()) if declare_keys else None,
     )
 
 
@@ -2220,7 +2227,12 @@ def build_source_plan(
     events_plan: SourceEventLogPlan | None = None
     if source_config.events is not None:
         events_plan = _build_event_log_plan(
-            sidecar, election, known_kinds, source_config.events, notices
+            sidecar,
+            election,
+            known_kinds,
+            source_config.events,
+            declare_keys,
+            notices,
         )
 
     _check_output_collisions(tables_t, events_plan)

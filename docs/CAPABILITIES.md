@@ -151,9 +151,11 @@ Each mode reads the same emit and writes a different target shape.
   `created_at` / `updated_at` / `active` / `deactivated_at`); a membership
   declaration as a `junction` association table (`joined_at` / `left_at`, NULL
   while open); the single `events` block as one polymorphic audit log at event
-  grain (`item_type`, `item_id`, `event`, `occurred_at`, `changes` — a
+  grain (`id`, `item_type`, `item_id`, `event`, `occurred_at`, `changes` — a
   deterministic JSON changeset of `[old, new]` pairs composing the
-  row-state-events and membership-events folds), with `only` / `ignore`
+  row-state-events and membership-events folds, keyed by a dense tape-anchored
+  `id` that publishes the log's total order and is its primary key under
+  `declare_keys`), with `only` / `ignore`
   audited-property filters per source. Sidecar facts gate declarations (unknown
   kind / sub-type / membership fails fast); they never decide layout — omission
   is the exclusion mechanism, and a config declaring no output is a load-time
@@ -215,6 +217,19 @@ Each mode reads the same emit and writes a different target shape.
   (lifecycle-only kinds and membership sources commented out), and the aligned
   `keys` block — consuming no `record_roles`; the emitted config always parses
   and plans clean.
+- ✓ **List-valued row predicates** *(dimensional)* — every predicate value in the
+  dimensional grammar (`source.filter`, `source.where`, `source.value`, a membership
+  `fk.where`, `derived.elapsed.other_where`) is a scalar or a non-empty list of
+  alternatives, compiling to `=` or `IN` through one rendering authority. A list is
+  what groups several discriminator values into one named table — the domain's own
+  shape (an NHS "Emergency Care" dataset spanning several decision types) instead of
+  one table per value or one undifferentiated table. Equality and set membership
+  only; entries over distinct columns are AND-joined. On a sub-typed dim's
+  discriminator the value set also selects the dim's source population set, keeping
+  FK output closed over its target. See
+  [`architecture/row-predicates.md`](architecture/row-predicates.md).
+  *Teaches: authoring warehouse subject areas that don't line up 1:1 with source
+  event types.*
 - ✓ **Incremental drip-feed** — window-at-a-time export, wired for the
   dimensional, source, and base modes: `--next` reads a cursor and emits the next window
   (or `--from`/`--to` runs a stateless range), one calendar period

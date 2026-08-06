@@ -1,52 +1,106 @@
 # ExportConfig — ride-sharing bundle, source mode (operational OLTP tables)
 # ============================================================
-# `fabulexa-forge export docs/examples/ride-sharing/bundle docs/examples/ride-sharing/source.yaml`
+# `fabulexa-forge export docs/examples/ride-sharing/bundle docs/examples/ride-sharing/source.yaml <out> --fmt duckdb`
 #
 # Source mode DECLARES its own output shape (docs/architecture/source.md): each
-# `tables[]` entry is a `state` table (current-state, one row per record)
-# over a `kind:`, or a `junction` table over a `membership:` reference.
-# Every domain-meaningful kind gets its own `state` table, verbatim-named:
-# actor (trips), entity (riders + zones), journey_instance (trip
-# lifecycles), resource (drivers) — plus one `junction` table over
-# `membership__resource__holders` (which trip held which driver, from match
-# through drop-off).
+# `tables[]` entry is a `state` table (current-state, one row per record) over a
+# `kind:`, or a `junction` table over a `membership:` reference. History is opt-in
+# through the single polymorphic `events:` log.
 #
-# History is opt-in via the single polymorphic `events:` log; TRACKED-NESS
-# decides who is worth auditing: actor (status — the trip lifecycle
-# changelog, this bundle's headline shape), journey_instance
-# (current_state), resource (allocated). entity carries no tracked
-# property, so it is state-only (no `events` source) — the same choice
-# `init`'s own proposal would make.
+# `name:` is author-verbatim, and that is the whole point: the bundle's `kind:`
+# values are the simulator's ontology, not a ride-hailing platform's schema. This
+# config previously named its tables `actor`, `entity`, `journey_instance`,
+# `resource` and `resource_holders` — every one of them an engine noun. The
+# mapping applied here, taken from the atlas and `sub_type_columns`:
 #
-# Source is the first mode that REQUIRES a resolved wallclock anchor (the
-# event log's `occurred_at` is a real TIMESTAMP). No rebase block is given,
-# so the anchor falls back to the sidecar `runtime` (start 2026-01-05, UTC)
-# — the emit's own clock. Uncomment `rebase:` to override origin/zone.
+#   actor/trip              -> trip            (the atlas: actor IS the trip)
+#   entity/rider            -> rider
+#   entity/zone             -> pickup_zone
+#   resource/driver         -> driver
+#   journey_instance        -> trip_lifecycle
+#   membership holders      -> driver_assignment
+#   membership bindings     -> trip_binding
+#   the event log           -> audit_log
 #
-# Same two mechanism kinds excluded as base/dimensional (see base.yaml) —
-# omission is source's own exclusion mechanism, so `tick_decision` and
-# `queue` are simply never declared. Neither owns a membership table this
-# bundle keeps: excluding `queue` drops membership__queue__waiters, and
-# excluding `tick_decision` drops membership__tick_decision__bindings —
-# junctions without their owner are not operational, so
-# membership__resource__holders is the one declared here.
+#   SPLIT  entity -> rider + pickup_zone. `sub_type_columns` partitions them and
+#          the atlas models them as two distinct lookups. Measured 12 riders and
+#          5 zones.
+#   ADDED  trip_binding, over membership__tick_decision__bindings. This config
+#          previously declared no such table, reasoning that a junction whose
+#          owner record is mechanism "is not operational" — but that left `rider`
+#          and `pickup_zone` unreachable from anything else in the database. The
+#          bindings table is the ONLY place the base layer records which rider and
+#          which pickup zone belong to a trip, so without it the app database
+#          cannot answer who took a trip. The owning decision record stays out;
+#          the binding, which is domain data, comes in. (Same judgment
+#          dimensional.yaml makes with its bridge facts.) `role_name` separates
+#          the two edges: measured 1,496 rider bindings and 1,496 pickup_zone
+#          bindings, one of each per trip.
+#
+# `queue` is never declared — it is scheduling mechanism, and omission is source's
+# own exclusion mechanism. That also leaves membership__queue__waiters out, which
+# costs nothing: its owner is the queue record and its member is the trip, so it
+# links nothing the database does not already link.
+#
+# COLUMNS: `sub_types:` narrows the ROWS a table draws but NOT its columns —
+# absent `columns:`, `rider` would still carry the zone's `zone_type` at 100% NULL
+# and `pickup_zone` would carry the rider's `loyalty` the same way. Both therefore
+# enumerate `columns:` from their own partition, prefixed by the record lifecycle
+# the source archetype wants — created_sim_time, active, deactivated_at,
+# last_mutation_sim_time, rendering as created_at, active, deactivated_at,
+# updated_at. `trip_lifecycle` enumerates too, to drop `output_roles` (engine role
+# bookkeeping with no domain meaning). The rest keep the full projection.
+#
+# A `temporal_class: slice_only` column is auto-omitted with a notice whatever
+# this config says — here trip.surge_tier, driver.queue, and trip_lifecycle's
+# state_entry_time / complete / bound_roles. The export's `notice:` lines are the
+# authoritative list.
+#
+# A few columns come out largely empty, and each is faithful rather than a config
+# defect: `deactivated_at` is set for 1,494 of 1,496 trips (the 2 still in flight
+# at tape's end are the exceptions) and for no driver, rider or zone;
+# `trip_binding.left_at` is empty for all 2,992 bindings because a rider or zone
+# binding is never released; and `driver_assignment.on_preempted_rule` is empty
+# for all 1,496 holds because preemption is a mechanism this run never exercises.
+#
+# History is opt-in and tracked-ness decides who is audited: actor (status — the
+# trip lifecycle changelog, this bundle's headline shape), journey_instance
+# (current_state), resource (allocated). entity carries no tracked property, so it
+# is state-only.
+#
+# Source is the first mode that REQUIRES a resolved wallclock anchor (the log's
+# `occurred_at` and the junctions' `joined_at` / `left_at` are real TIMESTAMPs).
+# No rebase block is given, so the anchor falls back to the sidecar `runtime`
+# (start 2026-01-05, UTC) — the emit's own clock. Uncomment `rebase:` to override.
 
 mode: source
 
 source:
   tables:
-    - name: actor
+    - name: trip
       kind: actor
-    - name: entity
-      kind: entity
-    - name: journey_instance
-      kind: journey_instance
-    - name: resource
+    - name: driver
       kind: resource
-    - name: resource_holders
+    - name: rider
+      kind: entity
+      sub_types: [rider]
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__name, prop__loyalty]
+    - name: pickup_zone
+      kind: entity
+      sub_types: [zone]
+      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__name, prop__zone_type]
+    - name: trip_lifecycle
+      kind: journey_instance
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__actor, prop__journey_type, prop__current_state]
+    - name: driver_assignment
       membership: {kind: resource, property: holders}
+    - name: trip_binding
+      membership: {kind: tick_decision, property: bindings}
   events:
-    name: history
+    name: audit_log
     sources:
       - kind: actor
       - kind: journey_instance

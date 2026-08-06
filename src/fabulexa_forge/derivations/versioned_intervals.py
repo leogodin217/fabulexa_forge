@@ -177,7 +177,7 @@ def build_versioned_intervals_sql(
     fork_path: str,
     kind: str,
     tracked_properties: frozenset[str],
-    discriminator_filter: Mapping[str, str],
+    discriminator_filter: Mapping[str, str | list[str]],
 ) -> str:
     """Build the canonical versioned-intervals SELECT for a kind over history.
 
@@ -208,10 +208,10 @@ def build_versioned_intervals_sql(
         kind: The record kind whose history is reconstructed.
         tracked_properties: The history-tracked properties forming version
             boundaries; non-empty, pre-validated by the mode.
-        discriminator_filter: Records column -> required value restricting the
-            record set (a discriminator-split source's source.filter); an empty
-            mapping selects the whole kind. Callers pass it explicitly — there is
-            no default.
+        discriminator_filter: Column -> required value or list of alternatives
+            restricting the record set (a discriminator-split source's
+            source.filter); an empty mapping applies no restriction. Callers
+            pass it explicitly — there is no default.
 
     Returns:
         A complete, deterministic SELECT producing VERSIONED_INTERVAL_COLUMNS
@@ -223,6 +223,9 @@ def build_versioned_intervals_sql(
             orders the prop columns). The fold's primary read, history, raises
             nothing for absence: it is a contract-guaranteed fixed-category table
             (base-format C3), always present in an emit.
+        ExportError: a predicate column's sidecar type is not one the shared
+            typed-literal renderer recognizes — propagated from the composed
+            reader records builder (§ Consolidating the literal renderers).
     """
     ordered_props = _ordered_tracked_properties(sidecar, kind, tracked_properties)
 

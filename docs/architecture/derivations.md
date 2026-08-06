@@ -120,9 +120,10 @@ Derivations are single-branch at this stage: each takes the sole branch's
 
 ### The versioned-intervals derivation
 
-`build_versioned_intervals_sql(sidecar, fork_path, kind, tracked_properties)`
-produces one row per `(record_id, version)` interval for a kind over a set of
-history-tracked properties. Canonical columns are `VERSIONED_INTERVAL_COLUMNS` —
+`build_versioned_intervals_sql(sidecar, fork_path, kind, tracked_properties,
+discriminator_filter)` produces one row per `(record_id, version)` interval for a
+kind over a set of history-tracked properties, optionally restricted to the
+records the predicate selects. Canonical columns are `VERSIONED_INTERVAL_COLUMNS` —
 `record_id`, `version_start`, `version_end` (raw ns; `version_end` is `NULL` on a
 record's last version) — followed by one `prop__<p>` column per tracked property, in
 the kind's sidecar column-declaration order. The fold reads only `history` (filtered
@@ -165,7 +166,10 @@ columns — static values, per-source-type casts, and provenance enrichment are
 mode-side representation (see [`dimensional.md`](dimensional.md)). `tracked_properties`
 is non-empty; the empty set is not a valid call. A record with no history row for any
 tracked property contributes no boundary and is absent from the relation — no
-creation-time version is synthesized. Behavioral cases are exercised in
+creation-time version is synthesized. The restriction is a semi-join on the reader's
+records relation, which owns the predicate rendering
+([`row-predicates.md`](row-predicates.md)); this fold passes the predicate through
+untouched and renders no condition of its own. Behavioral cases are exercised in
 [`tests/derivations/test_versioned_intervals.py`](../../tests/derivations/test_versioned_intervals.py).
 
 ### The row-state-events derivation
@@ -442,8 +446,16 @@ one `resolved` per anchor `record_id`; the empty `hop_columns` is the zero-hop s
 case (terminal = anchor record). **membership-edge is not** — it yields one row per
 qualifying binding, so the author's `where` predicate is what narrows an owner to a
 single member; an ambiguous `where` leaves several rows for one `record_id` and fans
-the anchor out on join. An anchor whose path does not start resolvable, or a
+the anchor out on join. A list-valued `where` sits between a scalar and an absent
+predicate on that spectrum: it admits every binding matching any element, so it can
+fan out where a scalar does not. An anchor whose path does not start resolvable, or a
 member-kind mismatch, projects `NULL` — never fabricated.
+
+The edge's `where` entries compile through the one predicate-rendering authority
+([`row-predicates.md`](row-predicates.md)) against each element column's sidecar
+type, which is how the layer narrows by an author predicate without importing the
+exporters: the authority takes plain values and a type string, never a config
+object.
 
 **The faithful-vs-interpretive boundary.** Both the faithful membership relation
 (reader tier) and the membership edge name the membership table; the deciding fact is
@@ -798,6 +810,7 @@ filter on; it raises `ExportError` on zero or more than one branch.
 | [`source.md`](source.md) | The mode that composes row-state-events and membership-events (its event log) and state-at (its windowed state snapshot) into landed operational tables. |
 | [`base.md`](base.md) | The mode that composes state-at for its values and the record-index resident for its integer key columns. |
 | [`key-election.md`](key-election.md) | The cross-mode surface that composes the record-index and presentation-key relations to render elected identities and edges. |
+| [`row-predicates.md`](row-predicates.md) | The predicate grammar and rendering authority the membership edge narrows through and the versioned-intervals fold passes along. |
 | [`playback.md`](playback.md) | The seam that composes state-at, membership-state-at, and the truncated-tape surface for its point-in-time and shaped-`state` answers. |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored input contract — `history`, `records__*`, branch enumeration. |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap. |

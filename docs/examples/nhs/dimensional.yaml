@@ -6,8 +6,36 @@
 # against the atlas into the star an NHS trust warehouse would actually run.
 # Curation decisions (the author judgment init can't make):
 #
-#   DROPPED  tick_decision + queue — simulation-mechanism kinds, not clinical
-#            data (engine bookkeeping). Declared under `exclude` as a guard.
+#   DROPPED  queue — scheduler state (specialty priority queues), no clinical
+#            row grain. Declared under `exclude` as a guard.
+#   RESTORED tick_decision (115,289 rows). An earlier revision excluded it as
+#            "engine bookkeeping" from the kind name alone; `record_roles`
+#            declares it a fact kind and its decision_type values ARE the
+#            clinical event stream (ed_arrival, triage, admission,
+#            surgery_performed, ...). Decide from the atlas, not the name.
+#   SPLIT    tick_decision -> one fact per clinical process, at decision
+#            grain, each selected by a list-valued `filter` over its
+#            process's decision types. The decision types cluster 1:1 under
+#            journey_instance.journey_type (verified: every type maps to
+#            exactly one journey type, except waiting_list_deterioration),
+#            so the domain partition is expressible as named tables — which
+#            is what an NHS warehouse actually ships (ECDS, APC, Outpatient,
+#            DM01, CWT), never a single "clinical events" table.
+#            The 982 waiting_list_deterioration events span THREE pathways
+#            (cancer / outpatient / surgical) and would cross-contaminate
+#            any process fact's filter, so they are their own cross-pathway
+#            fact carrying `pathway` via lookup.
+#   BRIDGES  the five binding roles of membership__tick_decision__bindings
+#            (23,505 rows) become five bridge facts, one per role
+#            (`where: {elem__role_name: ...}`), each declaring a real FK to
+#            its reference catalogue: dx_test -> fact_diagnostic_test,
+#            admitted_meds -> fact_medication_administration (multi-pick —
+#            up to three medications per decision, so binding grain is
+#            forced; dimensional.md § Membership-grain facts), spell_ward ->
+#            fact_ward_stay, surgery_procedure -> fact_procedure,
+#            surgery_theatre -> fact_theatre_session. These are the only
+#            link from clinical events to the five catalogue dims, which
+#            previously had no inbound FK at all.
 #   SPLIT    entity -> dim_ward / dim_theatre / dim_diagnostic_test /
 #            dim_procedure / dim_medication. The kind is polymorphic (five
 #            unrelated reference catalogues behind one `entity_type`
@@ -25,54 +53,144 @@
 #            carries the discriminator instead.
 #   DIM->T1  consultant: init proposed SCD-2 because `allocated` (patients
 #            currently held) is history-tracked. That is operational STATE,
-#            not a slowly-changing attribute — dropped; the dim is Type-1
-#            reference data (capacity, grade, specialty).
+#            not a slowly-changing attribute — the dim is Type-1 reference
+#            data (capacity, grade, specialty), and the caseload timeline
+#            enters the star at its own grain as fact_consultant_caseload
+#            (the same judgment ride-sharing-marketplace's fact_loyalty_band
+#            cites as its precedent).
 #   DIM->T1  appointment_book: same logic — `next_opening` (the book's next
 #            free slot) is operational state, not a dim attribute; dropped,
 #            and the dim is Type-1.
+#   STATE    patient (QA F3): dim_patient carried the state of whatever
+#            episode the patient was currently in — 18 of its 29 columns —
+#            so clinical churn, not attribute change, drove 55,449 SCD-2
+#            rows over 15,060 patients (up to 28 versions of one person).
+#            Split three ways on measured evidence:
+#            - TIMELINES -> facts. status (44,621 intervals), hai_status
+#              (19,374 intervals) and the FFT rating (2,093 recorded
+#              outcomes — the fft_invited event's context is stage-only,
+#              so this history series is the ONLY record of the answer)
+#              enter the star at their own grain: fact_patient_status,
+#              fact_hai_status, fact_fft_response below.
+#            - EVENT MIRRORS -> dropped. admission_count (2,717 flips =
+#              the 2,717 admission events), cancer_referred (2,276 = the
+#              cancer_referral events), surgical_referred (1,863 flips ~
+#              1,865 surgeon_assigned events), fft_invited (set on only
+#              229 of 2,208 invited patients; 1,575 carry a recorded
+#              outcome under fft_invited='no'). The clinical event facts
+#              already carry these processes at event grain.
+#            - SCRIPT FLAGS -> dropped as generator inputs (the same
+#              judgment as quality_rating below): pathway_type,
+#              diagnostic_required, outpatient_diagnostic_required,
+#              diagnostic_test_type, suspicious_finding,
+#              surgical_indicated, procedure_code, readmission_risk,
+#              admission_disposition are the patient's pre-assigned route,
+#              contradicted by outcomes — procedure_code on all 15,060
+#              patients while surgical_indicated='no' on 13,290;
+#              admission_disposition set on all 15,060 while only 1,951
+#              were ever admitted. What actually happened lives in the
+#              event facts and bridges.
+#            What remains on the dim is the patient: identity, demographics
+#            and the constant clinical attributes the atlas names (primary
+#            condition, comorbidities, frailty).
 #   NO DIM   journey_instance: its records table is a tombstone (terminal
 #            state + completion flag; everything else slice_only). The value
 #            is its `history` series — current_state is the richest series in
 #            the bundle (~171k transitions) — so the kind enters the star as
 #            fact_pathway_state (below), not as a dimension.
 #
-# Facts — one per grain family, which is what the bundle really carries:
+# Facts — every grain family the bundle carries:
 #   fact_booking             (records grain)          appointment bookings
+#   fact_patient_intake / fact_emergency_care / fact_outpatient /
+#   fact_diagnostics / fact_admitted_care / fact_cancer_pathway /
+#   fact_surgical_pathway / fact_post_discharge / fact_fft /
+#   fact_waiting_list_deterioration
+#                            (records grain)          the clinical event stream,
+#                            one fact per clinical process at decision grain —
+#                            all 115,289 decisions, each in exactly one fact
+#   fact_diagnostic_test / fact_medication_administration / fact_ward_stay /
+#   fact_procedure / fact_theatre_session
+#                            (membership grain)       the five binding-role
+#                            bridges, clinical event -> reference catalogue
 #   fact_pathway_state       (history_interval grain) one row per state-occupancy
 #                            interval of a care episode — time-in-state analytics
 #                            (ED 4-hour breaches, 2WW waits, LoS by state)
 #   fact_consultant_allocation (membership grain)     one row per interval a
 #                            patient held a consultant — utilisation/caseload
+#   fact_consultant_caseload (history_interval grain) one row per constant-caseload
+#                            interval of a consultant — caseload-as-it-stood, read
+#                            via interval join from fact_consultant_allocation
+#   fact_patient_status      (history_interval grain) one row per interval of the
+#                            patient's cross-episode care position
+#   fact_hai_status          (history_interval grain) one row per infection-status
+#                            interval (clear / colonized) — HAI burden over time
+#   fact_fft_response        (history_point grain)    one row per recorded FFT
+#                            survey rating
 #
-# SCD-2 kept where a genuine attribute versions over time: dim_patient
-# (clinical flags: status, hai_status, referrals, fft, ...).
+# No SCD-2 dim remains. dim_patient is Type-1 like the other dims: with the
+# state columns gone, its only tracked properties (full_name, birth_date)
+# never change in this run — and SCD-2 windows version on the KIND's history,
+# not the projected columns, so keeping type2 would re-emit the same 55,449
+# windows as 40,389 pairs of identical adjacent versions. One row per patient
+# is the honest shape; if a run ever mutates names, revisit.
 #
 # Not every omission below is an author choice. `temporal_class: slice_only`
 # columns cannot be projected in any mode — that is why booking.attended_at,
 # journey_instance.state_entry_time / complete / bound_roles / output_roles,
 # and consultant.queue appear nowhere here.
 #
+# Generator parameters are DROPPED, on purpose, and this is the note that keeps
+# them from being added back as "attributes we already have":
+#   dim_consultant.quality_rating   a per-clinician score, 20 distinct values
+#                                   over 30 named consultants. A simulator input;
+#                                   attaching one to a named individual would be
+#                                   a governance problem in a real trust.
+#   dim_appointment_book.no_show_rate  0.12 on 5 of 15 books. The most dangerous
+#                                   of the set: the actual DNA rate computable
+#                                   from fact_booking lands within about a point
+#                                   of it, so a consumer has every reason to
+#                                   report the parameter as a measurement.
+#   ...min_lead, ...window          empty on all 15 books.
+#   ...horizon, ...booking_discipline, ...on_overflow
+#                                   one distinct value across all 15 — a global
+#                                   engine setting materialized per row, carrying
+#                                   no analytic information.
+#   ...slot_interval                3 values, but raw sim-time ns (~17h, ~58h).
+#                                   An engine tick scale, not a clinic slot.
+# What survives on the book is book_type + main_specialty, which is the honest
+# extent of its real catalogue content.
+#
+# capacity is KEPT. It is a real job-plan attribute and the denominator
+# fact_consultant_allocation needs to express utilisation — the analysis that
+# fact exists for.
+#
 # Timestamps: no `rebase:` block, so the effective anchor is the sidecar's own
 # `runtime` (2023-01-01T00:00 UTC). `derived: {timestamp: ...}` columns render
 # wallclock TIMESTAMP through it; their `_ns` siblings keep the raw BIGINT
-# sim-time ns for exact arithmetic.
+# sim-time ns for exact arithmetic. The `_ns` columns are NOT redundant with the
+# timestamps: DuckDB TIMESTAMP is microsecond-precision, and 96% of
+# fact_pathway_state.entered_ns is not microsecond-aligned, so the rendered
+# timestamp truncates real precision. Two of them (entered_ns, allocated_ns) are
+# also declared grain keys.
 
 mode: dimensional
 
 dimensional:
   exclude:
-    kinds: [tick_decision, queue]
+    kinds: [queue]
 
   tables:
-    # --- dim: patient — SCD-2, clinical flags version over time ---
+    # --- dim: patient — Type-1, identity + demographics + constant clinical
+    #     attributes only; per-episode state exports at its own grain (see
+    #     the STATE header note) ---
     - name: dim_patient
       role: dim
-      scd: type2
+      scd: type1
       source:
         grain: records
         kind: actor
         filter: {prop__actor_type: default}
-      key: [patient_id, valid_from]
+      key: [patient_id]
       columns:
         - {name: patient_id, from: record_id}
         - {name: patient_number, from: presentation_id}
@@ -83,28 +201,11 @@ dimensional:
         - {name: imd_decile, from: prop__imd_decile}
         - {name: gp_practice_code, from: prop__gp_practice_code}
         - {name: primary_condition, from: prop__primary_condition}
-        - {name: pathway_type, from: prop__pathway_type}
         - {name: comorbidity_count, from: prop__comorbidity_count}
         - {name: frailty_band, from: prop__frailty_band}
-        - {name: status, from: prop__status}
-        - {name: admission_count, from: prop__admission_count}
-        - {name: admission_disposition, from: prop__admission_disposition}
-        - {name: surgical_referred, from: prop__surgical_referred}
-        - {name: cancer_referred, from: prop__cancer_referred}
-        - {name: diagnostic_required, from: prop__diagnostic_required}
-        - {name: outpatient_diagnostic_required, from: prop__outpatient_diagnostic_required}
-        - {name: diagnostic_test_type, from: prop__diagnostic_test_type}
-        - {name: suspicious_finding, from: prop__suspicious_finding}
-        - {name: surgical_indicated, from: prop__surgical_indicated}
-        - {name: procedure_code, from: prop__procedure_code}
-        - {name: readmission_risk, from: prop__readmission_risk}
-        - {name: hai_status, from: prop__hai_status}
-        - {name: fft_invited, from: prop__fft_invited}
-        - {name: fft_outcome, from: prop__fft_outcome}
-        - {name: valid_from, derived: {scd_window: valid_from}}
-        - {name: valid_to, derived: {scd_window: valid_to}}
 
-    # --- dim: consultant — Type-1 (allocated = state, dropped; queue = slice_only) ---
+    # --- dim: consultant — Type-1 (allocated = state -> fact_consultant_caseload;
+    #     queue = slice_only) ---
     - name: dim_consultant
       role: dim
       scd: type1
@@ -119,8 +220,10 @@ dimensional:
         - {name: entity_code, from: prop__entity_code}
         - {name: main_specialty, from: prop__main_specialty}
         - {name: grade, from: prop__grade}
+        # capacity is the denominator fact_consultant_allocation needs for
+        # utilisation/caseload — kept. quality_rating is DROPPED: see the
+        # generator-parameter note in the header.
         - {name: capacity, from: prop__capacity}
-        - {name: quality_rating, from: prop__quality_rating}
 
     # --- dims: the entity catalogue split per sub-type (sidecar sub_type_columns) ---
     - name: dim_ward
@@ -217,16 +320,12 @@ dimensional:
         kind: diary
       key: [book_id]
       columns:
+        # Every scheduler setting the diary carries is DROPPED — see the
+        # generator-parameter note in the header. What is left is the book's
+        # real catalogue identity, and it is the whole of it.
         - {name: book_id, from: record_id}
         - {name: book_type, from: prop__diary_type}
         - {name: main_specialty, from: prop__main_specialty}
-        - {name: slot_interval, from: prop__slot_interval}
-        - {name: horizon, from: prop__horizon}
-        - {name: min_lead, from: prop__min_lead}
-        - {name: booking_discipline, from: prop__booking_discipline}
-        - {name: on_overflow, from: prop__on_overflow}
-        - {name: no_show_rate, from: prop__no_show_rate}
-        - {name: window, from: prop__window}
 
     # --- fact: booking (records grain) — one row per appointment booking ---
     - name: fact_booking
@@ -239,11 +338,11 @@ dimensional:
         - {name: booking_id, from: record_id}
         - {name: patient_id, fk: {to: dim_patient, via: reference}}
         - {name: book_id, fk: {to: dim_appointment_book, via: reference}}
-        # Event time as an anchored wallclock TIMESTAMP, so the fact is
-        # point-in-time joinable against dim_patient's SCD-2 window:
-        #   JOIN dim_patient d ON f.patient_id = d.patient_id
-        #                     AND f.requested_at >= d.valid_from
-        #                     AND (f.requested_at < d.valid_to OR d.valid_to IS NULL)
+        # Event time as an anchored wallclock TIMESTAMP. Patient-state-as-of-
+        # booking is an interval join against the state facts, e.g.:
+        #   JOIN fact_patient_status s ON s.patient_id = f.patient_id
+        #                    AND f.requested_at_ns >= s.entered_ns
+        #                    AND (s.exited_ns IS NULL OR f.requested_at_ns < s.exited_ns)
         - {name: requested_at, derived: {timestamp: {source: prop__requested_at}}}
         - {name: opening_at, derived: {timestamp: {source: prop__opening_at}}}
         # The raw sim-time ns kept alongside, under distinct names.
@@ -292,3 +391,408 @@ dimensional:
         # NULL while the patient still holds the consultant at tape's end.
         - {name: released_at, derived: {timestamp: {source: left_sim_time}}}
         - {name: allocated_ns, from: joined_sim_time}
+
+    # --- fact: consultant caseload (history_interval grain) — one row per
+    #     constant-caseload interval of a consultant. `allocated` is operational
+    #     state (see the DIM->T1 note), so it enters the star at its own grain;
+    #     caseload-as-it-stood at any event is a three-predicate interval join:
+    #       JOIN fact_consultant_caseload c ON c.consultant_id = f.consultant_id
+    #                            AND f.allocated_ns >= c.entered_ns
+    #                            AND (c.exited_ns IS NULL OR f.allocated_ns < c.exited_ns)
+    - name: fact_consultant_caseload
+      role: fact
+      source:
+        grain: history_interval
+        kind: resource
+        property: allocated
+      key: [consultant_id, entered_ns]
+      columns:
+        - {name: consultant_id, from: record_id}
+        # history.value arrives VARCHAR: the history_interval grain's `from:
+        # value` does not cast back to the sidecar type (BIGINT here) — cast at
+        # query time.
+        - {name: caseload, from: value}
+        - {name: entered_at, derived: {timestamp: {source: sim_time}}}
+        # NULL on the consultant's current (open) caseload interval.
+        - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
+        - {name: entered_ns, from: sim_time}
+        - {name: exited_ns, from: lead_sim_time}
+
+    # ------------------------------------------------------------------
+    # Patient state timelines — the tracked clinical state moved OUT of
+    # dim_patient (the STATE header note). Same judgment as
+    # fact_consultant_caseload: operational state enters the star at its
+    # own grain. patient_id joins dim_patient the way caseload's
+    # consultant_id joins dim_consultant — record_id IS the dim key.
+    # ------------------------------------------------------------------
+
+    # --- fact: patient status (history_interval grain) — one row per
+    #     interval of the patient's cross-episode care position (active,
+    #     in_ed, admitted, ... recovered, deceased). Coarser than
+    #     fact_pathway_state and patient-scoped: it spans episodes (a
+    #     patient is `active` between them, `deceased` terminally), which
+    #     no episode-grain table can express. ---
+    - name: fact_patient_status
+      role: fact
+      source:
+        grain: history_interval
+        kind: actor
+        property: status
+      key: [patient_id, entered_ns]
+      columns:
+        - {name: patient_id, from: record_id}
+        - {name: status, from: value}
+        - {name: entered_at, derived: {timestamp: {source: sim_time}}}
+        # NULL on the patient's current (open) status interval.
+        - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
+        - {name: entered_ns, from: sim_time}
+        - {name: exited_ns, from: lead_sim_time}
+
+    # --- fact: HAI status (history_interval grain) — one row per
+    #     infection-status interval (clear / colonized): the trust's
+    #     hospital-acquired-infection burden over time. This timeline
+    #     exists nowhere else: safety_incident events (599) are not the
+    #     colonization changes (4,314). ---
+    - name: fact_hai_status
+      role: fact
+      source:
+        grain: history_interval
+        kind: actor
+        property: hai_status
+      key: [patient_id, entered_ns]
+      columns:
+        - {name: patient_id, from: record_id}
+        - {name: hai_status, from: value}
+        - {name: entered_at, derived: {timestamp: {source: sim_time}}}
+        # NULL on the patient's current (open) infection-status interval.
+        - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
+        - {name: entered_ns, from: sim_time}
+        - {name: exited_ns, from: lead_sim_time}
+
+    # --- fact: FFT response (history_point grain) — one row per recorded
+    #     Friends & Family Test rating. A response is a point event, and
+    #     the `value:` predicate drops the 15,060 `not_given` seed
+    #     intervals, leaving the 2,093 recorded outcomes. The rating lives
+    #     ONLY in this history series: the fft_invited event's context is
+    #     stage-only, so fact_fft has the invite but never the answer. ---
+    - name: fact_fft_response
+      role: fact
+      source:
+        grain: history_point
+        kind: actor
+        property: fft_outcome
+        value: [very_good, good, neutral, poor, very_poor, no_response]
+      key: [patient_id, recorded_at_ns]
+      columns:
+        - {name: patient_id, from: record_id}
+        - {name: outcome, from: value}
+        - {name: recorded_at, derived: {timestamp: {source: sim_time}}}
+        - {name: recorded_at_ns, from: sim_time}
+
+    # ------------------------------------------------------------------
+    # The clinical event stream: one fact per clinical process, at decision
+    # grain (see the RESTORED / SPLIT header notes). Shared shape: event_id,
+    # episode_id (joins fact_pathway_state.episode_id — the state timeline),
+    # patient_id (the two-hop decision -> journey_instance -> actor
+    # pathfind), milestone where the process has more than one, and the
+    # anchored event time. `context` is projected only where it carries
+    # information milestone does not (verified 1:1 elsewhere).
+    # ------------------------------------------------------------------
+
+    # --- fact: patient intake — front-door triage routing each arrival ---
+    - name: fact_patient_intake
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter: {prop__decision_type: intake}
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+
+    # --- fact: emergency care (ECDS shape, decision grain) — A&E milestones ---
+    - name: fact_emergency_care
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter:
+          prop__decision_type: [ed_arrival, triage, ed_assessment, ed_diagnosis]
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: milestone, from: prop__decision_type}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+        # The four-hour-breach metric in its native form: minutes from this
+        # attendance's ed_arrival to this milestone (0 on the arrival row).
+        - name: minutes_from_arrival
+          derived:
+            elapsed:
+              correlate_on: prop__journey_instance
+              other_where: {prop__decision_type: ed_arrival}
+              start_source: created_sim_time
+              end_source: created_sim_time
+              unit: minutes
+
+    # --- fact: outpatient — referral, attendance, DNA ---
+    - name: fact_outpatient
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter:
+          prop__decision_type: [referral_created, appointment_attended, appointment_dna]
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: milestone, from: prop__decision_type}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+
+    # --- fact: diagnostics (DM01 shape) — order, perform, communicate ---
+    - name: fact_diagnostics
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter:
+          prop__decision_type:
+            [diagnostic_ordered, diagnostic_performed, diagnostic_result_communicated]
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: milestone, from: prop__decision_type}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+        # Turnaround: hours from this request's diagnostic_ordered event.
+        - name: hours_from_order
+          derived:
+            elapsed:
+              correlate_on: prop__journey_instance
+              other_where: {prop__decision_type: diagnostic_ordered}
+              start_source: created_sim_time
+              end_source: created_sim_time
+              unit: hours
+
+    # --- fact: admitted patient care (APC shape) — the inpatient spell's
+    #     milestones. `context` is kept HERE only: safety_incident is the one
+    #     milestone whose context adds information (the care stage — ICU vs
+    #     specialty ward — the incident occurred in). ---
+    - name: fact_admitted_care
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter:
+          prop__decision_type:
+            [admission, ward_assignment, specialty_care_start,
+             medication_administered, medically_fit, dtoc_assessment,
+             safety_incident, icu_care]
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: milestone, from: prop__decision_type}
+        - {name: context, from: prop__context}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+
+    # --- fact: cancer pathway (CWT shape) — 2WW / 62-day milestones ---
+    - name: fact_cancer_pathway
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter:
+          prop__decision_type:
+            [cancer_referral, cancer_first_seen, cancer_diagnosis_confirmed,
+             cancer_treatment_decision]
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: milestone, from: prop__decision_type}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+        # The waiting-time standards in native form: hours from this
+        # pathway's cancer_referral (2WW = 336, 62-day = 1488).
+        - name: hours_from_referral
+          derived:
+            elapsed:
+              correlate_on: prop__journey_instance
+              other_where: {prop__decision_type: cancer_referral}
+              start_source: created_sim_time
+              end_source: created_sim_time
+              unit: hours
+
+    # --- fact: surgical pathway — pre-op, assignment, surgery, recovery ---
+    - name: fact_surgical_pathway
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter:
+          prop__decision_type:
+            [surgeon_assigned, pre_op_assessment, surgery_performed,
+             recovery_started]
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: milestone, from: prop__decision_type}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+
+    # --- fact: post-discharge follow-up — the check at home ---
+    - name: fact_post_discharge
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter: {prop__decision_type: post_discharge_check}
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+
+    # --- fact: FFT — Friends and Family Test invitations ---
+    - name: fact_fft
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter: {prop__decision_type: fft_invited}
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+
+    # --- fact: waiting-list deterioration — the one decision type that spans
+    #     THREE pathways (cancer / outpatient / surgical), so it is its own
+    #     cross-pathway fact rather than a contaminant in three process
+    #     facts' filters. `pathway` names which waiting list. ---
+    - name: fact_waiting_list_deterioration
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+        filter: {prop__decision_type: waiting_list_deterioration}
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: episode_id, from: prop__journey_instance}
+        - {name: patient_id, fk: {to: dim_patient, via: reference}}
+        - {name: pathway, lookup: {to: journey_instance, property: journey_type}}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at_ns, from: created_sim_time}
+
+    # ------------------------------------------------------------------
+    # The five binding-role bridges (see the BRIDGES header note): clinical
+    # event -> reference catalogue, one bridge per role, each a real
+    # gate-checkable FK edge. Join event_id to the owning process fact for
+    # the milestone and patient. left_sim_time is not projected: no binding
+    # is ever released within the run (0 of 23,505).
+    # ------------------------------------------------------------------
+
+    # --- bridge: diagnostic event -> test catalogue. One row per test bound
+    #     to a diagnostic_ordered or diagnostic_performed event (1:1). ---
+    - name: fact_diagnostic_test
+      role: fact
+      source:
+        grain: membership
+        kind: tick_decision
+        property: bindings
+        where: {elem__role_name: dx_test}
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: test_id, fk: {to: dim_diagnostic_test, via: membership, member_field: entity}}
+        - {name: bound_at, derived: {timestamp: {source: joined_sim_time}}}
+        - {name: bound_at_ns, from: joined_sim_time}
+
+    # --- bridge: medication administration -> formulary. MULTI-PICK: up to
+    #     three medications per medication_administered decision, ordered by
+    #     pick_index, so binding grain is forced (dimensional.md
+    #     § Membership-grain facts) and pick_index joins the key. ---
+    - name: fact_medication_administration
+      role: fact
+      source:
+        grain: membership
+        kind: tick_decision
+        property: bindings
+        where: {elem__role_name: admitted_meds}
+      key: [event_id, medication_id, pick_index]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: medication_id, fk: {to: dim_medication, via: membership, member_field: entity}}
+        - {name: pick_index, from: elem__pick_index}
+        - {name: administered_at, derived: {timestamp: {source: joined_sim_time}}}
+        - {name: administered_at_ns, from: joined_sim_time}
+
+    # --- bridge: ward assignment -> ward catalogue (1:1 per spell) ---
+    - name: fact_ward_stay
+      role: fact
+      source:
+        grain: membership
+        kind: tick_decision
+        property: bindings
+        where: {elem__role_name: spell_ward}
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: ward_id, fk: {to: dim_ward, via: membership, member_field: entity}}
+        - {name: assigned_at, derived: {timestamp: {source: joined_sim_time}}}
+        - {name: assigned_at_ns, from: joined_sim_time}
+
+    # --- bridge: surgical procedure -> OPCS-4 catalogue. Bound at BOTH
+    #     pre_op_assessment (planned) and surgery_performed (performed) —
+    #     join event_id to fact_surgical_pathway.milestone to tell which. ---
+    - name: fact_procedure
+      role: fact
+      source:
+        grain: membership
+        kind: tick_decision
+        property: bindings
+        where: {elem__role_name: surgery_procedure}
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: procedure_id, fk: {to: dim_procedure, via: membership, member_field: entity}}
+        - {name: bound_at, derived: {timestamp: {source: joined_sim_time}}}
+        - {name: bound_at_ns, from: joined_sim_time}
+
+    # --- bridge: theatre session -> theatre catalogue (surgery_performed
+    #     events only) ---
+    - name: fact_theatre_session
+      role: fact
+      source:
+        grain: membership
+        kind: tick_decision
+        property: bindings
+        where: {elem__role_name: surgery_theatre}
+      key: [event_id]
+      columns:
+        - {name: event_id, from: record_id}
+        - {name: theatre_id, fk: {to: dim_theatre, via: membership, member_field: entity}}
+        - {name: used_at, derived: {timestamp: {source: joined_sim_time}}}
+        - {name: used_at_ns, from: joined_sim_time}

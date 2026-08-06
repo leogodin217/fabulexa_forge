@@ -308,12 +308,14 @@ under `record_id` election is the maximally-informative shape.
 `fk.to` names a declared dim table; the edge targets that *table*, not the
 kind, so an FK column renders exactly **one** surface and its identity
 relation is **restricted to the destination dim's source population set** —
-the dim's `source.kind`, narrowed to the sub-type selected by the `filter`'s
-conjunct on the synthesized `<kind>_type` discriminator when the filter
-carries one (the filter grammar is an equality conjunction, so any further
-conjuncts narrow rows *within* that population, never widen the set), the
+the dim's `source.kind`, narrowed to the sub-types the `filter`'s conjunct on the
+synthesized `<kind>_type` discriminator selects when the filter carries one (that
+conjunct's value set — a scalar's singleton or a list's elements — is the
+selected set; any further conjuncts narrow rows *within* it, never widen it), the
 kind's whole population set when no discriminator conjunct is present;
-`via: reference` and `via: membership` edges alike.
+`via: reference` and `via: membership` edges alike. The set's cardinality ranges
+over any non-empty declared subset, and every gate below takes it as such
+([`dimensional.md`](dimensional.md) § Foreign keys).
 
 An `fk` edge without `target_key` inherits that population set's election.
 Inheritance requires **one** answer: when the set carries more than one

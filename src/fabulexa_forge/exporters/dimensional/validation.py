@@ -415,13 +415,63 @@ def check_elapsed_columns_exist(
             )
 
 
+def _predicate_elements(value: str | list[str]) -> list[str]:
+    """Normalize a predicate value to its element list, in config order.
+
+    Args:
+        value: A scalar (treated as a one-element list) or a list.
+
+    Returns:
+        The value's elements, in order.
+    """
+    return [value] if isinstance(value, str) else list(value)
+
+
+def _unobserved_discriminator_notice_message(
+    kind: str, prop: str, element: str, wholly_unobserved: bool
+) -> str:
+    """Render one discriminator-value-unobserved notice's message.
+
+    The table-will-be-empty wording holds for a scalar or a wholly-unobserved
+    list (the table really is empty); a partially-observed list's still-observed
+    elements keep the table non-empty, so its unobserved elements take the
+    weaker per-element wording (§ The unobserved-value notice matrix).
+
+    Args:
+        kind: The records kind the filter targets.
+        prop: The discriminator column name.
+        element: The unobserved filter value.
+        wholly_unobserved: Whether every element of the filter's value is
+            unobserved.
+
+    Returns:
+        The notice message text.
+    """
+    if wholly_unobserved:
+        return (
+            f"discriminator value '{element}' not observed for"
+            f" '{kind}.{prop}'; table will be empty"
+        )
+    return (
+        f"discriminator value '{element}' not observed for"
+        f" '{kind}.{prop}'; it contributes no rows"
+    )
+
+
 def check_discriminator_value_observed(
     source: "SourceDecl",
     sidecar: "Sidecar",
     notice_sink: "NoticeSink",
 ) -> None:
-    """Emit a 'discriminator-value-unobserved' Notice if a records filter value
-    is not observed in the emit.
+    """Emit a 'discriminator-value-unobserved' Notice per unobserved element of
+    a records filter value.
+
+    The unobserved set is computed before any notice is emitted; notices follow
+    the filter's config element order. A scalar or wholly-unobserved list keeps
+    the `table will be empty` wording verbatim; a partially-observed list's
+    unobserved elements take the weaker per-element `it contributes no rows`
+    wording, since the table is not, in fact, empty (§ The unobserved-value
+    notice matrix).
 
     Args:
         source: The grain source binding (must be records grain with a filter).
@@ -434,19 +484,27 @@ def check_discriminator_value_observed(
     if source.grain != "records" or not source.filter:
         return
 
+    domains = sidecar.enum_domains()
+    kind_domains = domains.get(source.kind, {})
+
     for prop, value in source.filter.items():
-        # Check enum_domains for observed values
-        domains = sidecar.enum_domains()
-        kind_domains = domains.get(source.kind, {})
         bare_prop = prop.removeprefix("prop__") if prop.startswith("prop__") else prop
         observed_values = kind_domains.get(bare_prop, ()) or kind_domains.get(prop, ())
-        if observed_values and value not in observed_values:
+        if not observed_values:
+            continue
+
+        elements = _predicate_elements(value)
+        unobserved = [e for e in elements if e not in observed_values]
+        if not unobserved:
+            continue
+
+        wholly_unobserved = len(unobserved) == len(elements)
+        for element in unobserved:
             notice_sink(
                 Notice(
                     code="discriminator-value-unobserved",
-                    message=(
-                        f"discriminator value '{value}' not observed for"
-                        f" '{source.kind}.{prop}'; table will be empty"
+                    message=_unobserved_discriminator_notice_message(
+                        source.kind, prop, element, wholly_unobserved
                     ),
                 )
             )

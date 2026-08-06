@@ -10,9 +10,9 @@ import math
 import re
 import string
 from datetime import datetime
-from typing import Annotated, Literal
+from typing import Annotated, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
 from typing_extensions import Self
 
 from fabulexa_forge._sql import is_recognized_sql_type
@@ -68,6 +68,58 @@ class StrictBaseModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+# ---------------------------------------------------------------------------
+# Predicate values (dimensional row predicates: scalar or non-empty list)
+# ---------------------------------------------------------------------------
+
+
+def _reject_malformed_predicate(value: str | list[str]) -> str | list[str]:
+    """Reject the two malformed list shapes; say nothing about the scalar form.
+
+    Args:
+        value: A parsed predicate value.
+
+    Returns:
+        The value unchanged.
+
+    Raises:
+        ValueError: the value is an empty list, or a list containing a repeated
+            element (the message names the repeated element).
+    """
+    if isinstance(value, str):
+        return value
+    if not value:
+        raise ValueError(
+            "predicate value must not be an empty list"
+            " (an empty predicate selects nothing; omit the entry or the table)"
+        )
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for element in value:
+        if element in seen:
+            duplicates.append(element)
+        seen.add(element)
+    if duplicates:
+        raise ValueError(
+            f"predicate value list contains duplicate element(s): {duplicates}"
+        )
+    return value
+
+
+PredicateValue: TypeAlias = Annotated[
+    str | list[str], AfterValidator(_reject_malformed_predicate)
+]
+"""One predicate's required value: a scalar (compiles to `=`) or a non-empty,
+duplicate-free list of alternatives (compiles to `IN`).
+
+The well-formedness rule rides the type, not the models. Every field declared
+`PredicateValue` carries it — including as the value type of a
+`dict[str, PredicateValue]`, where it applies per entry — so the three
+predicate-bearing models need no shared validator, the failure is reported at the
+offending field's path rather than at model level, and a future predicate field
+on any mode's config inherits the rule without wiring."""
+
+
 class FkClause(StrictBaseModel):
     """A dimension foreign key resolved by a labeled-edge pathfind."""
 
@@ -75,7 +127,7 @@ class FkClause(StrictBaseModel):
     """The kind whose dimension row this FK resolves to."""
     via: Literal["reference", "membership"]
     """Which edge to pathfind along — a declared reference, or a membership interval."""
-    where: dict[str, str] | None = None
+    where: dict[str, PredicateValue] | None = None
     """Membership filter predicates matched against membership-table element columns."""
     member_field: str | None = None
     """Membership-table column holding the member identity to resolve."""
@@ -177,14 +229,34 @@ class ElapsedSpec(StrictBaseModel):
 
     correlate_on: str
     """The output column that links this row to its counterpart event row."""
-    other_where: dict[str, str]
-    """Filter predicates identifying the counterpart event row."""
+    other_where: dict[str, PredicateValue]
+    """Predicate identifying the counterpart event row(s); the earliest
+    matching interval start per correlation key is the one correlated."""
     start_source: str
     """The sim_time column on the counterpart row marking the interval start."""
     end_source: str
     """The sim_time column on this row marking the interval end."""
     unit: Literal["minutes", "seconds", "hours"]
     """The time unit for the computed delta output."""
+
+    @model_validator(mode="after")
+    def other_where_non_empty(self) -> Self:
+        """`other_where` names at least one predicate entry.
+
+        The grammar's one required predicate mapping: an empty mapping renders
+        no condition at all — a degenerate correlation the elapsed subquery
+        cannot express. (The optional mappings have a meaning when empty —
+        select all rows — that `other_where` does not.)
+
+        Raises:
+            ValueError: `other_where` is empty.
+        """
+        if not self.other_where:
+            raise ValueError(
+                "elapsed.other_where must name at least one predicate entry"
+                " (an empty mapping renders no condition at all)"
+            )
+        return self
 
 
 class DerivedSpec(StrictBaseModel):
@@ -327,12 +399,12 @@ class SourceDecl(StrictBaseModel):
     """The base-layer kind whose table is the primary source."""
     property: str | None = None
     """The property name scoping the history or membership grain."""
-    value: str | None = None
-    """For history_point grain, the specific property value to filter on."""
-    where: dict[str, str] | None = None
-    """Membership-only filter predicates matched against membership element columns."""
-    filter: dict[str, str] | None = None
-    """Records-only filter predicates matched against the kind's records columns."""
+    value: PredicateValue | None = None
+    """For history_point grain, the property value(s) to filter on."""
+    where: dict[str, PredicateValue] | None = None
+    """Membership-only row predicate matched against membership element columns."""
+    filter: dict[str, PredicateValue] | None = None
+    """Records-only row predicate matched against the kind's records columns."""
 
     @model_validator(mode="after")
     def source_fields_match_grain(self) -> Self:

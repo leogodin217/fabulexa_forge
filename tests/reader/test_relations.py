@@ -1,6 +1,8 @@
 """Tests for reader/relations.py: faithful-read SQL builders + distinct_prop_values.
 
-Verifies that each builder produces correct SQL and that distinct_prop_values
+Verifies that each builder produces correct SQL — scalar and list-valued
+predicates alike, the latter rendering `IN` via the shared
+`render_predicate_condition` authority — and that distinct_prop_values
 returns values in native-type ORDER BY 1 order.
 """
 
@@ -14,6 +16,7 @@ from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.errors import ExportError
 from fabulexa_forge.reader.emit import open_emit
 from fabulexa_forge.reader.errors import TableNotFoundError
 from fabulexa_forge.reader.relations import (
@@ -194,6 +197,56 @@ def test_records_relation_discriminator_filter_integer() -> None:
     assert "\"prop__priority\" = CAST('42' AS BIGINT)" in sql
 
 
+def test_records_relation_discriminator_filter_list_renders_in() -> None:
+    """A list-valued discriminator filter renders `IN`, typed per sidecar column."""
+    sidecar = _make_sidecar(
+        [
+            {
+                "name": "records__entity",
+                "category": "records",
+                "record_kind": "entity",
+                "columns": [
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
+                    {"name": "prop__entity_type", "type": "VARCHAR"},
+                ],
+                "rows": 0,
+            }
+        ]
+    )
+    sql = build_records_relation_sql(
+        sidecar,
+        "trunk",
+        "entity",
+        {"prop__entity_type": ["consultant", "nurse"]},
+    )
+    assert "\"prop__entity_type\" IN ('consultant', 'nurse')" in sql
+
+
+def test_records_relation_unrecognized_column_type_raises() -> None:
+    """A predicate column whose sidecar type is unrecognized raises ExportError
+    — no silent VARCHAR fallback."""
+    sidecar = _make_sidecar(
+        [
+            {
+                "name": "records__entity",
+                "category": "records",
+                "record_kind": "entity",
+                "columns": [
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    identity_column("record_index", "BIGINT"),
+                    {"name": "prop__blob", "type": "BLOB"},
+                ],
+                "rows": 0,
+            }
+        ]
+    )
+    with pytest.raises(ExportError, match="unrecognized SQL type"):
+        build_records_relation_sql(sidecar, "trunk", "entity", {"prop__blob": "x"})
+
+
 def test_records_relation_empty_filter_selects_all() -> None:
     """Empty discriminator_filter produces no extra predicates beyond fork_path."""
     sidecar = _make_sidecar(
@@ -341,6 +394,15 @@ def test_history_relation_value_filter_varchar_literal() -> None:
     assert "\"value\" = 'completed'" in sql
 
 
+def test_history_relation_list_value_filter_renders_in_over_raw_literals() -> None:
+    """A list-valued value_filter renders `IN` over raw (untyped) literals."""
+    sidecar = _make_sidecar()
+    sql = build_history_relation_sql(
+        sidecar, "trunk", "entity", "state", ["completed", "cancelled"]
+    )
+    assert "\"value\" IN ('completed', 'cancelled')" in sql
+
+
 def test_history_relation_no_value_filter_omits_predicate() -> None:
     """When value_filter is None, no value predicate is emitted."""
     sidecar = _make_sidecar()
@@ -412,6 +474,44 @@ def test_membership_relation_where_predicate() -> None:
         sidecar, "trunk", "journey", "team_members", {"elem__role_name": "surgeon"}
     )
     assert "\"elem__role_name\" = 'surgeon'" in sql
+
+
+def test_membership_relation_list_where_predicate_renders_in() -> None:
+    """A list-valued where_predicate entry renders `IN`, typed per sidecar type."""
+    sidecar = _sidecar_with_membership()
+    sql = build_membership_relation_sql(
+        sidecar,
+        "trunk",
+        "journey",
+        "team_members",
+        {"elem__role_name": ["surgeon", "anesthetist"]},
+    )
+    assert "\"elem__role_name\" IN ('surgeon', 'anesthetist')" in sql
+
+
+def test_membership_relation_unrecognized_column_type_raises() -> None:
+    """A where_predicate column whose sidecar type is unrecognized raises
+    ExportError — no silent VARCHAR fallback."""
+    sidecar = _make_sidecar(
+        [
+            {
+                "name": "membership__journey__team_members",
+                "category": "membership",
+                "record_kind": "journey",
+                "property": "team_members",
+                "columns": [
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    {"name": "elem__weight", "type": "BLOB"},
+                ],
+                "rows": 0,
+            }
+        ]
+    )
+    with pytest.raises(ExportError, match="unrecognized SQL type"):
+        build_membership_relation_sql(
+            sidecar, "trunk", "journey", "team_members", {"elem__weight": "x"}
+        )
 
 
 def test_membership_relation_no_order_by() -> None:

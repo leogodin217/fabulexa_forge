@@ -385,9 +385,19 @@ base-table rows that match.
 
 | Builder | Relation | Filtered to |
 |---|---|---|
-| `build_records_relation_sql` | `records__<kind>`, full sidecar column list | `fork_path` + a discriminator predicate (literals typed per the column's DuckDB type) |
-| `build_history_relation_sql` | `history` (the six fixed columns) | `fork_path`, `kind`, `property`, and — when given — `value` (a raw `VARCHAR` literal against `history.value`, never type-coerced, since `history.value` is always `VARCHAR` per contract) |
-| `build_membership_relation_sql` | `membership__<owner_kind>__<property>`, full column list | `fork_path` + a `where` predicate over `elem__` columns (typed literals) |
+| `build_records_relation_sql` | `records__<kind>`, full sidecar column list | `fork_path` + a discriminator predicate |
+| `build_history_relation_sql` | `history` (the six fixed columns) | `fork_path`, `kind`, `property`, and — when given — `value`, compared as a raw `VARCHAR` literal against `history.value`, never type-coerced, since `history.value` is always `VARCHAR` per contract |
+| `build_membership_relation_sql` | `membership__<owner_kind>__<property>`, full column list | `fork_path` + a `where` predicate over `elem__` columns |
+
+Each predicate value is a scalar or a non-empty list of alternatives, compiled to
+`=` or `IN` by the one rendering authority
+([`row-predicates.md`](row-predicates.md)). The builders own the half the
+authority cannot: resolving each predicate column's DuckDB type from the sidecar,
+so literals are typed against the column they compare to. A column whose declared
+type the shared typed-literal renderer does not recognize — a `BLOB`, a
+producer-custom array or struct — is refused with an `ExportError` naming the
+type on the records and membership builders, rather than compared as a `VARCHAR`
+literal that would quietly match nothing.
 
 A missing table raises `TableNotFoundError`. The faithful introspection helper
 `distinct_prop_values(emit, kind, property_name)` *executes* (rather than returning
@@ -698,6 +708,7 @@ What the reader deliberately does not own:
 | [`bundle.md`](bundle.md) | Consumer-side orientation to the format — the column temporal classes and the genesis guarantee the temporal accessors surface |
 | [`source.md`](source.md) | The audited-set resolution — the first consumer of `Sidecar.temporal_class` |
 | [`derivations.md`](derivations.md) | The interpretive layer that composes the faithful-read builders — the home for reads that reconstruct versions or resolve references |
+| [`row-predicates.md`](row-predicates.md) | The scalar-or-list predicate grammar and the rendering authority the builders' predicate conditions compile through |
 | [`dimensional.md`](dimensional.md) | The first reshaping consumer — uses `query_arrow`, the `history_tracked` flag, and the faithful-read builders |
 | [`corrupters.md`](corrupters.md) | The base-emit-writing consumer — materializes every table via `query_arrow`, reads column metadata and reference targets from the `Sidecar`, and reuses the single-branch guard |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability — the consumer the strict `presentation_keys` accessor and the union-safety algebra exist for |
