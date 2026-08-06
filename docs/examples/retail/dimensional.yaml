@@ -66,6 +66,17 @@
 #            own binding-grain fact, fact_action_product, carrying all 92,710
 #            bindings for every role; dropping a compared product to force 1:1
 #            would be a fidelity violation.
+#   KEYS     entity/product elects presentation_id. The bundle's record_id for
+#            products mixes two upstream id-assignment schemes (measured: 44
+#            short integer ids, 149 64-char hashes — seeded vs runtime-spawned
+#            creation paths), while the registry declares a uniform SKU_ counter
+#            key space for the product sub-type, unique within the emit. Electing
+#            it keys dim_product on the SKU and renders fact_action_product's
+#            inherited FK in the same surface. actor is NOT elected: its ids are
+#            already uniform (11,468 64-char customers), and the two lookup-built
+#            customer_id fact columns render prop__actor verbatim (a lookup
+#            projects prop__ columns only), so re-keying dim_customer on CUST_
+#            would break those joins. journey_instance carries no registry claim.
 #   DROPPED  journey_instance.output_roles — engine role bookkeeping, no domain
 #            meaning. journey_instance's slice_only columns (state_entry_time,
 #            complete, bound_roles) are not projectable in any mode; in dimensional
@@ -79,14 +90,17 @@
 # actions; 399,756 of 399,872 state rows).
 #
 # One consequence of splitting the dims is worth stating exactly, because it is easy
-# to assume the opposite: an `fk` writes the referenced record's id whether or not
-# that record survives the destination dim's filter. It does NOT null it. So exactly
-# one row in each of three tables carries an id that joins to nothing, and all three
-# are that same monitoring loop:
+# to assume the opposite: an `fk` under the DEFAULT election writes the referenced
+# record's id whether or not that record survives the destination dim's filter. So
+# the ops monitoring loop leaves two rows carrying an id that joins to nothing:
 #   - dim_session.customer_id and fact_customer_action.customer_id carry the ops
 #     AGENT (its actor is not a customer, so it is not in dim_customer).
-#   - fact_action_product.product_id on the one `store`-role binding carries the
-#     storefront HOST (an infrastructure entity, so it is not in dim_product).
+# The third such edge is rendered differently by the election above:
+#   - fact_action_product.product_id resolves presentation_id restricted to
+#     dim_product's source population set, and the one `store`-role binding points
+#     at the storefront HOST (infrastructure — outside the set), so that row
+#     renders NULL rather than a dangling id (the out-of-set posture; the raw
+#     record is still reachable through the base/source exports).
 # Every other FK resolves completely: 0 unresolved session_id, 0 unresolved
 # storefront_id, and 122,669 of 122,670 actions match a dim_customer version through
 # the point-in-time join below.
@@ -101,6 +115,12 @@
 #                      AND (f.occurred_at < d.valid_to OR d.valid_to IS NULL)
 
 mode: dimensional
+
+# entity/product presents as its registry-declared SKU_ presentation key (see the
+# KEYS decision above). Unlisted populations (infrastructure) keep record_id.
+keys:
+  entity:
+    product: presentation_id
 
 dimensional:
   tables:
@@ -152,8 +172,11 @@ dimensional:
         filter: {prop__entity_type: product}
       key: [product_id]
       columns:
-        - {name: product_id, from: record_id}
-        - {name: sku, from: presentation_id}
+        # the elected surface (keys: entity/product) — SKU_xxxxx, the registry's
+        # uniform counter key space; the dim-key-agreement gate requires the
+        # declared key to project it. No separate `sku` column: it would be an
+        # exact duplicate of this one.
+        - {name: product_id, from: presentation_id}
         - {name: product_name, from: prop__product_name}
         - {name: category, from: prop__category}
         - {name: price_cents, from: prop__price_cents}
@@ -238,8 +261,10 @@ dimensional:
       key: [action_id, product_id, pick_index]
       columns:
         - {name: action_id, from: record_id}
-        # On the one `store`-role binding this carries the storefront host's id,
-        # which is not in dim_product (see the header note on unresolved FKs).
+        # Inherits entity/product's presentation_id election: SKU_xxxxx values.
+        # On the one `store`-role binding the target is the storefront host —
+        # outside dim_product's population set — so this renders NULL (see the
+        # header note on the out-of-set posture).
         - name: product_id
           fk:
             to: dim_product

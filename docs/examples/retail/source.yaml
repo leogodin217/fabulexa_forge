@@ -70,6 +70,20 @@
 # A `temporal_class: slice_only` column is auto-omitted with a notice whatever
 # this config says; the export's `notice:` lines are the authoritative list.
 #
+# KEYS: actor and entity elect presentation_id — the app database presents its
+# business identifiers, not the engine's internal record ids. The registry
+# declares all four populations (CUST_/OPS_/SKU_/INFRA_ counter key spaces,
+# unique within the emit, pairwise union-safe), which matters here because the
+# bundle's record_id for products mixes two upstream id-assignment schemes (44
+# short integers, 149 64-char hashes). Under the election each state table's
+# `id` IS the presentation key (the standalone presentation_id column is
+# absorbed — emitting both would duplicate it), and every referencing column
+# renders its target's surface: shopping_session.actor -> CUST_/OPS_,
+# customer.store -> INFRA_, the action_product member column -> SKU_ (INFRA_ on
+# the one store-role binding), audit_log.item_id -> the audited population's
+# key. journey_instance carries no registry claim and tick_decision's claim is
+# a bare counter, so both keep record_id; their tables and edges are unchanged.
+#
 # Two columns are largely empty, and both are faithful rather than defects. The
 # soft-delete `deactivated_at` is set only where something actually retires:
 # measured, 13 of 193 products are withdrawn from the catalogue and 31,502 of
@@ -79,12 +93,17 @@
 
 mode: source
 
+# Uniform shorthand: every declared sub-type of the kind elects the surface.
+keys:
+  actor: presentation_id
+  entity: presentation_id
+
 source:
   tables:
     - name: customer
       kind: actor
       sub_types: [customer]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__first_name, prop__last_name, prop__name, prop__email, prop__username,
                 prop__phone, prop__birth_date, prop__street_address, prop__place_city,
                 prop__place_subdivision, prop__place_postal_code, prop__place_area_code,
@@ -93,19 +112,19 @@ source:
     - name: ops_agent
       kind: actor
       sub_types: [ops]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__component]
     - name: product
       kind: entity
       sub_types: [product]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__product_name, prop__category, prop__price_cents, prop__margin,
                 prop__popularity, prop__identity_brand, prop__identity_line,
                 prop__identity_naming_style, prop__identity_tier, prop__designator]
     - name: storefront
       kind: entity
       sub_types: [infrastructure]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__status, prop__error_rate, prop__primary_ip, prop__domain]
     # journey_instance is not sub-typed; `columns:` here drops `output_roles`,
     # which is engine role bookkeeping with no domain meaning.

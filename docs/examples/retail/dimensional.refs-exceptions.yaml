@@ -1,0 +1,19 @@
+# refs_resolve.py exceptions — retail dimensional star.
+#
+# Each entry waives specific orphan VALUES on one declared `fk:` edge. Waivers
+# are value-scoped: any NEW orphan value on these edges still fails the gate.
+# See tools/qa/refs_resolve.py (§ Exceptions) for the grammar.
+
+- table: dim_session
+  column: customer_id
+  target: dim_customer
+  values: ["0"]
+  reason: >
+    The ops monitoring agent's single session. Record '0' is actor/ops — the
+    storefront monitor bot, a pinned simulation mechanism the upstream
+    projection deliberately separates from customers (its own OPS_ key space,
+    no presentation properties). dim_customer filters to actor_type=customer,
+    so the bot is rightly absent; the session row faithfully carries its
+    actor's id. Investigated 2026-08-03, post-ID QA F11 (vault finding
+    retail-dim-product-carries-two-key-schemes-and-two-dangling-references).
+    Isolate the funnel with `where journey_type = 'shopping_session'`.
