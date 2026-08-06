@@ -201,6 +201,71 @@ def test_distinct_table_names_are_valid() -> None:
 
 
 # ---------------------------------------------------------------------------
+# `kind_labels` (source-domain-vocabulary)
+# ---------------------------------------------------------------------------
+
+
+def test_kind_labels_parses() -> None:
+    """A well-formed `kind_labels` map parses."""
+    config = SourceConfig.model_validate(
+        {
+            "tables": [{"name": "trips", "kind": "trip"}],
+            "kind_labels": {"actor": "patient", "resource": "consultant"},
+        }
+    )
+    assert config.kind_labels == {"actor": "patient", "resource": "consultant"}
+
+
+def test_kind_labels_empty_rejected() -> None:
+    """`kind_labels: {}` -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceConfig.model_validate(
+            {"tables": [{"name": "trips", "kind": "trip"}], "kind_labels": {}}
+        )
+
+
+def test_kind_labels_empty_key_rejected() -> None:
+    """`kind_labels` with an empty key -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceConfig.model_validate(
+            {
+                "tables": [{"name": "trips", "kind": "trip"}],
+                "kind_labels": {"": "patient"},
+            }
+        )
+
+
+def test_kind_labels_empty_value_rejected() -> None:
+    """`kind_labels` with an empty value -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceConfig.model_validate(
+            {
+                "tables": [{"name": "trips", "kind": "trip"}],
+                "kind_labels": {"actor": ""},
+            }
+        )
+
+
+def test_kind_labels_duplicate_target_labels_rejected() -> None:
+    """Two kinds mapping to one label -> rejected."""
+    with pytest.raises(ValidationError, match="distinct"):
+        SourceConfig.model_validate(
+            {
+                "tables": [{"name": "trips", "kind": "trip"}],
+                "kind_labels": {"actor": "patient", "resource": "patient"},
+            }
+        )
+
+
+def test_kind_labels_defaults_none() -> None:
+    """`kind_labels` defaults to None when absent."""
+    config = SourceConfig.model_validate(
+        {"tables": [{"name": "trips", "kind": "trip"}]}
+    )
+    assert config.kind_labels is None
+
+
+# ---------------------------------------------------------------------------
 # `declare_keys` composes with `tables` and `events`
 # ---------------------------------------------------------------------------
 

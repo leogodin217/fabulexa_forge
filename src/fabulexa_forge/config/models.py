@@ -670,6 +670,32 @@ def _require_rename_map_valid(value: dict[str, str] | None, field_name: str) -> 
         raise ValueError(f"{field_name} values must be distinct: {duplicates}")
 
 
+def _require_dict_entries_nonempty(
+    value: dict[str, str] | None, field_name: str
+) -> None:
+    """A dict field: when present, every key and value is non-empty.
+
+    Shared by every dict-valued field whose grammar refuses empty keys or
+    values on top of `_require_rename_map_valid`'s present-but-empty /
+    distinct-values checks (`SourceEventSourceDecl.rename`,
+    `SourceConfig.kind_labels`).
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: A key or value in `value` is the empty string.
+    """
+    if value is None:
+        return
+    for key, target in value.items():
+        if not key:
+            raise ValueError(f"{field_name} keys must be non-empty")
+        if not target:
+            raise ValueError(f"{field_name} values must be non-empty")
+
+
 def _require_exactly_one_population_source(
     kind: str | None, membership: "MembershipRef | None", label: str
 ) -> None:
@@ -767,6 +793,15 @@ class SourceEventSourceDecl(StrictBaseModel):
     ignore: tuple[str, ...] | None = None
     """Audited-property exclusion by bare name; mutually exclusive with
     `only`."""
+    item_type: str | None = None
+    """This source's resolved item-type, verbatim, overriding the
+    kind-label / contract-identity default. Optional; non-empty when
+    present."""
+    rename: dict[str, str] | None = None
+    """Audited property (element field) bare name -> `changes` output key.
+    Keys are source identities, never output keys, so a default-key
+    collision is always resolvable. A membership reference field's entry
+    renames its expanded `<f>_kind` / `<f>_id` pair in place."""
 
     @model_validator(mode="after")
     def source_shape(self) -> Self:
@@ -776,7 +811,9 @@ class SourceEventSourceDecl(StrictBaseModel):
             ValueError: Not exactly one of `kind` / `membership` is set;
                 `sub_types` is set without `kind`; `sub_types` / `only` /
                 `ignore` is present-but-empty or carries a duplicate entry;
-                both `only` and `ignore` are set.
+                both `only` and `ignore` are set; `item_type` is empty;
+                `rename` is present-but-empty, has an empty key or value, or
+                two keys share a target value.
         """
         label = "events source"
         _require_exactly_one_population_source(self.kind, self.membership, label)
@@ -788,6 +825,10 @@ class SourceEventSourceDecl(StrictBaseModel):
         _require_distinct_nonempty_tuple(self.ignore, "SourceEventSourceDecl.ignore")
         if self.only is not None and self.ignore is not None:
             raise ValueError(f"{label}: 'only' and 'ignore' are mutually exclusive")
+        if self.item_type is not None:
+            _require_nonempty_str(self.item_type, "SourceEventSourceDecl.item_type")
+        _require_rename_map_valid(self.rename, "SourceEventSourceDecl.rename")
+        _require_dict_entries_nonempty(self.rename, "SourceEventSourceDecl.rename")
         return self
 
 
@@ -828,6 +869,25 @@ class SourceConfig(StrictBaseModel):
     resolved from the sidecar's presentation_keys registry. Off by default —
     the design doc's own contract default, not an invented value. Ignored
     under CSV: a keys-not-declarable-csv notice is emitted instead."""
+    kind_labels: dict[str, str] | None = None
+    """Engine kind name -> domain label, applied wherever a kind name
+    renders as a value: item-type defaults, `<f>_kind` entries inside
+    `changes`, and junction `member__<f>__kind` values. Never applied to
+    identity values, table names, or sub-type discriminator values. Absent =
+    verbatim kind names."""
+
+    @model_validator(mode="after")
+    def kind_labels_shape(self) -> Self:
+        """`kind_labels`, when present: non-empty, non-empty keys and
+        values, distinct values.
+
+        Raises:
+            ValueError: The map is empty, a key or value is the empty
+                string, or two kinds map to one label.
+        """
+        _require_rename_map_valid(self.kind_labels, "SourceConfig.kind_labels")
+        _require_dict_entries_nonempty(self.kind_labels, "SourceConfig.kind_labels")
+        return self
 
     @model_validator(mode="after")
     def source_section_required(self) -> Self:

@@ -2,7 +2,7 @@ sprint: source-domain-vocabulary
 parent_branch: keys_and_modes_qa
 baseline_sha: 86d70ec1de945e78c795b373eb17c78c2d62b627
 started: 2026-08-06
-current_phase: 1
+current_phase: 2
 capabilities:
   - source-exporter: [kind-labels, event-source-item-type, event-source-rename]
   - recipes: [source-domain-vocabulary]
@@ -11,7 +11,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Config grammar: kind_labels, item_type, rename"
     demo: "docs/sprints/source-domain-vocabulary/demos/phase_1_config_grammar.py"
   2:

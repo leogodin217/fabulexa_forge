@@ -261,6 +261,80 @@ def test_event_source_decl_extra_field_forbidden() -> None:
 
 
 # ---------------------------------------------------------------------------
+# SourceEventSourceDecl: item_type / rename (source-domain-vocabulary)
+# ---------------------------------------------------------------------------
+
+
+def test_event_source_decl_item_type_parses_on_records_source() -> None:
+    """`item_type` parses on a records (kind) source."""
+    decl = SourceEventSourceDecl(kind="trip", item_type="clinician")
+    assert decl.item_type == "clinician"
+
+
+def test_event_source_decl_item_type_parses_on_membership_source() -> None:
+    """`item_type` parses on a membership source."""
+    decl = SourceEventSourceDecl(
+        membership=MembershipRef(kind="trip", property="drivers"),
+        item_type="consultant_allocation",
+    )
+    assert decl.item_type == "consultant_allocation"
+
+
+def test_event_source_decl_item_type_empty_rejected() -> None:
+    """`item_type: ""` -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceEventSourceDecl(kind="trip", item_type="")
+
+
+def test_event_source_decl_rename_parses_on_records_source() -> None:
+    """`rename` parses on a records (kind) source."""
+    decl = SourceEventSourceDecl(kind="trip", rename={"full_name": "name"})
+    assert decl.rename == {"full_name": "name"}
+
+
+def test_event_source_decl_rename_parses_on_membership_source() -> None:
+    """`rename` parses on a membership source."""
+    decl = SourceEventSourceDecl(
+        membership=MembershipRef(kind="trip", property="drivers"),
+        rename={"full_name": "name"},
+    )
+    assert decl.rename == {"full_name": "name"}
+
+
+def test_event_source_decl_rename_empty_rejected() -> None:
+    """`rename: {}` -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceEventSourceDecl(kind="trip", rename={})
+
+
+def test_event_source_decl_rename_empty_key_rejected() -> None:
+    """`rename` with an empty key -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceEventSourceDecl(kind="trip", rename={"": "name"})
+
+
+def test_event_source_decl_rename_empty_value_rejected() -> None:
+    """`rename` with an empty value -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceEventSourceDecl(kind="trip", rename={"full_name": ""})
+
+
+def test_event_source_decl_rename_duplicate_targets_rejected() -> None:
+    """Two `rename` keys sharing a target value -> rejected."""
+    with pytest.raises(ValidationError, match="distinct"):
+        SourceEventSourceDecl(
+            kind="trip", rename={"full_name": "name", "nickname": "name"}
+        )
+
+
+def test_event_source_decl_item_type_and_rename_default_none() -> None:
+    """A source declaring neither field parses exactly as today: both None."""
+    decl = SourceEventSourceDecl(kind="trip")
+    assert decl.item_type is None
+    assert decl.rename is None
+
+
+# ---------------------------------------------------------------------------
 # SourceEventsDecl
 # ---------------------------------------------------------------------------
 
