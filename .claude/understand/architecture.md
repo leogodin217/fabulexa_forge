@@ -1,7 +1,10 @@
 ---
 name: architecture
 description: Designing interfaces, contracts, and architectural decisions for the exporters and corrupters.
-subsystem-docs: docs/architecture/*.md
+subsystem-docs: docs/architecture/
+layout: single-package
+typecheck-hook: mypy (strict, src)
+output-judge-agent: ops-gate
 context: |
   docs/PROCESS.md
   docs/architecture/README.md  outline  #per-subsystem-design-docs
@@ -16,6 +19,6 @@ A design moves through `/arch-design` (writes a doc under
 `docs/architecture/pending/`) → `/arch-review` (judges it) → `/create-sprint` →
 `/fold-pending` (retires it).
 
-Code navigation is cclsp-first: `.claude/skills/worker-protocol.md` § Code
+Code navigation is cclsp-first: `.claude/worker-protocol.md` § Code
 Navigation. Findings and bugs are tracked in the `note` vault, not GitHub —
 `/note list --type finding --status open`.
