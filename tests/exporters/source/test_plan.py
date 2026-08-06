@@ -35,6 +35,8 @@ from fabulexa_forge.errors import (
     SourceColumnUnresolved,
     SourceEventSourceOverlap,
     SourceHistoryTrackedRequired,
+    SourceKindLabelCollision,
+    SourceKindLabelUnknown,
     SourceNameCollision,
     SourceSliceOnlyRead,
     SourceUnclassifiedColumn,
@@ -72,11 +74,17 @@ def _config(
     events: SourceEventsDecl | None = None,
     declare_keys: bool = False,
     keys: "dict[str, KeySurface | dict[str, KeySurface]] | None" = None,
+    kind_labels: "dict[str, str] | None" = None,
 ) -> ExportConfig:
     """Build a `mode: source` ExportConfig from a declared table/events set."""
     return ExportConfig(
         mode="source",
-        source=SourceConfig(tables=tables, events=events, declare_keys=declare_keys),
+        source=SourceConfig(
+            tables=tables,
+            events=events,
+            declare_keys=declare_keys,
+            kind_labels=kind_labels,
+        ),
         keys=keys,
     )
 
@@ -959,3 +967,83 @@ def test_declared_keys_off_event_log_carries_no_keys(tmp_path: Path) -> None:
     )
     assert plan.events is not None
     assert plan.events.keys is None
+
+
+# ---------------------------------------------------------------------------
+# kind_labels: resolution + validation (Phase 2 — junction rendering only;
+# labels do not yet reach the event log, Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def test_kind_labels_absent_resolves_empty_on_every_junction_unit(
+    tmp_path: Path,
+) -> None:
+    """No `kind_labels` declared -> every junction unit carries the empty
+    tuple."""
+    plan = _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            tables=(
+                SourceTableDecl(
+                    name="visit_team",
+                    membership=MembershipRef(kind="visit", property="team"),
+                ),
+            ),
+        ),
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceJunctionTablePlan)
+    assert table.kind_labels == ()
+
+
+def test_kind_labels_resolve_onto_every_junction_unit_in_declaration_order(
+    tmp_path: Path,
+) -> None:
+    """`kind_labels` resolves onto every junction unit, declaration order."""
+    plan = _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            tables=(
+                SourceTableDecl(
+                    name="visit_team",
+                    membership=MembershipRef(kind="visit", property="team"),
+                ),
+            ),
+            kind_labels={"actor": "clinician", "visit": "encounter"},
+        ),
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceJunctionTablePlan)
+    assert table.kind_labels == (("actor", "clinician"), ("visit", "encounter"))
+
+
+def test_kind_labels_unknown_kind_raises(tmp_path: Path) -> None:
+    """A `kind_labels` key naming no records kind raises SourceKindLabelUnknown
+    with the design doc message."""
+    with pytest.raises(
+        SourceKindLabelUnknown, match="kind_labels: kind 'ghost' not in this emit"
+    ):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                tables=(SourceTableDecl(name="locs", kind="location"),),
+                kind_labels={"ghost": "phantom"},
+            ),
+        )
+
+
+def test_kind_labels_label_equals_unlabeled_kind_name_raises(tmp_path: Path) -> None:
+    """A label equal to an *unlabeled* kind's own name raises
+    SourceKindLabelCollision, even when that kind names no declared `tables[]`
+    entry — the whole-kind-universe range."""
+    with pytest.raises(
+        SourceKindLabelCollision,
+        match="kind_labels: label 'location' collides with kind 'location'",
+    ):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                tables=(SourceTableDecl(name="visits", kind="visit"),),
+                kind_labels={"actor": "location"},
+            ),
+        )

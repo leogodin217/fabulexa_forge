@@ -5,7 +5,10 @@ windowed)` — every render is a pure function of the returned `SourcePlan`
 (`sidecar`, `fork_path`, `anchor`, `windowed`, plus the resolved units), so
 `build_source_query_specs(plan, window)` (renders.py / engine.py, a later
 step) needs no further data-dependent step except the write-mode dispatch.
-Resolves, in order: (1) every `tables` declaration to populations
+Resolves, in order: (0) `SourceConfig.kind_labels` to the ordered (kind,
+label) pair tuple, validated against the sidecar's whole kind universe
+(`SourceKindLabelUnknown` / `SourceKindLabelCollision`) and threaded onto
+every junction unit; (1) every `tables` declaration to populations
 (`exporters.populations.resolve_populations`) and its `state` / `junction`
 column set (taxonomy classification, `columns` / `rename` selection, the
 identity/edge key-election gates); (2) the `events` declaration to its
@@ -55,6 +58,8 @@ from fabulexa_forge.errors import (
     SourceColumnUnresolved,
     SourceEventSourceOverlap,
     SourceHistoryTrackedRequired,
+    SourceKindLabelCollision,
+    SourceKindLabelUnknown,
     SourceNameCollision,
     SourceSliceOnlyRead,
     SourceTableMembershipUnknown,
@@ -224,6 +229,10 @@ class SourceJunctionTablePlan:
     """The owner column's entry first (when the owner kind has a declared
     records table), then one per *selected* member field, sidecar column
     order."""
+    kind_labels: "tuple[tuple[str, str], ...]"
+    """The resolved (kind, label) map for projected `member__<f>__kind`
+    column values; identity fall-through. Empty when no labels are
+    declared."""
 
 
 @dataclass(frozen=True)
@@ -281,6 +290,49 @@ def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
             assert kind is not None, "records table must declare record_kind"
             kinds.append(kind)
     return tuple(kinds)
+
+
+def _resolve_kind_labels(
+    known_kinds: "tuple[str, ...]",
+    kind_labels: "dict[str, str] | None",
+) -> tuple[tuple[str, str], ...]:
+    """Resolve and validate `SourceConfig.kind_labels` against the sidecar's
+    whole kind universe.
+
+    Injectivity beyond "two kinds map to one label" (already refused at
+    parse time, `SourceConfig.kind_labels_shape`'s distinct-values rule)
+    reduces to one residual case here: a label equal to an *unlabeled*
+    kind's own verbatim name — two labeled kinds can never collide with each
+    other, since their labels are already pairwise distinct.
+
+    Args:
+        known_kinds: Every kind with a declared records table in the emit
+            (§ `_known_records_kinds`) — the whole kind universe the
+            injectivity check ranges over, not just declared sources.
+        kind_labels: The declared `SourceConfig.kind_labels` map, or None.
+
+    Returns:
+        The resolved (kind, label) pairs, declaration order; empty when
+        `kind_labels` is None.
+
+    Raises:
+        SourceKindLabelUnknown: A key names no records kind in the sidecar.
+        SourceKindLabelCollision: A label equals an unlabeled kind's own
+            name.
+    """
+    if not kind_labels:
+        return ()
+    known = frozenset(known_kinds)
+    for kind in kind_labels:
+        if kind not in known:
+            raise SourceKindLabelUnknown(f"kind_labels: kind '{kind}' not in this emit")
+    labeled = frozenset(kind_labels)
+    for label in kind_labels.values():
+        if label in known and label not in labeled:
+            raise SourceKindLabelCollision(
+                f"kind_labels: label '{label}' collides with kind '{label}'"
+            )
+    return tuple(kind_labels.items())
 
 
 # ---------------------------------------------------------------------------
@@ -1135,6 +1187,7 @@ def _build_junction_table_plan(
     election: Election,
     known_kinds: "tuple[str, ...]",
     decl: "SourceTableDecl",
+    kind_labels: "tuple[tuple[str, str], ...]",
 ) -> SourceJunctionTablePlan:
     """Resolve one `tables[]` membership declaration to a `junction` table plan.
 
@@ -1143,6 +1196,9 @@ def _build_junction_table_plan(
         election: The resolved election.
         known_kinds: Every kind with a declared records table in the emit.
         decl: The declaration (`decl.membership` is not None).
+        kind_labels: The resolved `source.kind_labels` map (§
+            `_resolve_kind_labels`), carried onto the unit for the render's
+            `member__<f>__kind` values.
 
     Returns:
         The resolved `SourceJunctionTablePlan`.
@@ -1186,6 +1242,7 @@ def _build_junction_table_plan(
         source_table=source_table,
         columns=columns,
         edge_surfaces=edge_surfaces,
+        kind_labels=kind_labels,
     )
 
 
@@ -2174,6 +2231,10 @@ def build_source_plan(
             population sets.
         SourceUnclassifiedColumn: a projected records column resolves no
             taxonomy role.
+        SourceKindLabelUnknown: a `source.kind_labels` key names no records
+            kind in the sidecar.
+        SourceKindLabelCollision: a label equals an unlabeled kind's own
+            name — kind -> rendered name is not injective.
         SourceNameCollision: duplicate output table or column names.
         ElectionMixedIdentity, ElectionUnionUnsafe: the identity gates
             per declared table; the edge gates per referencing column and
@@ -2203,6 +2264,7 @@ def build_source_plan(
 
     known_kinds = _known_records_kinds(sidecar)
     declare_keys = source_config.declare_keys
+    kind_labels = _resolve_kind_labels(known_kinds, source_config.kind_labels)
 
     tables: list[SourceStateTablePlan | SourceJunctionTablePlan] = []
     for decl in source_config.tables:
@@ -2220,7 +2282,9 @@ def build_source_plan(
             )
         else:
             tables.append(
-                _build_junction_table_plan(sidecar, election, known_kinds, decl)
+                _build_junction_table_plan(
+                    sidecar, election, known_kinds, decl, kind_labels
+                )
             )
     tables_t = tuple(tables)
 

@@ -23,6 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
+import duckdb
 from _support.notices import discard_notice_sink
 
 from fabulexa_forge.anchor import render_anchor_timestamp_expr, resolve_effective_anchor
@@ -332,6 +333,99 @@ def test_junction_render_determinism(tmp_path: Path) -> None:
             plan.sidecar, plan.fork_path, table, plan.anchor, None
         )
     assert sql_a == sql_b
+
+
+# ---------------------------------------------------------------------------
+# `junction` render: kind_labels
+# ---------------------------------------------------------------------------
+
+
+def test_junction_render_no_kind_labels_byte_identical_to_default(
+    tmp_path: Path,
+) -> None:
+    """A junction unit with no `kind_labels` renders the member kind column
+    verbatim — byte-identical to a plain passthrough column, the no-labels
+    no-op guard."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        assert table.kind_labels == ()
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+    assert '"_mem"."member__actor__kind" AS "actor_kind"' in sql
+    assert "CASE" not in sql
+
+
+def test_junction_render_labeled_member_kind_renders_label(tmp_path: Path) -> None:
+    """A labeled member kind renders the label; the owner column, ids, and
+    timestamps are untouched."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        labeled = replace(table, kind_labels=(("actor", "clinician"),))
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, labeled, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, labeled, sql)
+    assert {r["actor_kind"] for r in rows} == {"clinician"}
+    assert {r["actor_id"] for r in rows} == {"act001", "act002"}
+    assert all(r["visit_id"] == "v001" for r in rows)
+
+
+def test_junction_render_unlabeled_kind_renders_verbatim(tmp_path: Path) -> None:
+    """A `kind_labels` map naming a different kind leaves an unlabeled
+    member kind verbatim."""
+    with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        labeled = replace(table, kind_labels=(("location", "site"),))
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, labeled, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, labeled, sql)
+    assert {r["actor_kind"] for r in rows} == {"actor"}
+
+
+def test_junction_render_null_member_kind_cell_stays_null(tmp_path: Path) -> None:
+    """A NULL member-kind cell (open-interval / non-reference row) stays
+    NULL under a `kind_labels` map — the CASE's identity fall-through never
+    turns NULL into a rendered string."""
+    emit_dir = build_source_test_emit(tmp_path)
+    with duckdb.connect(str(emit_dir / "run.duckdb")) as conn:
+        conn.execute(
+            'UPDATE "membership__visit__team" SET "member__actor__kind" = NULL'
+            " WHERE \"elem__role_name\" = 'support'"
+        )
+    with _plan(emit_dir, _SPANNING_TABLES) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        labeled = replace(table, kind_labels=(("actor", "clinician"),))
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, labeled, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, labeled, sql)
+    still_open = next(r for r in rows if r["role_name"] == "support")
+    assert still_open["actor_kind"] is None
+
+
+def test_junction_render_corrupted_member_kind_value_renders_verbatim(
+    tmp_path: Path,
+) -> None:
+    """A member-kind value naming no sidecar kind (a corrupted emit's
+    mutated cell) renders verbatim — never masked, never an error."""
+    emit_dir = build_source_test_emit(tmp_path)
+    with duckdb.connect(str(emit_dir / "run.duckdb")) as conn:
+        conn.execute(
+            'UPDATE "membership__visit__team" SET "member__actor__kind" = ?'
+            " WHERE \"elem__role_name\" = 'lead'",
+            ["mutant_kind"],
+        )
+    with _plan(emit_dir, _SPANNING_TABLES) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        labeled = replace(table, kind_labels=(("actor", "clinician"),))
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, labeled, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, labeled, sql)
+    closed = next(r for r in rows if r["role_name"] == "lead")
+    assert closed["actor_kind"] == "mutant_kind"
 
 
 # ---------------------------------------------------------------------------

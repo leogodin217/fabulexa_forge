@@ -185,6 +185,29 @@ class SourceNameCollision(ExportError):
     silently suffixed or dropped — the author resolves it via `rename`."""
 
 
+class SourceKindLabelUnknown(ExportError):
+    """A `source.kind_labels` key names no records kind in the sidecar
+    (no `records__<kind>` table) — the sidecar-facts-gate-declarations
+    posture. Message: `"kind_labels: kind '{kind}' not in this emit"`."""
+
+
+class SourceKindLabelCollision(ExportError):
+    """After labeling, kind -> rendered name is not injective over the
+    emit's whole kind universe: a label equals another kind's label or an
+    unlabeled kind's own name, so two kinds would be indistinguishable in
+    a `<f>_kind` column. Message:
+    `"kind_labels: label '{label}' collides with kind '{kind}'"`."""
+
+
+class SourceItemTypeCollision(ExportError):
+    """Two events sources resolve one item-type over two audited item
+    spaces (different kinds, or a membership source sharing any source's
+    item-type), or a resolved item-type equals the rendered name of
+    another kind (any kind, for a membership source) — ranged over the
+    emit's whole kind universe. Messages per the design doc § Business
+    Rules row."""
+
+
 class SourceAnchorRequired(ExportError):
     """A `mode: source` export ran with no resolved `EffectiveAnchor`. Source
     renders every structural sim-time column as wallclock and never falls back to
