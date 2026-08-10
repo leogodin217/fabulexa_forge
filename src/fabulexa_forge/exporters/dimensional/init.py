@@ -4,9 +4,13 @@ Reads the sidecar (and DISTINCT discriminators where needed) and emits a
 commented candidate config the author edits. Honest about being a starting
 point (~70-80%); classification stays author-authoritative.
 
-Role is read exclusively from `record_roles` in the sidecar. Bare-string
-kinds resolve their role directly; the object-valued kind (actor) splits per
-declared sub-type. `enum_domains` and reference topology are not consulted.
+Role is read exclusively from `record_roles` in the sidecar; reference
+topology is not consulted. Splitting into per-sub-type stubs is a separate
+question, answered by `Sidecar.subtype_values` (the declared `<kind>_type`
+domain from `enum_domains`) — independent of whether `record_roles[kind]` is
+object-valued (role varies per sub-type, today only `actor`) or a bare string
+(role uniform across sub-types, e.g. `entity`, `resource`). Either way, a
+sub-typed kind gets one stub per declared sub-type.
 """
 
 from __future__ import annotations
@@ -533,6 +537,85 @@ def _presentation_id_advisory_comment(
     )
 
 
+def _write_sub_type_stub(
+    w: Callable[[str], None],
+    kind: str,
+    sub_type: str,
+    config_role: str,
+    has_tracked: bool,
+    all_tables: tuple[TableSpec, ...],
+    sidecar: "Sidecar",
+    notice_sink: "NoticeSink",
+    expanded: "dict[tuple[str, str | None], KeySurface]",
+    advisory_comment: str | None,
+) -> None:
+    """Write one dim/fact stub for a single (kind, sub_type) population.
+
+    Shared by both sub-typed splitting paths in `_build_candidate_yaml`: a
+    kind whose `record_roles` entry is object-valued (role varies per
+    sub-type, today only `actor`) and a bare-role kind that still carries a
+    declared `<kind>_type` domain (role uniform, e.g. `entity`, `resource`).
+    Both pass one sub-type at a time; only where the sub-type set comes from
+    differs.
+
+    Args:
+        w: Line-writing callable.
+        kind: The record kind name.
+        sub_type: The sub-type discriminator value for this stub.
+        config_role: `"dim"` or `"fact"`, already mapped from the registry role.
+        has_tracked: Whether the kind's records table carries a
+            `history_tracked` column (kind-level, precomputed by the caller).
+        all_tables: All sidecar TableSpec objects.
+        sidecar: The open emit's sidecar.
+        notice_sink: Receiver for slice-only-column-omitted skip notices.
+        expanded: The natural key-election map, `(kind, sub_type) ->` surface.
+        advisory_comment: The `presentation_id` natural-key advisory comment
+            for this kind, or None.
+    """
+    owned = _owned_columns(sidecar, kind, sub_type)
+    name = f"{config_role}_{kind}_{sub_type}"
+    filter_line = (
+        f"        filter: {{prop__{kind}_type: {sub_type}}}"
+        "  # one slice per sub-type"
+    )
+    w(f"    # --- {config_role}: {kind} sub-type '{sub_type}' ---")
+    if config_role == "dim":
+        id_surface = expanded[(kind, sub_type)]
+        dim_advisory = None if id_surface == "presentation_id" else advisory_comment
+        if has_tracked:
+            _write_dim_scd2_stub(
+                w,
+                kind,
+                name,
+                all_tables,
+                sidecar,
+                notice_sink,
+                filter_line,
+                id_surface,
+                owned_columns=owned,
+                advisory_comment=dim_advisory,
+            )
+        else:
+            _write_dim_type1_stub(
+                w,
+                kind,
+                name,
+                id_surface,
+                filter_line,
+                advisory_comment=dim_advisory,
+            )
+    else:
+        _write_fact_stub(
+            w,
+            kind,
+            name,
+            all_tables,
+            filter_line,
+            owned_columns=owned,
+            advisory_comment=advisory_comment,
+        )
+
+
 def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     """Build a commented candidate YAML config from the sidecar.
 
@@ -581,58 +664,52 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
 
     for kind in record_roles.kinds():
         advisory_comment = _presentation_id_advisory_comment(presentation_keys, kind)
+        sub_types = sidecar.subtype_values(kind)
         if record_roles.is_subtyped(kind):
-            # Object-valued kind: split per declared sub-type
+            # Object-valued kind (today only `actor`): role varies per
+            # sub-type, so `record_roles` is the authoritative sub-type set.
             has_tracked = _columns_have_history_tracked(kind, all_tables)
             for sub_type in record_roles.sub_types(kind):
-                owned = _owned_columns(sidecar, kind, sub_type)
                 registry_role = record_roles.role_of(kind, sub_type)
                 config_role = _ROLE_MAP[registry_role]
-                name = f"{config_role}_{kind}_{sub_type}"
-                filter_line = (
-                    f"        filter: {{prop__{kind}_type: {sub_type}}}"
-                    "  # one slice per sub-type"
+                _write_sub_type_stub(
+                    w,
+                    kind,
+                    sub_type,
+                    config_role,
+                    has_tracked,
+                    all_tables,
+                    sidecar,
+                    notice_sink,
+                    expanded,
+                    advisory_comment,
                 )
-                w(f"    # --- {config_role}: {kind} sub-type '{sub_type}' ---")
-                if config_role == "dim":
-                    id_surface = expanded[(kind, sub_type)]
-                    dim_advisory = (
-                        None if id_surface == "presentation_id" else advisory_comment
-                    )
-                    if has_tracked:
-                        _write_dim_scd2_stub(
-                            w,
-                            kind,
-                            name,
-                            all_tables,
-                            sidecar,
-                            notice_sink,
-                            filter_line,
-                            id_surface,
-                            owned_columns=owned,
-                            advisory_comment=dim_advisory,
-                        )
-                    else:
-                        _write_dim_type1_stub(
-                            w,
-                            kind,
-                            name,
-                            id_surface,
-                            filter_line,
-                            advisory_comment=dim_advisory,
-                        )
-                else:
-                    _write_fact_stub(
-                        w,
-                        kind,
-                        name,
-                        all_tables,
-                        filter_line,
-                        owned_columns=owned,
-                        advisory_comment=advisory_comment,
-                    )
+        elif sub_types:
+            # Bare-role kind (record_roles[kind] is a plain string, role
+            # uniform across sub-types) that still carries a declared
+            # `<kind>_type` domain — e.g. `entity`, `resource`. Splitting is
+            # the sidecar's own sub-typing signal (Sidecar.subtype_values),
+            # independent of record_roles's object-vs-string shape: one
+            # conformed dim/fact would union unrelated sub-type schemas into
+            # a mostly-NULL table.
+            has_tracked = _columns_have_history_tracked(kind, all_tables)
+            registry_role = record_roles.role_of(kind, None)
+            config_role = _ROLE_MAP[registry_role]
+            for sub_type in sub_types:
+                _write_sub_type_stub(
+                    w,
+                    kind,
+                    sub_type,
+                    config_role,
+                    has_tracked,
+                    all_tables,
+                    sidecar,
+                    notice_sink,
+                    expanded,
+                    advisory_comment,
+                )
         else:
-            # Bare-string kind: single role
+            # Flat kind: single role, no declared <kind>_type domain
             registry_role = record_roles.role_of(kind, None)
             config_role = _ROLE_MAP[registry_role]
             has_tracked = _columns_have_history_tracked(kind, all_tables)
@@ -729,24 +806,32 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
 def generate_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     """Generate a commented candidate dimensional export config from an emit.
 
-    Reads `record_roles` for warehouse role (authoritative), the sidecar tables
-    for grain/column shape, `history_tracked` for SCD class, and the reader's
-    DISTINCT introspection for fact-discriminator fan-out values. Role is never
-    inferred from reference topology, and `enum_domains` is not consulted.
+    Reads `record_roles` for warehouse role (authoritative), `Sidecar.
+    subtype_values` (`enum_domains[<kind>][<kind>_type]`) for whether and how
+    a kind splits into per-sub-type stubs, the sidecar tables for grain/column
+    shape, `history_tracked` for SCD class, and the reader's DISTINCT
+    introspection for fact-discriminator fan-out on kinds with no declared
+    `<kind>_type` domain. Role is never inferred from reference topology.
 
     New behavior: slice_only columns are skipped from column proposals
     (joining identity and lifecycle columns as never-proposed), one
     'slice-only-column-omitted' Notice per skip; the exempt discriminator
     remains proposable and drives filter pre-fill unchanged.
 
-    A bare-string kind resolves its role from `record_roles[kind]`. The
-    object-valued kind (today only `actor`) splits per declared sub-type from
-    `record_roles[kind].sub_types()`, with each sub-type's role resolved
-    independently via `role_of(kind, sub_type)`. The registry tokens
-    `"dimension"` / `"fact"` map to config `role` tokens `dim` / `fact`. `scd`
-    class is per-kind (from `history_tracked`); role is per-sub-type. The fact
+    Splitting and role resolution are separate questions. Whether a kind
+    splits into per-sub-type stubs follows `Sidecar.subtype_values(kind)`
+    (non-empty iff the sidecar declares a `<kind>_type` domain) —
+    independent of `record_roles[kind]`'s shape. Role resolution follows
+    `record_roles`: the object-valued kind (today only `actor`) resolves each
+    sub-type's role independently via `role_of(kind, sub_type)`; every other
+    sub-typed kind (e.g. `entity`, `resource`) has one role uniform across all
+    its sub-types, resolved once via `role_of(kind, None)`. The registry
+    tokens `"dimension"` / `"fact"` map to config `role` tokens `dim` /
+    `fact`. `scd` class is per-kind (from `history_tracked`). The fact
     modelling-discriminator `SELECT DISTINCT` fan-out (for a bare-string fact
-    kind carrying a non-taxonomy `prop__<kind>_type`) is unchanged.
+    kind with no declared `<kind>_type` domain but a `prop__<kind>_type`
+    column) is unchanged — the fallback for a kind `subtype_values` reports
+    as flat.
 
     Kind order and sub-type order follow the registry's lexicographic key order;
     the fact fan-out uses the reader's DISTINCT native-type order. No topology
@@ -783,7 +868,8 @@ def generate_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     Returns:
         A YAML string: a commented candidate `mode: dimensional` config, with
         a proposed `keys:` block. One table stub per dimension/fact kind (per
-        declared sub-type for the object-valued kind), with SCD-2 window
+        declared sub-type for every sub-typed kind, object-valued or bare-role
+        alike), with SCD-2 window
         columns where `history_tracked` applies, FK-candidate comments per
         reference column, membership-FK candidate comments for kinds that own
         a membership table, and the `presentation_id` natural-key advisory

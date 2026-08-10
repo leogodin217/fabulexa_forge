@@ -371,6 +371,105 @@ def build_bare_fact_with_discriminator_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
+_EQUIPMENT_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {"name": "prop__equipment_type", "type": "VARCHAR"},
+    {"name": "prop__label", "type": "VARCHAR"},
+]
+
+_DELIVERY_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {"name": "prop__delivery_type", "type": "VARCHAR"},
+]
+
+
+def build_bare_subtyped_dim_emit(tmp_path: Path) -> Path:
+    """Bare-role dimension kind ('equipment') that still carries a declared
+    `<kind>_type` domain (`forklift` / `scanner`) — `record_roles["equipment"]`
+    is a plain string, not object-valued, mirroring `entity`/`resource` in the
+    nhs/retail example bundles. Regression fixture for the crash where the
+    stub-splitting loop trusted `record_roles.is_subtyped` (true only for
+    `actor`) instead of `Sidecar.subtype_values` (the general oracle)."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__equipment", _EQUIPMENT_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__equipment" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "e1", 10, True, 10, 0, "forklift", "Forklift 1"],
+    )
+    conn.execute(
+        'INSERT INTO "records__equipment" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "e2", 10, True, 10, 1, "scanner", "Scanner 1"],
+    )
+    conn.close()
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[
+                _table_spec(
+                    "records__equipment",
+                    "records",
+                    _EQUIPMENT_COLUMNS,
+                    2,
+                    record_kind="equipment",
+                ),
+            ],
+            record_roles={"equipment": "dimension"},
+            enum_domains={"equipment": {"equipment_type": ["forklift", "scanner"]}},
+        ),
+    )
+    return tmp_path
+
+
+def build_bare_subtyped_fact_emit(tmp_path: Path) -> Path:
+    """Bare-role fact kind ('delivery') that carries a declared `<kind>_type`
+    domain (`express` / `standard`) — the fact-side counterpart of
+    `build_bare_subtyped_dim_emit`."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__delivery", _DELIVERY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__delivery" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "d1", 10, True, 10, 0, "express"],
+    )
+    conn.execute(
+        'INSERT INTO "records__delivery" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "d2", 20, True, 20, 1, "standard"],
+    )
+    conn.close()
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[
+                _table_spec(
+                    "records__delivery",
+                    "records",
+                    _DELIVERY_COLUMNS,
+                    2,
+                    record_kind="delivery",
+                ),
+            ],
+            record_roles={"delivery": "fact"},
+            enum_domains={"delivery": {"delivery_type": ["express", "standard"]}},
+        ),
+    )
+    return tmp_path
+
+
 def build_object_valued_actor_emit(
     tmp_path: Path, columns: list[dict[str, object]] | None = None
 ) -> Path:
@@ -822,6 +921,69 @@ def test_object_valued_kind_unobserved_subtype_yields_stub(tmp_path: Path) -> No
     content = out_path.read_text(encoding="utf-8")
     # bus is declared but has no rows in the table; stub still proposed
     assert "dim_actor_bus" in content
+
+
+# ---------------------------------------------------------------------------
+# Tests: bare-role kind with a declared <kind>_type domain (entity/resource
+# shape) -- splitting follows Sidecar.subtype_values, independent of whether
+# record_roles[kind] is object-valued.
+# ---------------------------------------------------------------------------
+
+
+def test_bare_subtyped_dim_splits_per_subtype(tmp_path: Path) -> None:
+    """A bare-role dim kind with a declared <kind>_type domain still splits
+    into one stub per sub-type -- not one combined dim_equipment stub."""
+    emit_dir = build_bare_subtyped_dim_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "- name: dim_equipment_forklift\n" in content
+    assert "- name: dim_equipment_scanner\n" in content
+    assert "- name: dim_equipment\n" not in content
+
+
+def test_bare_subtyped_dim_filters_per_subtype(tmp_path: Path) -> None:
+    """Each sub-type stub filters on prop__equipment_type."""
+    emit_dir = build_bare_subtyped_dim_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "prop__equipment_type: forklift" in content
+    assert "prop__equipment_type: scanner" in content
+
+
+def test_bare_subtyped_dim_role_uniform_via_bare_string(tmp_path: Path) -> None:
+    """Role is resolved once from the bare-string record_roles entry --
+    both sub-type stubs are dims, matching the kind's single declared role."""
+    emit_dir = build_bare_subtyped_dim_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    forklift = _actor_stub_block(content, "dim_equipment_forklift")
+    scanner = _actor_stub_block(content, "dim_equipment_scanner")
+    assert "role: dim" in forklift
+    assert "role: dim" in scanner
+
+
+def test_bare_subtyped_fact_splits_per_subtype(tmp_path: Path) -> None:
+    """A bare-role fact kind with a declared <kind>_type domain also splits
+    into one fact stub per sub-type."""
+    emit_dir = build_bare_subtyped_fact_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "- name: fact_delivery_express\n" in content
+    assert "- name: fact_delivery_standard\n" in content
+    assert "prop__delivery_type: express" in content
+    assert "prop__delivery_type: standard" in content
+
+
+def test_bare_subtyped_dim_proposal_passes_its_own_gates(tmp_path: Path) -> None:
+    """The generated candidate for a bare-role subtyped kind loads and plans."""
+    emit_dir = build_bare_subtyped_dim_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
 
 
 # ---------------------------------------------------------------------------
