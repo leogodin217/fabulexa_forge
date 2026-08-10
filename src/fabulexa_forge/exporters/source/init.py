@@ -1,17 +1,21 @@
 """Sidecar-driven candidate `mode: source` config generator for `init`.
 
 `generate_source_init_config` is a pure function of `(emit, code version)`
-(design doc § `init --mode source` inference contract): one `state` table
-per `records__<kind>` table (a sub-typed kind proposes one combined STI
-table, with a comment enumerating its declared sub-types and the
-per-sub-type split alternative — commented, since comments are not
-grammar), one `junction` table per `membership__<K>__<p>` table, and one
-`events` stub named `versions` — an active source per tracked-property
-kind, membership sources and lifecycle-only kinds appended commented-out;
-fully commented when no kind carries a tracked property. Absent `columns` /
-`only` / `ignore` propose the full classified default (source's own
-absent-selection rule), so no column enumeration is needed here; non-exempt
-`slice_only` columns are never proposed and each gets one
+(design doc § `init --mode source` inference contract): one `state` table per
+population — one per declared sub-type for a sub-typed kind (`sub_types:
+[<sub_type>]`), one for a flat kind — `init`'s default split, matching
+dimensional's per-sub-type stubs (both key off `Sidecar.subtype_values`,
+independent of `record_roles`, which source never consults). The first
+sub-type's stub carries a header comment naming the kind's full declared
+domain; the last carries a commented combine-alternative (one shared table
+across every sub-type, `sub_types:` omitted) for a kind whose sub-types share
+an identical column set. One `junction` table per `membership__<K>__<p>`
+table, and one `events` stub named `versions` — an active source per
+tracked-property kind, membership sources and lifecycle-only kinds appended
+commented-out; fully commented when no kind carries a tracked property.
+Absent `columns` / `only` / `ignore` propose the full classified default
+(source's own absent-selection rule), so no column enumeration is needed
+here; non-exempt `slice_only` columns are never proposed and each gets one
 'slice-only-column-omitted' notice. Two auto-derived names that collide
 (underscore-bearing identifiers) emit the later proposal commented, with a
 collision note — the emitted config always parses and plans clean.
@@ -19,14 +23,15 @@ collision note — the emitted config always parses and plans clean.
 The `keys:` proposal shares the key-election `init` contract's natural rule
 (`exporters.keys_init`: declared population -> presentation_id, undeclared
 -> record_index) with dimensional's engine, self-gated through
-`resolve_election` before a line is written. Source's own table shape (one
-state table spanning a kind's *full* declared domain, unlike dimensional's
-always-single-population dim stubs) means `check_identity_election` over
-each sub-typed kind's full domain is the *only* gate needed: it is strictly
-stronger than the edge-union-safety check (it additionally refuses a mixed
-election, which the edge gate does not), and every edge into a kind targets
-that same kind's full domain (source edges are kind-targeted), so a kind
-that passes its own identity gate is edge-safe by the same computation.
+`exporters.keys_init.self_gate_edge_safety` before a line is written. Every
+proposed `state` table is single-population (one sub-type, or a flat kind's
+whole domain), so — exactly like dimensional's always-single-population dim
+stubs — `check_edge_union_safety` over the reference graph is the only gate
+needed; `check_identity_election` (which gates a table spanning more than one
+population) never applies to a proposal that never combines populations. It
+still runs at real export time, in `source/plan.py`, over an
+author-edited config that reintroduces a combined table — `init`'s proposal
+just never needs to protect against its own output triggering it.
 """
 
 from __future__ import annotations
@@ -35,23 +40,17 @@ import io
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
-from fabulexa_forge.errors import (
-    ElectionMixedIdentity,
-    ElectionUnionUnsafe,
-    SourceHistoryTrackedRequired,
-)
-from fabulexa_forge.exporters.election import check_identity_election, resolve_election
+from fabulexa_forge.errors import SourceHistoryTrackedRequired
 from fabulexa_forge.exporters.keys_init import (
-    build_keys_config,
     domains_for_kinds,
     natural_expanded_surfaces,
+    self_gate_edge_safety,
     write_keys_block,
 )
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 
 if TYPE_CHECKING:
-    from fabulexa_forge.config.models import KeySurface
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -62,10 +61,19 @@ _PROP_PREFIX = "prop__"
 
 @dataclass(frozen=True)
 class _StateUnit:
-    """One proposed `state` table: verbatim kind name, one per records kind."""
+    """One proposed `state` table: one population of one records kind.
+
+    A flat kind proposes exactly one unit (`sub_type=None`, verbatim kind
+    name). A sub-typed kind (`Sidecar.subtype_values` non-empty) proposes one
+    unit per declared sub-type (`name` = `<kind>_<sub_type>`, narrowed via
+    `sub_types: [<sub_type>]`) — `init`'s default split, matching
+    dimensional's per-sub-type stubs; both key off `Sidecar.subtype_values`,
+    independent of `record_roles`.
+    """
 
     name: str
     kind: str
+    sub_type: str | None
 
 
 @dataclass(frozen=True)
@@ -101,20 +109,31 @@ def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
 
 
 def _proposed_units(sidecar: "Sidecar") -> "tuple[_StateUnit | _JunctionUnit, ...]":
-    """One unit per `records__<kind>` / `membership__<K>__<p>` table.
+    """One unit per population: one per sub-type of a sub-typed kind, one per
+    flat kind, one per `membership__<K>__<p>` table.
 
     Args:
         sidecar: The open emit's sidecar.
 
     Returns:
-        The proposed units, sidecar table-declaration order.
+        The proposed units, sidecar table-declaration order (sub-types in
+        declared-domain order within a kind).
     """
     units: "list[_StateUnit | _JunctionUnit]" = []
     for table in sidecar.tables():
         if table.category == "records":
             kind = table.record_kind
             assert kind is not None, "records table must declare record_kind"
-            units.append(_StateUnit(name=kind, kind=kind))
+            domain = sidecar.subtype_values(kind)
+            if domain:
+                for sub_type in domain:
+                    units.append(
+                        _StateUnit(
+                            name=f"{kind}_{sub_type}", kind=kind, sub_type=sub_type
+                        )
+                    )
+            else:
+                units.append(_StateUnit(name=kind, kind=kind, sub_type=None))
         elif table.category == "membership":
             owner_kind = table.record_kind
             property_name = table.property
@@ -168,55 +187,6 @@ def _kind_has_tracked_property(sidecar: "Sidecar", kind: str) -> bool:
         if sidecar.temporal_class(table_name, col.name) == "tracked":
             return True
     return False
-
-
-# ---------------------------------------------------------------------------
-# `keys:` self-gate
-# ---------------------------------------------------------------------------
-
-
-def _self_gate_keys_proposal(
-    sidecar: "Sidecar",
-    domains: "dict[str, tuple[str, ...]]",
-    expanded: "dict[tuple[str, str | None], KeySurface]",
-) -> "tuple[dict[str, KeySurface | dict[str, KeySurface]], dict[str, str]]":
-    """Gate the natural proposal through `resolve_election` + identity uniformity.
-
-    Every sub-typed kind proposes exactly one combined `state` table over its
-    full declared domain, so `check_identity_election` over that same full
-    domain is the mode's own plan-time gate — no separate edge-union-safety
-    pass is needed (module docstring). A flat kind (domain length < 1) or a
-    kind with exactly one addressed sub-type needs no gate (never mixed, and
-    a lone population has no pair to check).
-
-    Args:
-        sidecar: The open emit's sidecar.
-        domains: Every proposed kind's sub-type domain.
-        expanded: The natural per-population proposal, mutated in place with
-            any degradations.
-
-    Returns:
-        (keys_config, degraded) — the gated `ExportConfig.keys`-shaped
-        proposal, and kind -> a one-line reason naming the forcing gate, for
-        every kind the gate degraded.
-    """
-    election = resolve_election(sidecar, build_keys_config(expanded, domains))
-    degraded: dict[str, str] = {}
-    for kind, domain in domains.items():
-        if len(domain) < 2:
-            continue
-        try:
-            check_identity_election(election, kind, domain, kind)
-        except (ElectionMixedIdentity, ElectionUnionUnsafe) as exc:
-            degraded[kind] = f"{type(exc).__name__}: {exc}"
-
-    if not degraded:
-        return build_keys_config(expanded, domains), degraded
-
-    for kind in degraded:
-        for sub_type in domains[kind]:
-            expanded[(kind, sub_type)] = "record_index"
-    return build_keys_config(expanded, domains), degraded
 
 
 # ---------------------------------------------------------------------------
@@ -275,10 +245,18 @@ def _write_state_unit(
 ) -> None:
     """Write one proposed `state` table entry.
 
-    A sub-typed kind (`domain` non-empty) proposes one combined STI table
-    over the full domain, with a comment enumerating the declared sub-types
-    and the commented per-sub-type split alternative. A name collision
-    comments out the whole entry instead, with a collision note.
+    A flat kind (`unit.sub_type` is None) proposes one whole-kind stub. A
+    sub-typed kind proposes one stub per declared sub-type — `init`'s
+    default split, narrowed via `sub_types: [<sub_type>]`, matching
+    dimensional's per-sub-type stubs (both key off `Sidecar.subtype_values`,
+    independent of `record_roles`). The first sub-type's stub carries a
+    header comment naming the kind's full declared domain; the last carries
+    a commented combine-alternative — one shared table across every declared
+    sub-type (`sub_types:` omitted) — the shape a kind whose sub-types
+    declare an identical column set may prefer instead (the `KEPT ...
+    CONFORMED` judgment the nhs/retail example configs make for kinds like
+    `diary`/`appointment_book`). A name collision comments out the whole
+    entry instead, with a collision note.
 
     Args:
         w: Line-writing callable.
@@ -290,23 +268,26 @@ def _write_state_unit(
         _write_collision_note(w, unit.name)
         w(f"    # - name: {unit.name}")
         w(f"    #   kind: {unit.kind}")
+        if unit.sub_type is not None:
+            w(f"    #   sub_types: [{unit.sub_type}]")
         return
-    if domain:
+    if unit.sub_type is not None and unit.sub_type == domain[0]:
         w(
             f"    # kind '{unit.kind}' declares sub-types: {', '.join(domain)}"
-            " (STI: one combined table below)"
+            " (one table per sub-type below)"
         )
     w(f"    - name: {unit.name}")
     w(f"      kind: {unit.kind}")
-    if domain:
+    if unit.sub_type is not None:
+        w(f"      sub_types: [{unit.sub_type}]")
+    if unit.sub_type is not None and unit.sub_type == domain[-1]:
         w(
-            "    # Split alternative: one table per sub-type instead of the"
-            " combined table above"
+            "    # Combine alternative: one shared table across every"
+            " declared sub-type instead of the per-sub-type split above"
+            " (valid when the sub-types share an identical column set)"
         )
-        for sub_type in domain:
-            w(f"    # - name: {unit.name}_{sub_type}")
-            w(f"    #   kind: {unit.kind}")
-            w(f"    #   sub_types: [{sub_type}]")
+        w(f"    # - name: {unit.kind}")
+        w(f"    #   kind: {unit.kind}")
 
 
 def _write_junction_unit(
@@ -428,11 +409,14 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
         A YAML string with candidate config and inline comments.
     """
     sidecar = emit.sidecar
+    all_tables = sidecar.tables()
     known_kinds = _known_records_kinds(sidecar)
     domains = domains_for_kinds(sidecar, known_kinds)
     presentation_keys = sidecar.presentation_keys()
     expanded = natural_expanded_surfaces(presentation_keys, domains)
-    keys_config, degraded = _self_gate_keys_proposal(sidecar, domains, expanded)
+    keys_config, degraded = self_gate_edge_safety(
+        sidecar, all_tables, domains, expanded
+    )
 
     buf = io.StringIO()
 
@@ -473,10 +457,11 @@ def generate_source_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
 
     Returns:
         A YAML string: a commented candidate `mode: source` config, with a
-        proposed `keys:` block, one `state` / `junction` table stub per
-        sidecar table (a sub-typed kind's combined STI stub carries the
-        per-sub-type split alternative in comments), and a `versions` events
-        stub (fully commented when no kind carries a tracked property).
+        proposed `keys:` block, one `state` table stub per population (per
+        declared sub-type for a sub-typed kind, carrying a commented
+        combine-alternative after the last one) / one `junction` stub per
+        membership table, and a `versions` events stub (fully commented when
+        no kind carries a tracked property).
 
     Raises:
         SourceHistoryTrackedRequired: The sidecar predates per-column

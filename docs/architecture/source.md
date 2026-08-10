@@ -653,7 +653,8 @@ parses and plans clean, the key-election `init` self-gating posture.
 
 | Emit condition | Proposal |
 |---|---|
-| Each `records__<kind>` table | One state table: `name: <kind>`, `kind: <kind>`. For a sub-typed kind, one combined table (the STI shape) with a comment enumerating the declared sub-types and showing the per-sub-type split alternative |
+| Each `records__<kind>` table, flat (no declared `<kind>_type` domain) | One state table: `name: <kind>`, `kind: <kind>` |
+| Each `records__<kind>` table, sub-typed (`Sidecar.subtype_values(kind)` non-empty) | One state table per declared sub-type — `name: <kind>_<sub_type>`, `sub_types: [<sub_type>]` — `init`'s default split, matching dimensional's per-sub-type stubs. The first sub-type's stub carries a header comment naming the full domain; the last carries a commented combine-alternative (one shared table across every sub-type, `sub_types:` omitted) for a kind whose sub-types share an identical column set |
 | Each `membership__<K>__<p>` table | One junction table: `name: <K>_<p>` |
 | ≥ 1 kind with a class-`tracked` property | One `events` stub named `versions`, one active source entry per such kind; membership sources and lifecycle-only kinds (no tracked property — spine `create` / `destroy` only) appended as commented-out source entries |
 | No kind carries a tracked property | The `events` stub is emitted fully commented out (name and every per-kind source), under a comment noting the emit's auditable history is lifecycle-only; uncommenting opts in |

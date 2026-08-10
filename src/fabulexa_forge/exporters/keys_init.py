@@ -3,19 +3,25 @@
 The key-election `init` contract (docs/architecture/key-election.md §
 `init` proposals) is one natural rule — declared population -> presentation_id,
 undeclared -> record_index — shared verbatim by every mode's proposal engine.
-What differs per mode is the *self-gate*: which of `resolve_election`'s
-plan-time gates the mode's own table shapes exercise (dimensional's dims are
-always single-population, so only the edge gate applies; source's combined
-state tables are not, so the identity gate applies too). This module holds
-the mode-neutral pieces — natural-surface computation, the
-`ExportConfig.keys`-shaped assembly, and the block writer — so each mode's
-own `init` module composes them around its own self-gate rather than
+Both dimensional's dims and source's `state` tables (since source's
+per-sub-type split became `init`'s default) propose only single-population
+output tables, so the one gate either mode's proposal needs is edge safety —
+`check_edge_union_safety` over the sidecar's reference graph, never the
+identity-mixing gate (`check_identity_election`), which only ever fires for a
+table spanning more than one population of a kind. This module holds the
+mode-neutral pieces — natural-surface computation, the reference graph, the
+shared self-gate, the `ExportConfig.keys`-shaped assembly, and the block
+writer — so each mode's own `init` module composes them rather than
 reimplementing the shared half.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Callable, Iterable
+
+from fabulexa_forge.errors import ElectionUnionUnsafe
+from fabulexa_forge.exporters.election import check_edge_union_safety, resolve_election
+from fabulexa_forge.reader.sidecar import TableSpec
 
 if TYPE_CHECKING:
     from fabulexa_forge.config.models import KeySurface
@@ -121,6 +127,90 @@ def build_keys_config(
         values = set(sub_map.values())
         config[kind] = next(iter(values)) if len(values) == 1 else sub_map
     return config
+
+
+def reference_edges(all_tables: tuple[TableSpec, ...]) -> list[tuple[str, str, str]]:
+    """Every `references` column across every records table — the reference graph.
+
+    Args:
+        all_tables: All sidecar TableSpec objects.
+
+    Returns:
+        (source_kind, column_name, target_kind) triples, in sidecar order.
+    """
+    edges: list[tuple[str, str, str]] = []
+    for table in all_tables:
+        if not isinstance(table, TableSpec):
+            continue
+        if not table.name.startswith("records__"):
+            continue
+        kind = table.name[len("records__") :]
+        for col in table.columns:
+            if col.references:
+                edges.append((kind, col.name, col.references))
+    return edges
+
+
+def self_gate_edge_safety(
+    sidecar: "Sidecar",
+    all_tables: tuple[TableSpec, ...],
+    domains: "dict[str, tuple[str, ...]]",
+    expanded: "dict[tuple[str, str | None], KeySurface]",
+) -> "tuple[dict[str, KeySurface | dict[str, KeySurface]], dict[str, str]]":
+    """Gate the natural proposal through `resolve_election` + edge union safety.
+
+    Shared by dimensional and source's `init`: `init` runs its own proposal
+    through the exact machinery the export would run. Neither mode's
+    proposal ever combines two populations of one kind into one output table
+    (dimensional's dims never did; source's `state` tables don't since the
+    per-sub-type split became `init`'s default), so `check_edge_union_safety`
+    over the reference graph is the one gate needed — per `references`
+    column, gated against the target kind's full declared domain with no
+    `target_key` / surface override. A kind implicated in a failure degrades
+    to uniform `record_index` — always passing, by construction. One pass
+    suffices: each edge's verdict depends only on its own target kind's
+    populations, so degrading the implicated kinds cannot newly break an
+    edge that previously passed.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        all_tables: All sidecar TableSpec objects.
+        domains: Every proposed kind's sub-type domain.
+        expanded: The natural per-population proposal, mutated in place with
+            any degradations.
+
+    Returns:
+        (keys_config, degraded) — the gated `ExportConfig.keys`-shaped
+        proposal, and kind -> a one-line reason naming the forcing gate, for
+        every kind the gate degraded.
+    """
+    election = resolve_election(sidecar, build_keys_config(expanded, domains))
+    degraded: dict[str, str] = {}
+    for source_kind, column, target_kind in reference_edges(all_tables):
+        if target_kind not in domains:
+            continue
+        if target_kind in degraded:
+            continue
+        edge_name = f"{source_kind}.{column}"
+        try:
+            check_edge_union_safety(
+                election,
+                target_kind,
+                domains[target_kind],
+                edge_name,
+                surface_override=None,
+            )
+        except ElectionUnionUnsafe as exc:
+            degraded[target_kind] = f"ElectionUnionUnsafe: {exc}"
+
+    if not degraded:
+        return build_keys_config(expanded, domains), degraded
+
+    for kind in degraded:
+        sub_types: tuple[str | None, ...] = domains[kind] if domains[kind] else (None,)
+        for sub_type in sub_types:
+            expanded[(kind, sub_type)] = "record_index"
+    return build_keys_config(expanded, domains), degraded
 
 
 def write_keys_block(

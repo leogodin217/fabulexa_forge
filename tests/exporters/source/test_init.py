@@ -1,9 +1,11 @@
 """Tests for `exporters.source.init.generate_source_init_config`.
 
 Covers:
-- One state table per `records__<kind>`, name verbatim `<kind>`; a sub-typed
-  kind proposes one combined STI table with the sub-type enumeration + split
-  alternative in comments.
+- One state table per population: name verbatim `<kind>` for a flat kind;
+  one stub per declared sub-type (`<kind>_<sub_type>`, `sub_types:
+  [<sub_type>]`) for a sub-typed kind -- `init`'s default split -- with a
+  header comment naming the full domain and a commented combine-alternative
+  after the last sub-type's stub.
 - One junction per membership table, named `<K>_<p>`.
 - The `versions` events stub: one active source per tracked-property kind,
   membership sources and lifecycle-only kinds appended commented-out.
@@ -13,8 +15,10 @@ Covers:
   proposal with a collision note; the emitted config still parses and plans
   clean.
 - A registry-declared population -> the `keys:` proposal, self-gated through
-  `check_identity_election` (mixed declarations degrade a sub-typed kind to
-  uniform `record_index`; full agreement collapses to the scalar).
+  `check_edge_union_safety` (every proposed table is single-population, so
+  the identity-mixing gate never applies; a partial declaration proposes
+  each population's own election independently, no degradation; full
+  agreement collapses to the scalar).
 - Non-exempt `slice_only` columns are never proposed; one notice each.
 - An emit predating `history_tracked` -> `SourceHistoryTrackedRequired`; an
   incoherent `presentation_keys` block -> `PresentationKeysInvalidError`.
@@ -120,7 +124,8 @@ _UNTRACKED_FLAT_ROW: list[object] = ["trunk", "w1", 10, True, None, 10, 0, "Widg
 
 
 # ---------------------------------------------------------------------------
-# State tables: one per records__<kind>, sub-typed STI + split alternative
+# State tables: one per population -- split by default for a sub-typed kind,
+# with a commented combine-alternative
 # ---------------------------------------------------------------------------
 
 
@@ -133,29 +138,36 @@ def test_state_table_one_per_flat_kind_verbatim_name(tmp_path: Path) -> None:
     assert "    - name: location\n      kind: location\n" in content
 
 
-def test_subtyped_kind_proposes_combined_sti_with_split_alternative(
+def test_subtyped_kind_splits_per_subtype_with_combine_alternative(
     tmp_path: Path,
 ) -> None:
-    """A sub-typed kind proposes one combined STI table, sub-types enumerated,
-    with a commented per-sub-type split alternative."""
+    """A sub-typed kind proposes one live stub per declared sub-type, header
+    comment naming the full domain, with a commented combine-alternative
+    after the last one."""
     emit_dir = tmp_path / "emit"
     emit_dir.mkdir()
     build_source_test_emit(emit_dir)
     content = _generate(emit_dir)
     assert (
         "    # kind 'actor' declares sub-types: consultant, nurse"
-        " (STI: one combined table below)\n"
-        "    - name: actor\n"
-        "      kind: actor\n" in content
+        " (one table per sub-type below)\n"
+        "    - name: actor_consultant\n"
+        "      kind: actor\n"
+        "      sub_types: [consultant]\n" in content
     )
-    assert "    # - name: actor_consultant\n" in content
-    assert "    #   kind: actor\n" in content
-    assert "    #   sub_types: [consultant]\n" in content
-    assert "    # - name: actor_nurse\n" in content
-    assert "    #   sub_types: [nurse]\n" in content
-    # The active proposal is the combined table; the split alternative never
-    # uncomments a live '- name: actor_consultant' entry.
-    assert "\n    - name: actor_consultant" not in content
+    assert (
+        "    - name: actor_nurse\n"
+        "      kind: actor\n"
+        "      sub_types: [nurse]\n"
+        "    # Combine alternative: one shared table across every declared"
+        " sub-type instead of the per-sub-type split above (valid when the"
+        " sub-types share an identical column set)\n"
+        "    # - name: actor\n"
+        "    #   kind: actor\n" in content
+    )
+    # The active proposals are the split stubs; the combine alternative never
+    # uncomments a live '- name: actor' entry.
+    assert "\n    - name: actor\n" not in content
 
 
 # ---------------------------------------------------------------------------
@@ -362,16 +374,123 @@ _ACTOR_PARTIAL_KEYS: dict[str, object] = {
 }
 
 
-def test_registry_partial_declaration_degrades_sub_typed_kind(tmp_path: Path) -> None:
-    """`driver`/`bus` declared and `ride` undeclared: the combined table's
-    mixed election fails `check_identity_election` -> the whole kind
-    degrades to the uniform `record_index` scalar, with a comment naming
-    the forcing gate."""
+def test_registry_partial_declaration_proposes_per_subtype_dict(tmp_path: Path) -> None:
+    """`driver`/`bus` declared and `ride` undeclared: since each sub-type gets
+    its own single-population table, there is no mixed-identity table to
+    protect against -- the proposal elects each population independently
+    (no degradation) as a per-sub-type dict."""
     emit_dir = _build_subtyped_actor_emit(
         tmp_path, ["driver", "bus", "ride"], _ACTOR_PARTIAL_KEYS
     )
     content = _generate(emit_dir)
-    assert "keys:\n  actor: record_index  # NOTE: ElectionMixedIdentity" in content
+    assert (
+        "keys:\n"
+        "  actor:\n"
+        "    driver: presentation_id\n"
+        "    bus: presentation_id\n"
+        "    ride: record_index\n" in content
+    )
+    assert "NOTE" not in content
+    _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
+
+
+_ORDER_REFERENCING_ACTOR_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_id",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="actor",
+    ),
+    identity_column("ref_index__actor_id", "BIGINT"),
+]
+
+#: `driver`/`bus` both declare a bare (empty-prefix) `counter` key space --
+#: pairwise-unsafe under a uniform `presentation_id` election.
+_ACTOR_BARE_COUNTER_KEYS: dict[str, object] = {
+    "actor": {
+        "sub_types": {
+            "driver": {
+                "unique_within": "emit",
+                "branch_stable": False,
+                "slice_stable": False,
+                "key_space": {"class": "counter", "prefix": "", "width": 3},
+            },
+            "bus": {
+                "unique_within": "emit",
+                "branch_stable": False,
+                "slice_stable": False,
+                "key_space": {"class": "counter", "prefix": "", "width": 3},
+            },
+        },
+        "branch_stable": False,
+        "slice_stable": False,
+    }
+}
+
+
+def _build_subtyped_actor_with_referencing_order_emit(tmp_path: Path) -> Path:
+    """A sub-typed `actor` (driver/bus, bare/ambiguous counter prefixes) plus
+    an `order` table referencing it -- the edge gate needs a referencing
+    column to gate actor's election against, mirroring dimensional's
+    `build_actor_with_referencing_booking_emit`."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir(parents=True, exist_ok=True)
+    conn = duckdb.connect(str(emit_dir / "run.duckdb"))
+    conn.execute(_create_ddl("records__actor", _SUBTYPED_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("records__order", _ORDER_REFERENCING_ACTOR_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "a1", 1, 10, True, None, 10, 0, "driver", "Alice"],
+    )
+    conn.execute(
+        'INSERT INTO "records__order" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "o1", 10, True, None, 10, 0, "a1", 0],
+    )
+    conn.close()
+    write_emit(
+        emit_dir,
+        tables=[
+            _table_spec(
+                "records__actor",
+                "records",
+                _SUBTYPED_ACTOR_COLUMNS,
+                1,
+                record_kind="actor",
+            ),
+            _table_spec(
+                "records__order",
+                "records",
+                _ORDER_REFERENCING_ACTOR_COLUMNS,
+                1,
+                record_kind="order",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={
+            "enum_domains": {"actor": {"actor_type": ["driver", "bus"]}},
+            "presentation_keys": _ACTOR_BARE_COUNTER_KEYS,
+        },
+    )
+    return emit_dir
+
+
+def test_referencing_column_degrades_union_unsafe_subtype(tmp_path: Path) -> None:
+    """`order.prop__actor_id` references the sub-typed `actor` kind: driver
+    and bus both electing pairwise-unsafe bare counters degrades the kind to
+    uniform `record_index` via the edge gate -- `check_edge_union_safety`,
+    not `check_identity_election` (no table combines driver and bus; each
+    gets its own single-population stub)."""
+    emit_dir = _build_subtyped_actor_with_referencing_order_emit(tmp_path)
+    content = _generate(emit_dir)
+    assert "keys:\n  actor: record_index  # NOTE: ElectionUnionUnsafe" in content
     _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
 
 
@@ -402,12 +521,18 @@ def test_registry_full_declaration_collapses_to_presentation_id_scalar(
     tmp_path: Path,
 ) -> None:
     """Every declared sub-type electing `presentation_id`, pairwise
-    union-safe, collapses the proposal to the scalar aligned with the
-    combined `tables:` entry."""
+    union-safe, collapses the `keys:` proposal to the scalar -- independent
+    of the `tables:` layout, which still splits one stub per sub-type."""
     emit_dir = _build_subtyped_actor_emit(tmp_path, ["driver", "bus"], _ACTOR_FULL_KEYS)
     content = _generate(emit_dir)
     assert "keys:\n  actor: presentation_id\n" in content
-    assert "    - name: actor\n      kind: actor\n" in content
+    assert (
+        "    - name: actor_driver\n      kind: actor\n      sub_types: [driver]\n"
+        in content
+    )
+    assert (
+        "    - name: actor_bus\n      kind: actor\n      sub_types: [bus]\n" in content
+    )
     _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
 
 
@@ -537,10 +662,12 @@ def test_proposal_order_follows_sidecar_declaration_order(tmp_path: Path) -> Non
     ]
     assert names_in_order == [
         "visit",
-        "shift",
+        "shift_day",
+        "shift_night",
         "location",
         "order",
-        "actor",
+        "actor_consultant",
+        "actor_nurse",
         "visit_team",
     ]
 

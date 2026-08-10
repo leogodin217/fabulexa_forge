@@ -18,12 +18,11 @@ from __future__ import annotations
 import io
 from typing import TYPE_CHECKING, Callable
 
-from fabulexa_forge.errors import ElectionUnionUnsafe, InitRequiresRecordRoles
-from fabulexa_forge.exporters.election import check_edge_union_safety, resolve_election
+from fabulexa_forge.errors import InitRequiresRecordRoles
 from fabulexa_forge.exporters.keys_init import (
-    build_keys_config,
     domains_for_kinds,
     natural_expanded_surfaces,
+    self_gate_edge_safety,
     write_keys_block,
 )
 from fabulexa_forge.exporters.notices import Notice
@@ -231,89 +230,6 @@ def _membership_kinds_and_props(
             ]
             result.append((table.record_kind, table.property, elem_cols))
     return result
-
-
-def _reference_edges(all_tables: tuple[TableSpec, ...]) -> list[tuple[str, str, str]]:
-    """Every `references` column across every records table — the reference graph.
-
-    Args:
-        all_tables: All sidecar TableSpec objects.
-
-    Returns:
-        (source_kind, column_name, target_kind) triples, in sidecar order.
-    """
-    edges: list[tuple[str, str, str]] = []
-    for table in all_tables:
-        if not isinstance(table, TableSpec):
-            continue
-        if not table.name.startswith("records__"):
-            continue
-        kind = table.name[len("records__") :]
-        for col in table.columns:
-            if col.references:
-                edges.append((kind, col.name, col.references))
-    return edges
-
-
-def _self_gate_keys_proposal(
-    sidecar: "Sidecar",
-    all_tables: tuple[TableSpec, ...],
-    domains: "dict[str, tuple[str, ...]]",
-    expanded: "dict[tuple[str, str | None], KeySurface]",
-) -> "tuple[dict[str, KeySurface | dict[str, KeySurface]], dict[str, str]]":
-    """Gate the natural proposal through `resolve_election` + edge union safety.
-
-    Doc § `init` proposals: `init` runs its own proposal through the exact
-    machinery the export would run. Dimensional's plan-time gate over an
-    ungrained proposal (no `fk:` columns are proposed — FK candidates stay
-    comments) is `check_edge_union_safety` over the emit's reference graph:
-    per `references` column, gated against the target kind's full declared
-    domain with no `target_key` override (an uncommented FK candidate
-    inherits). A kind implicated in a failure degrades to uniform
-    `record_index` — always passing, by construction (doc's Invariants).
-    One pass suffices: each edge's verdict depends only on its own target
-    kind's populations, so degrading the implicated kinds cannot newly break
-    an edge that previously passed.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        all_tables: All sidecar TableSpec objects.
-        domains: Every proposed kind's sub-type domain.
-        expanded: The natural per-population proposal, mutated in place with
-            any degradations.
-
-    Returns:
-        (keys_config, degraded) — the gated `ExportConfig.keys`-shaped
-        proposal, and kind -> a one-line reason naming the forcing gate, for
-        every kind the gate degraded.
-    """
-    election = resolve_election(sidecar, build_keys_config(expanded, domains))
-    degraded: dict[str, str] = {}
-    for source_kind, column, target_kind in _reference_edges(all_tables):
-        if target_kind not in domains:
-            continue
-        if target_kind in degraded:
-            continue
-        edge_name = f"{source_kind}.{column}"
-        try:
-            check_edge_union_safety(
-                election,
-                target_kind,
-                domains[target_kind],
-                edge_name,
-                surface_override=None,
-            )
-        except ElectionUnionUnsafe as exc:
-            degraded[target_kind] = f"ElectionUnionUnsafe: {exc}"
-
-    if not degraded:
-        return build_keys_config(expanded, domains), degraded
-
-    for kind in degraded:
-        sub_types: tuple[str | None, ...] = domains[kind] if domains[kind] else (None,)
-        for sub_type in sub_types:
-            expanded[(kind, sub_type)] = "record_index"
-    return build_keys_config(expanded, domains), degraded
 
 
 def _write_dim_scd2_stub(
@@ -575,8 +491,7 @@ def _write_sub_type_stub(
     owned = _owned_columns(sidecar, kind, sub_type)
     name = f"{config_role}_{kind}_{sub_type}"
     filter_line = (
-        f"        filter: {{prop__{kind}_type: {sub_type}}}"
-        "  # one slice per sub-type"
+        f"        filter: {{prop__{kind}_type: {sub_type}}}  # one slice per sub-type"
     )
     w(f"    # --- {config_role}: {kind} sub-type '{sub_type}' ---")
     if config_role == "dim":
@@ -641,7 +556,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
 
     domains = domains_for_kinds(sidecar, record_roles.kinds())
     expanded = natural_expanded_surfaces(presentation_keys, domains)
-    keys_config, degraded = _self_gate_keys_proposal(
+    keys_config, degraded = self_gate_edge_safety(
         sidecar, all_tables, domains, expanded
     )
 
