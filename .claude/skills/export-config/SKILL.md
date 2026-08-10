@@ -1,6 +1,6 @@
 ---
 name: export-config
-description: Author or edit a Fabulexa export config YAML — read the bundle's atlas and sub-type partition to learn what the simulation's kinds actually mean in the domain, pick the envelope (dimensional ExportConfig or StreamConfig), adapt the nearest known-good recipe, look up only the config types you change in the models via cclsp, then run-iterate to a clean export and profile the output before shipping. Use when writing or modifying an export or streaming config.
+description: Author or edit a Fabulexa export config YAML — read the bundle's atlas and sub-type partition to learn what the simulation's kinds actually mean in the domain, pick the envelope (ExportConfig — mode dimensional / source / base — or streaming StreamConfig), adapt the nearest known-good recipe, look up only the config types you change in the models via cclsp, then run-iterate to a clean export and profile the output before shipping. Use when writing or modifying an export or streaming config.
 argument-hint: [what the export should produce]
 ---
 
@@ -62,35 +62,44 @@ copying a recipe and, when you change a type, reading that model class via cclsp
 
 | Material | What it gives you | How to read it |
 |---|---|---|
-| `docs/recipes/README.md` | **Capability index — the primary copy-adapt source.** One narrow recipe per capability (SCD-2 dim, fact from history/membership, FK via reference/membership, `lookup`, the four derived columns, `exclude`, `rebase`, table/column rename; streaming: state-changes CDC, identity tombstone, multi-kind global `seq`, stream `rebase`). | `tools/mdnav` the index, pick the recipe whose capability matches, copy its `config.yaml`. |
-| `src/fabulexa_forge/config/models.py` | **Every config type: its fields, types, required/optional, and the cross-field rules.** The authoritative field shapes (Code Is Truth). | cclsp ONLY — `find_definition` / `get_hover` on the type name (`FkClause`, `SourceDecl`, `StreamKindSelection`, `RoutingConfig`…). The class docstring + attribute docstrings + `@model_validator` docstrings carry the field meaning and the rules. **Never read the whole 661-line file to find one field.** |
-| `fabulexa-forge init <emit_dir> [<out>]` | A commented **candidate `mode: dimensional` config** inferred from the sidecar (roles, SCD, sub-type splits, FK candidates). A starting point to edit, not a finished config. | Use when authoring a dimensional config from scratch against a real emit. Classification stays author-authoritative — edit the candidate. |
+| `docs/recipes/README.md` | **Capability index — the primary copy-adapt source.** One narrow recipe per capability (dimensional: SCD-2 / Type-1 dims, sub-type split, facts from history / history-interval / membership, FK via reference/membership plus the `path` hint, `lookup`, the four derived columns, `exclude`, `rebase`, table/column rename; source: state tables, sub-type split, junction, event log, log-only, `columns`/`rename`; streaming: state-changes CDC, membership-events join/leave, identity tombstones, routing — sub-type topics, `types`, `groups`, `topic_template`, `table_identity` — debezium for both contents, realtime pacing, stream `rebase`). | `tools/mdnav` the index, pick the recipe whose capability matches, copy its `config.yaml`. |
+| `src/fabulexa_forge/config/models.py` | **Every config type: its fields, types, required/optional, and the cross-field rules.** The authoritative field shapes (Code Is Truth). | cclsp ONLY — `find_definition` / `get_hover` on the type name (`FkClause`, `SourceDecl`, `StreamKindSelection`, `RoutingConfig`…). The class docstring + attribute docstrings + `@model_validator` docstrings carry the field meaning and the rules. **Never read the whole file — 2,300+ lines — to find one field.** |
+| `fabulexa-forge init <emit_dir> [<out>] [--mode dimensional\|source]` | A commented **candidate config** inferred from the sidecar — `--mode dimensional` (the default: roles, SCD, sub-type splits, FK candidates) or `--mode source` (the source proposal engine: state/junction tables + event log). A starting point to edit, not a finished config. | Use when authoring a dimensional or source config from scratch against a real emit. Classification stays author-authoritative — edit the candidate. |
 | `fabulexa-forge export` / `fabulexa-forge stream` | The **mechanical** gate (Pydantic load + the full reshape against an emit). Necessary, not sufficient — it judges grammar, never meaning. | Run until exit 0, then profile the output (§ Workflow step 5). This repo has **no config-only `validate` verb**; running against an emit is the gate. |
 | `docs/examples/<domain>/` | **Worked full-domain configs** — a whole bundle (`bundle/`) with its atlas, and curated `dimensional.yaml` / `source.yaml` / `base.yaml` / `stream.yaml` beside it. Where recipes teach one knob against a domain-agnostic fixture, these show a complete star built from real domain reasoning. `nhs/dimensional.yaml` is the exemplar: read its header decision log. | Read as a model of *reasoning*, never copy its claims — see the warning under § Decision rules. |
 
 Pick the smallest starting point that already does what you need, by capability not by
 size: SCD-2 dimension → `dim-scd2-from-records`; FK through a membership edge →
-`fact-fk-via-membership`; a CDC change stream → `streaming/state-changes`; choose your
-own event wallclock → `streaming/rebase-ts`.
+`fact-fk-via-membership`; an app-database state table → `source/source-state-tables`;
+a CDC change stream → `streaming/state-changes`; a join/leave presence stream →
+`streaming/membership-events`; choose your own event wallclock → `streaming/rebase-ts`.
 
-## The three shapes — pick first
+## The four shapes — pick first
 
-This package has two top-level config envelopes, and three shapes across them; the
+This package has two top-level config envelopes, and four shapes across them; the
 top-level key tells you which:
 
 | Shape | Envelope | Distinguishing key | Section / lists | Run with |
 |---|---|---|---|---|
-| Dimensional reshape | **`ExportConfig`** | `mode: dimensional` | a `dimensional:` section (`tables`, optional `exclude`); optional `rebase`, `incremental` | `fabulexa-forge export <emit> <config> <out> --fmt <csv\|duckdb>` |
-| Source reshape (operational dump) | **`ExportConfig`** | `mode: source` | an optional `source:` section (`change_delivery`, `exclude`, `rename`); optional `rebase`, `incremental` | `fabulexa-forge export <emit> <config> <out> --fmt <csv\|duckdb>` |
-| CDC delivery | **`StreamConfig`** | `content: state-changes` | a `kinds:` list; optional `routing`, `rebase`, `debezium` | `fabulexa-forge stream <emit> <config> --fmt <jsonl\|debezium> --sink <stdout\|file> [--out <dir>]` |
+| Dimensional reshape | **`ExportConfig`** | `mode: dimensional` | a `dimensional:` section (`tables`, optional `exclude`); optional `rebase`, `incremental`, `keys` | `fabulexa-forge export <emit> <config> <out> --fmt <csv\|duckdb>` |
+| Source reshape (operational dump) | **`ExportConfig`** | `mode: source` | a **required** `source:` section (`tables`, `events`, `declare_keys`); optional `rebase`, `incremental`, `keys` | `fabulexa-forge export <emit> <config> <out> --fmt <csv\|duckdb>` |
+| Base flat projection | **`ExportConfig`** | `mode: base` | an *optional* `base:` section (`exclude`, `rename`, `slice_at`, `declare_keys`); optional `rebase`, `incremental`, `keys` | `fabulexa-forge export <emit> <config> <out> --fmt <csv\|duckdb>` |
+| Event-stream delivery | **`StreamConfig`** | `content: state-changes` \| `membership-events` | a `kinds:` list (state-changes) or a `memberships:` list (membership-events); optional `routing`, `rebase`, `debezium`, `clock`, `kafka` | `fabulexa-forge stream <emit> <config> --fmt <jsonl\|debezium> --sink <stdout\|file\|kafka> [--out <dir>]` |
 
-Dimensional and source are two `mode`s of the *same* envelope (a discriminated
-union — `mode_section_matches` enforces the named mode's section is present and the
-other's is absent) and load through the one `load_export_config`. `StreamConfig` is a
-genuinely separate envelope with its own loader, `load_stream_config` — streaming is a
-delivery driver, not a mode of `ExportConfig`.
+Dimensional, source, and base are three `mode`s of the *same* envelope (a
+discriminated union — `mode_section_matches` enforces the named mode's section is
+present and the others' absent; base is the one escape hatch — a bare `mode: base`
+with no section is a legal full current-state dump, though an empty `base: {}` block
+is refused) and load through the one `load_export_config`. `StreamConfig` is a
+genuinely separate envelope with its own loader, `load_stream_config` — streaming is
+a delivery driver, not a mode of `ExportConfig`.
 
-All three accept the `--base-date` / `--timezone` rebase overrides.
+All four accept the `--base-date` / `--timezone` rebase overrides. All three
+`ExportConfig` modes also accept a top-level `keys:` block — the cross-mode key
+election choosing, per population, which identity surface (`record_id` /
+`record_index` / `presentation_id`) presents as a table's exported identity, resolved
+against the sidecar's `presentation_keys` registry at export time (a bad election
+fails the run, not the load).
 
 **Source specifics.** Source declares its output shape table by table — *things get
 tables, events get the log* (see
@@ -113,6 +122,16 @@ Three things about the grammar are easy to get wrong:
   `deactivated_at`, `last_mutation_sim_time` to keep the `created_at` / `active` /
   `deactivated_at` / `updated_at` soft-delete quartet the source archetype wants.
 
+**Base specifics.** Base has no declared-table grammar and no event log: every records
+kind exports as one table — its state-at reconstruction — at one of three horizons
+(tape's end by default, an inclusive `base.slice_at: T`, or per-window under
+`incremental`). The `base:` section is pure escape hatch: `exclude` drops
+kinds/tables, `rename` relabels (never splits — `sub_type` is rejected), and
+`declare_keys` mirrors source's. Because nothing is renamed by default, base output
+keeps the simulator's nouns — acceptable for a raw dump, but the moment the dataset is
+*for* someone, § The bundle speaks simulation applies and `rename` carries the domain
+names.
+
 ## Workflow
 
 1. **Read the domain before the grammar.** Non-optional whenever the target is a real
@@ -127,6 +146,9 @@ Three things about the grammar are easy to get wrong:
    import json; s = json.load(open("<emit_dir>/base.json"))
    print("record_roles:", json.dumps(s.get("record_roles"), indent=1))
    print("sub_type_columns:", json.dumps(s.get("sub_type_columns"), indent=1))
+   print("enum_domains:", json.dumps(s.get("enum_domains"), indent=1))
+   print("presentation_keys kinds:", sorted(s.get("presentation_keys", {})))
+   print("pinned_ids:", json.dumps(s.get("pinned_ids"), indent=1))
    for t in s["tables"]:
        if not t["name"].startswith("records__"):
            continue
@@ -164,16 +186,26 @@ Three things about the grammar are easy to get wrong:
    31,519 shopping sessions against 399,872 `current_state` rows is a fact wearing a
    dimension's name.
 
+   Three sidecar blocks beyond `record_roles` / `sub_type_columns` carry decisions.
+   `enum_domains` is the *declared* value set for every closed-domain property,
+   including the `prop__<kind>_type` discriminator — intent, not observation, so
+   split/route against it, never against `SELECT DISTINCT` (a declared sub-type with
+   zero live rows is still a sub-type). `presentation_keys` says which kinds mint a
+   `presentation_id` and what key claims it carries — the surface `declare_keys` and
+   the `keys:` election resolve through. And a column whose `temporal_class` is
+   `slice_only` is presentation-only: dimensional refuses it, source and base omit it
+   with a notice — never plan a column or split around one.
+
    Write down the kind → domain mapping (kind/sub-type, what it is, output name, row
    count) **before** any YAML. Naming, the split/conform call, and the grain call all
    fall out of that table. If the atlas leaves a kind genuinely ambiguous, ask the
    author — do not name it from the engine noun.
 
 2. **Pick the shape and the nearest recipe.**
-   - Decide dimensional vs source vs streaming (table above). For a from-scratch
-     dimensional config against a real emit, `fabulexa-forge init <emit_dir>` gives a
-     candidate to edit (source and streaming have no `init` candidate — author from a
-     recipe).
+   - Decide dimensional vs source vs base vs streaming (table above). For a
+     from-scratch dimensional or source config against a real emit,
+     `fabulexa-forge init <emit_dir> [--mode source]` gives a candidate to edit (base
+     and streaming have no `init` candidate — author from a recipe).
    - `tools/mdnav docs/recipes/README.md`, pick the recipe matching your capability,
      copy its `config.yaml`. Edit it — add/remove tables, columns, kinds, properties,
      routing — rather than authoring from a blank file.
@@ -183,11 +215,11 @@ Three things about the grammar are easy to get wrong:
    - Watch for the `source:` name collision — a *dimensional table's* per-table
      `source:` field (its grain binding, type `SourceDecl`) is unrelated to the
      top-level `source:` section of a `mode: source` config (type `SourceConfig`,
-     `exclude`/`rename`/`change_delivery`). Same key, two different types depending
+     `tables`/`events`/`declare_keys`). Same key, two different types depending
      on where it appears — check which envelope/mode you're in before you cclsp.
    - cclsp `find_definition` / `get_hover` on the corresponding model class
-     (`FkClause`, `DerivedSpec`, `SourceDecl`, `SourceConfig`, `RoutingConfig`,
-     `StreamKindSelection`).
+     (`FkClause`, `DerivedSpec`, `SourceDecl`, `SourceConfig`, `BaseConfig`,
+     `RoutingConfig`, `StreamKindSelection`, `MembershipSelection`, `KeySurface`).
    - Read its attribute docstrings (field meaning) and `@model_validator` docstrings
      (the cross-field rules — e.g. `via='membership'` forbids `path`; a `DerivedSpec`
      sets exactly one of ordinal/value_map/timestamp/scd_window/elapsed; a `ColumnDecl`
@@ -302,10 +334,10 @@ that shows it. A stale decision log is worse than none.
   serious modeling defect this skill guards against exits 0.
 - **Faithful reshaping (Principle #3).** Every output column must trace to a base-layer
   value — `from` / `fk` / `lookup` / `derived` over real columns. The config never
-  fabricates data. Only a corrupter may break conformance — that's a third, sibling
+  fabricates data. Only a corrupter may break conformance — that's a sibling
   envelope (`CorruptConfig`) with its own grammar and its own skill,
-  [`corrupt-config`](../corrupt-config/SKILL.md); this skill writes neither corrupters
-  nor base output.
+  [`corrupt-config`](../corrupt-config/SKILL.md); this skill writes no corrupter
+  configs.
 - **The model is read-scoped, not read-whole.** cclsp → one type. Loading all of
   `models.py` to find one field is the exact anti-pattern this skill avoids.
 - **Code Is Truth.** The models are authoritative; there is no prose field spec to read
