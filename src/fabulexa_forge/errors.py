@@ -165,7 +165,7 @@ class CorruptValidationError(CorruptError):
     """An emit-dependent check fails: a business rule (table / column existence
     and column eligibility, each resolved against the schema as of the
     operation's position -- the evolved-schema simulation), a source emit that
-    fails a C1-C12 check (the corrupter refuses a non-conformant input), a
+    fails a C1-C14 check (the corrupter refuses a non-conformant input), a
     schema_drift retype that cannot cast or names an unrecognized DuckDB type,
     or an out_dir that already holds an emit. The message names the operation
     index and the offending table / column / rule -- or, for a non-conformant
