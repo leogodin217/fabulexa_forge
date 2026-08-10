@@ -94,6 +94,7 @@ def _make_junction_unit() -> SourceJunctionTablePlan:
         source_table="membership__k__p",
         columns=(),
         edge_surfaces=(),
+        kind_labels=(),
     )
 
 

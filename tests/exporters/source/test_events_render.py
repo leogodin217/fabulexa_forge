@@ -85,24 +85,75 @@ def _agent_record_index_edge(source_column: str) -> SourceEdgeSurface:
     )
 
 
+def _identity_pairs(
+    bare_names: tuple[str, ...], rename: dict[str, str] | None = None
+) -> tuple[tuple[str, str], ...]:
+    """(bare, output) pairs for `audited_properties`: the bare name, unless
+    `rename` maps it to an output key."""
+    mapping = rename or {}
+    return tuple((bare, mapping.get(bare, bare)) for bare in bare_names)
+
+
 def _ticket_source(
     audited_properties: tuple[str, ...],
     *,
     sub_types: tuple[str, ...] | None = None,
     item_surface: tuple[tuple[str | None, KeySurface], ...] = _RECORD_ID_SURFACE,
     change_edges: tuple[SourceEdgeSurface, ...] = (),
+    item_type: str = "ticket",
+    rename: dict[str, str] | None = None,
+    kind_labels: tuple[tuple[str, str], ...] = (),
 ) -> SourceEventSourcePlan:
     """A records-source unit over `ticket`, addressing `sub_types` (default:
     both bug and feature)."""
     domain = sub_types if sub_types is not None else ("bug", "feature")
     return SourceEventSourcePlan(
-        item_type="ticket",
+        item_type=item_type,
         kind="ticket",
         property=None,
         populations=tuple(Population(kind="ticket", sub_type=st) for st in domain),
-        audited_properties=audited_properties,
+        audited_properties=_identity_pairs(audited_properties, rename),
+        kind_labels=kind_labels,
         item_surface=item_surface,
         change_edges=change_edges,
+    )
+
+
+def _watchers_source(
+    *,
+    audited_properties: tuple[str, ...] = ("note", "party"),
+    rename: dict[str, str] | None = None,
+    kind_labels: tuple[tuple[str, str], ...] = (),
+    item_type: str = "ticket.watchers",
+) -> SourceEventSourcePlan:
+    """A membership-source unit over `ticket.watchers`."""
+    return SourceEventSourcePlan(
+        item_type=item_type,
+        kind="ticket",
+        property="watchers",
+        populations=(
+            Population(kind="ticket", sub_type="bug"),
+            Population(kind="ticket", sub_type="feature"),
+        ),
+        audited_properties=_identity_pairs(audited_properties, rename),
+        kind_labels=kind_labels,
+        item_surface=_RECORD_ID_SURFACE,
+        change_edges=(_agent_record_index_edge("member__party__id"),),
+    )
+
+
+def _visit_source() -> SourceEventSourcePlan:
+    """A flat, untyped records-source unit over `visit` (the windowed
+    fixture)."""
+    return SourceEventSourcePlan(
+        item_type="visit",
+        kind="visit",
+        property=None,
+        populations=(Population(kind="visit", sub_type=None),),
+        audited_properties=_identity_pairs(("status", "priority")),
+        kind_labels=(),
+        item_surface=((None, "record_id"),),
+        change_edges=(),
     )
 
 
@@ -300,20 +351,11 @@ class TestItemIdTypeRule:
 
 class TestMembershipSource:
     def _log(self) -> SourceEventLogPlan:
-        source = SourceEventSourcePlan(
-            item_type="ticket.watchers",
-            kind="ticket",
-            property="watchers",
-            populations=(
-                Population(kind="ticket", sub_type="bug"),
-                Population(kind="ticket", sub_type="feature"),
-            ),
-            audited_properties=("note", "party"),
-            item_surface=_RECORD_ID_SURFACE,
-            change_edges=(_agent_record_index_edge("member__party__id"),),
-        )
         return SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+            name="versions",
+            sources=(_watchers_source(),),
+            item_id_type="VARCHAR",
+            keys=None,
         )
 
     def test_join_creates_leave_destroys_field_expansion(self, tmp_path: Path) -> None:
@@ -372,18 +414,7 @@ class TestTotalOrderTieFree:
         event_sim_time=180ms; `item_type` ('ticket' < 'ticket.watchers')
         must break the tie deterministically."""
         ticket_source = _ticket_source(("status",))
-        watchers_source = SourceEventSourcePlan(
-            item_type="ticket.watchers",
-            kind="ticket",
-            property="watchers",
-            populations=(
-                Population(kind="ticket", sub_type="bug"),
-                Population(kind="ticket", sub_type="feature"),
-            ),
-            audited_properties=("note", "party"),
-            item_surface=_RECORD_ID_SURFACE,
-            change_edges=(_agent_record_index_edge("member__party__id"),),
-        )
+        watchers_source = _watchers_source()
         log = SourceEventLogPlan(
             name="versions",
             sources=(ticket_source, watchers_source),
@@ -449,17 +480,11 @@ class TestWindowed:
     def test_window_selects_by_event_sim_time_keeping_correct_old_new(
         self, tmp_path: Path
     ) -> None:
-        source = SourceEventSourcePlan(
-            item_type="visit",
-            kind="visit",
-            property=None,
-            populations=(Population(kind="visit", sub_type=None),),
-            audited_properties=("status", "priority"),
-            item_surface=((None, "record_id"),),
-            change_edges=(),
-        )
         log = SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+            name="versions",
+            sources=(_visit_source(),),
+            item_id_type="VARCHAR",
+            keys=None,
         )
         emit_dir = build_windowed_source_test_emit(tmp_path)
         _, w1, _ = windowed_test_windows()
@@ -488,18 +513,7 @@ class TestEventLogId:
         """A full export's `id` is 1..N with no gaps, ascending in emitted
         row order (rows already arrive `ORDER BY "id"`)."""
         ticket_source = _ticket_source(("status", "priority"))
-        watchers_source = SourceEventSourcePlan(
-            item_type="ticket.watchers",
-            kind="ticket",
-            property="watchers",
-            populations=(
-                Population(kind="ticket", sub_type="bug"),
-                Population(kind="ticket", sub_type="feature"),
-            ),
-            audited_properties=("note", "party"),
-            item_surface=_RECORD_ID_SURFACE,
-            change_edges=(_agent_record_index_edge("member__party__id"),),
-        )
+        watchers_source = _watchers_source()
         log = SourceEventLogPlan(
             name="versions",
             sources=(ticket_source, watchers_source),
@@ -551,17 +565,11 @@ class TestEventLogId:
         export — `id` is tape-anchored, never renumbered per window — and
         those ids form one contiguous ascending block within the full
         export's numbering."""
-        source = SourceEventSourcePlan(
-            item_type="visit",
-            kind="visit",
-            property=None,
-            populations=(Population(kind="visit", sub_type=None),),
-            audited_properties=("status", "priority"),
-            item_surface=((None, "record_id"),),
-            change_edges=(),
-        )
         log = SourceEventLogPlan(
-            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+            name="versions",
+            sources=(_visit_source(),),
+            item_id_type="VARCHAR",
+            keys=None,
         )
         emit_dir = build_windowed_source_test_emit(tmp_path)
         _, w1, _ = windowed_test_windows()
@@ -664,3 +672,296 @@ class TestCoincidentUpdateAndDestroy:
             _row_for(rows, "t900", "update")["occurred_at"]
             == _row_for(rows, "t900", "destroy")["occurred_at"]
         )
+
+
+# ---------------------------------------------------------------------------
+# `changes` key resolution: `rename`
+# ---------------------------------------------------------------------------
+
+
+class TestRenamedRecordsProperty:
+    def test_renamed_property_changes_key_used_order_preserved(
+        self, tmp_path: Path
+    ) -> None:
+        """A `rename`d bare property's `changes` entry uses the output key
+        in create, update, and destroy rows; key order stays the given
+        `audited_properties` order — rename relabels, never reorders."""
+        source = _ticket_source(
+            ("ticket_type", "status", "priority", "assignee_id"),
+            rename={"priority": "level"},
+            change_edges=(_agent_record_index_edge("prop__assignee_id"),),
+        )
+        log = SourceEventLogPlan(
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        t001_create = _row_for(rows, "t001", "create")
+        raw = t001_create["changes"]
+        assert isinstance(raw, str)
+        assert list(json.loads(raw).keys()) == [
+            "ticket_type",
+            "status",
+            "level",
+            "assignee_id",
+        ]
+        assert _changes(t001_create)["level"] == [None, "1"]
+        assert "priority" not in _changes(t001_create)
+
+        t001_updates = [
+            r for r in rows if r["item_id"] == "t001" and r["event"] == "update"
+        ]
+        assert any(_changes(r).get("level") == ["1", "5"] for r in t001_updates)
+        for r in t001_updates:
+            assert "priority" not in _changes(r)
+
+        t002_destroy = _row_for(rows, "t002", "destroy")
+        assert _changes(t002_destroy)["level"] == ["2", None]
+
+
+class TestRenamedMembershipField:
+    def test_renamed_reference_field_expands_to_g_kind_g_id(
+        self, tmp_path: Path
+    ) -> None:
+        """A membership reference field renamed `party -> handler` yields
+        `handler_kind` / `handler_id` entries in place of `party_kind` /
+        `party_id`."""
+        log = SourceEventLogPlan(
+            name="versions",
+            sources=(_watchers_source(rename={"party": "handler"}),),
+            item_id_type="VARCHAR",
+            keys=None,
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        creates = [r for r in rows if r["event"] == "create"]
+        urgent_create = next(
+            r for r in creates if _changes(r).get("note") == [None, "urgent"]
+        )
+        assert _changes(urgent_create) == {
+            "note": [None, "urgent"],
+            "handler_kind": [None, "agent"],
+            "handler_id": [None, "0"],
+        }
+        assert "party_kind" not in _changes(urgent_create)
+        assert "party_id" not in _changes(urgent_create)
+
+
+# ---------------------------------------------------------------------------
+# `<f>_kind` labeling
+# ---------------------------------------------------------------------------
+
+
+class TestMembershipKindLabeling:
+    def _urgent_rows(
+        self, tmp_path: Path, kind_labels: "tuple[tuple[str, str], ...]"
+    ) -> list[dict[str, object]]:
+        log = SourceEventLogPlan(
+            name="versions",
+            sources=(_watchers_source(kind_labels=kind_labels),),
+            item_id_type="VARCHAR",
+            keys=None,
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            return _rows(emit, sql)
+
+    def test_labeled_kind_renders_label_in_old_and_new_halves(
+        self, tmp_path: Path
+    ) -> None:
+        rows = self._urgent_rows(tmp_path, (("agent", "clinician"),))
+        urgent_create = next(
+            r
+            for r in rows
+            if r["event"] == "create" and _changes(r).get("note") == [None, "urgent"]
+        )
+        urgent_destroy = next(
+            r
+            for r in rows
+            if r["event"] == "destroy" and _changes(r).get("note") == ["urgent", None]
+        )
+        assert _changes(urgent_create)["party_kind"] == [None, "clinician"]
+        assert _changes(urgent_destroy)["party_kind"] == ["clinician", None]
+
+    def test_unlabeled_kind_renders_verbatim(self, tmp_path: Path) -> None:
+        rows = self._urgent_rows(tmp_path, (("resource", "consultant"),))
+        fyi_create = next(
+            r
+            for r in rows
+            if r["event"] == "create" and _changes(r).get("note") == [None, "fyi"]
+        )
+        assert _changes(fyi_create)["party_kind"] == [None, "agent"]
+
+    def test_corrupted_kind_value_renders_verbatim(self, tmp_path: Path) -> None:
+        """A member-kind value naming no sidecar kind (a corrupted emit's
+        mutated cell) renders verbatim — never masked, never an error."""
+        emit_dir = build_events_test_emit(tmp_path)
+        with duckdb.connect(str(emit_dir / "run.duckdb")) as conn:
+            conn.execute(
+                'UPDATE "membership__ticket__watchers"'
+                " SET \"member__party__kind\" = 'mutant_kind'"
+                " WHERE \"elem__note\" = 'urgent'"
+            )
+        log = SourceEventLogPlan(
+            name="versions",
+            sources=(_watchers_source(kind_labels=(("agent", "clinician"),)),),
+            item_id_type="VARCHAR",
+            keys=None,
+        )
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        urgent_create = next(
+            r
+            for r in rows
+            if r["event"] == "create" and _changes(r).get("note") == [None, "urgent"]
+        )
+        assert _changes(urgent_create)["party_kind"] == [None, "mutant_kind"]
+
+
+class TestNoLabelsByteIdenticalToday:
+    def test_membership_kind_passthrough_composes_no_case(self, tmp_path: Path) -> None:
+        """With `kind_labels=()`, the member-kind value expression is the
+        raw column, unwrapped — no labeling CASE composes."""
+        log = SourceEventLogPlan(
+            name="versions",
+            sources=(_watchers_source(),),
+            item_id_type="VARCHAR",
+            keys=None,
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+        assert 'WHEN "_fold"."member__party__kind" = ' not in sql
+
+
+# ---------------------------------------------------------------------------
+# Resolved `item_type`: stamped value and order-key component
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedItemTypeOrdering:
+    def test_records_source_item_type_override_replaces_kind_name(
+        self, tmp_path: Path
+    ) -> None:
+        """The stamped `item_type` is the plan's resolved value, not the
+        kind name it was constructed from."""
+        source = _ticket_source(("status",), item_type="issue")
+        log = SourceEventLogPlan(
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+        assert {r["item_type"] for r in rows} == {"issue"}
+
+    def test_two_sources_aliased_to_one_item_type_interleave_by_time(
+        self, tmp_path: Path
+    ) -> None:
+        """Two split records sources resolving one aliased item_type union
+        and order as a single population — later events from either source
+        sort after earlier ones from the other, not grouped by source."""
+        bug_source = _ticket_source(
+            ("status",),
+            sub_types=("bug",),
+            item_surface=(("bug", "record_id"),),
+            item_type="issue",
+        )
+        feature_source = _ticket_source(
+            ("status",),
+            sub_types=("feature",),
+            item_surface=(("feature", "record_id"),),
+            item_type="issue",
+        )
+        log = SourceEventLogPlan(
+            name="versions",
+            sources=(bug_source, feature_source),
+            item_id_type="VARCHAR",
+            keys=None,
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        assert {r["item_type"] for r in rows} == {"issue"}
+        creates_by_item_id = {
+            r["item_id"]: r["id"] for r in rows if r["event"] == "create"
+        }
+        # t001/t002 (bug, 100ms) precede t003 (feature, 120ms).
+        assert creates_by_item_id["t001"] < creates_by_item_id["t003"]
+        assert creates_by_item_id["t002"] < creates_by_item_id["t003"]
+
+    def test_aliased_split_orders_by_resolved_names_not_natural_kind(
+        self, tmp_path: Path
+    ) -> None:
+        """A coincident-time tie between two sources breaks on the RESOLVED
+        item_type, not the kind's natural name — overriding the ticket
+        source's item_type to sort after 'ticket.watchers' flips the tie
+        order relative to the natural-name case."""
+        ticket_source = _ticket_source(("status",), item_type="zzz_ticket")
+        log = SourceEventLogPlan(
+            name="versions",
+            sources=(ticket_source, _watchers_source()),
+            item_id_type="VARCHAR",
+            keys=None,
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        t002_destroy_idx = next(
+            i
+            for i, r in enumerate(rows)
+            if r["item_type"] == "zzz_ticket"
+            and r["item_id"] == "t002"
+            and r["event"] == "destroy"
+        )
+        fyi_create_idx = next(
+            i
+            for i, r in enumerate(rows)
+            if r["item_type"] == "ticket.watchers"
+            and r["event"] == "create"
+            and _changes(r).get("note") == [None, "fyi"]
+        )
+        # Both events genuinely coincide on event_sim_time (180ms).
+        assert (
+            rows[t002_destroy_idx]["occurred_at"] == rows[fyi_create_idx]["occurred_at"]
+        )
+        # Flipped from the natural-name case (TestTotalOrderTieFree): 'ticket'
+        # < 'ticket.watchers' but 'zzz_ticket' > 'ticket.watchers'.
+        assert fyi_create_idx < t002_destroy_idx

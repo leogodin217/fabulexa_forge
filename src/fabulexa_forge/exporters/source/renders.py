@@ -37,13 +37,15 @@ election module (`build_identity_translation_sql`, and the record-index /
 presentation-key horizon dispatchers `_record_index_sql` / `_presentation_key_sql`
 the self-identity join composes, shared with base's renders — doc § module
 placement), fabulexa_forge.anchor, fabulexa_forge._sql, the sibling
-source.columns and source.plan modules (the latter's `_MEMBER_PREFIX` /
-`_MEMBER_ID_SUFFIX` / `_RECORDS_TABLE_PREFIX` name constants at runtime,
-mirroring base's runtime import of `_self_identity`; `SourceEdgeSurface` /
-`SourceStateTablePlan` / `SourceJunctionTablePlan` TYPE_CHECKING only),
-`exporters.populations` (`Population`, TYPE_CHECKING only), config.models
-(TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.* or
-exporters.streaming.*.
+source.columns (`_PROP_PREFIX`, and the one labeling authority
+`build_kind_label_expr` the junction render's `member__<f>__kind` column
+renders through) and source.plan modules (the latter's `_MEMBER_PREFIX` /
+`_MEMBER_ID_SUFFIX` / `_MEMBER_KIND_SUFFIX` / `_RECORDS_TABLE_PREFIX` name
+constants at runtime, mirroring base's runtime import of `_self_identity`;
+`SourceEdgeSurface` / `SourceStateTablePlan` / `SourceJunctionTablePlan`
+TYPE_CHECKING only), `exporters.populations` (`Population`, TYPE_CHECKING
+only), config.models (TYPE_CHECKING only), and stdlib. Never imports
+exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -70,9 +72,10 @@ from fabulexa_forge.exporters.election import (
     _record_index_sql,
     build_identity_translation_sql,
 )
-from fabulexa_forge.exporters.source.columns import _PROP_PREFIX
+from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, build_kind_label_expr
 from fabulexa_forge.exporters.source.plan import (
     _MEMBER_ID_SUFFIX,
+    _MEMBER_KIND_SUFFIX,
     _MEMBER_PREFIX,
     _RECORDS_TABLE_PREFIX,
 )
@@ -521,10 +524,14 @@ def build_junction_render_sql(
     per row) — now projection-aware: renders exactly `table.columns` (the
     owner column always present; a member pair's two columns project
     independently; per-row election resolution consults the member kind
-    internally even when `<f>_kind` is omitted). Windowed: extract-on-change
-    over interval activity, `left_at` horizon-masked at `window.end_ns`.
-    Total ORDER BY `(record_id, joined_sim_time, element fields in
-    element-schema declaration order, VARCHAR-compared, NULLS FIRST)`.
+    internally even when `<f>_kind` is omitted). A projected
+    `member__<f>__kind` column's value renders through
+    `build_kind_label_expr(table.kind_labels)` — identity fall-through,
+    byte-identical passthrough when no labels are declared. Windowed:
+    extract-on-change over interval activity, `left_at` horizon-masked at
+    `window.end_ns`. Total ORDER BY `(record_id, joined_sim_time, element
+    fields in element-schema declaration order, VARCHAR-compared, NULLS
+    FIRST)`.
 
     Args:
         sidecar: The plan's sidecar.
@@ -565,6 +572,9 @@ def build_junction_render_sql(
             select_parts.append(
                 _junction_masked_left_at_expr(src, out, "_mem", anchor, window)
             )
+        elif src.startswith(_MEMBER_PREFIX) and src.endswith(_MEMBER_KIND_SUFFIX):
+            labeled_expr = build_kind_label_expr(f'"_mem"."{src}"', table.kind_labels)
+            select_parts.append(f'{labeled_expr} AS "{out}"')
         else:
             select_parts.append(
                 _render_wallclock_column(

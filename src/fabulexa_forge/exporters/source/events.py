@@ -17,10 +17,11 @@ Layer-direction invariant: imports the reader (through the derivations
 layer), the derivations layer's two event folds, the mode-neutral election
 module (`build_identity_translation_sql`, `build_population_spine_sql`),
 `fabulexa_forge.anchor`, `fabulexa_forge._sql`, the sibling `source.plan`
-module (`SourceEdgeSurface`, TYPE_CHECKING only), `exporters.populations`
-(`Population`, TYPE_CHECKING only), config.models (`KeySurface`, TYPE_CHECKING
-only), and stdlib. Never imports `exporters.dimensional.*` or
-`exporters.streaming.*`.
+module (`SourceEdgeSurface`, TYPE_CHECKING only), the sibling `source.columns`
+module (`build_kind_label_expr` — the one labeling authority, also the
+junction render's call site), `exporters.populations` (`Population`,
+TYPE_CHECKING only), config.models (`KeySurface`, TYPE_CHECKING only), and
+stdlib. Never imports `exporters.dimensional.*` or `exporters.streaming.*`.
 """
 
 from __future__ import annotations
@@ -46,6 +47,7 @@ from fabulexa_forge.exporters.election import (
     build_identity_translation_sql,
     build_population_spine_sql,
 )
+from fabulexa_forge.exporters.source.columns import build_kind_label_expr
 
 _PROP_PREFIX = "prop__"
 
@@ -59,8 +61,12 @@ class SourceEventSourcePlan:
     """
 
     item_type: str
-    """The contract identity: the kind name for a records source,
-    '<K>.<property>' for a membership source."""
+    """The RESOLVED item-type: the declaration's `item_type` override,
+    else the kind's label (owner-half-labeled `<label(K)>.<property>` for
+    a membership source), else the contract identity verbatim (the kind
+    name for a records source, '<K>.<property>' for a membership source).
+    The dereference key, the union-safety gate key, and the order-key
+    component."""
     kind: str
     """The audited kind (records source) or the owner kind `<K>`
     (membership source)."""
@@ -71,14 +77,20 @@ class SourceEventSourcePlan:
     discriminator narrowing and the overlap check). Membership source: the
     owner kind's full declared domain (drives per-row item_id resolution;
     membership sources are disjoint by (kind, property), not by these)."""
-    audited_properties: "tuple[str, ...]"
-    """The audited set, bare names, sidecar column-declaration order:
-    every tracked- and constant-class property (discriminator included,
-    slice_only policy-omitted) narrowed by only / widened-by-subtraction
-    via ignore, for a records source; the selected element-schema field
-    names (member reference fields by bare field name — the pair expands
-    at render) for a membership source. Feeds the folds' property set
-    verbatim (`build_row_state_events_sql` / `build_membership_events_sql`)."""
+    audited_properties: "tuple[tuple[str, str], ...]"
+    """The audited set as (source bare name, changes output key) pairs,
+    sidecar column-declaration order — every tracked- and constant-class
+    property (discriminator included, slice_only policy-omitted) narrowed
+    by only / widened-by-subtraction via ignore, for a records source; the
+    selected element-schema field names for a membership source. Output
+    key equals the bare name absent a rename entry. For a membership
+    reference field the pair expands at render to `<key>_kind` /
+    `<key>_id`. Folds keep receiving the bare names, never output keys
+    (`build_row_state_events_sql` / `build_membership_events_sql`)."""
+    kind_labels: "tuple[tuple[str, str], ...]"
+    """The resolved (kind, label) map threaded to the render for
+    `<f>_kind` entry values; identity fall-through for any value not
+    listed. Empty when no labels are declared."""
     item_surface: "tuple[tuple[str | None, KeySurface], ...]"
     """Per-population elected surface of the item target — the audited
     kind's addressed populations (records source) or the owner kind's
@@ -380,9 +392,10 @@ def _build_records_arm_sql(
     `changes` is the full object (`build_changes_object_expr`)
     for create/destroy rows, the differing-only object
     (`_build_diff_changes_expr`) for update rows — an update row touching no
-    audited property is dropped. `item_id` joins the source's `item_surface`
-    translation relation on the fold's own `record_id` (never the nulled
-    after-image), so it is never NULL.
+    audited property is dropped, keyed by each pair's resolved `changes`
+    output key. `item_id` joins the source's `item_surface` translation
+    relation on the fold's own `record_id` (never the nulled after-image),
+    so it is never NULL.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -395,7 +408,7 @@ def _build_records_arm_sql(
         A SELECT producing the arm's row shape (§ `build_event_log_sql`).
     """
     kind = source.kind
-    properties = frozenset(source.audited_properties)
+    properties = frozenset(bare for bare, _output in source.audited_properties)
     fold_sql = build_row_state_events_sql(sidecar, fork_path, kind, properties)
 
     filter_sql = _records_population_filter_sql(
@@ -422,18 +435,18 @@ def _build_records_arm_sql(
     joins = [item_join]
 
     value_selects = []
-    for prop in source.audited_properties:
-        raw_expr = f'"_narrowed"."{_PROP_PREFIX}{prop}"'
-        edge = edges_by_property.get(prop)
+    for bare, _output in source.audited_properties:
+        raw_expr = f'"_narrowed"."{_PROP_PREFIX}{bare}"'
+        edge = edges_by_property.get(bare)
         if edge is None:
-            value_selects.append(f'{raw_expr} AS "_val__{prop}"')
+            value_selects.append(f'{raw_expr} AS "_val__{bare}"')
             continue
-        alias = f"_edge__{prop}"
+        alias = f"_edge__{bare}"
         join, value_expr = _edge_translation_join(
             sidecar, fork_path, edge, alias, raw_expr, None
         )
         joins.append(join)
-        value_selects.append(f'{value_expr} AS "_val__{prop}"')
+        value_selects.append(f'{value_expr} AS "_val__{bare}"')
     joins_sql = "".join(joins)
 
     valued_select = ", ".join(
@@ -445,18 +458,18 @@ def _build_records_arm_sql(
 
     lag_selects = [
         (
-            f'LAG("_valued"."_val__{prop}") OVER (PARTITION BY "_valued"."record_id"'
+            f'LAG("_valued"."_val__{bare}") OVER (PARTITION BY "_valued"."record_id"'
             f' ORDER BY "_valued"."event_sim_time", "_valued"."event_class")'
-            f' AS "_old__{prop}"'
+            f' AS "_old__{bare}"'
         )
-        for prop in source.audited_properties
+        for bare, _output in source.audited_properties
     ]
     lagged_select = ", ".join(['"_valued".*', *lag_selects])
     lagged_sql = f'SELECT {lagged_select} FROM ({valued_sql}) AS "_valued"'
 
     entries = tuple(
-        (prop, f'"_lagged"."_old__{prop}"', f'"_lagged"."_val__{prop}"')
-        for prop in source.audited_properties
+        (output, f'"_lagged"."_old__{bare}"', f'"_lagged"."_val__{bare}"')
+        for bare, output in source.audited_properties
     )
     full_expr = build_changes_object_expr(entries)
     diff_expr = _build_diff_changes_expr(entries)
@@ -590,8 +603,13 @@ def _build_membership_arm_sql(
     create/destroy. Every selected field's value lives on its own row (a
     membership row carries no history of its own), so old/new derive from
     the row's own op, not a lag: join -> `[null, value]`, leave ->
-    `[value, null]`. `item_id` joins the owner's `item_surface` translation
-    relation on the fold's own (already-owner-VARCHAR) `record_id`.
+    `[value, null]`. A reference field's pair renders `<key>_kind` /
+    `<key>_id`, its resolved `changes` output key; the `_kind` half's old
+    and new both render through `build_kind_label_expr` (identity
+    fall-through, applied once to the underlying value before the
+    old/new CASE split, which commutes with labeling). `item_id` joins the
+    owner's `item_surface` translation relation on the fold's own
+    (already-owner-VARCHAR) `record_id`.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -606,9 +624,9 @@ def _build_membership_arm_sql(
     owner_kind = source.kind
     property_name = source.property
     assert property_name is not None, "a membership source carries its property"
-    fields = source.audited_properties
+    bare_fields = tuple(bare for bare, _output in source.audited_properties)
     fold_sql = build_membership_events_sql(
-        sidecar, fork_path, owner_kind, property_name, fields
+        sidecar, fork_path, owner_kind, property_name, bare_fields
     )
     table_name = f"membership__{owner_kind}__{property_name}"
 
@@ -625,15 +643,15 @@ def _build_membership_arm_sql(
     joins = [item_join]
 
     entries: list[tuple[str, str, str]] = []
-    for field in fields:
+    for field, output in source.audited_properties:
         cols = _membership_field_columns(sidecar, table_name, field)
         if len(cols) == 1:
             raw_expr = f'"_fold"."{cols[0]}"'
-            entries.append((field, *_join_leave_old_new(raw_expr)))
+            entries.append((output, *_join_leave_old_new(raw_expr)))
             continue
 
         kind_col, id_col = cols
-        kind_expr = f'"_fold"."{kind_col}"'
+        kind_expr = build_kind_label_expr(f'"_fold"."{kind_col}"', source.kind_labels)
         id_raw_expr = f'"_fold"."{id_col}"'
         edge = edges_by_source_column.get(id_col)
         if edge is None:
@@ -641,11 +659,11 @@ def _build_membership_arm_sql(
         else:
             alias = f"_edge__{field}"
             join, id_value_expr = _edge_translation_join(
-                sidecar, fork_path, edge, alias, id_raw_expr, kind_expr
+                sidecar, fork_path, edge, alias, id_raw_expr, f'"_fold"."{kind_col}"'
             )
             joins.append(join)
-        entries.append((f"{field}_kind", *_join_leave_old_new(kind_expr)))
-        entries.append((f"{field}_id", *_join_leave_old_new(id_value_expr)))
+        entries.append((f"{output}_kind", *_join_leave_old_new(kind_expr)))
+        entries.append((f"{output}_id", *_join_leave_old_new(id_value_expr)))
 
     joins_sql = "".join(joins)
     changes_expr = build_changes_object_expr(tuple(entries))
@@ -656,7 +674,7 @@ def _build_membership_arm_sql(
     occurred_at_expr = render_anchor_timestamp_expr(
         anchor, '"_fold"."event_sim_time"', "occurred_at"
     )
-    order_fields_expr = _membership_sort_key_expr(sidecar, table_name, fields)
+    order_fields_expr = _membership_sort_key_expr(sidecar, table_name, bare_fields)
 
     final_select = ", ".join(
         [
@@ -689,29 +707,34 @@ def build_event_log_sql(
     """The polymorphic event-log render: one audit table, event grain.
 
     Per records source: composes `build_row_state_events_sql(sidecar,
-    fork_path, kind, frozenset(audited_properties))`, narrowed per row to
-    the source's populations through the records-spine discriminator;
-    recodes op c/u/d -> create/update/destroy. Per membership source:
-    composes `build_membership_events_sql(sidecar, fork_path, owner_kind,
-    property, fields)` (join -> create, leave -> destroy). Old values are
-    a per-record lag over the fold's own audited after-images; `changes`
-    is the design-doc JSON changeset (create: [null, v] for every audited
-    property; update: exactly the differing entries, all-equal rows
-    suppressed; destroy: [last, null]; empty audited set: '{}'), keys in
-    sidecar column-declaration order, values the folds' CAST-AS-VARCHAR
+    fork_path, kind, frozenset(bare names of audited_properties))`,
+    narrowed per row to the source's populations through the records-spine
+    discriminator; recodes op c/u/d -> create/update/destroy. Per
+    membership source: composes `build_membership_events_sql(sidecar,
+    fork_path, owner_kind, property, bare field names)` (join -> create,
+    leave -> destroy). Old values are a per-record lag over the fold's own
+    audited after-images; `changes` is the design-doc JSON changeset
+    (create: [null, v] for every audited property; update: exactly the
+    differing entries, all-equal rows suppressed; destroy: [last, null];
+    empty audited set: '{}'), keyed by each `audited_properties` pair's
+    resolved output key (sidecar column-declaration order — rename
+    relabels, never reorders), values the folds' CAST-AS-VARCHAR
     after-image strings verbatim or null, assembled via
     `build_changes_object_expr`. Reference-valued entries and membership
     member fields translate through `build_identity_translation_sql` per
     `change_edges` (fan-out-free, applied around the lag — order
-    irrelevant, both agree); a member field expands in place to its
-    `<f>_kind` / `<f>_id` entry pair. `item_id` joins the source's
-    `item_surface` translation relation (destroy rows included — never
-    the nulled after-image; the owner's identity for a membership
-    source), CAST to `log.item_id_type` when non-VARCHAR. `occurred_at`
-    renders wallclock through the anchor renderer. Sources UNION ALL in
-    declaration order under the total ORDER BY `(event_sim_time,
-    item_type, event_class, record_id, membership fields in
-    element-schema declaration order, VARCHAR-compared, NULLS FIRST)`.
+    irrelevant, both agree); a member reference field's pair expands in
+    place to its `<key>_kind` / `<key>_id` entry pair, the `_kind` half's
+    old and new values each rendered through `build_kind_label_expr`
+    (identity fall-through). `item_id` joins the source's `item_surface`
+    translation relation (destroy rows included — never the nulled
+    after-image; the owner's identity for a membership source), CAST to
+    `log.item_id_type` when non-VARCHAR. `occurred_at` renders wallclock
+    through the anchor renderer. Sources UNION ALL in declaration order
+    under the total ORDER BY `(event_sim_time, item_type, event_class,
+    record_id, membership fields in element-schema declaration order,
+    VARCHAR-compared, NULLS FIRST)` — `item_type` the plan's resolved
+    value.
 
     `id` is the event's 1-based position in that order over every row the
     log emits for the whole tape, across every source — a ROW_NUMBER,
