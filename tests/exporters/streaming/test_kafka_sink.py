@@ -841,6 +841,45 @@ def test_preexisting_topic_one_partition_used_as_is(
     assert outcome.events_per_topic["good_topic"] == 0
 
 
+def test_preexisting_topic_absent_from_metadata_raises(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TOPIC_ALREADY_EXISTS but topic absent from metadata → fail closed.
+
+    The broker reports the topic as already existing, yet the re-read cluster
+    metadata omits it, so the partition count is unverifiable. The guard must
+    raise rather than fall through to acceptance — an unchecked topic reaching
+    the producer would silently void the per-topic ordering guarantee.
+    """
+    from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
+
+    already_exists_error = _FakeKafkaException(_FakeKafkaError(36))
+
+    class _GhostAdmin(_FakeAdminClient):
+        def __init__(self, cfg: dict[str, Any]) -> None:
+            super().__init__(
+                cfg,
+                topic_futures={"ghost_topic": _make_topic_future(already_exists_error)},
+                # existing_partitions deliberately empty: list_topics omits the topic
+            )
+
+    spy_ck = _make_fake_ck(admin_cls=_GhostAdmin)
+    monkeypatch.setitem(sys.modules, "confluent_kafka", spy_ck)
+    monkeypatch.setitem(sys.modules, "confluent_kafka.admin", spy_ck.admin)
+
+    with pytest.raises(
+        KafkaDeliveryError, match="'ghost_topic'.*absent from cluster metadata"
+    ):
+        write_kafka_stream(
+            events=[],
+            render_value=_render_value,
+            anchor=_make_anchor(),
+            bootstrap_servers="localhost:9092",
+            topic_set=("ghost_topic",),
+            paced=False,
+        )
+
+
 # ---------------------------------------------------------------------------
 # write_kafka_stream — generic topic-creation failure
 # ---------------------------------------------------------------------------

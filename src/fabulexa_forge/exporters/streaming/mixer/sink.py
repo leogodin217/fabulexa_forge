@@ -114,8 +114,9 @@ class KafkaSink:
 
         Raises:
             KafkaClientUnavailable: confluent-kafka is not importable.
-            KafkaDeliveryError: topic creation fails or a pre-existing topic
-                has != 1 partition.
+            KafkaDeliveryError: topic creation fails, a pre-existing topic
+                has != 1 partition, or a topic reported as already existing
+                is absent from cluster metadata (count unverifiable).
         """
         ck = _import_confluent_kafka_checked()
         loop = asyncio.get_running_loop()

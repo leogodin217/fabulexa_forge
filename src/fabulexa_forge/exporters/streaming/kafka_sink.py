@@ -143,7 +143,10 @@ def _ensure_topics(
 
     A topic that already exists with exactly 1 partition is used as-is. A topic
     with a partition count other than 1 raises KafkaDeliveryError naming the topic
-    and partition count.
+    and partition count. The check fails closed: a topic the broker reports as
+    already existing but that is absent from the re-read cluster metadata is an
+    error, not a pass — an unverifiable partition count must never reach the
+    producer, since per-topic ordering rests on the single-partition guarantee.
 
     Args:
         AdminClient: The confluent_kafka.admin.AdminClient class.
@@ -153,8 +156,9 @@ def _ensure_topics(
         topic_set: The full topic set to create/validate.
 
     Raises:
-        KafkaDeliveryError: Topic creation fails or a pre-existing topic has ≠ 1
-            partition.
+        KafkaDeliveryError: Topic creation fails, a pre-existing topic has ≠ 1
+            partition, or a topic reported as already existing is absent from the
+            re-read cluster metadata (partition count unverifiable).
     """
     admin = AdminClient({"bootstrap.servers": bootstrap_servers})
     new_topics = [
@@ -169,14 +173,22 @@ def _ensure_topics(
             err = exc.args[0]
             if err.code() == 36:  # TOPIC_ALREADY_EXISTS
                 meta = admin.list_topics(timeout=10)
-                if topic in meta.topics:
-                    part_count = len(meta.topics[topic].partitions)
-                    if part_count != 1:
-                        raise KafkaDeliveryError(
-                            f"topic {topic!r} already exists with {part_count}"
-                            f" partition(s); exactly 1 required"
-                        ) from exc
-                # else: exists with 1 partition — use as-is
+                if topic not in meta.topics:
+                    # Broker said the topic exists, yet metadata omits it — the
+                    # partition count is unverifiable. Fail closed: proceeding
+                    # would produce to a topic the guard never checked.
+                    raise KafkaDeliveryError(
+                        f"topic {topic!r} reported as already existing but absent"
+                        f" from cluster metadata; cannot verify it has exactly 1"
+                        f" partition"
+                    ) from exc
+                part_count = len(meta.topics[topic].partitions)
+                if part_count != 1:
+                    raise KafkaDeliveryError(
+                        f"topic {topic!r} already exists with {part_count}"
+                        f" partition(s); exactly 1 required"
+                    ) from exc
+                # exists with exactly 1 partition — use as-is
             else:
                 raise KafkaDeliveryError(
                     f"failed to create topic {topic!r}: {exc}"
@@ -249,8 +261,10 @@ def write_kafka_stream(
             not installed).
         KafkaDeliveryError: connection, topic creation, produce (including a full
             local producer queue, surfaced from BufferError), or flush fails; a
-            delivery callback reports failure; flush leaves unacked messages; or a
-            pre-existing topic has a partition count other than 1.
+            delivery callback reports failure; flush leaves unacked messages; a
+            pre-existing topic has a partition count other than 1; or a topic
+            reported as already existing is absent from the re-read cluster
+            metadata (partition count unverifiable).
     """
     from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
     from fabulexa_forge.exporters.streaming.types import StreamOutcome
