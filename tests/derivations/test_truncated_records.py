@@ -208,6 +208,34 @@ def _build_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
+def _build_absent_target_emit(tmp_path: Path) -> Path:
+    """Write a fixture emit with records__container only: its reference
+    properties still declare `references: widget`, but records__widget is
+    omitted (contract-legal — zero widgets in the slice), so every
+    reference value is NULL."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_ddl("history", _HISTORY_COLS))
+    conn.execute(_ddl("records__container", _CONTAINER_COLS))
+    rows: list[tuple[Any, ...]] = [
+        (FORK_PATH, "c1", 30, True, None, 30, 0, None, None, None, None, None),
+        (FORK_PATH, "c2", 40, True, None, 40, 1, None, None, None, None, None),
+    ]
+    ph = ", ".join("?" for _ in _CONTAINER_COLS)
+    for row in rows:
+        conn.execute(f'INSERT INTO "records__container" VALUES ({ph})', list(row))
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _history_table_spec(0),
+            _table_spec("records__container", _CONTAINER_COLS, len(rows), "container"),
+        ],
+    )
+    return tmp_path
+
+
 def _rows_by_record_id(
     rows: list[tuple[Any, ...]], cols: list[str]
 ) -> dict[str, dict[str, Any]]:
@@ -398,6 +426,31 @@ class TestBuildTruncatedRecordsSql:
         # c4: no history at all for "owner" -> NULL reference -> NULL index.
         assert by_id["c4"]["prop__owner"] is None
         assert by_id["c4"]["ref_index__owner"] is None
+
+    def test_ref_index_absent_target_table_projects_null(self, tmp_path: Path) -> None:
+        """A reference property whose target kind has no records table in
+        the sidecar (contract-legal: zero records of that kind in the
+        slice) projects ref_index__<name> as a typed NULL — no JOIN naming
+        the nonexistent table, no binder error, tracked and constant
+        references alike."""
+        emit_dir = _build_absent_target_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            sql = build_truncated_records_sql(
+                emit.sidecar, FORK_PATH, "container", AT_SIM_TIME
+            )
+            assert "records__widget" not in sql
+            cols = [c.name for c in emit.sidecar.columns("records__container")]
+            rows = emit.query(sql, ())
+            described = emit.query(f"DESCRIBE ({sql})", ())
+        by_id = _rows_by_record_id(rows, cols)
+        assert set(by_id) == {"c1", "c2"}
+        assert by_id["c1"]["ref_index__owner"] is None
+        assert by_id["c1"]["ref_index__backup"] is None
+        assert by_id["c2"]["ref_index__owner"] is None
+        # The NULL projection keeps the column's sidecar-declared type.
+        types_by_col = {row[0]: row[1] for row in described}
+        assert types_by_col["ref_index__owner"] == "BIGINT"
+        assert types_by_col["ref_index__backup"] == "BIGINT"
 
     def test_column_list_agrees_with_truncated_sidecar(self, tmp_path: Path) -> None:
         """The SELECT's column names/order agree with build_truncated_sidecar's

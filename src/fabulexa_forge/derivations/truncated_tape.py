@@ -211,7 +211,8 @@ def _build_recorded_trail(
 
 
 def _try_cast_expr(value_expr: str, sql_type: str) -> str:
-    """TRY_CAST a reconstructed VARCHAR history value to its declared type.
+    """TRY_CAST an expression (a reconstructed VARCHAR history value, or the
+    literal NULL of an absent-target ref_index__ column) to a declared type.
 
     Gates sql_type through the shared type allow-list
     (`_sql.is_recognized_sql_type` — the same gate `render_typed_literal`
@@ -254,7 +255,9 @@ def _build_ref_index_join(
     depending on any external binding) — projecting the matched row's
     record_index. A LEFT JOIN: NULL beside a NULL reference, and NULL beside
     a verbatim non-NULL reference that resolves to no truncated spine row
-    (dangling, mispointed, or naming a record created after T).
+    (dangling, mispointed, or naming a record created after T). The caller
+    has already verified records__<target_kind> is present in the sidecar;
+    on absence it projects a typed NULL instead of calling here.
 
     Args:
         fork_path: The sole branch fork_path.
@@ -310,7 +313,13 @@ def build_truncated_records_sql(
     target kind's truncated spine (the one-consistent-truncated-world rule):
     NULL beside a NULL reference, and NULL beside a verbatim non-NULL
     reference that resolves to no truncated spine row (dangling, mispointed,
-    or naming a record created after T). The self-read is schema-qualified
+    or naming a record created after T). When records__<target_kind> is
+    absent from the sidecar entirely (contract-legal: an emit with no
+    records of that kind in the slice MAY omit the table), the column is
+    projected as a typed NULL with no JOIN — the base layer's no-dangling-
+    references guarantee means every reference to an absent kind is NULL,
+    so this renders exactly what a producer slicing at T would have
+    emitted. The self-read is schema-qualified
     (`main."records__<kind>"`) — see build_truncated_history_sql for why
     (binds physical under the base_relations shadow wrap; unqualified would
     be a circular CTE reference).
@@ -359,11 +368,18 @@ def build_truncated_records_sql(
             prop = name[len("ref_index__") :]
             target_kind = prop_cols[f"prop__{prop}"].references
             assert target_kind is not None  # C1: a ref_index__ sibling implies one
-            join_sql, ref_expr = _build_ref_index_join(
-                fork_path, target_kind, prop, prop_value_exprs[prop], at_sim_time
-            )
-            joins.append(join_sql)
-            select_parts.append(f'{ref_expr} AS "{name}"')
+            if all(t.name != f"records__{target_kind}" for t in sidecar.tables()):
+                # Contract-legal absence: zero records of target_kind in the
+                # slice. No dangling references means every reference to it
+                # is NULL, so project the (correct) typed NULL directly
+                # rather than emit a JOIN naming a nonexistent table.
+                select_parts.append(f'{_try_cast_expr("NULL", col.type)} AS "{name}"')
+            else:
+                join_sql, ref_expr = _build_ref_index_join(
+                    fork_path, target_kind, prop, prop_value_exprs[prop], at_sim_time
+                )
+                joins.append(join_sql)
+                select_parts.append(f'{ref_expr} AS "{name}"')
         elif name.startswith("prop__"):
             prop = name[len("prop__") :]
             prop_cols[name] = col
