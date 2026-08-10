@@ -85,7 +85,9 @@ packages = ["src/fabulexa_forge"]
 [tool.ruff]
 line-length = 88
 # Vendored agent tooling — kept verbatim from upstream, not package source.
-extend-exclude = [".claude"]
+# tools/hooks holds symlinks into the agent starter repo; the targets are
+# external code locally and dangle entirely in CI (ruff E902).
+extend-exclude = [".claude", "tools/hooks"]
 # Honor exclude/extend-exclude even for paths passed explicitly on the command
 # line, as the ruff pre-commit hook does. Without this, `.claude` would be
 # linted/reformatted on commit.

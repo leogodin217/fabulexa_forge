@@ -156,7 +156,13 @@ Each mode reads the same emit and writes a different target shape.
   row-state-events and membership-events folds, keyed by a dense tape-anchored
   `id` that publishes the log's total order and is its primary key under
   `declare_keys`), with `only` / `ignore`
-  audited-property filters per source. Sidecar facts gate declarations (unknown
+  audited-property filters per source. An author-declared domain vocabulary
+  resolves kind names and `changes` keys that would otherwise render engine
+  vocabulary as data: `source.kind_labels` (engine kind → domain label,
+  applied wherever a kind name renders as a value — item-type defaults,
+  `<f>_kind` entries, junction member-kind values, identity fall-through for
+  anything unmapped) plus per-events-source `item_type` (wholesale item-type
+  override) and `rename` (audited property → `changes` output key). Sidecar facts gate declarations (unknown
   kind / sub-type / membership fails fast); they never decide layout — omission
   is the exclusion mechanism, and a config declaring no output is a load-time
   error. Operational presentation defaults (prefix-stripped names,
