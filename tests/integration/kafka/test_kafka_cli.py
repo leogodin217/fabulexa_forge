@@ -17,7 +17,7 @@ from typing import Any
 import duckdb
 import pytest
 import yaml
-from _support.sidecar_builder import identity_column
+from _support.sidecar_builder import identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from exporters.streaming._helpers import _ddl
@@ -37,7 +37,9 @@ _RECORD_COLS: list[dict[str, object]] = [
     {"name": "deactivated_at", "type": "BIGINT"},
     {"name": "last_mutation_sim_time", "type": "BIGINT"},
     identity_column("record_index", "BIGINT"),
-    {"name": "prop__status", "type": "VARCHAR", "history_tracked": True},
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
 ]
 
 _HISTORY_COLS: list[dict[str, object]] = [
