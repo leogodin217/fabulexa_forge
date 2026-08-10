@@ -497,6 +497,39 @@ class TableDecl(StrictBaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def membership_grain_fk_where_refused(self) -> Self:
+        """A membership-grain table's plain via:membership fk may not set
+        `where` — the grain row already IS the binding, so there is no
+        separate membership relation for the predicate to narrow. Narrowing
+        which binding rows the table holds belongs in `source.where`. The
+        point-in-time form (`as_of`) correlates its own membership subquery
+        and keeps `where`.
+
+        Raises:
+            ValueError: source.grain == 'membership' and a column's fk sets
+                via='membership' and `where` without `as_of`.
+        """
+        if self.source.grain != "membership":
+            return self
+        for col in self.columns:
+            fk = col.fk
+            if (
+                fk is not None
+                and fk.via == "membership"
+                and fk.as_of is None
+                and fk.where is not None
+            ):
+                raise ValueError(
+                    f"table '{self.name}' column '{col.name}': fk.where has no"
+                    " meaning on a membership-grain table — the grain row is"
+                    " already the binding, so there is no membership relation"
+                    " to narrow. Narrow this table's rows with source.where"
+                    " instead (the point-in-time membership fk, as_of, still"
+                    " accepts where)."
+                )
+        return self
+
 
 class ExcludeDecl(StrictBaseModel):
     """Kinds and tables dropped before export."""

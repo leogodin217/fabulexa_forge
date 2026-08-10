@@ -637,6 +637,92 @@ def test_dim_without_scd_is_allowed() -> None:
 
 
 # ---------------------------------------------------------------------------
+# membership_grain_fk_where_refused
+# ---------------------------------------------------------------------------
+
+
+def test_membership_grain_fk_where_raises() -> None:
+    """fk.where on a membership-grain table's plain membership fk raises,
+    naming source.where as the live surface."""
+    with pytest.raises(ValidationError, match=r"fk\.where.*source\.where") as exc_info:
+        TableDecl.model_validate(
+            _make_table(
+                source=MEMBERSHIP_SOURCE,
+                columns=[
+                    MINIMAL_COLUMN,
+                    {
+                        "name": "actor_id",
+                        "fk": {
+                            "to": "dim_actor",
+                            "via": "membership",
+                            "where": {"elem__role": "consultant"},
+                        },
+                    },
+                ],
+            )
+        )
+    assert "actor_id" in str(exc_info.value)
+
+
+def test_membership_grain_fk_without_where_is_allowed() -> None:
+    """The plain membership fk itself stays legal on a membership grain."""
+    t = TableDecl.model_validate(
+        _make_table(
+            source=MEMBERSHIP_SOURCE,
+            columns=[
+                MINIMAL_COLUMN,
+                {"name": "actor_id", "fk": {"to": "dim_actor", "via": "membership"}},
+            ],
+        )
+    )
+    assert t.columns[1].fk is not None
+
+
+def test_records_grain_fk_where_is_allowed() -> None:
+    """fk.where stays legal on a records grain — the joined-edge path renders it."""
+    t = TableDecl.model_validate(
+        _make_table(
+            columns=[
+                MINIMAL_COLUMN,
+                {
+                    "name": "actor_id",
+                    "fk": {
+                        "to": "dim_actor",
+                        "via": "membership",
+                        "where": {"elem__role": "consultant"},
+                    },
+                },
+            ],
+        )
+    )
+    assert t.columns[1].fk is not None
+
+
+def test_membership_grain_point_in_time_fk_where_is_allowed() -> None:
+    """fk.where stays legal on a membership grain's point-in-time (as_of) fk —
+    that form correlates its own membership subquery and renders it."""
+    t = TableDecl.model_validate(
+        _make_table(
+            source=MEMBERSHIP_SOURCE,
+            columns=[
+                MINIMAL_COLUMN,
+                {
+                    "name": "owner_id",
+                    "fk": {
+                        "to": "dim_owner",
+                        "via": "membership",
+                        "as_of": "joined_sim_time",
+                        "member_path": ["prop__owner"],
+                        "where": {"elem__role": "consultant"},
+                    },
+                },
+            ],
+        )
+    )
+    assert t.columns[1].fk is not None
+
+
+# ---------------------------------------------------------------------------
 # source_fields_match_grain
 # ---------------------------------------------------------------------------
 

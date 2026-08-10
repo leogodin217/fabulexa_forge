@@ -611,7 +611,10 @@ structurally-conformant input like the folds. No existing resident changes.
   sidecar-declared type (`NULL` where corrupted history text does not parse — a
   cast never errors); presentation-property columns by the same per-class rule;
   each `ref_index__<name>` re-derived from the reconstructed `prop__<name>` via
-  the target kind's *truncated* spine (`NULL` beside an unresolvable reference).
+  the target kind's *truncated* spine (`NULL` beside an unresolvable reference;
+  a target kind whose records table is absent from the sidecar — contract-legal
+  for a kind with zero records in the slice — projects a typed `NULL` with no
+  join, the value the no-dangling-references guarantee already forces).
   `slice_only` columns are absent — except a sub-typed kind's `slice_only`
   discriminator `prop__<kind>_type`, carried verbatim as the classification
   column (invariant 5's carve-out, [`slice-only.md`](slice-only.md)) — and

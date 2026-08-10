@@ -532,6 +532,11 @@ def build_membership_fk_expr_on_membership(
     by target_kind (a row whose member kind mismatches resolves to NULL), is
     the resolved record_id; projected through `_dispatch_fk_surface`.
 
+    `fk.where` never reaches this builder: there is no separate membership
+    relation left to narrow here, so `TableDecl.membership_grain_fk_where_refused`
+    rejects the combination at parse time (row narrowing on this grain is
+    `source.where`'s job).
+
     Args:
         col_decl: The FK column declaration (fk.via == 'membership').
         table_decl: The output table declaration (for error messages).
@@ -551,7 +556,6 @@ def build_membership_fk_expr_on_membership(
     """
     assert col_decl.fk is not None
     fk = col_decl.fk
-    where = fk.where or {}
 
     mem_table_name, _prop = _find_membership_table(
         anchor_kind, fk.property, sidecar, table_decl, col_decl
@@ -559,8 +563,6 @@ def build_membership_fk_expr_on_membership(
     member_field = _find_member_field(
         mem_table_name, fk.member_field, sidecar, table_decl, col_decl
     )
-    if where:
-        _check_where_columns_exist(where, mem_table_name, sidecar, table_decl, col_decl)
 
     id_col = f"member__{member_field}__id"
     kind_col = f"member__{member_field}__kind"
