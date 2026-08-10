@@ -204,11 +204,11 @@ idiom. Fixed columns; the author names the table, not the columns:
 | Column | Content |
 |---|---|
 | `id` | `BIGINT`, the audit table's key. The event's 1-based position in the log's total order (below) over the **whole tape** — every row the log emits, across every source, one counter. A row-number, never a value-based rank: two rows tying the order key take consecutive numbers. Assigned above changeset resolution (a suppressed update consumes no number, so `id` is dense) and beneath the window predicate (so an event's number does not depend on which window or invocation exported it). The log's emitted row order is `ORDER BY id` |
-| `item_type` | The population's contract identity: the kind name for records sources, `<K>.<property>` for membership sources. Sidecar-derived, independent of which thing-tables are declared |
+| `item_type` | The population's **resolved** item-type: an events source's declared `item_type` override, else its kind's `source.kind_labels` label (the owner kind's label for a membership source, forming `<label>.<property>`), else the kind name verbatim (`<K>.<property>` for membership) — sidecar-derived by default, independent of which thing-tables are declared, unless an author declares it otherwise (§ Domain vocabulary). The contract identity everywhere item-type governs: this stamped column, the `item_id` dereference key, the union-safety gate's granularity, and the order-key component |
 | `item_id` | For a records source: the record's identity in its own population's elected surface (`record_id` verbatim absent an election); on destroy rows the value comes from the identity join relation, not the fold's nulled after-image, so it is never NULL. For a membership source: the **owner** record's identity in the owner kind's election — the junction-owner-column render, per-row resolved for a sub-typed owner. Column type per the junction-member-column rule over the union of every source's resolved surfaces: the common declared type when all agree, else `VARCHAR` with `record_index` digit-rendered |
 | `event` | `create` / `update` / `destroy` — deterministic recode of the folds' ops (`c`/`u`/`d`; `join` → `create`, `leave` → `destroy` of a membership in the named collection, recorded against the owner — `item_type` is what separates collection changes from the owner's own lifecycle rows) |
 | `occurred_at` | Wallclock `TIMESTAMP` through the anchor renderer |
-| `changes` | Serialized JSON text (codec `VARCHAR`): an object mapping audited property bare names → `[old, new]` pairs — a membership reference field expands in place to its `<f>_kind` / `<f>_id` entry pair (the junction render's names, kind then id; `only` / `ignore` still address the bare field name). Keys in sidecar column-declaration order; values are the folds' `CAST(… AS VARCHAR)` after-image strings verbatim or `null` — the row-state-events / membership-events rendering, the same strings streaming's payloads carry, never the conformance codec — reference-valued entries in the target's elected surface (below). The JSON assembly (object construction, string escaping) is mode-owned SQL, rendered deterministically in the SELECT |
+| `changes` | Serialized JSON text (codec `VARCHAR`): an object mapping each audited property's **output key** — its bare name, or its source's declared `rename` target (§ Domain vocabulary) — to `[old, new]` pairs — a membership reference field expands in place to its `<f>_kind` / `<f>_id` entry pair (the junction render's names, kind then id, each renamed in place by a `rename` targeting the bare field name; `only` / `ignore` still address the bare field name). Keys in sidecar column-declaration order of the *source* properties — rename relabels, never reorders; values are the folds' `CAST(… AS VARCHAR)` after-image strings verbatim or `null` — the row-state-events / membership-events rendering, the same strings streaming's payloads carry, never the conformance codec — reference-valued entries in the target's elected surface (below), and `<f>_kind` entry values rendered through `source.kind_labels` (§ Domain vocabulary). The JSON assembly (object construction, string escaping) is mode-owned SQL, rendered deterministically in the SELECT |
 
 **The audited property set** per source: every `tracked` and `constant`-class
 property of the kind (the temporally honest set — `slice_only` is
@@ -332,6 +332,111 @@ derivation resident backs the log: it composes the existing row-state-events and
 membership-events folds; the changeset diff and JSON serialization are source
 render concerns, single-consumer, and live in the mode.
 
+### Domain vocabulary
+
+Two opt-in declarations extend the event log's and junction render's
+kind-name and `changes`-key surfaces with author-chosen vocabulary — the
+reach no table/column declaration touches, because these are kind names and
+property names rendered as *values*, not as columns. Both default to
+engine-verbatim names (no invented mapping — CLAUDE.md Principle #7):
+
+- **Per events source, `item_type` and `rename`.** `item_type` overrides
+  that source's resolved item-type wholesale — per-population granularity,
+  naming each split of a kind for the sub-type concept it actually
+  represents (kinds are simulation machinery; sub-types are the first-class
+  domain concepts — § Rationale). `rename` maps an audited property (or
+  membership element field) bare name to its `changes` output key, mirroring
+  the declared-table `rename` grammar; a reference field's entry renames its
+  expanded `<f>_kind` / `<f>_id` pair in place.
+- **`SourceConfig.kind_labels`** — one engine-kind → domain-label map,
+  applied everywhere a kind name renders **as a value**: the default
+  `item_type` of every events source (including the owner half of a
+  membership source's `<label>.<property>` identity), `<f>_kind` entries
+  inside `changes`, and junction `member__<f>__kind` column values. It is
+  the only reach into surfaces carrying no per-source declaration — a
+  junction's member-kind values are structurally kind-valued — and it
+  carries the one-concept-kind case in a single declaration.
+
+**Item-type resolution**, per events source, first match wins:
+
+| Condition | Resolved item-type |
+|---|---|
+| `item_type` declared on the source | The declared string, verbatim |
+| Records source, kind in `kind_labels` | The kind's label |
+| Records source, kind not labeled | The kind name |
+| Membership source, owner kind `K` labeled | `<label(K)>.<property>` |
+| Membership source, owner kind not labeled | `<K>.<property>` |
+
+**Item-type distinctness.** Records item-types (kind names) and membership
+item-types (`<K>.<property>`) are distinct by construction absent aliasing;
+aliasing makes collisions expressible, and the `(item_type, item_id)`
+dereference idiom (§ The event log) decides which are legal — refused as
+`SourceItemTypeCollision`:
+
+| Condition | Result |
+|---|---|
+| Two records sources of one kind resolve one item-type | Legal — the union-safety gate (§ Identity and key election) runs jointly over their populations |
+| Two records sources of different kinds resolve one item-type | Refused — two identity spaces behind one dereference key |
+| A membership source resolves the same item-type as any other source | Refused — item-type is what separates collection changes from the owner's own lifecycle rows |
+| Two records sources of one kind resolve different item-types | Legal — the union-safety gate re-partitions and runs per resolved item-type |
+| A source's resolved item-type equals the **rendered name of another kind** (that kind's label, or its verbatim name when unlabeled) | Refused — one rendered name identifies at most one kind's population space, audited or not |
+
+The rendered-kind-name clause ranges over the emit's whole kind universe,
+the same range as label injectivity (below) — an unaudited kind's rendered
+name still reaches the output through `<f>_kind` and junction member-kind
+values. Override, label, and verbatim name are one vocabulary that must not
+contradict itself; no layer outranks another.
+
+**`changes` key resolution.** An audited property's output key is its
+`rename` entry when declared, else its bare name; key order stays sidecar
+column-declaration order of the *source* properties — rename relabels, it
+never reorders. A membership reference field's rename renames its expanded
+`<f>_kind` / `<f>_id` pair in place; `only` / `ignore` still address the
+bare field name. Two properties resolving one output key, a `rename` key
+naming a non-property or a narrowed-away property, or a `rename` key naming
+a non-exempt `slice_only` property are each refused at plan time (never a
+silent collision or drop) — the collision case joins the output-table /
+output-column collision `SourceNameCollision` already covers (§ Validation
+Rules).
+
+**Kind-label rendering.** `<f>_kind` entries (event log) and
+`member__<f>__kind` values (junction) render through
+`build_kind_label_expr` ([`exporters/source/columns.py`](../../src/fabulexa_forge/exporters/source/columns.py))
+— a compile-time `CASE` over the declared `(kind, label)` pairs with
+**identity fall-through**: a value matching no pair (an unlabeled kind, or a
+corrupted emit's mutated cell) renders verbatim, and `NULL` stays `NULL` —
+the mapping is total, so a corrupter's defect surfaces unchanged, never
+masked and never a render-time error. Inside `changes`, an `<f>_kind`
+entry's `[old, new]` halves each render through the map independently — a
+pure value recode commutes with the old-value lag. Byte-identical
+passthrough when no labels are declared, mirroring the no-join composition
+rule for default elections (§ Identity and key election). The mapping is
+the same fidelity class as a table rename (CLAUDE.md Principle #3): the
+value still traces to the base-layer kind name through a config-declared
+bijection.
+
+**Label vocabulary integrity.** `<f>_kind` disambiguates per row and a
+junction may admit several kinds, so the *rendered* kind vocabulary must
+stay injective over the emit's whole kind universe — not just kinds in
+declared tables, since a member field's admitted kind universe is not
+bounded by the declaration list: every `kind_labels` key names a sidecar
+kind (`SourceKindLabelUnknown`), two kinds cannot map to one label
+(parse-time), and a label cannot equal the rendered name of another kind
+(`SourceKindLabelCollision`).
+
+**Ordering consequence.** `item_type` is a component of the log's order key
+(§ Ordering and determinism); the key uses the *resolved* item-type, so
+declaring `item_type` or `kind_labels` can reorder events that share an
+instant across item-types and therefore renumber `id` — within the log's
+existing per-export-monotonicity contract ("two configs over one emit
+number differently", above), not a new guarantee.
+
+Vocabulary resolution is compile-time and window-invariant — no interaction
+with incremental export beyond the existing rule that the window
+fingerprint binds the config; touches no key column under `declare_keys`;
+and is a render-time presentation concern the derivations folds and the
+reader never see.
+
 ### Identity and key election
 
 Which identity surface each column carries is the cross-mode key-election
@@ -418,7 +523,7 @@ nondeterministic):
 |---|---|
 | `state` | `(created_sim_time, record_id)` |
 | `junction` | `(record_id, joined_sim_time, field columns in element-schema declaration order, VARCHAR-compared, NULLS FIRST)` |
-| event log | `id`, which is the row-number of `(event_sim_time, item_type, event_class, record_id, membership fields in element-schema declaration order, VARCHAR-compared, NULLS FIRST)` — the folds' raw keys (`event_class` is the folds' own ordering ordinal) with `item_type` interposed to disambiguate across sources. Sorting by the ordinal rather than restating the key is what keeps emitted row order monotone in `id` where the key ties (§ The event log) |
+| event log | `id`, which is the row-number of `(event_sim_time, item_type, event_class, record_id, membership fields in element-schema declaration order, VARCHAR-compared, NULLS FIRST)` — the folds' raw keys (`event_class` is the folds' own ordering ordinal) with `item_type` (the *resolved* item-type — § Domain vocabulary) interposed to disambiguate across sources. Sorting by the ordinal rather than restating the key is what keeps emitted row order monotone in `id` where the key ties (§ The event log) |
 
 ### Delivery
 
@@ -630,7 +735,8 @@ The rules below state *what* is rejected and *when*.
 | Validator | Rejects |
 |---|---|
 | `source_section_required` (`SourceConfig`) | A `mode: source` config declaring no output — no `tables` entry and no `events` block (two-sided with the other modes' sections; there is no bare zero-config dump) |
-| `table_source_exclusive` | Anything but exactly one of `kind` / `membership` per table declaration and per events-source declaration alike; `sub_types` without `kind` (both shapes); empty `name` / `columns` / `rename` / `sub_types` / `sources` / `only` / `ignore`; non-distinct entries; non-distinct `rename` values; `only` and `ignore` together; non-distinct table names across the declaration list; more than one `events` block (single log) |
+| `table_source_exclusive` | Anything but exactly one of `kind` / `membership` per table declaration and per events-source declaration alike; `sub_types` without `kind` (both shapes); empty `name` / `columns` / `rename` / `sub_types` / `sources` / `only` / `ignore`; non-distinct entries; non-distinct `rename` values; `only` and `ignore` together; non-distinct table names across the declaration list; more than one `events` block (single log); an events source's empty `item_type`; an events source's `rename` present-but-empty or carrying an empty key or value |
+| `kind_labels_shape` (`SourceConfig`) | An empty `kind_labels` map; an empty key or value; two kinds mapping to one label |
 
 **Business rules.** Run at plan time against the open emit, before any write;
 each raises an `ExportError` subclass surfaced through the CLI's existing error
@@ -644,15 +750,18 @@ for a `tables` entry, `events source #<n>` (1-based, declaration order) for an
 | `SourceTableSubTypeUnknown` | Every `sub_types` entry is in the kind's discriminator domain | `"{owner}: sub_type '{sub_type}' not declared for kind '{kind}'"` |
 | `SourceSubTypesOnFlatKind` | `sub_types` only on a sub-typed kind | `"{owner}: kind '{kind}' declares no sub-types"` |
 | `SourceTableMembershipUnknown` | Every `membership` reference resolves to a sidecar membership table | `"{owner}: no membership table for ({kind}, {property})"` |
-| `SourceColumnUnresolved` | Every `columns` / `rename` key resolves on the table's source surface — a state table's identity column by its elected surface's contract name only, the junction owner column by its source name `record_id` whatever surface it carries, and `last_mutation_sim_time` only on a non-windowed invocation (the windowed state render omits it); every `only` / `ignore` entry names a property (element field) of its source | `"{owner}: '{entry}' not a column of its source"` (the unrendered-surface and windowed-`updated_at` cases name the election / omission) |
+| `SourceColumnUnresolved` | Every `columns` / `rename` key resolves on the table's source surface — a state table's identity column by its elected surface's contract name only, the junction owner column by its source name `record_id` whatever surface it carries, and `last_mutation_sim_time` only on a non-windowed invocation (the windowed state render omits it); every `only` / `ignore` entry names a property (element field) of its source; an events source's `rename` key names an audited property (element field) of its source, surviving `only` / `ignore` narrowing | `"{owner}: '{entry}' not a column of its source"` (the unrendered-surface, windowed-`updated_at`, and narrowed-away-rename-key cases name the election / omission / `only`-or-`ignore` entry) |
 | `SourceColumnNotAddressable` | No `columns` / `rename` entry names `fork_path` / `ref_index__*`, or `record_index` other than as the table's elected surface; no `columns` entry names the table's elected surface (identity is election-governed) — a non-elected, unrendered surface name (`record_id` under a `presentation_id` election) is `SourceColumnUnresolved` instead | `"table '{name}': '{column}' is not addressable here"`, naming why |
 | `SourceEventSourceOverlap` | `events.sources` resolve pairwise-disjoint population sets (membership sources distinct by `(kind, property)`) | `"events: sources overlap on population '{population}'"` |
+| `SourceKindLabelUnknown` | Every `kind_labels` key has a `records__<kind>` table in the sidecar | `"kind_labels: kind '{kind}' not in this emit"` |
+| `SourceKindLabelCollision` | After labeling, kind → rendered name is injective over the emit's whole kind universe (a label equals no other kind's label and no unlabeled kind's own name) | `"kind_labels: label '{label}' collides with kind '{kind}'"` |
+| `SourceItemTypeCollision` | Resolved item-types are pairwise distinct across sources, except records sources of one kind may share one; and no resolved item-type equals the rendered name of another kind (of any kind, for a membership source) — ranged over the emit's whole kind universe (§ Domain vocabulary) | `"events: sources #{m} and #{n} resolve one item_type '{item_type}' over two audited item spaces"`; the rendered-name clause: `"events source #{n}: item_type '{item_type}' collides with kind '{kind}'"` |
 | `SourceSliceOnlyRead` | No declaration entry names a non-exempt `slice_only` column | Names the entry, the column, and the omission reason |
 | `SourceUnclassifiedColumn` | Every projected records column classifies to a taxonomy role ([`reader.md`](reader.md) § The records-column taxonomy) | Names the table and column |
 | `SourceAnchorRequired` | An `EffectiveAnchor` resolved | `"source export renders wallclock timestamps and requires a resolved anchor: the emit declares no runtime block; supply rebase.base_date/timezone or --base-date/--timezone"` |
-| `SourceNameCollision` | Output table names (the event log's included) and per-table column names unique after defaults + renames | `"output name collision: {names}; resolve via rename"` |
+| `SourceNameCollision` | Output table names (the event log's included) and per-table column names unique after defaults + renames; within one events source, resolved `changes` keys are distinct after renames (a membership pair's expanded `_kind` / `_id` names included) | `"output name collision: {names}; resolve via rename"`; the `changes`-key case: `"{owner}: changes key collision: {keys}; resolve via rename"` |
 | Reserved-name check (`exporters/reserved_names.py`, raised as `ExportError`) | No output table name collides with bookkeeping names / suffixes; no output column named `last_mutation_sim_time` (§ Presentation-name posture) — checked at plan build over all output names, so a full export and a later `--next` on the same target agree | — |
-| `ElectionMixedIdentity` / `ElectionUnionUnsafe` | Identity gates per declared table; edge gates per referencing column, per event-log item-type (over the union of its sources' addressed populations; the owner kind's for a membership item-type), and per audited reference property; no gate across item-types (polymorphic identity) | Per [`key-election.md`](key-election.md) |
+| `ElectionMixedIdentity` / `ElectionUnionUnsafe` | Identity gates per declared table; edge gates per referencing column, per event-log **resolved** item-type (over the union of its sources' addressed populations; the owner kind's for a membership item-type), and per audited reference property; no gate across item-types (polymorphic identity) | Per [`key-election.md`](key-election.md) |
 | `SourceHistoryTrackedRequired` | The sidecar carries `history_tracked` flags (the events render and the windowed state snapshot consume them) | `"source export requires per-column history_tracked flags; this emit predates them"` |
 | `TemporalClassUnavailableError` (reader-owned; see [`reader.md`](reader.md)) | Every consulted flagged column declares an in-enum `temporal_class` (audited-set resolution) — a C13 breach surfaced on the consuming path | `"… declares history_tracked but no temporal_class; the emit is non-conformant (C13). Run \`fabulexa-forge validate\`."` |
 | Single-branch guard (`derivations/guard.py`, cross-mode) | Exactly one branch | — |
@@ -726,6 +835,36 @@ writer semantics, CSV posture, and incremental gating are owned by
   list splits them. Gating per declaration would admit collisions the consumer
   actually hits; gating across item-types would refuse collisions `item_type`
   already disambiguates.
+- **Sub-types are the concepts; kinds are the engine's grouping.** A kind
+  exists to let similar functionality share machinery; the `<K>_type`
+  sub-types are the first-class domain concepts and the expected default
+  shape of the data. That is why the per-source `item_type` override is the
+  primary naming surface (each split of a kind names its own concept), why
+  `kind_labels` is a convenience for the one-concept kind and for the
+  structurally kind-valued surfaces, and why sub-type discriminator
+  *values* render verbatim — they are already domain vocabulary.
+- **A naming surface, not a derivation.** Resolving `item_type` from the
+  declared state table for the same population is not viable: a kind split
+  by `sub_types` maps to several tables, a kind may be audited without any
+  declared table, and coupling the log's vocabulary to table declarations
+  would make it change silently when tables do. Item-type stays
+  sidecar-derived, independent of which thing-tables are declared, by
+  default; what an author gains is the ability to *declare* the vocabulary
+  explicitly, matching the mode's own thesis (declared intent drives
+  output). Deriving a label from table names remains the author's own read
+  while writing `kind_labels`.
+- **Mode-level `kind_labels` plus per-source override, not per-source
+  only.** Kind names surface where no per-source declaration exists
+  (junction member kinds), and one kind can appear as a value across many
+  sources and tables — a single map keeps the kind-level vocabulary
+  consistent by construction. The per-source `item_type` stays the
+  first-class naming over it; the rendered-name collision clause is what
+  keeps the two layers from contradicting each other — no layer outranks
+  another, one rendered name identifies one population space.
+- **Identity fall-through, not strictness, at render time.** Plan-time
+  validation runs against the sidecar; render-time values may be corrupted
+  by design (the dirty source dump, § Corrupter composition). A total
+  mapping preserves declared defects and keeps the render infallible.
 - **Suppressing empty updates.** An audit log records what it tracks: an
   `update` event none of whose audited properties changed carries no
   information and would leak the existence of unaudited changes; lifecycle
@@ -775,6 +914,24 @@ writer semantics, CSV posture, and incremental gating are owned by
   extension (see [`README.md`](README.md) § Staged roadmap).
 - **CSV + DuckDB only.** No Parquet — the cross-mode writer boundary
   (see [`writers.md`](writers.md)).
+- **No value mapping for property values, sub-type discriminator values, or
+  any payload cell.** Domain vocabulary (§ Domain vocabulary) covers kind
+  names and `changes` keys only; a general value-map surface is
+  dimensional's `derived` territory, outside source's fidelity posture.
+- **No streaming-mode vocabulary.** Streaming's payload keys and `kind`
+  field speak engine names by design — it has its own routing/naming
+  surface ([`streaming-routing.md`](streaming-routing.md)); extending
+  vocabulary mapping there is a separable future design.
+- **No `init` proposal for labels.** `init` proposes engine-verbatim table
+  names, under which every label is the identity mapping — there is nothing
+  to propose until an author renames, and the author who renames owns the
+  labels.
+- **No per-table label scoping.** `kind_labels` is one vocabulary per
+  export, not per declared table.
+- **No row-predicate addressing.** The analytical partition is the star's
+  job; source's population grammar tracks only the structural partition the
+  sidecar declares (decision note
+  `source-mode-narrows-rows-by-sub-types-only-no-row-predicate-surface`).
 
 ## Related
 
