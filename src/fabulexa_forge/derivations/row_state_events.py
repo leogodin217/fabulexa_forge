@@ -244,30 +244,40 @@ def build_row_state_events_sql(
     fork_path: str,
     kind: str,
     properties: frozenset[str],
+    change_scope: frozenset[str],
 ) -> str:
     """Build the canonical row-state-events SELECT for one kind.
 
-    One event row per (record_id, sim_time) at which the record's state changes: a
-    'c' at created_sim_time for every record (including zero-history-tracked-property
-    records), a 'u' at each later distinct history sim_time of the selected
-    history-tracked properties, and a 'd' at deactivated_at when the record is
-    deactivated. The after-image columns reconstruct the full row at the event
-    sim_time — each selected history-tracked property as the most-recent
-    history.value at or before that time (inclusive sim_time <= event_sim_time;
-    codec VARCHAR; NULL when none is at or before), each selected current-value
-    property as the record's current records__<kind> value cast to codec VARCHAR
-    (temporally constant). The identity after-image columns are likewise cast to
-    codec VARCHAR (a BIGINT presentation_id is cast, not assumed already-string), so
-    every after-image column is VARCHAR (str-or-NULL). On a 'd' row the after-image
-    columns are NULL. `properties` is partitioned into history-tracked vs
-    current-value classes by reading each column's sidecar history_tracked flag,
-    applying the shipped `is True` convention (_collect_tracked_props, scd.py): a
-    flag of exactly True is type-2 (history); anything else — False, or None on a
-    non-conformant emit — is type-1 (current value). The class is never
-    inferred from history and has no inference fallback. Reads history (filtered to
-    the kind and the history-tracked subset) and records__<kind> (spine + current
-    values + column order). Single-branch: filtered to fork_path. Values are raw —
-    wallclock rendering and the global seq are the engine's representation.
+    The two-scope contract (design doc § Per-stream folds and after-images):
+    event membership and after-image projection are independently scoped.
+    One event row per (record_id, sim_time) at which the record's state
+    changes: a 'c' at created_sim_time for every record, a 'u' at each later
+    distinct history sim_time of `change_scope`'s history-tracked subset, and
+    a 'd' at deactivated_at when deactivated. The after-image columns are
+    `properties` resolved by resolve_stream_columns — the projection scope
+    never widens or narrows the event set, and the change scope never adds a
+    column to the SELECT.
+
+    The after-image columns reconstruct the full row at the event sim_time —
+    each selected history-tracked property as the most-recent history.value
+    at or before that time (inclusive sim_time <= event_sim_time; codec
+    VARCHAR; NULL when none is at or before), each selected current-value
+    property as the record's current records__<kind> value cast to codec
+    VARCHAR (temporally constant). The identity after-image columns are
+    likewise cast to codec VARCHAR (a BIGINT presentation_id is cast, not
+    assumed already-string), so every after-image column is VARCHAR
+    (str-or-NULL). On a 'd' row the after-image columns are NULL. Both
+    `properties` and `change_scope` are partitioned into history-tracked vs
+    current-value classes by reading each column's sidecar history_tracked
+    flag, applying the shipped `is True` convention (_collect_tracked_props,
+    scd.py): a flag of exactly True is type-2 (history); anything else —
+    False, or None on a non-conformant emit — is type-1 (current value); a
+    current-value name in `change_scope` contributes no 'u' events. The class
+    is never inferred from history and has no inference fallback. Reads
+    history (filtered to the kind and each scope's history-tracked subset)
+    and records__<kind> (spine + current values + column order).
+    Single-branch: filtered to fork_path. Values are raw — wallclock
+    rendering and the global seq are the engine's representation.
 
     See § After-image reconstruction, § Op classification, § Event generation per
     record, § Ordering and `seq`.
@@ -277,8 +287,12 @@ def build_row_state_events_sql(
             presentation_id presence).
         fork_path: The sole branch, from require_single_branch.
         kind: The record kind whose row state is reconstructed.
-        properties: The selected property names (bare), of either class; may be
-            empty (identity + lifecycle only).
+        properties: The after-image property names (bare), of either class;
+            may be empty (identity + lifecycle only).
+        change_scope: The property names (bare) whose history-tracked subset
+            drives 'u' event membership; may equal `properties` (the shipped
+            single-scope behavior, byte-identical) and may be a superset or
+            disjoint. Callers state both scopes explicitly — no default.
 
     Returns:
         A complete, deterministic SELECT producing ROW_STATE_EVENT_COLUMNS (plus
@@ -288,21 +302,21 @@ def build_row_state_events_sql(
     Raises:
         TableNotFoundError: records__<kind> is not in the sidecar. Defensive: the
             engine's up-front validation (StreamKindResolvable) catches this first.
-        ExportError: A selected property has no prop__<property> column on the kind.
-            Likewise defensive — StreamPropertyResolvable catches it first.
+        ExportError: A name in `properties` or `change_scope` has no
+            prop__<name> column on the kind. Likewise defensive —
+            StreamPropertyResolvable catches it first.
     """
     table_name = f"records__{kind}"
     # Raises TableNotFoundError if absent; also validates properties
     after_image_cols = resolve_stream_columns(sidecar, kind, properties)
 
-    cols = sidecar.columns(table_name)
-
-    tracked_props, _ = partition_properties(sidecar, kind, properties)
+    change_tracked_props, _ = partition_properties(sidecar, kind, change_scope)
+    after_image_tracked_props, _ = partition_properties(sidecar, kind, properties)
     has_pid = has_presentation_id(sidecar, kind)
 
     fp_lit = _sql_literal(fork_path)
 
-    events_cte_sql = _build_events_cte(fork_path, kind, tracked_props)
+    events_cte_sql = _build_events_cte(fork_path, kind, change_tracked_props)
 
     # Build the final SELECT columns list
     # Fixed prefix: record_id, event_sim_time, event_class, op
@@ -319,18 +333,17 @@ def build_row_state_events_sql(
         ),
     ]
 
-    # Determine history_tracked classification for each prop (for SQL expression choice)
-    sidecar_tracked: set[str] = set()
-    for col in cols:
-        if col.name.startswith("prop__") and col.history_tracked is True:
-            sidecar_tracked.add(col.name[len("prop__") :])
+    # The after-image's history-tracked properties (properties ∩ full tracked set) —
+    # independent of change_scope's tracked subset, which drives event membership only.
+    sidecar_tracked: set[str] = set(after_image_tracked_props)
 
-    # One ASOF LEFT JOIN per selected history-tracked property reconstructs its
-    # after-image in a single linear pass. tracked_props is exactly the selected
-    # tracked props in sidecar order, so its value expressions key by prop below.
+    # One ASOF LEFT JOIN per after-image history-tracked property reconstructs its
+    # value in a single linear pass. after_image_tracked_props is exactly the
+    # properties-selected tracked props in sidecar order, so its value expressions
+    # key by prop below.
     asof_joins: list[str] = []
     tracked_value_exprs: dict[str, str] = {}
-    for prop in tracked_props:
+    for prop in after_image_tracked_props:
         join_sql, value_expr = _build_prop_asof_join(fork_path, kind, prop, "_events")
         asof_joins.append(join_sql)
         tracked_value_exprs[prop] = value_expr

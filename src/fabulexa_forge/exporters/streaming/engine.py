@@ -716,7 +716,9 @@ def _iter_events_inner(
         kind = kind_sel.kind
         properties = frozenset(kind_sel.properties)
 
-        sql = build_row_state_events_sql(emit.sidecar, fork_path, kind, properties)
+        sql = build_row_state_events_sql(
+            emit.sidecar, fork_path, kind, properties, change_scope=properties
+        )
         rows = emit.query(sql, ())
 
         # Apply types selection pre-merge for sub-typed kinds with an explicit list

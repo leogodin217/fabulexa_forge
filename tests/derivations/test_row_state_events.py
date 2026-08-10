@@ -36,10 +36,21 @@ def _run(
     emit_dir: Path,
     kind: str,
     properties: frozenset[str],
+    change_scope: frozenset[str] | None = None,
 ) -> list[tuple[Any, ...]]:
-    """Open the emit and materialize the row-state-events SQL."""
+    """Open the emit and materialize the row-state-events SQL.
+
+    change_scope defaults to `properties` (the shipped single-scope
+    invocation) when the caller doesn't split scopes.
+    """
     with open_emit(emit_dir) as emit:
-        sql = build_row_state_events_sql(emit.sidecar, "trunk", kind, properties)
+        sql = build_row_state_events_sql(
+            emit.sidecar,
+            "trunk",
+            kind,
+            properties,
+            change_scope=properties if change_scope is None else change_scope,
+        )
         return emit.query(sql, ())
 
 
@@ -601,7 +612,11 @@ class TestErrors:
         with open_emit(emit_dir) as emit:
             with pytest.raises(TableNotFoundError):
                 build_row_state_events_sql(
-                    emit.sidecar, "trunk", "nonexistent_kind", frozenset()
+                    emit.sidecar,
+                    "trunk",
+                    "nonexistent_kind",
+                    frozenset(),
+                    change_scope=frozenset(),
                 )
 
     def test_unknown_property_raises_export_error(self, tmp_path: Path) -> None:
@@ -614,7 +629,11 @@ class TestErrors:
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="has no prop__bogus column"):
                 build_row_state_events_sql(
-                    emit.sidecar, "trunk", "item", frozenset({"bogus"})
+                    emit.sidecar,
+                    "trunk",
+                    "item",
+                    frozenset({"bogus"}),
+                    change_scope=frozenset({"bogus"}),
                 )
 
 
@@ -735,6 +754,7 @@ class TestInterleavedPropAfterImageOrder:
                 "trunk",
                 "widget",
                 frozenset({"alpha", "beta", "gamma"}),
+                change_scope=frozenset({"alpha", "beta", "gamma"}),
             )
             rows = emit.query(sql, ())
 
@@ -815,3 +835,161 @@ class TestDeepSingleRecordHistory:
         at_18 = [r for r in rows if r[_OP] == "u" and r[_EVT] == 18]
         assert at_20[0][_N_PREFIX] == "20"
         assert at_18[0][_N_PREFIX] == "18"
+
+
+# ---------------------------------------------------------------------------
+# Two-scope contract: change_scope drives event membership, properties drives
+# the after-image projection — independently.
+# ---------------------------------------------------------------------------
+
+
+class TestChangeScopeSplit:
+    """change_scope (event membership) and properties (after-image) split."""
+
+    def test_change_scope_equals_properties_is_byte_identical(
+        self, tmp_path: Path
+    ) -> None:
+        """Equal scopes reproduce the shipped single-scope SQL and rows exactly."""
+        emit_dir = _build_emit(
+            tmp_path,
+            record_rows=[("trunk", "r1", 10, True, None, 30, 0, "c", "5")],
+            history_rows=[
+                ("trunk", "item", "r1", "status", 10, "a"),
+                ("trunk", "item", "r1", "status", 20, "b"),
+                ("trunk", "item", "r1", "status", 30, "c"),
+            ],
+        )
+        properties = frozenset({"status"})
+        with open_emit(emit_dir) as emit:
+            single_scope_sql = build_row_state_events_sql(
+                emit.sidecar,
+                "trunk",
+                "item",
+                properties,
+                change_scope=properties,
+            )
+            split_call_sql = build_row_state_events_sql(
+                emit.sidecar,
+                "trunk",
+                "item",
+                properties,
+                change_scope=frozenset({"status"}),
+            )
+        assert single_scope_sql == split_call_sql
+        assert _run(emit_dir, "item", properties) == _run(
+            emit_dir, "item", properties, change_scope=frozenset({"status"})
+        )
+
+    def test_wider_change_scope_fires_u_at_untracked_after_image_columns(
+        self, tmp_path: Path
+    ) -> None:
+        """A tracked column outside `properties` still drives 'u' membership; its
+        value never appears — the after-image carries only `properties`."""
+        emit_dir = _build_emit(
+            tmp_path,
+            record_rows=[("trunk", "r1", 10, True, None, 30, 0, "a2", "b0", "g1")],
+            history_rows=[
+                ("trunk", "widget", "r1", "alpha", 20, "a2"),
+                ("trunk", "widget", "r1", "gamma", 30, "g1"),
+            ],
+            kind="widget",
+            record_cols=_RECORD_COLS_INTERLEAVED,
+        )
+        rows = _run(
+            emit_dir,
+            "widget",
+            properties=frozenset({"beta"}),
+            change_scope=frozenset({"alpha", "beta", "gamma"}),
+        )
+        r1_rows = [r for r in rows if r[_REC_ID] == "r1"]
+        assert [r[_EVT] for r in r1_rows] == [10, 20, 30]
+        assert [r[_OP] for r in r1_rows] == ["c", "u", "u"]
+        # Only prop__beta is carried (properties = {"beta"}); no alpha/gamma columns.
+        assert all(len(r) == _N_PREFIX + 1 for r in r1_rows)
+        assert all(r[_N_PREFIX] == "b0" for r in r1_rows)
+
+    def test_empty_properties_with_nonempty_change_scope_identity_only(
+        self, tmp_path: Path
+    ) -> None:
+        """properties=frozenset() yields the full c/u/d event set from change_scope,
+        with an identity-only after-image (no prop__ columns)."""
+        emit_dir = _build_emit(
+            tmp_path,
+            record_rows=[("trunk", "r1", 10, False, 30, 30, 0, "b", "5")],
+            history_rows=[
+                ("trunk", "item", "r1", "status", 10, "a"),
+                ("trunk", "item", "r1", "status", 20, "b"),
+            ],
+        )
+        rows = _run(
+            emit_dir,
+            "item",
+            properties=frozenset(),
+            change_scope=frozenset({"status"}),
+        )
+        r1_rows = [r for r in rows if r[_REC_ID] == "r1"]
+        assert [r[_OP] for r in r1_rows] == ["c", "u", "d"]
+        assert all(len(r) == _N_PREFIX for r in r1_rows)
+
+    def test_current_value_name_in_change_scope_contributes_no_updates(
+        self, tmp_path: Path
+    ) -> None:
+        """A current-value (non-tracked) name in change_scope has no history rows
+        and so drives no 'u' events."""
+        emit_dir = _build_emit(
+            tmp_path,
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "5")],
+            history_rows=[],
+        )
+        rows = _run(
+            emit_dir,
+            "item",
+            properties=frozenset(),
+            change_scope=frozenset({"score"}),
+        )
+        r1_rows = [r for r in rows if r[_REC_ID] == "r1"]
+        assert [r[_OP] for r in r1_rows] == ["c"]
+
+    def test_disjoint_scopes_event_set_follows_change_scope_payload_follows_properties(
+        self, tmp_path: Path
+    ) -> None:
+        """change_scope and properties disjoint: 'u' events follow change_scope's
+        tracked changes; the after-image carries only properties' (constant)
+        current-value column."""
+        emit_dir = _build_emit(
+            tmp_path,
+            record_rows=[("trunk", "r1", 10, True, None, 30, 0, "b", "42")],
+            history_rows=[
+                ("trunk", "item", "r1", "status", 10, "a"),
+                ("trunk", "item", "r1", "status", 20, "a2"),
+                ("trunk", "item", "r1", "status", 30, "b"),
+            ],
+        )
+        rows = _run(
+            emit_dir,
+            "item",
+            properties=frozenset({"score"}),
+            change_scope=frozenset({"status"}),
+        )
+        r1_rows = [r for r in rows if r[_REC_ID] == "r1"]
+        assert [r[_EVT] for r in r1_rows] == [10, 20, 30]
+        assert [r[_OP] for r in r1_rows] == ["c", "u", "u"]
+        assert all(r[_N_PREFIX] == "42" for r in r1_rows)
+
+    def test_bad_change_scope_name_raises_export_error(self, tmp_path: Path) -> None:
+        """A change_scope name with no prop__<name> column raises ExportError
+        naming the column."""
+        emit_dir = _build_emit(
+            tmp_path,
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "5")],
+            history_rows=[],
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(ExportError, match="has no prop__bogus column"):
+                build_row_state_events_sql(
+                    emit.sidecar,
+                    "trunk",
+                    "item",
+                    frozenset(),
+                    change_scope=frozenset({"bogus"}),
+                )

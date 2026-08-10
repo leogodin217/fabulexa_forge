@@ -409,7 +409,9 @@ def _build_records_arm_sql(
     """
     kind = source.kind
     properties = frozenset(bare for bare, _output in source.audited_properties)
-    fold_sql = build_row_state_events_sql(sidecar, fork_path, kind, properties)
+    fold_sql = build_row_state_events_sql(
+        sidecar, fork_path, kind, properties, change_scope=properties
+    )
 
     filter_sql = _records_population_filter_sql(
         sidecar, fork_path, kind, source.populations
