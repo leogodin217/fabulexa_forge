@@ -44,6 +44,9 @@ from fabulexa_forge.exporters.election import (
 )
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.exporters.streaming.routing import (
+    kind_reference_targets,
+    known_records_kinds,
+    membership_reference_fields,
     membership_route_attributes,
     resolve_subtype_index,
     route_attributes,
@@ -185,83 +188,6 @@ def _validate_membership_stream(sidecar: "Sidecar", stream: "MembershipStream") 
                 )
 
 
-def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
-    """Every kind with a declared records table in the emit, sidecar table order.
-
-    The membership member-field edge gate's admitted kind universe (design
-    doc § Message-key election — "per member kind for a membership member
-    field").
-
-    Args:
-        sidecar: The open emit's sidecar view.
-
-    Returns:
-        Every `records__<kind>` table's bare kind name, sidecar order.
-    """
-    return tuple(
-        table.name[len("records__") :]
-        for table in sidecar.tables()
-        if table.name.startswith("records__")
-    )
-
-
-def _kind_reference_targets(
-    sidecar: "Sidecar",
-    kind: str,
-    properties: Sequence[str],
-) -> dict[str, str]:
-    """Selected reference-valued properties of a kind, mapped to their target kind.
-
-    A target absent from the emit (no declared `records__<target>` table)
-    is excluded — it carries no election and renders its default record_id
-    verbatim, the shared `check_edge_union_safety` caller contract.
-
-    Args:
-        sidecar: The open emit's sidecar view.
-        kind: The kind owning the properties.
-        properties: The stream's selected bare property names.
-
-    Returns:
-        Bare property name -> target kind, for every selected property whose
-        `prop__<p>` column declares a `references` target present in the emit.
-    """
-    cols = sidecar.columns(f"records__{kind}")
-    by_name = {c.name: c.references for c in cols if c.name.startswith("prop__")}
-    known_kinds = frozenset(_known_records_kinds(sidecar))
-    targets: dict[str, str] = {}
-    for prop in properties:
-        target = by_name.get(f"prop__{prop}")
-        if target is not None and target in known_kinds:
-            targets[prop] = target
-    return targets
-
-
-def _membership_reference_fields_selected(
-    sidecar: "Sidecar",
-    owner_kind: str,
-    property_name: str,
-    fields: Sequence[str],
-) -> frozenset[str]:
-    """Selected membership fields backed by a member__<f>__kind/__id pair.
-
-    Args:
-        sidecar: The open emit's sidecar view.
-        owner_kind: The membership table's owner kind.
-        property_name: The membership property name.
-        fields: The stream's selected bare field names.
-
-    Returns:
-        The subset of `fields` that are reference-valued.
-    """
-    table_name = f"membership__{owner_kind}__{property_name}"
-    col_names = {c.name for c in sidecar.columns(table_name)}
-    return frozenset(
-        field
-        for field in fields
-        if f"member__{field}__kind" in col_names and f"member__{field}__id" in col_names
-    )
-
-
 def _resolve_kind_stream_surface(
     sidecar: "Sidecar",
     election: "Election",
@@ -337,7 +263,7 @@ def _gate_kind_stream_reference_edges(
     """Run the edge union-safety gate over one kind-shaped stream's reference props.
 
     Streaming's admitted set for a reference column is the target kind's full
-    declared domain (design doc § Message-key election). `_kind_reference_
+    declared domain (design doc § Message-key election). `kind_reference_
     targets` already restricts to targets present in the emit, so every
     target here resolves through `election`.
 
@@ -350,7 +276,10 @@ def _gate_kind_stream_reference_edges(
         ElectionUnionUnsafe: An admitted target domain's resolved key spaces
             contain a pairwise-unsafe pair.
     """
-    targets = _kind_reference_targets(sidecar, stream.kind, stream.properties)
+    known_kinds = frozenset(known_records_kinds(sidecar))
+    targets = kind_reference_targets(
+        sidecar, stream.kind, stream.properties, known_kinds
+    )
     for prop, target_kind in targets.items():
         domain = sidecar.subtype_values(target_kind)
         check_edge_union_safety(
@@ -378,13 +307,13 @@ def _gate_membership_stream_edges(
         ElectionUnionUnsafe: Some admitted kind's own domain's resolved key
             spaces contain a pairwise-unsafe pair.
     """
-    reference_fields = _membership_reference_fields_selected(
+    reference_fields = membership_reference_fields(
         sidecar, stream.membership.kind, stream.membership.property, stream.fields
     )
     if not reference_fields:
         return
     for field in reference_fields:
-        for kind in _known_records_kinds(sidecar):
+        for kind in known_records_kinds(sidecar):
             domain = sidecar.subtype_values(kind)
             check_edge_union_safety(
                 election,
@@ -963,6 +892,7 @@ def _iter_kind_streams_inner(
     kind_by_stream: dict[str, str] = {}
     reference_targets_by_stream: dict[str, dict[str, str]] = {}
     identity_index_cache: dict[tuple[str, str], dict[str, str]] = {}
+    known_kinds = frozenset(known_records_kinds(sidecar))
 
     for stream in config.streams:
         assert isinstance(stream, KindStream)
@@ -983,8 +913,8 @@ def _iter_kind_streams_inner(
             sidecar, kind, properties
         )
         kind_by_stream[stream.name] = kind
-        reference_targets_by_stream[stream.name] = _kind_reference_targets(
-            sidecar, kind, stream.properties
+        reference_targets_by_stream[stream.name] = kind_reference_targets(
+            sidecar, kind, stream.properties, known_kinds
         )
 
     seq = 0
@@ -1106,7 +1036,7 @@ def _iter_membership_streams_inner(
         )
         owner_kind_by_stream[stream.name] = owner_kind
         property_by_stream[stream.name] = property_name
-        reference_fields_by_stream[stream.name] = _membership_reference_fields_selected(
+        reference_fields_by_stream[stream.name] = membership_reference_fields(
             sidecar, owner_kind, property_name, stream.fields
         )
 

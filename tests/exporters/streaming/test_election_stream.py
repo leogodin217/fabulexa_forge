@@ -296,6 +296,39 @@ class TestRecordIndexElection:
         assert create.after["record_index"] == "0"
         assert create.after["presentation_id"] == "W_001"
 
+    def test_debezium_value_schema_follows_elect_after_image_columns(
+        self, tmp_path: Path
+    ) -> None:
+        """schemas_enable's after schema field list equals
+        elect_after_image_columns' output under a record_index election too —
+        the declared schema and the rendered after-image stay the same list
+        by construction (the non-'presentation_id' return path)."""
+        emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
+        config = _kind_config(
+            "widgets",
+            "widget",
+            ["status"],
+            keys={"widget": "record_index"},
+            debezium=DebeziumConfig(source=_DEBEZIUM_SOURCE, schemas_enable=True),
+        )
+        anchor = EffectiveAnchor(
+            start_instant=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            timezone=ZoneInfo("UTC"),
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        with open_emit(emit_dir) as emit:
+            stream_export(
+                emit, config, fmt="debezium", sink="file", out=out, anchor=anchor
+            )
+
+        lines = (out / "widgets.jsonl").read_text(encoding="utf-8").splitlines()
+        msg = json.loads(lines[0])
+        after_field = next(f for f in msg["schema"]["fields"] if f["field"] == "after")
+        after_columns = [f["field"] for f in after_field["fields"]]
+        assert after_columns == ["record_index", "presentation_id", "prop__status"]
+        assert list(msg["payload"]["after"].keys()) == after_columns
+
 
 # ---------------------------------------------------------------------------
 # Reference translation: prop__ entries render the target's elected surface
@@ -334,6 +367,23 @@ class TestReferenceEdgeTranslation:
         by_id = {e.record_id: e for e in events}
         assert by_id["g1"].after["prop__target_id"] == "0"
         assert by_id["g2"].after["prop__target_id"] == "1"
+
+    def test_reference_renders_sub_typed_target_record_index(
+        self, tmp_path: Path
+    ) -> None:
+        """trainer.prop__pet_id renders creature's (sub-typed) elected
+        record_index, resolved per-row through the target's own discriminator."""
+        emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
+        config = _kind_config(
+            "trainers", "trainer", ["pet_id"], keys={"creature": "record_index"}
+        )
+        with open_emit(emit_dir) as emit:
+            events = list(iter_stream_events(emit, config, None))
+
+        by_id = {e.record_id: e for e in events}
+        assert by_id["t1"].after is not None
+        # t1 -> c_cat1, creature's record_index 0.
+        assert by_id["t1"].after["prop__pet_id"] == "0"
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +450,45 @@ class TestMembershipOwnerRekeyAndMemberFieldTranslation:
         assert priority_join.key_column == "presentation_id"
         assert companion_join.key_column == "presentation_id"
         assert priority_join.key_value == companion_join.key_value == "P_001"
+
+
+# ---------------------------------------------------------------------------
+# Sub-typed membership owner: the owner kind's full domain spans the stream
+# ---------------------------------------------------------------------------
+
+
+class TestSubTypedMembershipOwner:
+    """A membership stream whose owner kind is itself sub-typed spans the
+    owner's full declared domain (design doc: "the owner kind's full
+    declared domain always spans a membership stream") — the sub-typed-owner
+    branch of `_resolve_membership_stream_surface`."""
+
+    def test_sub_typed_owner_elects_uniform_surface_across_its_domain(
+        self, tmp_path: Path
+    ) -> None:
+        """cat and dog (creature's full domain) both own a toys interval; a
+        uniform record_index election renders both through the same surface."""
+        emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
+        config = _membership_config(
+            [
+                MembershipStream(
+                    name="toys",
+                    membership=MembershipRef(kind="creature", property="toys"),
+                    fields=["name"],
+                )
+            ],
+            keys={"creature": "record_index"},
+        )
+        with open_emit(emit_dir) as emit:
+            events = list(iter_stream_events(emit, config, None))
+
+        joins = {e.record_id: e for e in events if e.op == "join"}
+        assert joins["c_cat1"].key_column == "record_index"
+        assert joins["c_dog1"].key_column == "record_index"
+        assert joins["c_cat1"].after is not None
+        assert joins["c_dog1"].after is not None
+        assert joins["c_cat1"].after["record_index"] == "0"
+        assert joins["c_dog1"].after["record_index"] == "1"
 
 
 # ---------------------------------------------------------------------------

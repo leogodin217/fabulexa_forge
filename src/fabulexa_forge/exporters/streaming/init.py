@@ -58,6 +58,11 @@ from fabulexa_forge.exporters.keys_init import (
 )
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
+from fabulexa_forge.exporters.streaming.routing import (
+    kind_reference_targets,
+    known_records_kinds,
+    membership_reference_fields,
+)
 
 if TYPE_CHECKING:
     from fabulexa_forge.config.models import KeySurface
@@ -104,24 +109,6 @@ class _MembershipStreamUnit:
 # ---------------------------------------------------------------------------
 # Sidecar-driven unit enumeration
 # ---------------------------------------------------------------------------
-
-
-def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
-    """Every kind with a declared `records__<kind>` table, sidecar table order.
-
-    Args:
-        sidecar: The open emit's sidecar.
-
-    Returns:
-        Record kinds, in sidecar table-declaration order.
-    """
-    kinds: list[str] = []
-    for table in sidecar.tables():
-        if table.category == "records":
-            kind = table.record_kind
-            assert kind is not None, "records table must declare record_kind"
-            kinds.append(kind)
-    return tuple(kinds)
 
 
 def _sub_type_properties(
@@ -389,60 +376,6 @@ def _classify_units(
 # ---------------------------------------------------------------------------
 
 
-def _kind_stream_reference_targets(
-    sidecar: "Sidecar",
-    kind: str,
-    properties: Sequence[str],
-    known_kinds: frozenset[str],
-) -> dict[str, str]:
-    """Selected reference-valued properties of a kind, mapped to their target kind.
-
-    A target absent from the emit is excluded — it carries no election and
-    renders its default record_id verbatim.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        kind: The kind owning the properties.
-        properties: The stream's selected bare property names.
-        known_kinds: Every kind with a declared records table in the emit.
-
-    Returns:
-        Bare property name -> target kind, for every selected property whose
-        `prop__<p>` column declares a `references` target present in the emit.
-    """
-    cols = sidecar.columns(f"records__{kind}")
-    by_name = {c.name: c.references for c in cols if c.name.startswith(_PROP_PREFIX)}
-    targets: dict[str, str] = {}
-    for prop in properties:
-        target = by_name.get(f"{_PROP_PREFIX}{prop}")
-        if target is not None and target in known_kinds:
-            targets[prop] = target
-    return targets
-
-
-def _membership_reference_fields(
-    sidecar: "Sidecar", owner_kind: str, property_name: str, fields: Sequence[str]
-) -> frozenset[str]:
-    """Selected membership fields backed by a `member__<f>__kind`/`__id` pair.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        owner_kind: The membership table's owner kind.
-        property_name: The membership property name.
-        fields: The stream's selected bare field names.
-
-    Returns:
-        The subset of `fields` that are reference-valued.
-    """
-    table_name = f"membership__{owner_kind}__{property_name}"
-    col_names = {c.name for c in sidecar.columns(table_name)}
-    return frozenset(
-        field
-        for field in fields
-        if f"member__{field}__kind" in col_names and f"member__{field}__id" in col_names
-    )
-
-
 def _self_gate_streaming_keys(
     sidecar: "Sidecar",
     domains: "dict[str, tuple[str, ...]]",
@@ -483,7 +416,7 @@ def _self_gate_streaming_keys(
     for kind_unit, kind_status in kind_units:
         if kind_status != "live":
             continue
-        targets = _kind_stream_reference_targets(
+        targets = kind_reference_targets(
             sidecar, kind_unit.kind, kind_unit.properties, known_kinds
         )
         for prop, target_kind in targets.items():
@@ -502,7 +435,7 @@ def _self_gate_streaming_keys(
     for membership_unit, membership_status in membership_units:
         if membership_status != "live":
             continue
-        ref_fields = _membership_reference_fields(
+        ref_fields = membership_reference_fields(
             sidecar,
             membership_unit.owner_kind,
             membership_unit.property,
@@ -662,7 +595,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
             sidecar-derived name topic-illegal).
     """
     sidecar = emit.sidecar
-    known_kinds = _known_records_kinds(sidecar)
+    known_kinds = known_records_kinds(sidecar)
     domains = domains_for_kinds(sidecar, known_kinds)
     presentation_keys = sidecar.presentation_keys()
     expanded = natural_expanded_surfaces(presentation_keys, domains)
@@ -758,7 +691,7 @@ def generate_stream_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
             TemporalClassUnavailableError on an emit predating per-column
             temporal classes.
     """
-    if not _known_records_kinds(emit.sidecar):
+    if not known_records_kinds(emit.sidecar):
         raise StreamInitNothingToStream(
             "this emit carries no records kind; a candidate streaming config"
             " that cannot stream is not proposed"

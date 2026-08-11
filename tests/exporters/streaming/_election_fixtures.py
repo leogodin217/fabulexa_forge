@@ -21,6 +21,11 @@ translation, gates) need to be exercised against:
   - membership__person__waiters: person's membership table, one closed
       interval (join + leave), with a scalar `elem__priority` field and a
       reference `member__companion__kind`/`__id` field pointing at pet.
+  - membership__creature__toys: creature's own membership table (a
+      sub-typed owner — one closed interval per sub-type, cat and dog), with
+      a scalar `elem__name` field. Exercises the sub-typed-owner branch of
+      the owner-surface resolver (design doc: "the owner kind's full
+      declared domain always spans a membership stream").
 
 `presentation_keys` is caller-supplied (test-owned, mirroring
 `tests/exporters/base/_base_fixtures.py`) so each test declares exactly the
@@ -133,6 +138,14 @@ _WAITERS_COLS: list[dict[str, object]] = [
     {"name": "elem__priority", "type": "VARCHAR"},
     {"name": "member__companion__kind", "type": "VARCHAR"},
     {"name": "member__companion__id", "type": "VARCHAR"},
+]
+
+_TOYS_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__name", "type": "VARCHAR"},
 ]
 
 _HISTORY_COLS: list[dict[str, object]] = [
@@ -295,6 +308,16 @@ def build_election_emit(
         ["trunk", "p1", 0, 300, "high", "pet", "q1"],
     )
 
+    conn.execute(_ddl("membership__creature__toys", _TOYS_COLS))
+    conn.execute(
+        'INSERT INTO "membership__creature__toys" VALUES (?, ?, ?, ?, ?)',
+        ["trunk", "c_cat1", 0, 400, "ball"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__creature__toys" VALUES (?, ?, ?, ?, ?)',
+        ["trunk", "c_dog1", 0, 500, "bone"],
+    )
+
     conn.close()
 
     extra: dict[str, object] = {
@@ -359,6 +382,14 @@ def build_election_emit(
                 "property": "waiters",
                 "columns": _WAITERS_COLS,
                 "rows": 1,
+            },
+            {
+                "name": "membership__creature__toys",
+                "category": "membership",
+                "record_kind": "creature",
+                "property": "toys",
+                "columns": _TOYS_COLS,
+                "rows": 2,
             },
             {
                 "name": "history",

@@ -40,7 +40,11 @@ from _support.notices import RecordingNoticeSink, discard_notice_sink
 from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from exporters.source._source_fixtures import build_source_test_emit
-from exporters.streaming._election_fixtures import FULL_REGISTRY, build_election_emit
+from exporters.streaming._election_fixtures import (
+    CREATURE_UNSAFE_REGISTRY,
+    FULL_REGISTRY,
+    build_election_emit,
+)
 from fabulexa_forge.config.loader import load_stream_config
 from fabulexa_forge.errors import StreamInitNothingToStream
 from fabulexa_forge.exporters.streaming.engine import iter_stream_events
@@ -586,6 +590,106 @@ def test_keys_undeclared_registry_proposes_record_index(tmp_path: Path) -> None:
     assert "  person: record_index\n" in content
     assert "  pet: record_index\n" in content
     assert "  creature: record_index\n" in content
+
+
+_MIN_PERSON_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+]
+
+_MIN_CREATURE_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__creature_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="slice_only",
+    ),
+]
+
+_MIN_PETS_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "member__pet__kind", "type": "VARCHAR"},
+    {"name": "member__pet__id", "type": "VARCHAR"},
+]
+
+
+def _build_membership_member_field_degrade_emit(tmp_path: Path) -> Path:
+    """`person` (no reference properties) + sub-typed, pairwise-unsafe
+    `creature` (no reference properties either), tied together only by
+    `membership__person__pets`' reference-valued `pet` member field.
+
+    No kind-shaped stream (`person`, `cat`, `dog`) references `creature`, so
+    the only path that can admit it to the edge gate is the membership
+    member-field loop (design doc: "per member kind, since a membership
+    member field's target kind is per-row").
+    """
+    conn = duckdb.connect(str(tmp_path / "run.duckdb"))
+    conn.execute(_ddl("records__person", _MIN_PERSON_COLS))
+    conn.execute(
+        'INSERT INTO "records__person" VALUES (?, ?, ?, ?, NULL, ?, ?)',
+        ["trunk", "p1", 0, True, 0, 0],
+    )
+    conn.execute(_ddl("records__creature", _MIN_CREATURE_COLS))
+    conn.execute(
+        'INSERT INTO "records__creature" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "c_cat1", "C1", 0, True, 0, 0, "cat"],
+    )
+    conn.execute(
+        'INSERT INTO "records__creature" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "c_dog1", "D1", 0, True, 0, 1, "dog"],
+    )
+    conn.execute(_ddl("membership__person__pets", _MIN_PETS_COLS))
+    conn.execute(
+        'INSERT INTO "membership__person__pets" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "p1", 0, 300, "creature", "c_cat1"],
+    )
+    conn.close()
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec("records__person", "records", _MIN_PERSON_COLS, 1, "person"),
+            _table_spec(
+                "records__creature", "records", _MIN_CREATURE_COLS, 2, "creature"
+            ),
+            _membership_table_spec(
+                "membership__person__pets", _MIN_PETS_COLS, 1, "person", "pets"
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={
+            "enum_domains": {"creature": {"creature_type": ["cat", "dog"]}},
+            "presentation_keys": CREATURE_UNSAFE_REGISTRY,
+        },
+    )
+    return tmp_path
+
+
+def test_keys_membership_member_field_reference_degrades_admitted_kind(
+    tmp_path: Path,
+) -> None:
+    """A membership stream's reference-valued member field alone admits
+    `creature` to the edge gate -- its pairwise-unsafe presentation_id claims
+    degrade it to `record_index`, with no kind-shaped stream reference
+    involved at all."""
+    _build_membership_member_field_degrade_emit(tmp_path)
+    content = _generate(tmp_path)
+    assert "  creature: record_index  # NOTE: ElectionUnionUnsafe" in content
 
 
 # ---------------------------------------------------------------------------

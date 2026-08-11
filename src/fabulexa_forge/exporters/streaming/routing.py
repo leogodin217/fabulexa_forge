@@ -10,13 +10,14 @@ through by the engine.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.reader.errors import TableNotFoundError
 
 if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
+    from fabulexa_forge.reader.sidecar import Sidecar
 
 
 def route_attributes(
@@ -128,3 +129,79 @@ def resolve_subtype_index(
         (),
     )
     return {str(record_id): str(sub_type) for record_id, sub_type in rows}
+
+
+def known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
+    """Every kind with a declared `records__<kind>` table, sidecar table order.
+
+    Reads the sidecar's structured `TableSpec.category` / `record_kind`
+    fields (the established codebase convention — `exporters.source.plan`
+    and `exporters.source.init` read the same fields), never the table name.
+
+    Args:
+        sidecar: The open emit's sidecar.
+
+    Returns:
+        Record kinds, in sidecar table-declaration order.
+    """
+    kinds: list[str] = []
+    for table in sidecar.tables():
+        if table.category == "records":
+            kind = table.record_kind
+            assert kind is not None, "records table must declare record_kind"
+            kinds.append(kind)
+    return tuple(kinds)
+
+
+def kind_reference_targets(
+    sidecar: "Sidecar",
+    kind: str,
+    properties: Sequence[str],
+    known_kinds: frozenset[str],
+) -> dict[str, str]:
+    """Selected reference-valued properties of a kind, mapped to their target kind.
+
+    A target absent from the emit (not in `known_kinds`) is excluded — it
+    carries no election and renders its default record_id verbatim.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The kind owning the properties.
+        properties: The stream's selected bare property names.
+        known_kinds: Every kind with a declared records table in the emit.
+
+    Returns:
+        Bare property name -> target kind, for every selected property whose
+        `prop__<p>` column declares a `references` target present in the emit.
+    """
+    cols = sidecar.columns(f"records__{kind}")
+    by_name = {c.name: c.references for c in cols if c.name.startswith("prop__")}
+    targets: dict[str, str] = {}
+    for prop in properties:
+        target = by_name.get(f"prop__{prop}")
+        if target is not None and target in known_kinds:
+            targets[prop] = target
+    return targets
+
+
+def membership_reference_fields(
+    sidecar: "Sidecar", owner_kind: str, property_name: str, fields: Sequence[str]
+) -> frozenset[str]:
+    """Selected membership fields backed by a `member__<f>__kind`/`__id` pair.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        owner_kind: The membership table's owner kind.
+        property_name: The membership property name.
+        fields: The stream's selected bare field names.
+
+    Returns:
+        The subset of `fields` that are reference-valued.
+    """
+    table_name = f"membership__{owner_kind}__{property_name}"
+    col_names = {c.name for c in sidecar.columns(table_name)}
+    return frozenset(
+        field
+        for field in fields
+        if f"member__{field}__kind" in col_names and f"member__{field}__id" in col_names
+    )
