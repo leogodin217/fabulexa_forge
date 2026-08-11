@@ -21,6 +21,7 @@
 
 content: state-changes
 
-kinds:
-  - kind: admission
+streams:
+  - name: admission
+    kind: admission
     properties: []     # identity + lifecycle only — no prop columns in the after-image

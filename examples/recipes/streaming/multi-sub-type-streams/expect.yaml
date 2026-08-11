@@ -1,15 +1,17 @@
 streams:
-  # Both rendered topics (nurse, physician) fold into one `clinicians` topic;
-  # nurse and physician topics do not materialise. The merged stream keeps the
-  # global seq order.
-  clinicians:
-    event_count: 2
+  # Two declared streams, one per staff_type sub-type.
+  nurse:
+    event_count: 1
     contains_events:
       - seq: 1
         op: c
         kind: staff
         record_id: s001
         after.prop__name: Nora Vega
+  physician:
+    event_count: 1
+    contains_events:
+      # global seq continues across topics — physician's `c` is seq 2, not reset to 1
       - seq: 2
         op: c
         kind: staff

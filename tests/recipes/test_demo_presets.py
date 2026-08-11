@@ -5,7 +5,7 @@ and a demo.yaml.  A preset whose bundle/ directory is absent (gitignored in CI)
 is skipped rather than failed.
 
 Validated constraints per preset:
-- Every joins[].fact and joins[].dim is in build_topic_set(config, sidecar).
+- Every joins[].fact and joins[].dim is in build_topic_set(config).
 - Every windows[] entry is a positive int.
 - consumer_offset (when present) is "earliest" or "latest".
 """
@@ -20,7 +20,6 @@ import yaml
 
 from fabulexa_forge.config.loader import load_stream_config
 from fabulexa_forge.exporters.streaming.engine import build_topic_set
-from fabulexa_forge.reader.emit import open_emit
 
 _EXAMPLES_ROOT = Path(__file__).parent.parent.parent / "docs" / "examples"
 
@@ -73,9 +72,7 @@ def test_demo_joins_resolve_against_topic_set(name: str) -> None:
 
     demo = _load_demo(name)
     config = load_stream_config(_preset_config(name))
-
-    with open_emit(bundle) as emit:
-        topic_set = set(build_topic_set(config, emit.sidecar))
+    topic_set = set(build_topic_set(config))
 
     for entry in demo.get("joins", []):
         fact = entry["fact"]
@@ -140,8 +137,7 @@ def test_entity_not_in_marketplace_topic_set() -> None:
         pytest.skip("bundle absent for ride-sharing-marketplace — skipping")
 
     config = load_stream_config(_preset_config("ride-sharing-marketplace"))
-    with open_emit(bundle) as emit:
-        topic_set = set(build_topic_set(config, emit.sidecar))
+    topic_set = set(build_topic_set(config))
 
     assert "entity" not in topic_set, (
         f"'entity' should not be in topic set {sorted(topic_set)}; "

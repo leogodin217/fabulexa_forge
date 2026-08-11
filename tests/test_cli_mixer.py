@@ -120,7 +120,7 @@ def _write_stream_config(config_path: Path) -> None:
     """Write a minimal stream config YAML with a kafka block."""
     doc: dict[str, object] = {
         "content": "state-changes",
-        "kinds": [{"kind": "actor", "properties": ["status"]}],
+        "streams": [{"name": "actor", "kind": "actor", "properties": ["status"]}],
         "kafka": {"bootstrap_servers": "localhost:9092"},
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
@@ -128,7 +128,7 @@ def _write_stream_config(config_path: Path) -> None:
 
 def _write_bad_config(config_path: Path) -> None:
     """Write a config that fails Pydantic validation (missing required content)."""
-    doc: dict[str, object] = {"kinds": []}
+    doc: dict[str, object] = {"streams": []}
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
 
 
@@ -136,7 +136,7 @@ def _write_stream_config_no_bootstrap(config_path: Path) -> None:
     """Write a stream config without any kafka block (bootstrap unresolvable)."""
     doc: dict[str, object] = {
         "content": "state-changes",
-        "kinds": [{"kind": "actor", "properties": ["status"]}],
+        "streams": [{"name": "actor", "kind": "actor", "properties": ["status"]}],
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
 
@@ -145,7 +145,7 @@ def _write_debezium_config_no_block(config_path: Path) -> None:
     """Write a stream config for debezium without a debezium block."""
     doc: dict[str, object] = {
         "content": "state-changes",
-        "kinds": [{"kind": "actor", "properties": ["status"]}],
+        "streams": [{"name": "actor", "kind": "actor", "properties": ["status"]}],
         "kafka": {"bootstrap_servers": "localhost:9092"},
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")

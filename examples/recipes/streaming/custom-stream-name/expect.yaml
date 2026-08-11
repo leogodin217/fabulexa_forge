@@ -1,5 +1,5 @@
 streams:
-  # The `cdc.` prefix namespaces each leaf topic; stream stems carry the prefix.
+  # The `cdc.` prefix is just a literal in the declared `name` — no template.
   cdc.nurse:
     event_count: 1
     contains_events:

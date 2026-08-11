@@ -44,10 +44,10 @@ debezium:
     schema: public
     version: 2.5.0.Final
 
-memberships:
-  - owner_kind: queue
-    property: waiters
-    fields: [patient, priority]   # bare element-schema names; the sidecar maps each
+streams:
+  - name: queue__waiters            # declared verbatim; matches the leaf route_table
+    membership: {kind: queue, property: waiters}
+    fields: [patient, priority]     # bare element-schema names; the sidecar maps each
 
 rebase:
   base_date: 2024-01-01T00:00:00  # pins ts_ms; Debezium requires an anchor

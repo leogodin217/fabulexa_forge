@@ -1,5 +1,5 @@
 streams:
-  # topic_template "{owner_kind}.{property}" -> one topic per selected relation
+  # streams[].name is author-chosen; here "{owner_kind}.{property}" per relation
   queue.waiters:
     event_count: 3
     contains_events:

@@ -1,7 +1,11 @@
-"""Layer-A and Layer-B routing surface for the streaming exporter.
+"""Layer-A routing surface for the streaming exporter.
 
-Layer A: derive the per-event route attributes (kind, route_table, sub_type).
-Layer B: apply the RoutingConfig policy to produce a resolved topic name.
+Derives per-event route attributes (kind, route_table, sub_type) — the
+per-event leaf logical table, consumed solely by the Debezium
+`source_table` masquerade and the discriminator index. Layer B (topic
+template rendering, groups regrouping) is retired: topic naming is now the
+author-declared stream name (`StreamDeclaration.name`), carried straight
+through by the engine.
 """
 
 from __future__ import annotations
@@ -12,7 +16,6 @@ from fabulexa_forge.errors import ExportError
 from fabulexa_forge.reader.errors import TableNotFoundError
 
 if TYPE_CHECKING:
-    from fabulexa_forge.config.models import RoutingConfig
     from fabulexa_forge.reader.emit import Emit
 
 
@@ -38,8 +41,7 @@ def route_attributes(
 
     Returns:
         A mapping with keys 'kind' and 'route_table', plus 'sub_type' when the
-        kind is sub-typed. Used as template variables for ``resolve_topic`` and
-        ``enumerate_topics``.
+        kind is sub-typed.
 
     Raises:
         ValueError: ``is_subtyped`` is True but ``sub_type`` is None, or
@@ -60,88 +62,6 @@ def route_attributes(
     return {"kind": kind, "route_table": kind}
 
 
-def _member_to_target(routing: "RoutingConfig") -> dict[str, str]:
-    """Build a reverse index: member base-topic -> group target topic.
-
-    Args:
-        routing: The resolved Layer-B policy.
-
-    Returns:
-        A mapping member -> target for every member in every group.
-    """
-    index: dict[str, str] = {}
-    for target, members in routing.groups.items():
-        for member in members:
-            index[member] = target
-    return index
-
-
-def resolve_topic(
-    routing: "RoutingConfig",
-    attributes: dict[str, str],
-) -> str:
-    """Apply Layer-B policy to one event's route attributes to produce its topic.
-
-    Renders routing.topic_template against `attributes`, then remaps the rendered name
-    to a groups target when it is a member of one. Content-agnostic: it reads only
-    `attributes` and the policy, never kind / sub_type by name.
-
-    Args:
-        routing: The resolved Layer-B policy.
-        attributes: The event's route attributes from route_attributes.
-
-    Returns:
-        The resolved topic name.
-
-    Raises:
-        KeyError: The template references a placeholder absent from `attributes` (e.g.
-            {sub_type} for a non-sub-typed kind) — surfaced to the author as a config
-            error by the validation pass before any event is routed.
-    """
-    base_name = routing.topic_template.format(**attributes)
-    member_to_target = _member_to_target(routing)
-    return member_to_target.get(base_name, base_name)
-
-
-def enumerate_topics(
-    routing: "RoutingConfig",
-    selected_attributes: list[dict[str, str]],
-) -> tuple[str, ...]:
-    """Enumerate the run's full topic set, including declared-but-empty topics.
-
-    The union of each selected route attribute's resolved topic and every groups target
-    topic, in deterministic order (selection order, then group-config order,
-    de-duplicated).
-
-    Args:
-        routing: The resolved Layer-B policy.
-        selected_attributes: One route-attribute mapping per selected (kind, sub_type)
-            in enumeration order — every sub-type the run may emit, whether or not
-            it has rows.
-
-    Returns:
-        The ordered, de-duplicated topic set the sink must materialize. De-duplication
-        keeps each topic's first occurrence: a groups target that coincides with an
-        already-rendered name stays at that earlier position rather than reappearing in
-        group-config order.
-    """
-    seen: set[str] = set()
-    topics: list[str] = []
-
-    for attrs in selected_attributes:
-        topic = resolve_topic(routing, attrs)
-        if topic not in seen:
-            seen.add(topic)
-            topics.append(topic)
-
-    for target in routing.groups:
-        if target not in seen:
-            seen.add(target)
-            topics.append(target)
-
-    return tuple(topics)
-
-
 def membership_route_attributes(
     owner_kind: str,
     property_name: str,
@@ -150,8 +70,8 @@ def membership_route_attributes(
 
     The membership analog of route_attributes: {owner_kind, property, route_table}
     with route_table = f"{owner_kind}__{property_name}". No sub_type. The sole place
-    that interprets the membership relation identity; used as template variables for
-    resolve_topic and enumerate_topics. Total over its inputs — raises nothing.
+    that interprets the membership relation identity. Total over its inputs — raises
+    nothing.
 
     Returns:
         A mapping with keys 'owner_kind', 'property', and 'route_table'.

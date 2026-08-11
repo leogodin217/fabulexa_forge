@@ -36,6 +36,29 @@ EVENT_CLASS_JOIN: int = 0
 EVENT_CLASS_LEAVE: int = 1
 
 
+def field_resolves(col_names: set[str], field: str) -> bool:
+    """Whether `field` resolves to an elem__ or member__ column on a table.
+
+    Shared by `resolve_membership_columns` (the column-order producer) and the
+    streaming engine's MembershipFieldResolvable business check, so the
+    resolution rule never drifts between the two call sites.
+
+    Args:
+        col_names: The membership table's sidecar column names.
+        field: The bare element-schema field name.
+
+    Returns:
+        True iff `field` resolves to a scalar `elem__<field>` column, or a
+        reference `member__<field>__kind` / `member__<field>__id` pair.
+    """
+    ref_kind_col = f"member__{field}__kind"
+    ref_id_col = f"member__{field}__id"
+    scalar_col = f"elem__{field}"
+    if ref_kind_col in col_names and ref_id_col in col_names:
+        return True
+    return scalar_col in col_names
+
+
 def resolve_membership_columns(
     sidecar: "Sidecar",
     owner_kind: str,
@@ -66,17 +89,11 @@ def resolve_membership_columns(
 
     # Validate each field resolves to elem__ or member__ columns on the table
     for field in fields_set:
-        ref_kind_col = f"member__{field}__kind"
-        ref_id_col = f"member__{field}__id"
-        scalar_col = f"elem__{field}"
-        if ref_kind_col in col_names and ref_id_col in col_names:
-            continue  # reference field
-        if scalar_col in col_names:
-            continue  # scalar field
-        raise ExportError(
-            f"membership field '{field}' on '{table_name}' resolves to neither"
-            f" elem__{field} nor member__{field}__kind / member__{field}__id"
-        )
+        if not field_resolves(col_names, field):
+            raise ExportError(
+                f"membership field '{field}' on '{table_name}' resolves to neither"
+                f" elem__{field} nor member__{field}__kind / member__{field}__id"
+            )
 
     # Build result in element-schema declaration order
     result: list[str] = ["record_id"]

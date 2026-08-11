@@ -1,0 +1,34 @@
+# Recipe: streaming / multi-sub-type-streams
+# ============================================================
+# A sub-typed kind splits into one topic per sub-type — by declaring one
+# stream per sub-type explicitly.
+#
+# `staff` is sub-typed in the emit: its `staff_type` discriminator domain in
+# enum_domains is non-empty (values nurse, physician), and every staff record
+# carries the matching `prop__staff_type` value. Sub-typing follows that
+# `<kind>_type` domain, independent of record_roles shape.
+#
+# There is no implicit per-sub-type split any more: a stream's `sub_types`
+# scopes its own population, and omitting it combines the FULL domain into
+# ONE stream (see combined-stream). To split staff into two topics, declare
+# two streams, each scoped to one sub-type — here nurse and physician.
+#
+# Fixture world (recipe emit):
+#   records__staff — s001 Nora Vega (staff_type=nurse), s002 Owen Reed (physician)
+#   Both are type-1 (no history) and never deactivated -> one `c` event each.
+#
+# Output — one topic per sub-type, global seq across the run:
+#   nurse.jsonl       c s001  after {name: Nora Vega}
+#   physician.jsonl   c s002  after {name: Owen Reed}
+
+content: state-changes
+
+streams:
+  - name: nurse
+    kind: staff
+    sub_types: [nurse]
+    properties: [name]
+  - name: physician
+    kind: staff
+    sub_types: [physician]
+    properties: [name]

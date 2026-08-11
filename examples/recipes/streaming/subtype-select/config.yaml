@@ -1,0 +1,30 @@
+# Recipe: streaming / subtype-select
+# ============================================================
+# Stream only a subset of a sub-typed kind's sub-types via `sub_types:`.
+#
+# `sub_types` lists the bare <kind>_type discriminator values to feed the
+# stream. Rows whose discriminator is not in the list are dropped BEFORE the
+# cross-kind merge — a faithful selection (never a fabrication), so the
+# global `seq` numbers only the events that are actually emitted. No stream
+# is declared for the dropped sub-type, so no topic materialises for it
+# either (not even a declared-but-empty one).
+#
+# Validation guards (Principle #7 — no invented values): `sub_types` on a
+# non-sub-typed kind, or naming a value outside the kind's declared
+# sub-types, is a load-time error.
+#
+# Fixture world (recipe emit):
+#   records__staff — s001 (nurse), s002 (physician). Selecting [nurse] keeps only
+#   s001; the physician sub-type is dropped entirely, so no physician.jsonl is
+#   written and no empty physician topic is declared.
+#
+# Output — only the selected sub-type's topic exists:
+#   nurse.jsonl   c s001  after {name: Nora Vega}
+
+content: state-changes
+
+streams:
+  - name: nurse
+    kind: staff
+    sub_types: [nurse]    # keep only the nurse sub-type; physician is dropped
+    properties: [name]

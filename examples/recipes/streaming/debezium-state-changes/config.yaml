@@ -31,7 +31,7 @@
 # `ts_ms` is deterministic — created p001 (+1 day) -> 2024-01-02T00:00:00Z ->
 # 1704153600000.
 #
-# Fixture world (recipe emit) — two kinds, default routing (one topic per kind):
+# Fixture world (recipe emit) — two kinds, one declared stream each:
 #   records__patient   — p001 status pending@1d -> active@2d -> discharged@3d (c+u)
 #                        p002 status pending@2d                                 (c)
 #   records__admission — a001 active                                          (c)
@@ -51,10 +51,12 @@ debezium:
     schema: public
     version: 2.5.0.Final
 
-kinds:
-  - kind: patient
+streams:
+  - name: patient
+    kind: patient
     properties: [status]          # type-2 status -> a `u` per change; full after-image
-  - kind: admission
+  - name: admission
+    kind: admission
     properties: []                # identity + lifecycle only -> the `d` before-image
 
 rebase:

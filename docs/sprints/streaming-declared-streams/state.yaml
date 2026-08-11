@@ -2,7 +2,7 @@ sprint: streaming-declared-streams
 parent_branch: ci_fixes_and_bugs
 baseline_sha: 41f46265eb9d12fa7e85a621708f3ce5ca13fb07
 started: 2026-08-10
-current_phase: 2
+current_phase: 3
 capabilities:
   - streaming: [declared-streams, payload-independent-events, key-election, init-mode-streaming]
   - derivations: [row-state-events-change-scope]
@@ -15,7 +15,7 @@ phases:
     name: "Fold change-scope split"
     demo: "docs/sprints/streaming-declared-streams/demos/phase_1_fold_split.py"
   2:
-    status: pending
+    status: complete
     name: "Declared-stream grammar, engine, and delivery rework"
     demo: "docs/sprints/streaming-declared-streams/demos/phase_2_declared_streams.py"
     steps:

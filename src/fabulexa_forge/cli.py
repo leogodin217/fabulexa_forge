@@ -753,17 +753,11 @@ def cmd_mixer(
                     " epoch-milliseconds"
                 )
 
-            if config.routing is not None:
-                routing = config.routing
-            else:
-                from fabulexa_forge.config.models import RoutingConfig
-
-                routing = RoutingConfig()
-            topic_set = build_topic_set(config, emit.sidecar)
+            topic_set = build_topic_set(config)
 
             fmt_lit = cast(Literal["jsonl", "debezium"], fmt)
             render_value = build_kafka_render_value(
-                emit, config, fmt_lit, anchor, routing, topic_set
+                emit, config, fmt_lit, anchor, topic_set
             )
 
             launch_transport = Transport(playing=cli_playing, speed=cli_speed)

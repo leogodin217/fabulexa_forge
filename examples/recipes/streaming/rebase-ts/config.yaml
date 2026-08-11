@@ -24,8 +24,9 @@
 
 content: state-changes
 
-kinds:
-  - kind: patient
+streams:
+  - name: patient
+    kind: patient
     properties: [status]
 
 rebase:

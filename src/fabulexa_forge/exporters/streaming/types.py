@@ -47,13 +47,15 @@ class StreamEvent:
     prop__<p> per selected property), or None on a delete. Every value is codec
     VARCHAR — a str, or null — so the JSONL render is total and byte-stable."""
     topic: str
-    """The resolved destination topic (Layer B output). The file sink writes
-    <topic>.jsonl; stdout interleaves all topics in seq order; Kafka (later)
-    uses it as the topic name."""
+    """The declaring stream's name — author-verbatim (Layer B is retired; a
+    stream's declared name is the topic). The file sink writes <topic>.jsonl;
+    stdout interleaves all topics in seq order; Kafka uses it as the topic
+    name."""
     route_table: str
-    """The leaf logical source table (Layer A): the sub-type value for a sub-typed
-    kind, the kind otherwise. Reported as Debezium source.table under
-    table_identity='source_table'."""
+    """The per-event leaf logical source table (Layer A): the sub-type value
+    for a sub-typed kind, the bare kind for a flat kind, or
+    <owner_kind>__<property> for a membership stream. Reported as Debezium
+    source.table under table_identity='source_table'."""
 
 
 @dataclass(frozen=True)

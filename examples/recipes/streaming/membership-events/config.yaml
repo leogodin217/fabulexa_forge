@@ -34,7 +34,7 @@
 
 content: membership-events
 
-memberships:
-  - owner_kind: queue
-    property: waiters
+streams:
+  - name: queue__waiters
+    membership: {kind: queue, property: waiters}
     fields: [patient, priority]   # bare element-schema names; the sidecar maps each
