@@ -935,6 +935,19 @@ _MEMBERSHIP_MEMBERS_COLS: list[dict[str, object]] = [
     {"name": "left_sim_time", "type": "BIGINT"},
 ]
 
+#: Election resolution requires the owner kind to carry a declared records
+#: table, even under the no-`keys` default (see test_engine.py's
+#: `_owner_records_table_spec`).
+_OWNER_RECORD_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+]
+
 
 def _build_membership_emit(
     tmp_path: Path,
@@ -966,6 +979,8 @@ def _build_membership_emit(
             f'INSERT INTO "membership__team__members" VALUES ({ph_m})', list(row)
         )
 
+    for owner_kind in ("queue", "team"):
+        conn.execute(_ddl(f"records__{owner_kind}", _OWNER_RECORD_COLS))
     conn.close()
 
     write_emit(
@@ -985,6 +1000,20 @@ def _build_membership_emit(
                 "team",
                 "members",
             ),
+            {
+                "name": "records__queue",
+                "category": "records",
+                "record_kind": "queue",
+                "columns": _OWNER_RECORD_COLS,
+                "rows": 0,
+            },
+            {
+                "name": "records__team",
+                "category": "records",
+                "record_kind": "team",
+                "columns": _OWNER_RECORD_COLS,
+                "rows": 0,
+            },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
     )

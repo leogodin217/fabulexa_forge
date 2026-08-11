@@ -1299,6 +1299,12 @@ def _build_membership_emit(tmp_path: Path) -> Path:
 
     cols_ddl2 = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _MEMBERS_COLS)
     conn.execute(f'CREATE TABLE "membership__team__members" ({cols_ddl2})')
+
+    # Election resolution requires the owner kind to carry a declared
+    # records table, even under the no-`keys` default.
+    owner_cols_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _RECORD_COLS)
+    for owner_kind in ("queue", "team"):
+        conn.execute(f'CREATE TABLE "records__{owner_kind}" ({owner_cols_ddl})')
     conn.close()
 
     _write_sidecar(
@@ -1314,6 +1320,20 @@ def _build_membership_emit(tmp_path: Path) -> Path:
             _membership_table_spec(
                 "membership__team__members", _MEMBERS_COLS, 0, "team", "members"
             ),
+            {
+                "name": "records__queue",
+                "category": "records",
+                "record_kind": "queue",
+                "columns": _RECORD_COLS,
+                "rows": 0,
+            },
+            {
+                "name": "records__team",
+                "category": "records",
+                "record_kind": "team",
+                "columns": _RECORD_COLS,
+                "rows": 0,
+            },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
     )

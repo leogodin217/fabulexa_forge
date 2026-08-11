@@ -89,6 +89,8 @@ def test_encode_pinned_matches_jsonl_render_pipeline() -> None:
         record_id = "r99"
         after: dict[str, object] | None = {"bed_count": "10"}
         topic = "ward"
+        key_column = "record_id"
+        key_value = "r99"
 
     event = _FakeEvent()
     obj = render_jsonl_object(event)  # type: ignore[arg-type]

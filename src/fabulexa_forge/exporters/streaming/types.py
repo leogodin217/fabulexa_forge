@@ -56,6 +56,16 @@ class StreamEvent:
     for a sub-typed kind, the bare kind for a flat kind, or
     <owner_kind>__<property> for a membership stream. Reported as Debezium
     source.table under table_identity='source_table'."""
+    key_column: str
+    """The message-key entry's column name: the elected surface's contract
+    column name for the event's population ('record_id' when no election
+    applies — the default rendering). For membership-events, the owner's
+    elected surface."""
+    key_value: str
+    """The codec-rendered elected key value (record_id verbatim; record_index
+    digit-form; presentation_id codec rendering). Equals record_id under the
+    default. Renderers build the key map as {key_column: key_value}; ordering
+    and merge still read record_id."""
 
 
 @dataclass(frozen=True)

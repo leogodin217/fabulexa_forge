@@ -717,3 +717,64 @@ def test_stream_config_kafka_unknown_field_raises() -> None:
                 kafka={"bootstrap_servers": "localhost:9092", "unknown": "val"}
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# StreamConfig.keys — key election grammar (parse-time only; emit-independent;
+# the shared _check_keys_well_formed rule is exercised in full against
+# ExportConfig in tests/config/test_models.py — this section covers the
+# StreamConfig wiring only)
+# ---------------------------------------------------------------------------
+
+
+def test_stream_config_keys_absent_is_none() -> None:
+    """Absent `keys` block -> keys is None (byte-identical no-election default)."""
+    cfg = StreamConfig.model_validate(_make_stream_config())
+    assert cfg.keys is None
+
+
+def test_stream_config_keys_empty_map_raises() -> None:
+    """`keys: {}` (present but empty) is rejected."""
+    with pytest.raises(ValidationError, match="must not be empty"):
+        StreamConfig.model_validate(_make_stream_config(keys={}))
+
+
+@pytest.mark.parametrize("surface", ["record_id", "record_index", "presentation_id"])
+def test_stream_config_keys_scalar_election_parses_for_each_surface(
+    surface: str,
+) -> None:
+    """A scalar per-kind election parses for each of the three surfaces."""
+    cfg = StreamConfig.model_validate(_make_stream_config(keys={"patient": surface}))
+    assert cfg.keys == {"patient": surface}
+
+
+def test_stream_config_keys_per_sub_type_map_parses() -> None:
+    """A per-sub-type map elects independently per sub-type."""
+    cfg = StreamConfig.model_validate(
+        _make_stream_config(
+            keys={"patient": {"alpha": "presentation_id", "beta": "record_index"}}
+        )
+    )
+    assert cfg.keys == {"patient": {"alpha": "presentation_id", "beta": "record_index"}}
+
+
+def test_stream_config_keys_empty_per_kind_map_raises() -> None:
+    """`keys: {patient: {}}` (empty per-kind map) is rejected."""
+    with pytest.raises(ValidationError, match="per-sub-type map must not be empty"):
+        StreamConfig.model_validate(_make_stream_config(keys={"patient": {}}))
+
+
+def test_stream_config_keys_non_surface_value_raises() -> None:
+    """An election value outside the KeySurface literal is refused."""
+    with pytest.raises(ValidationError):
+        StreamConfig.model_validate(_make_stream_config(keys={"patient": "uuid"}))
+
+
+def test_stream_config_keys_kind_existence_not_checked_at_parse_time() -> None:
+    """`keys` accepts a kind name Pydantic can't check against any emit — kind/
+    sub-type existence is a streaming-time gate (resolve_election), not a
+    parse-time error (mirrors ExportConfig.keys)."""
+    cfg = StreamConfig.model_validate(
+        _make_stream_config(keys={"no_such_kind": "presentation_id"})
+    )
+    assert cfg.keys == {"no_such_kind": "presentation_id"}

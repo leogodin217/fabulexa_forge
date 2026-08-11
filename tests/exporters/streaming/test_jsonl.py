@@ -33,10 +33,15 @@ def _make_event(
     event_sim_time: int = 1000,
     ts: str | int = "2026-01-01T00:00:00+00:00",
     after: dict[str, object] | None = None,
+    key_column: str = "record_id",
+    key_value: str | None = None,
 ) -> StreamEvent:
     """Build a StreamEvent for tests.
 
     Under default routing (no sub-typing), topic == route_table == kind.
+    key_column/key_value default to the byte-identical no-election rendering
+    ({"record_id": record_id}); pass an elected surface to exercise the key
+    map under election.
     """
     if after is None and op != "d":
         after = {"record_id": record_id, "prop__status": "active"}
@@ -51,6 +56,8 @@ def _make_event(
         after=after,
         topic=kind,
         route_table=kind,
+        key_column=key_column,
+        key_value=key_value if key_value is not None else record_id,
     )
 
 
@@ -69,10 +76,29 @@ class TestRenderJsonlObject:
         assert list(obj.keys()) == ["seq", "op", "ts", "kind", "key", "after"]
 
     def test_key_is_record_id_dict(self) -> None:
-        """key is always {"record_id": ...}, even when presentation_id is set."""
+        """key is {"record_id": ...} under the default (no-election) surface,
+        even when presentation_id is set (never the message key)."""
         event = _make_event(record_id="r42", presentation_id="pid-99")
         obj = render_jsonl_object(event)
         assert obj["key"] == {"record_id": "r42"}
+
+    def test_key_map_renders_elected_presentation_id_surface(self) -> None:
+        """A presentation_id-elected event's key map is {"presentation_id": ...}."""
+        event = _make_event(key_column="presentation_id", key_value="P_001")
+        obj = render_jsonl_object(event)
+        assert obj["key"] == {"presentation_id": "P_001"}
+
+    def test_key_map_renders_elected_record_index_surface(self) -> None:
+        """A record_index-elected event's key map is {"record_index": "<digits>"}."""
+        event = _make_event(key_column="record_index", key_value="7")
+        obj = render_jsonl_object(event)
+        assert obj["key"] == {"record_index": "7"}
+
+    def test_key_map_single_entry_regardless_of_surface(self) -> None:
+        """The key map always carries exactly one entry — the elected surface."""
+        event = _make_event(key_column="presentation_id", key_value="P_002")
+        obj = render_jsonl_object(event)
+        assert len(obj["key"]) == 1
 
     def test_after_is_row_map_on_create(self) -> None:
         """after carries the full row map on a 'c' event."""

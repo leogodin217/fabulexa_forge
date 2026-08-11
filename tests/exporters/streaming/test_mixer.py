@@ -59,6 +59,8 @@ def make_event(
         after={"id": f"r{seq}"},
         topic=topic,
         route_table="patient",
+        key_column="record_id",
+        key_value=f"r{seq}",
     )
 
 
@@ -1088,7 +1090,9 @@ def _build_single_membership_emit(
     property_name: str,
     mem_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal emit with one membership table."""
+    """Build a minimal emit with one membership table and its owner's minimal
+    records table — election resolution requires the owner kind to carry a
+    declared records table, even under the no-`keys` default."""
     table_name = f"membership__{owner_kind}__{property_name}"
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -1096,6 +1100,7 @@ def _build_single_membership_emit(
     ph = ", ".join("?" for _ in _MEMBERSHIP_BASIC_COLS)
     for row in mem_rows:
         conn.execute(f'INSERT INTO "{table_name}" VALUES ({ph})', list(row))
+    conn.execute(_ddl(f"records__{owner_kind}", _RECORD_COLS))
     conn.close()
 
     _write_sidecar(
@@ -1108,7 +1113,14 @@ def _build_single_membership_emit(
                 "rows": len(mem_rows),
                 "record_kind": owner_kind,
                 "property": property_name,
-            }
+            },
+            {
+                "name": f"records__{owner_kind}",
+                "category": "records",
+                "record_kind": owner_kind,
+                "columns": _RECORD_COLS,
+                "rows": 0,
+            },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
     )

@@ -21,11 +21,12 @@ if TYPE_CHECKING:
 def render_jsonl_object(event: "StreamEvent") -> dict[str, object]:
     """Render one event as the S1 plain-JSONL object.
 
-    Shape: {seq, op, ts, kind, key: {record_id}, after} — keys inserted in exactly
-    that order, which is the serialized order (write_jsonl_stream does not sort). The
-    key is always {record_id} — never presentation_id, even for a kind that carries a
-    surrogate (§ Keying). `after` is the reconstructed row map (all values
-    str-or-null, codec VARCHAR) on c/u and null on d.
+    Shape: {seq, op, ts, kind, key: {<key_column>: <key_value>}, after} — keys
+    inserted in exactly that order, which is the serialized order
+    (write_jsonl_stream does not sort). The key is the event's elected
+    surface — {record_id} under no election (§ Keying), or one entry keyed by
+    the elected surface's contract column name. `after` is the reconstructed
+    row map (all values str-or-null, codec VARCHAR) on c/u and null on d.
 
     Args:
         event: The event to render.
@@ -39,7 +40,7 @@ def render_jsonl_object(event: "StreamEvent") -> dict[str, object]:
         "op": event.op,
         "ts": event.ts,
         "kind": event.kind,
-        "key": {"record_id": event.record_id},
+        "key": {event.key_column: event.key_value},
         "after": event.after,
     }
 

@@ -43,6 +43,30 @@ KeySurface = Literal["record_id", "record_index", "presentation_id"]
 """The three identity surfaces a population or FK edge may elect."""
 
 
+def _check_keys_well_formed(
+    keys: "dict[str, KeySurface | dict[str, KeySurface]] | None",
+) -> None:
+    """Shared `keys` block shape check for ExportConfig and StreamConfig.
+
+    `keys` (when present) is non-empty; every per-kind map is non-empty.
+    Emit-dependent checks (kind/sub-type existence, registry declaration,
+    union safety) are deliberately not here — the config is emit-independent.
+
+    Args:
+        keys: The config `keys` block, verbatim.
+
+    Raises:
+        ValueError: `keys` is an empty map, or a per-kind map value is empty.
+    """
+    if keys is None:
+        return
+    if not keys:
+        raise ValueError("keys: must not be empty (omit the field instead)")
+    for kind, election in keys.items():
+        if isinstance(election, dict) and not election:
+            raise ValueError(f"keys.{kind}: per-sub-type map must not be empty")
+
+
 def _require_sql_identifier(value: str, context: str) -> None:
     """Reject an author-supplied name that is not a plain SQL identifier.
 
@@ -1186,12 +1210,7 @@ class ExportConfig(StrictBaseModel):
         Raises:
             ValueError: `keys` is an empty map, or a per-kind map value is empty.
         """
-        if self.keys is not None:
-            if not self.keys:
-                raise ValueError("keys: must not be empty (omit the field instead)")
-            for kind, election in self.keys.items():
-                if isinstance(election, dict) and not election:
-                    raise ValueError(f"keys.{kind}: per-sub-type map must not be empty")
+        _check_keys_well_formed(self.keys)
         return self
 
     @model_validator(mode="after")
@@ -1560,6 +1579,10 @@ class StreamConfig(StrictBaseModel):
     """The declared streams — required, non-empty, names unique. Replaces
     `kinds`, `memberships`, and `routing`. Every entry's shape must match
     `content`."""
+    keys: dict[str, KeySurface | dict[str, KeySurface]] | None = None
+    """Per-kind key election — the ExportConfig.keys grammar and
+    keys_well_formed validator, verbatim. Absent: record_id throughout (every
+    identity render site renders byte-identically to today)."""
     rebase: RebaseConfig | None = None
     """Optional wallclock origin/zone for event timestamps; falls back to the
     sidecar runtime anchor. The `= None` default is the one optional-block exception
@@ -1617,6 +1640,19 @@ class StreamConfig(StrictBaseModel):
             raise ValueError(
                 f"StreamConfig.streams contains duplicate stream names: {duplicates}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def keys_well_formed(self) -> Self:
+        """`keys` (when present) is non-empty; every per-kind map is non-empty.
+
+        Emit-dependent checks (kind/sub-type existence, registry declaration,
+        union safety) are deliberately not here — the config is emit-independent.
+
+        Raises:
+            ValueError: `keys` is an empty map, or a per-kind map value is empty.
+        """
+        _check_keys_well_formed(self.keys)
         return self
 
 

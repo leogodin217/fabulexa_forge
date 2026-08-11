@@ -226,10 +226,10 @@ def write_kafka_stream(
     the selected format), so this sink holds no jsonl/debezium knowledge. Pre-creates
     every topic in topic_set (1 partition, replication factor 1, idempotent) before the
     first produce, configures an ordered idempotent fully-acked producer, produces each
-    event keyed by encode_pinned({"record_id": event.record_id}) (UTF-8) with record
-    timestamp rebased_epoch_ms(event.event_sim_time, anchor), and flushes (blocks on all
-    acks) before returning. A topic that receives zero events still appears in
-    events_per_topic with count 0.
+    event keyed by encode_pinned({event.key_column: event.key_value}) (UTF-8) with
+    record timestamp rebased_epoch_ms(event.event_sim_time, anchor), and flushes
+    (blocks on all acks) before returning. A topic that receives zero events still
+    appears in events_per_topic with count 0.
 
     paced=True serves delivery incrementally as each event arrives (the pacer governs
     arrival); paced=False produces all events then flushes once. In both modes
@@ -292,7 +292,7 @@ def write_kafka_stream(
     for event in events:
         if delivery_errors:
             raise KafkaDeliveryError(f"Kafka delivery failure: {delivery_errors[0]}")
-        key_bytes = encode_pinned({"record_id": event.record_id}).encode("utf-8")
+        key_bytes = encode_pinned({event.key_column: event.key_value}).encode("utf-8")
         value_bytes = render_value(event)
         timestamp_ms = rebased_epoch_ms(event.event_sim_time, anchor)
 

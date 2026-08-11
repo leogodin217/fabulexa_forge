@@ -213,12 +213,12 @@ def _build_envelope(
     """Build the Debezium envelope payload in the pinned envelope key order.
 
     Op branches:
-      - 'd'              -> before={record_id}; after=null; op='d'.
+      - 'd'              -> before={<key_column>: <key_value>}; after=null; op='d'.
       - 'c' / 'u'        -> before=null; after=event.after; op=event.op.
       - 'join' / 'leave' -> before=null; after={'event': op, **event.after}; op='c'.
     """
     if event.op == "d":
-        before: dict[str, object] | None = {"record_id": event.record_id}
+        before: dict[str, object] | None = {event.key_column: event.key_value}
         after: dict[str, object] | None = None
         envelope_op: str = event.op
     elif event.op in ("join", "leave"):
@@ -252,13 +252,14 @@ def render_debezium_message(
 ) -> dict[str, object]:
     """Re-wrap one StreamEvent as a Debezium value message.
 
-    Builds the envelope: before (null, or {record_id} on a delete), after (the
-    event's after-image, or null on a delete), op, ts_ms, transaction (null), and
-    the source block (static identity + derived ts_ms / lsn=event.seq / sequence /
-    snapshot / txId / table).
+    Builds the envelope: before (null, or {<key_column>: <key_value>} on a
+    delete), after (the event's after-image, or null on a delete), op, ts_ms,
+    transaction (null), and the source block (static identity + derived
+    ts_ms / lsn=event.seq / sequence / snapshot / txId / table).
 
     Op branches, by event.op:
-      - 'd'              -> envelope op 'd'; before={record_id}; after=null.
+      - 'd'              -> envelope op 'd'; before={<key_column>: <key_value>};
+                            after=null.
       - 'c' / 'u'        -> envelope op = event.op; before=null; after=event.after.
       - 'join' / 'leave' -> envelope op 'c'; before=null;
                             after={'event': event.op, **event.after}.

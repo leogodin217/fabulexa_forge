@@ -2,7 +2,7 @@ sprint: streaming-declared-streams
 parent_branch: ci_fixes_and_bugs
 baseline_sha: 41f46265eb9d12fa7e85a621708f3ce5ca13fb07
 started: 2026-08-10
-current_phase: 3
+current_phase: 4
 capabilities:
   - streaming: [declared-streams, payload-independent-events, key-election, init-mode-streaming]
   - derivations: [row-state-events-change-scope]
@@ -49,7 +49,7 @@ phases:
           - "tests/recipes/test_stream_recipes.py"
           - "tests/recipes/test_demo_presets.py"
   3:
-    status: pending
+    status: complete
     name: "Message-key election"
     demo: "docs/sprints/streaming-declared-streams/demos/phase_3_key_election.py"
     steps:

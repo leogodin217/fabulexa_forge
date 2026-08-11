@@ -6,14 +6,16 @@ stream (not per kind/table): a kind-shaped stream's event set is
 payload-independent (change scope = the kind's full property set, projection
 = the stream's declared properties), and every stream's rows merge under a
 canonical key whose source-identity component is the declared stream name.
-Layer-direction invariant: imports derivations, config, reader, anchor, and
-errors — never writers or CLI.
+Also resolves the message-key election (`exporters.election`) and renders the
+elected key and after-image identity through it (design doc § Message-key
+election). Layer-direction invariant: imports derivations, config, reader,
+anchor, the mode-neutral election module, and errors — never writers or CLI.
 """
 
 from __future__ import annotations
 
 import heapq
-from typing import TYPE_CHECKING, Iterator, Sequence, cast
+from typing import TYPE_CHECKING, Iterator, Literal, Sequence, cast
 
 from fabulexa_forge.anchor import render_ts
 from fabulexa_forge.config.models import KindStream, MembershipStream
@@ -32,6 +34,14 @@ from fabulexa_forge.derivations.row_state_events import (
     fold_row_column_names as record_fold_row_column_names,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.election import (
+    _presentation_key_sql,
+    _record_index_sql,
+    check_edge_union_safety,
+    check_elected_key_unique,
+    check_identity_election,
+    resolve_election,
+)
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.exporters.streaming.routing import (
     membership_route_attributes,
@@ -43,7 +53,8 @@ from fabulexa_forge.reader.errors import TableNotFoundError
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import StreamConfig
+    from fabulexa_forge.config.models import KeySurface, StreamConfig
+    from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -174,26 +185,559 @@ def _validate_membership_stream(sidecar: "Sidecar", stream: "MembershipStream") 
                 )
 
 
-def _validate_streams(emit: "Emit", config: "StreamConfig") -> str:
+def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
+    """Every kind with a declared records table in the emit, sidecar table order.
+
+    The membership member-field edge gate's admitted kind universe (design
+    doc § Message-key election — "per member kind for a membership member
+    field").
+
+    Args:
+        sidecar: The open emit's sidecar view.
+
+    Returns:
+        Every `records__<kind>` table's bare kind name, sidecar order.
+    """
+    return tuple(
+        table.name[len("records__") :]
+        for table in sidecar.tables()
+        if table.name.startswith("records__")
+    )
+
+
+def _kind_reference_targets(
+    sidecar: "Sidecar",
+    kind: str,
+    properties: Sequence[str],
+) -> dict[str, str]:
+    """Selected reference-valued properties of a kind, mapped to their target kind.
+
+    A target absent from the emit (no declared `records__<target>` table)
+    is excluded — it carries no election and renders its default record_id
+    verbatim, the shared `check_edge_union_safety` caller contract.
+
+    Args:
+        sidecar: The open emit's sidecar view.
+        kind: The kind owning the properties.
+        properties: The stream's selected bare property names.
+
+    Returns:
+        Bare property name -> target kind, for every selected property whose
+        `prop__<p>` column declares a `references` target present in the emit.
+    """
+    cols = sidecar.columns(f"records__{kind}")
+    by_name = {c.name: c.references for c in cols if c.name.startswith("prop__")}
+    known_kinds = frozenset(_known_records_kinds(sidecar))
+    targets: dict[str, str] = {}
+    for prop in properties:
+        target = by_name.get(f"prop__{prop}")
+        if target is not None and target in known_kinds:
+            targets[prop] = target
+    return targets
+
+
+def _membership_reference_fields_selected(
+    sidecar: "Sidecar",
+    owner_kind: str,
+    property_name: str,
+    fields: Sequence[str],
+) -> frozenset[str]:
+    """Selected membership fields backed by a member__<f>__kind/__id pair.
+
+    Args:
+        sidecar: The open emit's sidecar view.
+        owner_kind: The membership table's owner kind.
+        property_name: The membership property name.
+        fields: The stream's selected bare field names.
+
+    Returns:
+        The subset of `fields` that are reference-valued.
+    """
+    table_name = f"membership__{owner_kind}__{property_name}"
+    col_names = {c.name for c in sidecar.columns(table_name)}
+    return frozenset(
+        field
+        for field in fields
+        if f"member__{field}__kind" in col_names and f"member__{field}__id" in col_names
+    )
+
+
+def _resolve_kind_stream_surface(
+    sidecar: "Sidecar",
+    election: "Election",
+    stream: "KindStream",
+) -> "KeySurface":
+    """Gate and resolve one kind-shaped stream's uniform elected surface.
+
+    The spanned populations are the stream's declared `sub_types`, or the
+    kind's full declared domain under the shorthand (design doc § Message-key
+    election). A flat kind needs no gate — one population, trivially uniform.
+
+    Args:
+        sidecar: The open emit's sidecar view.
+        election: The resolved election.
+        stream: The kind-shaped stream declaration.
+
+    Returns:
+        The stream's uniform elected surface ('record_id' under no election).
+
+    Raises:
+        ElectionMixedIdentity: The spanned populations elect differing surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election whose spanned
+            key spaces contain a pairwise-unsafe pair.
+    """
+    domain = sidecar.subtype_values(stream.kind)
+    if not domain:
+        return election.surface_for(stream.kind, None)
+    populations = tuple(stream.sub_types) if stream.sub_types is not None else domain
+    check_identity_election(
+        election, stream.kind, populations, f"stream '{stream.name}'"
+    )
+    return election.surface_for(stream.kind, populations[0])
+
+
+def _resolve_membership_stream_surface(
+    sidecar: "Sidecar",
+    election: "Election",
+    stream: "MembershipStream",
+) -> "KeySurface":
+    """Gate and resolve one membership-shaped stream's owner elected surface.
+
+    The owner kind's full declared domain always spans a membership stream —
+    its owners span it (design doc § Message-key election).
+
+    Args:
+        sidecar: The open emit's sidecar view.
+        election: The resolved election.
+        stream: The membership-shaped stream declaration.
+
+    Returns:
+        The owner kind's uniform elected surface ('record_id' under no
+        election).
+
+    Raises:
+        ElectionMixedIdentity: The owner kind's full domain elects differing
+            surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election whose owner
+            key spaces contain a pairwise-unsafe pair.
+    """
+    owner_kind = stream.membership.kind
+    domain = sidecar.subtype_values(owner_kind)
+    if not domain:
+        return election.surface_for(owner_kind, None)
+    check_identity_election(election, owner_kind, domain, f"stream '{stream.name}'")
+    return election.surface_for(owner_kind, domain[0])
+
+
+def _gate_kind_stream_reference_edges(
+    sidecar: "Sidecar",
+    election: "Election",
+    stream: "KindStream",
+) -> None:
+    """Run the edge union-safety gate over one kind-shaped stream's reference props.
+
+    Streaming's admitted set for a reference column is the target kind's full
+    declared domain (design doc § Message-key election). `_kind_reference_
+    targets` already restricts to targets present in the emit, so every
+    target here resolves through `election`.
+
+    Args:
+        sidecar: The open emit's sidecar view.
+        election: The resolved election.
+        stream: The kind-shaped stream declaration.
+
+    Raises:
+        ElectionUnionUnsafe: An admitted target domain's resolved key spaces
+            contain a pairwise-unsafe pair.
+    """
+    targets = _kind_reference_targets(sidecar, stream.kind, stream.properties)
+    for prop, target_kind in targets.items():
+        domain = sidecar.subtype_values(target_kind)
+        check_edge_union_safety(
+            election, target_kind, domain, f"stream '{stream.name}'.prop__{prop}"
+        )
+
+
+def _gate_membership_stream_edges(
+    sidecar: "Sidecar",
+    election: "Election",
+    stream: "MembershipStream",
+) -> None:
+    """Run the edge union-safety gate over one membership stream's reference fields.
+
+    Streaming's admitted set for a member field is every known records kind
+    (design doc § Message-key election — "per member kind"), each gated
+    independently over its own domain.
+
+    Args:
+        sidecar: The open emit's sidecar view.
+        election: The resolved election.
+        stream: The membership-shaped stream declaration.
+
+    Raises:
+        ElectionUnionUnsafe: Some admitted kind's own domain's resolved key
+            spaces contain a pairwise-unsafe pair.
+    """
+    reference_fields = _membership_reference_fields_selected(
+        sidecar, stream.membership.kind, stream.membership.property, stream.fields
+    )
+    if not reference_fields:
+        return
+    for field in reference_fields:
+        for kind in _known_records_kinds(sidecar):
+            domain = sidecar.subtype_values(kind)
+            check_edge_union_safety(
+                election,
+                kind,
+                domain,
+                f"stream '{stream.name}'.member__{field} (member kind '{kind}')",
+            )
+
+
+def resolve_stream_surfaces(
+    sidecar: "Sidecar",
+    election: "Election",
+    config: "StreamConfig",
+) -> dict[str, "KeySurface"]:
+    """Gate and resolve every declared stream's uniform elected surface.
+
+    Runs the identity-uniformity gate (ElectionMixedIdentity), the
+    presentation_id union-safety gate (ElectionUnionUnsafe) over each
+    stream's own spanned populations, and the edge union-safety gate over
+    every stream's reference / member-field columns. A pure function of
+    (sidecar, election, config) — called by the engine's own eager
+    validation pass and again by the driver's Debezium value-schema builder;
+    both computations are the same pure function, so they cannot disagree
+    (mirrors `exporters.base.engine`'s recompute-not-thread posture).
+
+    Args:
+        sidecar: The open emit's sidecar view.
+        election: The resolved election.
+        config: The validated streaming configuration.
+
+    Returns:
+        Declaring stream name -> the stream's uniform elected surface.
+
+    Raises:
+        ElectionMixedIdentity: A stream's spanned populations elect differing
+            surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election's spanned key
+            spaces, or an edge's admitted target key spaces, contain a
+            pairwise-unsafe pair.
+    """
+    surfaces: dict[str, "KeySurface"] = {}
+    for stream in config.streams:
+        if isinstance(stream, KindStream):
+            surfaces[stream.name] = _resolve_kind_stream_surface(
+                sidecar, election, stream
+            )
+            _gate_kind_stream_reference_edges(sidecar, election, stream)
+        else:
+            surfaces[stream.name] = _resolve_membership_stream_surface(
+                sidecar, election, stream
+            )
+            _gate_membership_stream_edges(sidecar, election, stream)
+    return surfaces
+
+
+def build_elected_identity_index(
+    emit: "Emit",
+    fork_path: str,
+    kind: str,
+    surface: "Literal['record_index', 'presentation_id']",
+) -> dict[str, str]:
+    """record_id -> codec-rendered elected value for one kind, end-of-tape.
+
+    Composes the record-index or presentation-key derivation at the
+    end-of-tape entry point and runs the elected-key uniqueness guard over
+    the drawn rows: rows == DISTINCT record_id == DISTINCT elected value,
+    elected value non-NULL. The one data-touching election check
+    (key-election.md § The elected-key uniqueness guard).
+
+    Args:
+        emit: The open emit.
+        fork_path: The sole branch, from `require_single_branch`.
+        kind: The records kind.
+        surface: 'record_index' or 'presentation_id' (a 'record_id' election
+            composes no relation and never calls this).
+
+    Returns:
+        The identity map, every value a non-null str.
+
+    Raises:
+        ElectedKeyDuplicate: The guard failed; names the kind and the surface.
+    """
+    sidecar = emit.sidecar
+    relation_sql = (
+        _record_index_sql(sidecar, fork_path, kind, None)
+        if surface == "record_index"
+        else _presentation_key_sql(sidecar, fork_path, kind, None)
+    )
+    check_elected_key_unique(emit, relation_sql, surface, None, f"kind '{kind}'")
+    rows = emit.query(relation_sql, ())
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
+def elect_after_image_columns(
+    columns: list[str],
+    surface: "KeySurface",
+) -> list[str]:
+    """The elected after-image column list — the single re-key/absorb rule.
+
+    Transforms a resolve_stream_columns order for one stream under its
+    population's elected surface: the leading 'record_id' entry is re-keyed
+    to the surface's contract column name; under 'presentation_id' the
+    standalone 'presentation_id' entry is absorbed (it IS the identity —
+    emitting both would duplicate a column); under 'record_id' /
+    'record_index' the surrogate ships verbatim when present. Both the
+    Debezium value-schema builder and the after-image rendering consume this
+    one output, so the declared schema and the rendered rows stay the same
+    list by construction.
+
+    Args:
+        columns: The resolve_stream_columns order for the stream.
+        surface: The stream's elected surface.
+
+    Returns:
+        The rendered after-image column order.
+    """
+    if surface == "record_id":
+        return list(columns)
+    renamed = [surface if c == "record_id" else c for c in columns]
+    if surface != "presentation_id":
+        return renamed
+    result: list[str] = []
+    absorbed = False
+    for c in renamed:
+        if c == "presentation_id":
+            if absorbed:
+                continue
+            absorbed = True
+        result.append(c)
+    return result
+
+
+def _rekey_after_image(
+    after: dict[str, object] | None,
+    surface: "KeySurface",
+    elected_identity: str,
+) -> dict[str, object] | None:
+    """Re-key one after-image's leading identity entry to its elected surface.
+
+    Renames the 'record_id' entry to the surface's contract column name and
+    substitutes the elected value; under 'presentation_id' the standalone
+    'presentation_id' entry is absorbed — the per-row analog of
+    `elect_after_image_columns`, applied to a rendered row instead of a
+    column-name list. A no-op under 'record_id', or when `after` is None (a
+    delete keeps after=None regardless of election).
+
+    Args:
+        after: The unrekeyed after-image dict (record_id verbatim), or None.
+        surface: The population's elected surface.
+        elected_identity: The record's codec-rendered elected value.
+
+    Returns:
+        The re-keyed after-image, or `after` unchanged when inapplicable.
+    """
+    if after is None or surface == "record_id":
+        return after
+    result: dict[str, object] = {}
+    for key, value in after.items():
+        if key == "record_id":
+            result[surface] = elected_identity
+        elif key == "presentation_id" and surface == "presentation_id":
+            continue
+        else:
+            result[key] = value
+    return result
+
+
+def _resolve_target_identity(
+    emit: "Emit",
+    fork_path: str,
+    sidecar: "Sidecar",
+    election: "Election",
+    target_kind: str,
+    record_id: str,
+    identity_index_cache: dict[tuple[str, str], dict[str, str]],
+    subtype_index_cache: dict[str, dict[str, str]],
+) -> str:
+    """Translate one reference value through its target kind's elected surface.
+
+    Resolves the target row's own population (a flat kind's single population,
+    or a sub-typed kind's population via the records-spine discriminator —
+    the shipped per-row mixed-election rule), then renders that population's
+    elected surface value. Falls through to `record_id` verbatim when the
+    resolved surface is 'record_id', or when a population's identity index has
+    no entry for the value (a dangling reference — never fabricated).
+
+    Args:
+        emit: The open emit.
+        fork_path: The sole branch, from `require_single_branch`.
+        sidecar: The open emit's sidecar view.
+        election: The resolved election.
+        target_kind: The reference's target kind.
+        record_id: The raw target record_id to translate.
+        identity_index_cache: Mutable (kind, surface) -> identity map cache,
+            shared across a stream's render pass.
+        subtype_index_cache: Mutable kind -> (record_id -> sub_type) cache,
+            shared across a stream's render pass.
+
+    Returns:
+        The target's elected-surface value for `record_id`.
+    """
+    domain = sidecar.subtype_values(target_kind)
+    if not domain:
+        surface = election.surface_for(target_kind, None)
+    else:
+        if target_kind not in subtype_index_cache:
+            subtype_index_cache[target_kind] = resolve_subtype_index(emit, target_kind)
+        sub_type = subtype_index_cache[target_kind].get(record_id)
+        surface = election.surface_for(target_kind, sub_type)
+    if surface == "record_id":
+        return record_id
+    cache_key = (target_kind, surface)
+    if cache_key not in identity_index_cache:
+        identity_index_cache[cache_key] = build_elected_identity_index(
+            emit, fork_path, target_kind, surface
+        )
+    return identity_index_cache[cache_key].get(record_id, record_id)
+
+
+def _translate_reference_columns(
+    after: dict[str, object] | None,
+    reference_targets: dict[str, str],
+    emit: "Emit",
+    fork_path: str,
+    sidecar: "Sidecar",
+    election: "Election",
+    identity_index_cache: dict[tuple[str, str], dict[str, str]],
+    subtype_index_cache: dict[str, dict[str, str]],
+) -> dict[str, object] | None:
+    """Translate every reference-valued after-image entry to its target's surface.
+
+    Args:
+        after: The after-image dict (post-identity-rekey), or None.
+        reference_targets: `prop__<p>` bare property name -> target kind, for
+            the stream's selected reference properties.
+        emit: The open emit.
+        fork_path: The sole branch.
+        sidecar: The open emit's sidecar view.
+        election: The resolved election.
+        identity_index_cache: Mutable (kind, surface) -> identity map cache.
+        subtype_index_cache: Mutable kind -> (record_id -> sub_type) cache.
+
+    Returns:
+        `after` with every reference-valued entry translated; None unchanged;
+        `after` unchanged when `reference_targets` is empty. A NULL reference
+        value is never translated (stays NULL).
+    """
+    if after is None or not reference_targets:
+        return after
+    result = dict(after)
+    for prop, target_kind in reference_targets.items():
+        column = f"prop__{prop}"
+        raw_value = result.get(column)
+        if raw_value is not None:
+            result[column] = _resolve_target_identity(
+                emit,
+                fork_path,
+                sidecar,
+                election,
+                target_kind,
+                str(raw_value),
+                identity_index_cache,
+                subtype_index_cache,
+            )
+    return result
+
+
+def _translate_membership_member_fields(
+    after: dict[str, object],
+    reference_fields: frozenset[str],
+    emit: "Emit",
+    fork_path: str,
+    sidecar: "Sidecar",
+    election: "Election",
+    identity_index_cache: dict[tuple[str, str], dict[str, str]],
+    subtype_index_cache: dict[str, dict[str, str]],
+) -> dict[str, object]:
+    """Translate every membership reference field to its member row's kind's surface.
+
+    The target kind varies per row: it is read from the sibling
+    `member__<f>__kind` entry the same after-image already carries (the
+    junction-member analog of `_translate_reference_columns`).
+
+    Args:
+        after: The after-image dict (post owner-identity-rekey).
+        reference_fields: The stream's selected reference-valued field names.
+        emit: The open emit.
+        fork_path: The sole branch.
+        sidecar: The open emit's sidecar view.
+        election: The resolved election.
+        identity_index_cache: Mutable (kind, surface) -> identity map cache.
+        subtype_index_cache: Mutable kind -> (record_id -> sub_type) cache.
+
+    Returns:
+        `after` with every reference field's `member__<f>__id` entry
+        translated; unchanged when `reference_fields` is empty.
+    """
+    if not reference_fields:
+        return after
+    result = dict(after)
+    for field in reference_fields:
+        kind_col = f"member__{field}__kind"
+        id_col = f"member__{field}__id"
+        target_kind = result.get(kind_col)
+        raw_id = result.get(id_col)
+        if target_kind is not None and raw_id is not None:
+            result[id_col] = _resolve_target_identity(
+                emit,
+                fork_path,
+                sidecar,
+                election,
+                str(target_kind),
+                str(raw_id),
+                identity_index_cache,
+                subtype_index_cache,
+            )
+    return result
+
+
+def _validate_streams(
+    emit: "Emit", config: "StreamConfig"
+) -> tuple[str, "Election", dict[str, "KeySurface"]]:
     """Run the eager business-rule validation pass over every declared stream.
 
     Checks the single-branch guard, then each stream's rules: kind-shaped
     streams run StreamKindResolvable / StreamSubTypesRequireSubtyping /
     StreamSubTypesDeclared / StreamPropertyResolvable / StreamPropertySliceOnly;
     membership-shaped streams run MembershipResolvable /
-    MembershipFieldResolvable.
+    MembershipFieldResolvable. Then resolves the election and runs the
+    identity and edge gates (`resolve_stream_surfaces`).
 
     Args:
         emit: The open emit (reader + connection).
         config: The validated streaming configuration.
 
     Returns:
-        The fork_path (from require_single_branch).
+        (fork_path, election, surface_by_stream) — the resolved fork_path,
+        the resolved election, and every stream's gated uniform surface.
 
     Raises:
         ExportError: The single-branch guard fails, or any per-stream business
             rule fails — message leading with the offending stream's name.
         TemporalClassUnavailableError: Propagated from the slice_only check.
+        ElectionKindUnknown: A `keys` entry names no declared records kind.
+        ElectionSubTypeUnknown: A `keys` map key is outside the kind's
+            discriminator domain, or addresses a flat kind.
+        ElectionPresentationUndeclared: A population elects presentation_id
+            without a registry entry.
+        ElectionMixedIdentity: A stream's spanned populations elect differing
+            surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election's spanned key
+            spaces, or an edge's admitted target key spaces, contain a
+            pairwise-unsafe pair.
     """
     fork_path = require_single_branch(emit.sidecar)
     sidecar = emit.sidecar
@@ -202,7 +746,9 @@ def _validate_streams(emit: "Emit", config: "StreamConfig") -> str:
             _validate_kind_stream(sidecar, stream)
         else:
             _validate_membership_stream(sidecar, stream)
-    return fork_path
+    election = resolve_election(sidecar, config.keys)
+    surface_by_stream = resolve_stream_surfaces(sidecar, election, config)
+    return fork_path, election, surface_by_stream
 
 
 def _is_kind_subtyped(kind: str, sidecar: "Sidecar") -> bool:
@@ -384,6 +930,8 @@ def _iter_kind_streams_inner(
     fork_path: str,
     sidecar: "Sidecar",
     subtype_indexes: dict[str, dict[str, str]],
+    election: "Election",
+    surface_by_stream: dict[str, "KeySurface"],
 ) -> Iterator[StreamEvent]:
     """Materialize one fold per kind-shaped stream, merge, and yield StreamEvents.
 
@@ -392,7 +940,9 @@ def _iter_kind_streams_inner(
     change_scope = the kind's full property set (payload-independent event
     set) and projection = the stream's declared properties; a stream that
     scopes an explicit sub_types subset is filtered post-fold via the
-    discriminator index.
+    discriminator index. Renders the elected key and after-image identity
+    through `surface_by_stream` and `election` (§ Message-key election);
+    absent `keys`, every surface is 'record_id' and rendering is unchanged.
 
     Args:
         emit: The open emit (reader + connection).
@@ -400,7 +950,10 @@ def _iter_kind_streams_inner(
         anchor: The resolved effective anchor, or None for raw-ns timestamps.
         fork_path: The sole branch fork_path (from require_single_branch).
         sidecar: The open emit's sidecar view.
-        subtype_indexes: Per-sub-typed-kind record_id -> sub_type indexes.
+        subtype_indexes: Per-sub-typed-kind record_id -> sub_type indexes;
+            reused and extended as the reference-target identity cache.
+        election: The resolved election.
+        surface_by_stream: Every stream's gated uniform elected surface.
 
     Returns:
         An iterator of StreamEvent in global seq order.
@@ -408,6 +961,8 @@ def _iter_kind_streams_inner(
     stream_rows: list[list[_MergeRow]] = []
     col_names_by_stream: dict[str, list[str]] = {}
     kind_by_stream: dict[str, str] = {}
+    reference_targets_by_stream: dict[str, dict[str, str]] = {}
+    identity_index_cache: dict[tuple[str, str], dict[str, str]] = {}
 
     for stream in config.streams:
         assert isinstance(stream, KindStream)
@@ -428,6 +983,9 @@ def _iter_kind_streams_inner(
             sidecar, kind, properties
         )
         kind_by_stream[stream.name] = kind
+        reference_targets_by_stream[stream.name] = _kind_reference_targets(
+            sidecar, kind, stream.properties
+        )
 
     seq = 0
     for _merge_key, row, stream_name in heapq.merge(*stream_rows, key=lambda x: x[0]):
@@ -447,7 +1005,29 @@ def _iter_kind_streams_inner(
             raw_pid = row[pid_idx]
             presentation_id = str(raw_pid) if raw_pid is not None else None
 
+        surface = surface_by_stream[stream_name]
+        if surface == "record_id":
+            key_value = record_id
+        else:
+            cache_key = (kind, surface)
+            if cache_key not in identity_index_cache:
+                identity_index_cache[cache_key] = build_elected_identity_index(
+                    emit, fork_path, kind, surface
+                )
+            key_value = identity_index_cache[cache_key].get(record_id, record_id)
+
         after = _build_after_image(row, col_names, op)
+        after = _rekey_after_image(after, surface, key_value)
+        after = _translate_reference_columns(
+            after,
+            reference_targets_by_stream[stream_name],
+            emit,
+            fork_path,
+            sidecar,
+            election,
+            identity_index_cache,
+            subtype_indexes,
+        )
         ts = render_ts(event_sim_time, anchor)
 
         sub_type: str | None = None
@@ -467,6 +1047,8 @@ def _iter_kind_streams_inner(
             after=after,
             topic=stream_name,
             route_table=attrs["route_table"],
+            key_column=surface,
+            key_value=key_value,
         )
 
 
@@ -475,17 +1057,27 @@ def _iter_membership_streams_inner(
     config: "StreamConfig",
     anchor: "EffectiveAnchor | None",
     fork_path: str,
+    sidecar: "Sidecar",
+    election: "Election",
+    surface_by_stream: dict[str, "KeySurface"],
 ) -> Iterator[StreamEvent]:
     """Materialize one fold per membership-shaped stream, merge, and yield events.
 
     Called only after the eager validation pass in iter_stream_events has
-    succeeded, for content='membership-events'.
+    succeeded, for content='membership-events'. Renders the owner's elected
+    key and after-image identity, and translates every reference-valued
+    member field to its member row's own kind's elected surface, through
+    `surface_by_stream` and `election` (§ Message-key election); absent
+    `keys`, every surface is 'record_id' and rendering is unchanged.
 
     Args:
         emit: The open emit (reader + connection).
         config: The validated streaming configuration.
         anchor: The resolved effective anchor, or None for raw-ns timestamps.
         fork_path: The sole branch fork_path (from require_single_branch).
+        sidecar: The open emit's sidecar view.
+        election: The resolved election.
+        surface_by_stream: Every stream's gated uniform owner elected surface.
 
     Returns:
         An iterator of StreamEvent in global seq order.
@@ -494,6 +1086,9 @@ def _iter_membership_streams_inner(
     col_names_by_stream: dict[str, list[str]] = {}
     owner_kind_by_stream: dict[str, str] = {}
     property_by_stream: dict[str, str] = {}
+    reference_fields_by_stream: dict[str, frozenset[str]] = {}
+    identity_index_cache: dict[tuple[str, str], dict[str, str]] = {}
+    subtype_index_cache: dict[str, dict[str, str]] = {}
 
     for stream in config.streams:
         assert isinstance(stream, MembershipStream)
@@ -501,16 +1096,19 @@ def _iter_membership_streams_inner(
         property_name = stream.membership.property
 
         sql = build_membership_events_sql(
-            emit.sidecar, fork_path, owner_kind, property_name, stream.fields
+            sidecar, fork_path, owner_kind, property_name, stream.fields
         )
         rows = emit.query(sql, ())
 
         stream_rows.append(_rows_to_keyed(rows, stream.name))
         col_names_by_stream[stream.name] = membership_fold_row_column_names(
-            emit.sidecar, owner_kind, property_name, stream.fields
+            sidecar, owner_kind, property_name, stream.fields
         )
         owner_kind_by_stream[stream.name] = owner_kind
         property_by_stream[stream.name] = property_name
+        reference_fields_by_stream[stream.name] = _membership_reference_fields_selected(
+            sidecar, owner_kind, property_name, stream.fields
+        )
 
     seq = 0
     for _merge_key, row, stream_name in heapq.merge(*stream_rows, key=lambda x: x[0]):
@@ -523,7 +1121,30 @@ def _iter_membership_streams_inner(
         property_name = property_by_stream[stream_name]
 
         col_names = col_names_by_stream[stream_name]
+
+        surface = surface_by_stream[stream_name]
+        if surface == "record_id":
+            key_value = record_id
+        else:
+            cache_key = (owner_kind, surface)
+            if cache_key not in identity_index_cache:
+                identity_index_cache[cache_key] = build_elected_identity_index(
+                    emit, fork_path, owner_kind, surface
+                )
+            key_value = identity_index_cache[cache_key].get(record_id, record_id)
+
         after = _build_membership_after_image(row, col_names)
+        after = cast("dict[str, object]", _rekey_after_image(after, surface, key_value))
+        after = _translate_membership_member_fields(
+            after,
+            reference_fields_by_stream[stream_name],
+            emit,
+            fork_path,
+            sidecar,
+            election,
+            identity_index_cache,
+            subtype_index_cache,
+        )
         ts = render_ts(event_sim_time, anchor)
 
         attrs = membership_route_attributes(owner_kind, property_name)
@@ -539,6 +1160,8 @@ def _iter_membership_streams_inner(
             after=after,
             topic=stream_name,
             route_table=attrs["route_table"],
+            key_column=surface,
+            key_value=key_value,
         )
 
 
@@ -559,7 +1182,8 @@ def iter_stream_events(
     ts, stamps topic = the declaring stream's name and route_table = the
     per-event leaf, and yields StreamEvents.
 
-    See § Ordering and `seq`, § Timestamp rendering, § Business Rules.
+    See § Ordering and `seq`, § Timestamp rendering, § Business Rules,
+    § Message-key election.
 
     Args:
         emit: The open emit (reader + connection).
@@ -574,15 +1198,35 @@ def iter_stream_events(
             offending stream's name. Raised at call time, before the first
             next().
         TemporalClassUnavailableError: Propagated from the slice_only check.
+        ElectionKindUnknown: A `keys` entry names no declared records kind.
+        ElectionSubTypeUnknown: A `keys` map key is outside the kind's
+            discriminator domain, or addresses a flat kind.
+        ElectionPresentationUndeclared: A population elects presentation_id
+            without a registry entry.
+        ElectionMixedIdentity: A stream's spanned populations elect differing
+            surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election's spanned key
+            spaces, or an edge's admitted target key spaces, contain a
+            pairwise-unsafe pair.
     """
-    fork_path = _validate_streams(emit, config)
+    fork_path, election, surface_by_stream = _validate_streams(emit, config)
+    sidecar = emit.sidecar
 
     if config.content == "membership-events":
-        return _iter_membership_streams_inner(emit, config, anchor, fork_path)
+        return _iter_membership_streams_inner(
+            emit, config, anchor, fork_path, sidecar, election, surface_by_stream
+        )
 
-    subtype_indexes = _build_subtype_indexes(emit, config, emit.sidecar)
+    subtype_indexes = _build_subtype_indexes(emit, config, sidecar)
     return _iter_kind_streams_inner(
-        emit, config, anchor, fork_path, emit.sidecar, subtype_indexes
+        emit,
+        config,
+        anchor,
+        fork_path,
+        sidecar,
+        subtype_indexes,
+        election,
+        surface_by_stream,
     )
 
 

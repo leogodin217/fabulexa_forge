@@ -88,8 +88,15 @@ def _make_event(
     after: dict[str, object] | None = None,
     topic: str | None = None,
     route_table: str | None = None,
+    key_column: str = "record_id",
+    key_value: str | None = None,
 ) -> StreamEvent:
-    """Build a StreamEvent."""
+    """Build a StreamEvent.
+
+    key_column/key_value default to the byte-identical no-election rendering
+    ({"record_id": record_id}); pass an elected surface to exercise the
+    tombstone/key-only-before-image rendering under election.
+    """
     if after is None and op != "d":
         after = {"record_id": record_id, "prop__status": "active"}
     return StreamEvent(
@@ -103,6 +110,8 @@ def _make_event(
         after=after,
         topic=topic if topic is not None else kind,
         route_table=route_table if route_table is not None else kind,
+        key_column=key_column,
+        key_value=key_value if key_value is not None else record_id,
     )
 
 
@@ -115,6 +124,8 @@ def _make_membership_event(
     after: dict[str, object] | None = None,
     topic: str | None = None,
     route_table: str | None = None,
+    key_column: str = "record_id",
+    key_value: str | None = None,
 ) -> StreamEvent:
     """Build a membership StreamEvent with op in {'join', 'leave'}."""
     if after is None:
@@ -136,6 +147,8 @@ def _make_membership_event(
         after=after,
         topic=resolved_topic,
         route_table=resolved_route,
+        key_column=key_column,
+        key_value=key_value if key_value is not None else record_id,
     )
 
 
@@ -508,6 +521,82 @@ class TestRenderDebeziumMessage:
             "lsn",
         ]
         assert list(parsed.keys()) == expected
+
+
+# ---------------------------------------------------------------------------
+# render_debezium_message under key election: tombstone / before key map
+# ---------------------------------------------------------------------------
+
+
+class TestRenderDebeziumMessageElectedKey:
+    """A 'd' event's before is the elected key map {key_column: key_value};
+    c/u events never carry a before key map, elected or not."""
+
+    def setup_method(self) -> None:
+        self.identity = _make_identity()
+        self.anchor = make_anchor()
+
+    def _render(
+        self,
+        event: StreamEvent,
+        value_schema: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        ts_ms = rebased_epoch_ms(event.event_sim_time, self.anchor)
+        return render_debezium_message(
+            event, ts_ms, self.identity, event.kind, value_schema
+        )
+
+    def test_tombstone_before_is_elected_presentation_id_key_map(self) -> None:
+        """A presentation_id-elected 'd' event's before is {"presentation_id": ...}."""
+        event = _make_event(
+            op="d",
+            record_id="r1",
+            after=None,
+            key_column="presentation_id",
+            key_value="P_001",
+        )
+        payload = self._render(event)
+        assert payload["before"] == {"presentation_id": "P_001"}
+        assert payload["after"] is None
+
+    def test_tombstone_before_is_elected_record_index_key_map(self) -> None:
+        """A record_index-elected 'd' event's before is {"record_index": "<digits>"}."""
+        event = _make_event(
+            op="d", record_id="r1", after=None, key_column="record_index", key_value="3"
+        )
+        payload = self._render(event)
+        assert payload["before"] == {"record_index": "3"}
+
+    def test_tombstone_before_wrapped_and_bare_agree(self) -> None:
+        """The elected before key map is identical wrapped and bare."""
+        event = _make_event(
+            op="d",
+            record_id="r1",
+            after=None,
+            key_column="presentation_id",
+            key_value="P_002",
+        )
+        ts_ms = rebased_epoch_ms(event.event_sim_time, self.anchor)
+        schema = build_debezium_value_schema(
+            "actor", ["presentation_id", "prop__status"], "fabulexa", "postgresql"
+        )
+        bare = render_debezium_message(event, ts_ms, self.identity, event.kind, None)
+        wrapped = render_debezium_message(
+            event, ts_ms, self.identity, event.kind, schema
+        )
+        assert bare["before"] == wrapped["payload"]["before"]  # type: ignore[index]
+
+    def test_create_update_events_never_carry_elected_before(self) -> None:
+        """c/u events' before stays null regardless of an elected key_column."""
+        for op in ("c", "u"):
+            event = _make_event(
+                op=op,  # type: ignore[arg-type]
+                key_column="presentation_id",
+                key_value="P_003",
+                after={"presentation_id": "P_003", "prop__status": "active"},
+            )
+            payload = self._render(event)
+            assert payload["before"] is None
 
 
 # ---------------------------------------------------------------------------

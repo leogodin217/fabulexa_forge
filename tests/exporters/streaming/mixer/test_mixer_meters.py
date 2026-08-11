@@ -40,6 +40,8 @@ def _make_event(
         after=None,
         topic=topic,
         route_table="person",
+        key_column="record_id",
+        key_value=record_id,
     )
 
 

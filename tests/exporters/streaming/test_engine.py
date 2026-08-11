@@ -1304,14 +1304,36 @@ _MEMBERSHIP_REF_COLS: list[dict[str, object]] = [
 # ---------------------------------------------------------------------------
 
 
+def _owner_records_table_spec(
+    conn: duckdb.DuckDBPyConnection, kind: str
+) -> dict[str, object]:
+    """Create and spec a minimal zero-row flat records table for `kind`.
+
+    Election resolution (`resolve_stream_surfaces` / `Election.surface_for`)
+    requires every kind a membership stream can name — the owner kind, and
+    any membership reference field's per-row target kind — to carry a
+    declared `records__<kind>` table, even under the no-`keys` default. The
+    membership fixtures below carry no records data of their own, so this
+    builds the minimal conformant shell.
+    """
+    table_name = f"records__{kind}"
+    conn.execute(_ddl(table_name, _RECORD_COLS))
+    return _table_spec(table_name, "records", _RECORD_COLS, 0, record_kind=kind)
+
+
 def _build_single_membership_emit(
     tmp_path: Path,
     owner_kind: str,
     property_name: str,
     mem_cols: list[dict[str, object]],
     mem_rows: list[tuple[Any, ...]],
+    extra_kinds: tuple[str, ...] = (),
 ) -> Path:
-    """Build a minimal emit with one membership table."""
+    """Build a minimal emit with one membership table.
+
+    Also declares a minimal records table for `owner_kind` and every kind in
+    `extra_kinds` (a membership reference field's target kind).
+    """
     table_name = f"membership__{owner_kind}__{property_name}"
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -1319,15 +1341,19 @@ def _build_single_membership_emit(
     placeholders = ", ".join("?" for _ in mem_cols)
     for row in mem_rows:
         conn.execute(f'INSERT INTO "{table_name}" VALUES ({placeholders})', list(row))
+
+    tables = [
+        _membership_table_spec(
+            table_name, mem_cols, len(mem_rows), owner_kind, property_name
+        )
+    ]
+    for kind in dict.fromkeys((owner_kind, *extra_kinds)):
+        tables.append(_owner_records_table_spec(conn, kind))
     conn.close()
 
     _write_sidecar(
         tmp_path,
-        tables=[
-            _membership_table_spec(
-                table_name, mem_cols, len(mem_rows), owner_kind, property_name
-            )
-        ],
+        tables=tables,
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
     )
     return tmp_path
@@ -1344,7 +1370,8 @@ def _build_two_membership_emit(
     cols_b: list[dict[str, object]],
     rows_b: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal emit with two membership tables."""
+    """Build a minimal emit with two membership tables and their owners' records
+    tables (see `_owner_records_table_spec`)."""
     table_a = f"membership__{owner_kind_a}__{property_a}"
     table_b = f"membership__{owner_kind_b}__{property_b}"
     db_path = tmp_path / "run.duckdb"
@@ -1360,18 +1387,17 @@ def _build_two_membership_emit(
     for row in rows_b:
         conn.execute(f'INSERT INTO "{table_b}" VALUES ({ph_b})', list(row))
 
+    tables = [
+        _membership_table_spec(table_a, cols_a, len(rows_a), owner_kind_a, property_a),
+        _membership_table_spec(table_b, cols_b, len(rows_b), owner_kind_b, property_b),
+    ]
+    for kind in dict.fromkeys((owner_kind_a, owner_kind_b)):
+        tables.append(_owner_records_table_spec(conn, kind))
     conn.close()
 
     _write_sidecar(
         tmp_path,
-        tables=[
-            _membership_table_spec(
-                table_a, cols_a, len(rows_a), owner_kind_a, property_a
-            ),
-            _membership_table_spec(
-                table_b, cols_b, len(rows_b), owner_kind_b, property_b
-            ),
-        ],
+        tables=tables,
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
     )
     return tmp_path
@@ -1646,6 +1672,7 @@ class TestMembershipAfterImage:
             "waiters",
             _MEMBERSHIP_REF_COLS,
             [("trunk", "r1", 10, None, "person", "p1")],
+            extra_kinds=("person",),
         )
         config = _membership_events_config(
             [_membership_stream("waiters_feed", "queue", "waiters", ["owner"])]

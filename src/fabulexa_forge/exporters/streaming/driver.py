@@ -18,9 +18,12 @@ from fabulexa_forge.errors import (
     ExportRuntimeError,
     KafkaBootstrapUnresolvable,
 )
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
+    elect_after_image_columns,
     iter_stream_events,
+    resolve_stream_surfaces,
 )
 from fabulexa_forge.exporters.streaming.jsonl import write_jsonl_stream
 from fabulexa_forge.exporters.streaming.types import StreamOutcome
@@ -29,7 +32,11 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import DebeziumSourceIdentity, StreamConfig
+    from fabulexa_forge.config.models import (
+        DebeziumSourceIdentity,
+        KeySurface,
+        StreamConfig,
+    )
     from fabulexa_forge.exporters.streaming.pacer import ResolvedClock
     from fabulexa_forge.exporters.streaming.types import StreamEvent
     from fabulexa_forge.reader.emit import Emit
@@ -423,7 +430,13 @@ def _build_value_schemas(
 
     Dispatches on config.content: 'membership-events' loops the config's
     membership-shaped streams with a leading 'event' column; all other content
-    loops its kind-shaped streams.
+    loops its kind-shaped streams. Every stream's declared column list is
+    re-keyed through `elect_after_image_columns` under its gated elected
+    surface (`resolve_stream_surfaces`) — a pure recomputation of the same
+    gates and surfaces the engine's own validation pass resolves, so the
+    declared schema and the rendered after-image stay the same list by
+    construction (mirrors `exporters.base.engine`'s recompute-not-thread
+    posture).
 
     Args:
         emit: The open emit.
@@ -433,12 +446,23 @@ def _build_value_schemas(
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
+
+    Raises:
+        ElectionMixedIdentity: A stream's spanned populations elect differing
+            surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election's spanned key
+            spaces, or an edge's admitted target key spaces, contain a
+            pairwise-unsafe pair.
     """
+    election = resolve_election(emit.sidecar, config.keys)
+    surfaces = resolve_stream_surfaces(emit.sidecar, election, config)
     if config.content == "membership-events":
         return _build_value_schemas_membership(
-            emit, config, source_identity, table_identity
+            emit, config, source_identity, table_identity, surfaces
         )
-    return _build_value_schemas_kinds(emit, config, source_identity, table_identity)
+    return _build_value_schemas_kinds(
+        emit, config, source_identity, table_identity, surfaces
+    )
 
 
 def _build_value_schemas_kinds(
@@ -446,6 +470,7 @@ def _build_value_schemas_kinds(
     config: "StreamConfig",
     source_identity: "DebeziumSourceIdentity",
     table_identity: str,
+    surfaces: "dict[str, KeySurface]",
 ) -> dict[str, dict[str, object]]:
     """Build value schemas for state-changes content, one per declared stream.
 
@@ -454,6 +479,7 @@ def _build_value_schemas_kinds(
         config: The validated streaming configuration.
         source_identity: The masquerade source identity.
         table_identity: 'source_table' or 'topic'.
+        surfaces: Every stream's gated uniform elected surface.
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
@@ -465,8 +491,11 @@ def _build_value_schemas_kinds(
 
     for stream in config.streams:
         assert isinstance(stream, KindStream)
-        columns = resolve_stream_columns(
-            emit.sidecar, stream.kind, frozenset(stream.properties)
+        columns = elect_after_image_columns(
+            resolve_stream_columns(
+                emit.sidecar, stream.kind, frozenset(stream.properties)
+            ),
+            surfaces[stream.name],
         )
         if table_identity == "topic":
             schema_keys: tuple[str, ...] = (stream.name,)
@@ -490,6 +519,7 @@ def _build_value_schemas_membership(
     config: "StreamConfig",
     source_identity: "DebeziumSourceIdentity",
     table_identity: str,
+    surfaces: "dict[str, KeySurface]",
 ) -> dict[str, dict[str, object]]:
     """Build value schemas for membership-events content, one per declared stream.
 
@@ -498,6 +528,7 @@ def _build_value_schemas_membership(
         config: The validated streaming configuration.
         source_identity: The masquerade source identity.
         table_identity: 'source_table' or 'topic'.
+        surfaces: Every stream's gated uniform owner elected surface.
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
@@ -516,12 +547,18 @@ def _build_value_schemas_membership(
         schema_key = stream.name if table_identity == "topic" else attrs["route_table"]
 
         if schema_key not in value_schemas:
-            columns = ("event",) + resolve_membership_columns(
-                emit.sidecar, owner_kind, property_name, stream.fields
+            payload_columns = elect_after_image_columns(
+                list(
+                    resolve_membership_columns(
+                        emit.sidecar, owner_kind, property_name, stream.fields
+                    )
+                ),
+                surfaces[stream.name],
             )
+            columns = ["event", *payload_columns]
             value_schemas[schema_key] = build_debezium_value_schema(
                 table=schema_key,
-                columns=list(columns),
+                columns=columns,
                 source_name=source_identity.name,
                 connector=source_identity.connector,
             )
