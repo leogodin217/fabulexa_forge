@@ -16,6 +16,7 @@ Public surface:
     encode_pinned       — byte-stable JSON encoder shared by all streaming sinks
     write_kafka_stream  — produce events to Kafka (requires the kafka extra)
     stream_export       — end-to-end: events → format → sink
+    generate_stream_init_config — `init --mode streaming`'s proposal engine
     route_attributes    — derive Layer-A route attributes for one event
     resolve_subtype_index — index a sub-typed kind by discriminator
     ResolvedClock       — the resolved realtime pacing policy for one stream run
@@ -39,6 +40,7 @@ from fabulexa_forge.exporters.streaming.debezium import (
 from fabulexa_forge.exporters.streaming.driver import stream_export
 from fabulexa_forge.exporters.streaming.encoding import encode_pinned
 from fabulexa_forge.exporters.streaming.engine import iter_stream_events
+from fabulexa_forge.exporters.streaming.init import generate_stream_init_config
 from fabulexa_forge.exporters.streaming.jsonl import (
     render_jsonl_object,
     write_jsonl_stream,
@@ -79,6 +81,7 @@ __all__ = [
     "advance",
     "build_debezium_value_schema",
     "encode_pinned",
+    "generate_stream_init_config",
     "iter_stream_events",
     "membership_route_attributes",
     "rebased_epoch_ms",

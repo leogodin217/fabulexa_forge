@@ -63,7 +63,7 @@ phases:
           - "tests/exporters/streaming/test_jsonl.py"
           - "tests/exporters/streaming/test_debezium.py"
   4:
-    status: pending
+    status: complete
     name: "init --mode streaming"
     demo: "docs/sprints/streaming-declared-streams/demos/phase_4_init_streaming.py"
     steps:

@@ -72,6 +72,21 @@ class InitRequiresRecordRoles(ExporterError):
     """
 
 
+class StreamInitNothingToStream(ExporterError):
+    """`init --mode streaming` was run against an emit with nothing to propose.
+
+    Raised either when the emit carries no records kind (and therefore no
+    membership table — an interval requires an owner record within the
+    slice), or when every sidecar-derived stream name is topic-illegal, so no
+    proposal survives live. A candidate config that cannot stream is not
+    proposed.
+
+    A direct child of `ExporterError` (the `InitRequiresRecordRoles` posture:
+    `init` runs no engine and reads no config, so its failure is not an
+    `ExportError`). Caught by the CLI's `(ReaderError, ExporterError)` handler.
+    """
+
+
 class IncrementalError(ExporterError):
     """Base for incremental-driver failures (regime, cursor, fingerprint)."""
 

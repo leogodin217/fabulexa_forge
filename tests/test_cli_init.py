@@ -1663,3 +1663,62 @@ def test_mode_bogus_is_argparse_error(tmp_path: Path) -> None:
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     exit_code = main(["init", str(emit_dir), "--mode", "bogus"])
     assert exit_code == 2
+
+
+# ---------------------------------------------------------------------------
+# `--mode streaming` (streaming-declared-streams Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def build_no_records_kind_emit(tmp_path: Path) -> Path:
+    """Build an emit carrying no `records__<kind>` table at all -- only a
+    `fixed` table -- `generate_stream_init_config`'s `StreamInitNothingToStream`
+    refusal target."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    history_columns: list[dict[str, object]] = [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "kind", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "property", "type": "VARCHAR"},
+        {"name": "sim_time", "type": "BIGINT"},
+        {"name": "value", "type": "VARCHAR"},
+    ]
+    conn.execute(_create_ddl("history", history_columns))
+    conn.close()
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[_table_spec("history", "fixed", history_columns, 0)],
+            record_roles=None,
+        ),
+    )
+    return tmp_path
+
+
+def test_mode_streaming_dispatches_to_streaming_engine(tmp_path: Path) -> None:
+    """`init --mode streaming` proposes a `content: state-changes` candidate
+    config."""
+    emit_dir = build_bare_dim_scd2_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    exit_code = main(["init", str(emit_dir), str(out_path), "--mode", "streaming"])
+    assert exit_code == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert "content: state-changes" in content
+    assert "mode: dimensional" not in content
+
+
+def test_mode_streaming_no_records_kind_returns_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A recordless emit -> `StreamInitNothingToStream`, reported as ERROR:
+    on stderr, exit code 1."""
+    emit_dir = build_no_records_kind_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    exit_code = main(["init", str(emit_dir), str(out_path), "--mode", "streaming"])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    assert "ERROR:" in captured.err
+    assert "Traceback" not in captured.err
+    assert not out_path.exists()

@@ -292,7 +292,9 @@ def cmd_export(
 
 
 def cmd_init(
-    emit_dir: Path, out_path: Path | None, mode: Literal["dimensional", "source"]
+    emit_dir: Path,
+    out_path: Path | None,
+    mode: Literal["dimensional", "source", "streaming"],
 ) -> int:
     """`fabulexa-forge init` — emit a commented candidate config.
 
@@ -300,7 +302,11 @@ def cmd_init(
     `exporters.dimensional.init.generate_init_config` (unchanged); 'source'
     calls `exporters.source.init.generate_source_init_config` (design doc §
     Interface Contracts — one state table per kind, one junction per
-    membership table, the events stub, the keys proposal). Both are pure
+    membership table, the events stub, the keys proposal); 'streaming' calls
+    `exporters.streaming.init.generate_stream_init_config` (design doc §
+    `init --mode streaming` inference contract — one live declared stream per
+    population, the membership-events alternative fully commented, the keys
+    proposal self-gated through streaming's own gates). All three are pure
     functions of (emit, code version); output goes to `out_path` or stdout
     exactly as today.
 
@@ -322,12 +328,18 @@ def cmd_init(
                 )
 
                 candidate = generate_init_config(emit, render_notice_stderr)
-            else:
+            elif mode == "source":
                 from fabulexa_forge.exporters.source.init import (
                     generate_source_init_config,
                 )
 
                 candidate = generate_source_init_config(emit, render_notice_stderr)
+            else:
+                from fabulexa_forge.exporters.streaming.init import (
+                    generate_stream_init_config,
+                )
+
+                candidate = generate_stream_init_config(emit, render_notice_stderr)
     except (ReaderError, ExporterError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
@@ -933,10 +945,12 @@ def _cmd_init(args: list[str]) -> int:
     parser.add_argument("emit_dir", type=Path)
     parser.add_argument("out_path", type=Path, nargs="?", default=None)
     parser.add_argument(
-        "--mode", choices=("dimensional", "source"), default="dimensional"
+        "--mode",
+        choices=("dimensional", "source", "streaming"),
+        default="dimensional",
     )
     parsed = parser.parse_args(args)
-    mode = cast(Literal["dimensional", "source"], parsed.mode)
+    mode = cast(Literal["dimensional", "source", "streaming"], parsed.mode)
     return cmd_init(parsed.emit_dir, parsed.out_path, mode)
 
 
