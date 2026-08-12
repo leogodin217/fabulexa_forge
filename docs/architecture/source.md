@@ -920,8 +920,8 @@ writer semantics, CSV posture, and incremental gating are owned by
   names and `changes` keys only; a general value-map surface is
   dimensional's `derived` territory, outside source's fidelity posture.
 - **No streaming-mode vocabulary.** Streaming's payload keys and `kind`
-  field speak engine names by design — it has its own routing/naming
-  surface ([`streaming-routing.md`](streaming-routing.md)); extending
+  field speak engine names by design — its naming surface is the declared
+  stream name ([`streaming.md`](streaming.md) § Declared streams); extending
   vocabulary mapping there is a separable future design.
 - **No `init` proposal for labels.** `init` proposes engine-verbatim table
   names, under which every label is the identity mapping — there is nothing

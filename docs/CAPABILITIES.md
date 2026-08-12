@@ -178,26 +178,32 @@ Each mode reads the same emit and writes a different target shape.
   [`architecture/source.md`](architecture/source.md). *Teaches: app-database
   schemas, audit logs, source-to-warehouse ETL.*
 - ◐ **streaming** *(Stage 3)* — `fabulexa-forge stream` replays the base layer as an ordered
-  event stream over two content axes. `state-changes` replays `history` + the records spine
-  as a `c`/`u`/`d` CDC stream, one event per record state change; `membership-events` replays
-  the `membership__<K>__<p>` interval tables, unpivoting each interval into a `join` (always)
-  and a `leave` (when the element left within the slice), keyed on the owner `record_id` —
-  an append-only fact log. Serialized to stdout (all topics interleaved in
-  global `seq` order), one `<topic>.jsonl` per topic, or one message per event to a Kafka
-  broker (`--sink kafka`: topic pre-creation at 1 partition, `record_id` keying, and
-  CLI/config/env bootstrap resolution). Two formats: `jsonl` (flat
-  `{seq, op, ts, kind, key, after}`) and `debezium` (the Debezium value message —
-  `{schema?, payload}` with the configurable masquerade `source` identity and
-  epoch-millisecond `ts_ms`; requires a resolved anchor; both content types — `membership-events`
-  renders insert-only with the domain op as a leading `event` column). Record-id
-  keyed, full-row after-images, anchored timestamps; composes the row-state-events and
-  membership-events derivations. A configurable two-layer routing surface partitions the
-  stream into topics — a per-content Layer A (`route_table` from the record spine, or from
-  the `(owner_kind, property)` membership identity), `types` sub-type selection, a
-  `topic_template` + `groups` policy, and a Debezium `table_identity` masquerade (see
-  [`architecture/streaming-routing.md`](architecture/streaming-routing.md)). A
-  configurable clock paces emission — `realtime × speed` with an idle cap, or
-  as-fast-as-possible (`--speed` / `--idle-cap` / `--fast`). *Gaps:* the Debezium
+  event stream of author-declared streams: a `streams` list of named declarations, each
+  feeding from one kind's populations (one or more sub-types, or the whole kind) or one
+  membership table, where the stream `name` *is* the topic — the Kafka topic, the
+  `<name>.jsonl` filename. Each stream projects its own `properties` / `fields` after-image
+  (per-sub-type column lists from the sidecar's `sub_type_columns` partition; `[]` is an
+  identity-only notification feed), while the event set is payload-independent — a fact of
+  the stream's populations, row-level CDC. Two content axes: `state-changes` replays
+  `history` + the records spine as a `c`/`u`/`d` CDC stream, one event per record state
+  change; `membership-events` replays the `membership__<K>__<p>` interval tables,
+  unpivoting each interval into a `join` (always) and a `leave` (when the element left
+  within the slice), keyed on the owner — an append-only fact log. The cross-mode `keys`
+  election block elects the message key per population (`record_id` default /
+  `record_index` / `presentation_id`), with after-image references rendered in their
+  target's elected surface ([`architecture/key-election.md`](architecture/key-election.md)).
+  Serialized to stdout (all topics interleaved in global `seq` order), one
+  `<topic>.jsonl` per topic, or one message per event to a Kafka broker (`--sink kafka`:
+  topic pre-creation at 1 partition, elected-key keying, and CLI/config/env bootstrap
+  resolution). Two formats: `jsonl` (flat `{seq, op, ts, kind, key, after}`) and
+  `debezium` (the Debezium value message — `{schema?, payload}` with per-stream value
+  schemas, the configurable masquerade `source` identity, the `table_identity` knob
+  reporting the per-event `route_table` leaf or the stream name, and epoch-millisecond
+  `ts_ms`; requires a resolved anchor; both content types — `membership-events` renders
+  insert-only with the domain op as a leading `event` column). Full-row after-images,
+  anchored timestamps; composes the row-state-events (two-scope) and membership-events
+  derivations. A configurable clock paces emission — `realtime × speed` with an idle
+  cap, or as-fast-as-possible (`--speed` / `--idle-cap` / `--fast`). *Gaps:* the Debezium
   value message only (no separate key message or compaction tombstone), and whole-stream
   (not windowed). See
   [`architecture/streaming.md`](architecture/streaming.md).
@@ -212,8 +218,8 @@ Each mode reads the same emit and writes a different target shape.
 - ◐ **Output transforms** — `derived` columns ship (ordinal, value-map, anchored
   timestamp, SCD window); arbitrary per-table transforms beyond these are not.
 - ✓ **`init`** — generate a commented candidate config from the sidecar; `--mode`
-  selects the target (`dimensional`, the default, or `source`). Dimensional reads
-  `record_roles` for warehouse role, kinds, discriminators, membership tables,
+  selects the target (`dimensional`, the default, `source`, or `streaming`). Dimensional
+  reads `record_roles` for warehouse role, kinds, discriminators, membership tables,
   `history_tracked`; when the sidecar carries `sub_type_columns`, each
   per-sub-type stub proposes only that sub-type's declared columns
   (structurally-inapplicable columns pruned); absent the field, it falls back to
@@ -222,7 +228,12 @@ Each mode reads the same emit and writes a different target shape.
   membership table, an `events` stub covering every tracked kind
   (lifecycle-only kinds and membership sources commented out), and the aligned
   `keys` block — consuming no `record_roles`; the emitted config always parses
-  and plans clean.
+  and plans clean. Streaming proposes one live stream per population — per declared
+  sub-type for a sub-typed kind (names verbatim, `properties` from the
+  `sub_type_columns` partition), per kind for a flat kind — with the membership-events
+  alternative fully commented, name-collision losers and topic-illegal names commented
+  out, and the self-gated `keys` block; the emitted config always parses and streams
+  clean, and a recordless emit is refused rather than proposed.
 - ✓ **List-valued row predicates** *(dimensional)* — every predicate value in the
   dimensional grammar (`source.filter`, `source.where`, `source.value`, a membership
   `fk.where`, `derived.elapsed.other_where`) is a scalar or a non-empty list of
@@ -282,7 +293,8 @@ Each mode reads the same emit and writes a different target shape.
   surface per declared table (the event-log `item_id` as a polymorphic edge); base
   makes the id-space value surface elective beside its
   always-on index keys; dimensional FKs inherit the destination dim's election
-  (`fk.target_key` per-edge override, dim-key agreement check); `init` proposes a
+  (`fk.target_key` per-edge override, dim-key agreement check); streaming renders the
+  elected surface as the message key (one stream, one key surface); `init` proposes a
   self-gated `keys` block. Absent the block, output keeps the `record_id` default.
   Forge never mints — election selects among surfaces the emit carries. See
   [`architecture/key-election.md`](architecture/key-election.md).
@@ -406,7 +418,7 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   extra composing `[kafka]`. See
   [`architecture/mixer-control-plane.md`](architecture/mixer-control-plane.md).
 - ✓ `fabulexa-forge init` *(Stage 2)* — propose a candidate config from the sidecar;
-  `--mode dimensional` (default) or `--mode source`.
+  `--mode dimensional` (default), `--mode source`, or `--mode streaming`.
 - ✓ `fabulexa-forge corrupt` *(Stage 4)* — `fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml>
   --out <out_dir>`: apply a corrupter config, writing the broken `run.duckdb` +
   regenerated `base.json` plus `defects.json` (always written; no suppress flag). See
