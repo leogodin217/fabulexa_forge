@@ -1,0 +1,150 @@
+# ExportConfig — SaaS bundle, source mode (operational OLTP tables)
+# ============================================================
+# `fabulexa-forge export docs/examples/saas/bundle docs/examples/saas/source.yaml <out> --fmt duckdb`
+#
+# Source mode declares its own output shape: each `tables[]` entry is a
+# `state` table (current-state, one row per record) over a `kind:`, or a
+# `junction` table over a `membership:` reference; history is opt-in
+# through the single polymorphic `events:` log. The mapping this config
+# applies, taken from the atlas and `sub_type_columns`:
+#
+#   actor/company          -> companies
+#   actor/user              -> users
+#   entity/company_hub      -> accounts
+#   entity/sku               -> skus
+#   journey_instance         -> lifecycle_instances
+#   tick_decision             -> usage_events
+#   membership bindings       -> usage_event_skus
+#   the event log              -> versions
+#
+#   TWO "COMPANIES"  as in dimensional.yaml: actor.company (CRM/sales-stage,
+#            `companies`) and entity.company_hub (billing/workspace tenant,
+#            `accounts`) carry no structural reference to each other. Kept
+#            as two separate tables — no join fabricated between them.
+#   POLYMORPHIC lifecycle_instances.actor_id (from journey_instance's
+#            `prop__actor`) resolves per-row to whichever population the
+#            referenced actor record belongs to (source.md § Identity and
+#            key election: "reference columns render the target
+#            population's elected surface per row") — companies.id
+#            (CMP-#####) for a company_lifecycle row, users.id (USR-######)
+#            for a user_lifecycle row. `journey_type` is the discriminator
+#            telling you which table it lands on; this is a faithful,
+#            un-invented polymorphic FK, not a defect.
+#   SUB-TYPE naming: `sub_types:` narrows a table's ROWS, not its columns —
+#            each split table below names its own real columns explicitly
+#            (from `sub_type_columns`) so the other sub-type's columns
+#            never appear as spurious 100%-NULL fields.
+#   EVENTS   split by declared sub-type/kind for domain-named `item_type`
+#            values (`company` / `user` / `account` / `sku` /
+#            `lifecycle_instance`) instead of the engine's bare kind names.
+#            This captures the same user-session activity noted in
+#            dimensional.yaml's fact_lifecycle_interval: the
+#            `lifecycle_instance` item_type's `current_state` changes carry
+#            the active<->using toggle, at true per-event grain.
+#   DROPPED  tick_decision's `active` / `deactivated_at` / `updated_at` —
+#            a usage event is created once and never deactivated; those
+#            columns would be constant/uninformative for every row.
+#   OPAQUE   usage_events.context stays a raw VARCHAR (as in
+#            dimensional.yaml) — the config grammar has no mode to parse
+#            the repr'd-tuple value; see dimensional.yaml's header for the
+#            full rationale (consult(composite)-confirmed: real data, not
+#            engine noise, but not parseable by this package today).
+
+mode: source
+
+keys:
+  actor: presentation_id
+  entity: presentation_id
+  journey_instance: record_index
+  tick_decision: record_index
+
+source:
+  tables:
+    - name: companies
+      kind: actor
+      sub_types: [company]
+      columns: [prop__status, created_sim_time, active, deactivated_at, last_mutation_sim_time]
+
+    - name: users
+      kind: actor
+      sub_types: [user]
+      columns:
+        [
+          prop__status,
+          prop__company,
+          prop__first_name,
+          prop__last_name,
+          prop__company_name,
+          prop__company_domain,
+          prop__email_convention,
+          prop__email,
+          created_sim_time,
+          active,
+          deactivated_at,
+          last_mutation_sim_time,
+        ]
+      rename:
+        prop__company: account_id
+
+    - name: accounts
+      kind: entity
+      sub_types: [company_hub]
+      columns:
+        [
+          prop__plan,
+          prop__seat_price,
+          prop__attach_weight,
+          prop__churn_flag,
+          prop__engagement_score,
+          prop__name,
+          prop__domain,
+          created_sim_time,
+          active,
+          deactivated_at,
+          last_mutation_sim_time,
+        ]
+
+    - name: skus
+      kind: entity
+      sub_types: [sku]
+      columns: [prop__popularity, prop__name, created_sim_time, active, deactivated_at, last_mutation_sim_time]
+
+    - name: lifecycle_instances
+      kind: journey_instance
+      columns: [prop__actor, prop__journey_type, prop__current_state, created_sim_time, active, deactivated_at, last_mutation_sim_time]
+      rename:
+        prop__actor: actor_id
+        prop__journey_type: journey_type
+        prop__current_state: current_state
+
+    - name: usage_events
+      kind: tick_decision
+      columns: [prop__journey_instance, prop__decision_type, prop__context, created_sim_time]
+      rename:
+        prop__journey_instance: journey_instance_id
+        prop__decision_type: decision_type
+        prop__context: context
+
+    - name: usage_event_skus
+      membership: {kind: tick_decision, property: bindings}
+      rename:
+        record_id: usage_event_id
+        member__entity__id: sku_id
+
+  events:
+    name: versions
+    sources:
+      - kind: actor
+        sub_types: [company]
+        item_type: company
+      - kind: actor
+        sub_types: [user]
+        item_type: user
+      - kind: entity
+        sub_types: [company_hub]
+        item_type: account
+      - kind: entity
+        sub_types: [sku]
+        item_type: sku
+      - kind: journey_instance
+        item_type: lifecycle_instance

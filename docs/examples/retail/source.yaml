@@ -22,6 +22,28 @@
 #   membership bindings     -> action_product
 #   the event log           -> audit_log
 #
+# RENAMES (realism QA, aug11 round): the mapping above is applied to the
+# VOCABULARY surfaces too — the naming gate failed this config because the
+# tables were renamed while `audit_log.item_type` still declared raw kinds
+# (`actor`, `entity`, `journey_instance`) and the FK columns kept engine names.
+#   - The events sources split per sub-type so `item_type` carries the exported
+#     table's own name (customer / ops_agent / product / storefront /
+#     shopping_session) — actor and entity are split kinds, so one label per
+#     kind could not name both halves.
+#   - Per-table `rename:` puts reference columns on the <target_table>_id
+#     convention (prop__actor -> customer_id, prop__journey_instance ->
+#     session_id, prop__store -> storefront_id, the junction's record_id ->
+#     customer_action_id, member id -> product_id) and de-simulates vocabulary
+#     names (journey_type -> session_type, decision_type -> action_type,
+#     pick_index -> position, joined/left -> bound_at/released_at).
+#   - The junction drops its constant kind column (entity_kind='entity' on all
+#     92,710 rows — one simulator word, zero information) via `columns:`.
+#   - Per-source `rename:` keeps the `changes` payload keys in step with the
+#     renamed state-table columns.
+#   Renaming shopping_session.actor to customer_id accepts one known anomaly:
+#   the single storefront_ops session's value is the OPS_ agent — the same
+#   data-content quirk the ops row itself is, not a naming choice.
+#
 #   SPLIT  actor -> customer + ops_agent, two `state` tables over the same
 #          `kind: actor`, each narrowed by its own `sub_types:`. They are
 #          genuinely separate operational tables, not two views of one — measured
@@ -109,6 +131,8 @@ source:
                 prop__place_subdivision, prop__place_postal_code, prop__place_area_code,
                 prop__country, prop__acquisition_source, prop__tier, prop__segment,
                 prop__income, prop__store, prop__total_purchases]
+      rename:
+        prop__store: storefront_id
     - name: ops_agent
       kind: actor
       sub_types: [ops]
@@ -132,16 +156,46 @@ source:
       kind: journey_instance
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__actor, prop__journey_type, prop__current_state, prop__customer_handle]
+      rename:
+        prop__actor: customer_id
+        prop__journey_type: session_type
     - name: customer_action
       kind: tick_decision
+      rename:
+        prop__journey_instance: session_id
+        prop__decision_type: action_type
     - name: action_product
       membership: {kind: tick_decision, property: bindings}
+      columns: [joined_sim_time, left_sim_time, elem__role_name,
+                member__entity__id, elem__pick_index]
+      rename:
+        record_id: customer_action_id
+        member__entity__id: product_id
+        elem__pick_index: position
+        joined_sim_time: bound_at
+        left_sim_time: released_at
   events:
     name: audit_log
     sources:
       - kind: actor
+        sub_types: [customer]
+        item_type: customer
+        rename:
+          store: storefront_id
+      - kind: actor
+        sub_types: [ops]
+        item_type: ops_agent
       - kind: entity
+        sub_types: [product]
+        item_type: product
+      - kind: entity
+        sub_types: [infrastructure]
+        item_type: storefront
       - kind: journey_instance
+        item_type: shopping_session
+        rename:
+          actor: customer_id
+          journey_type: session_type
 
 # rebase:
 #   base_date: 2022-03-01
