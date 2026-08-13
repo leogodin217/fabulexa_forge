@@ -449,6 +449,85 @@ def test_name_collision_comments_out_later_proposal(tmp_path: Path) -> None:
     _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
 
 
+def _build_subtyped_junction_collision_emit(tmp_path: Path) -> Path:
+    """A flat kind literally named `actor_consultant_team` declared before the
+    sub-typed `actor` owner's `membership__actor__team` table -- collides with
+    the per-sub-type junction stub for the `consultant` sub-type (auto-derived
+    name `actor_consultant_team`)."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    flat_cols = _UNTRACKED_FLAT_COLUMNS
+    conn = duckdb.connect(str(emit_dir / "run.duckdb"))
+    conn.execute(_create_ddl("records__actor_consultant_team", flat_cols))
+    conn.execute(_create_ddl("records__actor", _SUBTYPED_TRACKED_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("membership__actor__team", _OWNER_MEMBERSHIP_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__actor_consultant_team" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "w1", 10, True, 10, 0, "Widget"],
+    )
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        _SUBTYPED_TRACKED_ACTOR_ROW,
+    )
+    conn.execute(
+        'INSERT INTO "membership__actor__team" VALUES (?, ?, ?, NULL, ?)',
+        ["trunk", "a1", 10, "front"],
+    )
+    conn.close()
+    write_emit(
+        emit_dir,
+        tables=[
+            _table_spec(
+                "records__actor_consultant_team",
+                "records",
+                flat_cols,
+                1,
+                record_kind="actor_consultant_team",
+            ),
+            _table_spec(
+                "records__actor",
+                "records",
+                _SUBTYPED_TRACKED_ACTOR_COLUMNS,
+                1,
+                record_kind="actor",
+            ),
+            _table_spec(
+                "membership__actor__team",
+                "membership",
+                _OWNER_MEMBERSHIP_COLUMNS,
+                1,
+                record_kind="actor",
+                property_name="team",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={"enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}}},
+    )
+    return emit_dir
+
+
+def test_subtyped_junction_name_collision_comments_out_proposal(
+    tmp_path: Path,
+) -> None:
+    """A sub-typed owner's per-sub-type junction stub can itself collide with
+    an earlier proposal; the commented fallback still carries the stub's own
+    `sub_types` line."""
+    emit_dir = _build_subtyped_junction_collision_emit(tmp_path)
+    content = _generate(emit_dir)
+    assert (
+        "    - name: actor_consultant_team\n      kind: actor_consultant_team\n"
+        in content
+    )
+    assert (
+        "    # NOTE: name 'actor_consultant_team' collides with an earlier"
+        " proposal above; rename one before uncommenting\n"
+        "    # - name: actor_consultant_team\n"
+        "    #   membership: {kind: actor, property: team}\n"
+        "    #   sub_types: [consultant]\n" in content
+    )
+    _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # `keys:` proposal — registry-declared population, self-gated
 # ---------------------------------------------------------------------------

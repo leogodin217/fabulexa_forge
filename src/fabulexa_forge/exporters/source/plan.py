@@ -95,7 +95,7 @@ from fabulexa_forge.exporters.slice_only import (
     is_non_exempt_slice_only,
     slice_only_refusal_message,
 )
-from fabulexa_forge.exporters.source.columns import _PROP_PREFIX
+from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, _scalar_properties
 from fabulexa_forge.exporters.source.events import (
     SourceEventLogPlan,
     SourceEventSourcePlan,
@@ -1215,7 +1215,7 @@ def _resolve_where_selection(
         ExportError: A consulted column's declared type is unrecognized.
     """
     source_table = f"{_RECORDS_TABLE_PREFIX}{subject_kind}"
-    bare_names = _records_bare_property_names(sidecar, source_table)
+    bare_names = _scalar_properties(sidecar, source_table)
     discriminator_col = (
         f"{_PROP_PREFIX}{subject_kind}_type"
         if sidecar.subtype_values(subject_kind)
@@ -1637,25 +1637,6 @@ def _validate_event_property_name(
         )
 
 
-def _records_bare_property_names(
-    sidecar: "Sidecar", source_table: str
-) -> frozenset[str]:
-    """Every real `prop__` bare property name of a records table.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        source_table: The kind's `records__<kind>` table.
-
-    Returns:
-        Bare property names, unordered.
-    """
-    return frozenset(
-        col.name[len(_PROP_PREFIX) :]
-        for col in sidecar.columns(source_table)
-        if col.name.startswith(_PROP_PREFIX)
-    )
-
-
 def _resolve_records_audited_properties(
     sidecar: "Sidecar",
     kind: str,
@@ -1688,7 +1669,7 @@ def _resolve_records_audited_properties(
         TemporalClassUnavailableError: Propagated.
     """
     source_table = f"{_RECORDS_TABLE_PREFIX}{kind}"
-    all_bare_set = _records_bare_property_names(sidecar, source_table)
+    all_bare_set = _scalar_properties(sidecar, source_table)
     candidates: list[str] = []
     for col in sidecar.columns(source_table):
         name = col.name
@@ -2115,7 +2096,7 @@ def _build_event_source_plan(
         audited = _resolve_records_audited_properties(
             sidecar, kind, decl.only, decl.ignore, owner, notice_sink
         )
-        all_bare_names = _records_bare_property_names(sidecar, source_table)
+        all_bare_names = _scalar_properties(sidecar, source_table)
         audited_pairs = _apply_records_property_rename(
             audited, decl.rename, all_bare_names, sidecar, kind, owner
         )
