@@ -1266,6 +1266,78 @@ def test_source_mode_fingerprint_mismatch_on_source_config_change(
 
 
 # ---------------------------------------------------------------------------
+# Source mode: a `where`-narrowed event log's `id` stays tape-anchored across
+# a windowed run (source-row-selection sprint § Phase 3, doc § Row selection)
+# ---------------------------------------------------------------------------
+
+
+def test_source_mode_events_where_narrowed_windowed_ids_match_full_export(
+    tmp_path: Path,
+) -> None:
+    """A windowed export of a `where`-narrowed event log carries the same
+    `id` values the full export of the same tape assigns — `id` is
+    tape-anchored beneath the window predicate, not renumbered per window."""
+    emit_dir = build_windowed_source_test_emit(tmp_path)
+    config = _source_config_no_incremental(
+        source={
+            "events": {
+                "name": "audit_log",
+                "sources": [{"kind": "order", "where": {"amount": ["100.0", "300.0"]}}],
+            }
+        }
+    )
+
+    w0, w1, w2 = windowed_test_windows()
+    full_window = Window(index=None, start_ns=0, end_ns=w2.end_ns, label="r_full")
+
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+
+        full_out = tmp_path / "full.duckdb"
+        export_window(
+            emit,
+            config,
+            full_out,
+            "duckdb",
+            anchor,
+            full_window,
+            None,
+            notice_sink=discard_notice_sink,
+        )
+        with duckdb.connect(str(full_out)) as conn:
+            full_rows = conn.execute(
+                'SELECT "id", "item_id" FROM "audit_log"'
+            ).fetchall()
+        full_by_item = {item_id: row_id for row_id, item_id in full_rows}
+        assert full_by_item, "the narrowed selection retained something to compare"
+
+        for index, window in enumerate((w0, w1, w2)):
+            range_window = Window(
+                index=None,
+                start_ns=window.start_ns,
+                end_ns=window.end_ns,
+                label=f"r{index}",
+            )
+            out = tmp_path / f"window{index}.duckdb"
+            export_window(
+                emit,
+                config,
+                out,
+                "duckdb",
+                anchor,
+                range_window,
+                None,
+                notice_sink=discard_notice_sink,
+            )
+            with duckdb.connect(str(out)) as conn:
+                window_rows = conn.execute(
+                    'SELECT "id", "item_id" FROM "audit_log"'
+                ).fetchall()
+            for row_id, item_id in window_rows:
+                assert full_by_item[item_id] == row_id
+
+
+# ---------------------------------------------------------------------------
 # Base mode: build_base_query_specs dispatch (the three-way regression fix)
 #
 # Base mode requires no resolved anchor (anchor=None throughout) and, unlike

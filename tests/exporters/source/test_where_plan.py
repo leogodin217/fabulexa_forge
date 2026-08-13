@@ -33,9 +33,12 @@ from fabulexa_forge.config.models import (
     ExportConfig,
     MembershipRef,
     SourceConfig,
+    SourceEventsDecl,
+    SourceEventSourceDecl,
     SourceTableDecl,
 )
 from fabulexa_forge.errors import (
+    SourceEventSourceOverlap,
     SourceSubTypesOnFlatKind,
     SourceTableSubTypeUnknown,
     SourceWhereColumnUnresolved,
@@ -63,9 +66,14 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _config(tables: "tuple[SourceTableDecl, ...]") -> ExportConfig:
-    """Build a `mode: source` ExportConfig from a declared table set."""
-    return ExportConfig(mode="source", source=SourceConfig(tables=tables))
+def _config(
+    tables: "tuple[SourceTableDecl, ...]" = (),
+    events: "SourceEventsDecl | None" = None,
+) -> ExportConfig:
+    """Build a `mode: source` ExportConfig from a declared table/events set."""
+    return ExportConfig(
+        mode="source", source=SourceConfig(tables=tables, events=events)
+    )
 
 
 def _open_plan(
@@ -550,3 +558,256 @@ def test_where_column_absent_from_registry_emits_no_notice(tmp_path: Path) -> No
     sink = RecordingNoticeSink()
     _open_plan(_write_sensor_emit(tmp_path), _config(tables), notice_sink=sink)
     assert sink.notices == []
+
+
+# ---------------------------------------------------------------------------
+# Events sources: `where` gate matrix (bare-key resolution, `events source
+# #<n>` labels — source-row-selection sprint § Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def _events(*sources: SourceEventSourceDecl) -> SourceEventsDecl:
+    """A one-line `SourceEventsDecl` builder for the disjointness/gate tests."""
+    return SourceEventsDecl(name="log", sources=sources)
+
+
+def test_events_records_source_where_bare_key_resolves(tmp_path: Path) -> None:
+    """A records events source's `where` key is bare — the `only` / `ignore`
+    addressing convention — never the state table's `prop__<p>` form."""
+    events = _events(SourceEventSourceDecl(kind="location", where={"name": "Ward A"}))
+    plan = _open_plan(build_source_test_emit(tmp_path), _config(events=events))
+    assert plan.events is not None
+    entry = plan.events.sources[0].where[0]
+    assert entry.key == "name"
+    assert entry.source_column == "prop__name"
+
+
+def test_events_records_source_where_prefixed_key_unresolved(tmp_path: Path) -> None:
+    """A `prop__`-prefixed key is refused as unresolved under the bare
+    addressing convention, labeled `events source #1`."""
+    events = _events(
+        SourceEventSourceDecl(kind="location", where={"prop__name": "Ward A"})
+    )
+    with pytest.raises(SourceWhereColumnUnresolved, match="events source #1"):
+        _open_plan(build_source_test_emit(tmp_path), _config(events=events))
+
+
+def test_events_membership_source_where_resolves_owner_constant(
+    tmp_path: Path,
+) -> None:
+    """A membership events source's `where` resolves owner constants through
+    the parent lookup, never the membership table's own columns."""
+    events = _events(
+        SourceEventSourceDecl(
+            membership=MembershipRef(kind="clinician", property="ward_allocation"),
+            where={"region": "east"},
+        )
+    )
+    plan = _open_plan(_write_clinician_emit(tmp_path), _config(events=events))
+    assert plan.events is not None
+    entry = plan.events.sources[0].where[0]
+    assert entry.key == "region"
+    assert entry.source_column == "prop__region"
+
+
+def test_events_records_source_where_tracked_refused_with_label(
+    tmp_path: Path,
+) -> None:
+    """A `tracked`-class column is refused, labeled `events source #1` — the
+    full constant-column gate applies to events sources."""
+    events = _events(SourceEventSourceDecl(kind="visit", where={"status": "open"}))
+    with pytest.raises(SourceWhereNotConstant, match="events source #1"):
+        _open_plan(build_source_test_emit(tmp_path), _config(events=events))
+
+
+def test_events_records_source_where_discriminator_refused_with_label(
+    tmp_path: Path,
+) -> None:
+    """A `where` key naming the discriminator is refused, labeled
+    `events source #1`, pointing at `sub_types`."""
+    events = _events(SourceEventSourceDecl(kind="shift", where={"shift_type": "day"}))
+    with pytest.raises(SourceWhereOnDiscriminator, match="events source #1"):
+        _open_plan(build_source_test_emit(tmp_path), _config(events=events))
+
+
+def test_events_records_source_where_uncastable_refused_with_label(
+    tmp_path: Path,
+) -> None:
+    """An uncastable element is refused, labeled `events source #1`, before
+    any write."""
+    events = _events(SourceEventSourceDecl(kind="sensor", where={"reading": "abc"}))
+    with pytest.raises(SourceWhereValueUncastable, match="events source #1"):
+        _open_plan(_write_sensor_emit(tmp_path), _config(events=events))
+
+
+def test_events_second_source_label_uses_its_declaration_index(
+    tmp_path: Path,
+) -> None:
+    """The label tracks declaration position, not just the first source."""
+    events = _events(
+        SourceEventSourceDecl(kind="location", where={"name": "Ward A"}, item_type="a"),
+        SourceEventSourceDecl(kind="location", where={"bogus": "x"}, item_type="b"),
+    )
+    with pytest.raises(SourceWhereColumnUnresolved, match="events source #2"):
+        _open_plan(build_source_test_emit(tmp_path), _config(events=events))
+
+
+# ---------------------------------------------------------------------------
+# Events sources: selection-aware disjointness (doc § Event-source
+# disjointness — every row of the table)
+# ---------------------------------------------------------------------------
+
+
+def test_disjointness_common_column_disjoint_typed_values_legal(
+    tmp_path: Path,
+) -> None:
+    """Both sources declare `where` on one common column whose typed value
+    sets are disjoint — legal, whatever their other entries do."""
+    events = _events(
+        SourceEventSourceDecl(kind="sensor", where={"reading": "5"}, item_type="a"),
+        SourceEventSourceDecl(kind="sensor", where={"reading": "9"}, item_type="b"),
+    )
+    plan = _open_plan(_write_sensor_emit(tmp_path), _config(events=events))
+    assert plan.events is not None
+
+
+def test_disjointness_05_and_5_on_bigint_resolve_one_typed_value_refused(
+    tmp_path: Path,
+) -> None:
+    """`'5'` and `'05'` on a BIGINT column are one typed value, never a
+    disjoint pair — string comparison would silently license double-logging."""
+    events = _events(
+        SourceEventSourceDecl(kind="sensor", where={"reading": "5"}, item_type="a"),
+        SourceEventSourceDecl(kind="sensor", where={"reading": "05"}, item_type="b"),
+    )
+    with pytest.raises(
+        SourceEventSourceOverlap, match="selections do not establish disjointness"
+    ):
+        _open_plan(_write_sensor_emit(tmp_path), _config(events=events))
+
+
+def test_disjointness_no_common_predicated_column_refused(tmp_path: Path) -> None:
+    """No column is common to both sources' `where` — nothing to disjoin."""
+    events = _events(
+        SourceEventSourceDecl(kind="sensor", where={"reading": "5"}, item_type="a"),
+        SourceEventSourceDecl(
+            kind="sensor", where={"category": "indoor"}, item_type="b"
+        ),
+    )
+    with pytest.raises(
+        SourceEventSourceOverlap, match="selections do not establish disjointness"
+    ):
+        _open_plan(_write_sensor_emit(tmp_path), _config(events=events))
+
+
+def test_disjointness_only_one_source_selective_refused(tmp_path: Path) -> None:
+    """One source declares no `where` at all — the other's selection alone
+    cannot establish disjointness."""
+    events = _events(
+        SourceEventSourceDecl(kind="sensor", where={"reading": "5"}, item_type="a"),
+        SourceEventSourceDecl(kind="sensor", item_type="b"),
+    )
+    with pytest.raises(
+        SourceEventSourceOverlap, match="selections do not establish disjointness"
+    ):
+        _open_plan(_write_sensor_emit(tmp_path), _config(events=events))
+
+
+def test_disjointness_every_common_column_intersects_refused(tmp_path: Path) -> None:
+    """Both common columns' value sets intersect (identical selections) —
+    refused, even though two columns are shared."""
+    events = _events(
+        SourceEventSourceDecl(
+            kind="sensor",
+            where={"reading": "5", "category": "indoor"},
+            item_type="a",
+        ),
+        SourceEventSourceDecl(
+            kind="sensor",
+            where={"reading": "5", "category": "indoor"},
+            item_type="b",
+        ),
+    )
+    with pytest.raises(SourceEventSourceOverlap):
+        _open_plan(_write_sensor_emit(tmp_path), _config(events=events))
+
+
+def test_disjointness_one_disjoint_common_column_suffices(tmp_path: Path) -> None:
+    """`reading` is disjoint (5 vs 9) despite `category` intersecting on both
+    (indoor) — legality is existential, one disjoint column suffices."""
+    events = _events(
+        SourceEventSourceDecl(
+            kind="sensor",
+            where={"reading": "5", "category": "indoor"},
+            item_type="a",
+        ),
+        SourceEventSourceDecl(
+            kind="sensor",
+            where={"reading": "9", "category": "indoor"},
+            item_type="b",
+        ),
+    )
+    plan = _open_plan(_write_sensor_emit(tmp_path), _config(events=events))
+    assert plan.events is not None
+
+
+def test_disjointness_membership_disjoint_owner_sub_types_legal(
+    tmp_path: Path,
+) -> None:
+    """Membership sources of one `(kind, property)` with both-declared
+    disjoint owner `sub_types` sets are legal — the owner sub-type is the
+    population axis — and share one resolved item-type by default (the
+    sharing exception extends to membership)."""
+    events = _events(
+        SourceEventSourceDecl(
+            membership=MembershipRef(kind="clinician", property="ward_allocation"),
+            sub_types=("day",),
+        ),
+        SourceEventSourceDecl(
+            membership=MembershipRef(kind="clinician", property="ward_allocation"),
+            sub_types=("night",),
+        ),
+    )
+    plan = _open_plan(_write_clinician_emit(tmp_path), _config(events=events))
+    assert plan.events is not None
+    assert {s.item_type for s in plan.events.sources} == {"clinician.ward_allocation"}
+
+
+def test_disjointness_membership_common_where_column_disjoint_legal(
+    tmp_path: Path,
+) -> None:
+    """Membership sources of one `(kind, property)` with a common owner
+    `where` column whose typed value sets are disjoint are legal, with no
+    `sub_types` narrowing at all."""
+    events = _events(
+        SourceEventSourceDecl(
+            membership=MembershipRef(kind="clinician", property="ward_allocation"),
+            where={"region": "east"},
+            item_type="a",
+        ),
+        SourceEventSourceDecl(
+            membership=MembershipRef(kind="clinician", property="ward_allocation"),
+            where={"region": "west"},
+            item_type="b",
+        ),
+    )
+    plan = _open_plan(_write_clinician_emit(tmp_path), _config(events=events))
+    assert plan.events is not None
+
+
+def test_disjointness_population_disjoint_records_legal_regardless_of_where(
+    tmp_path: Path,
+) -> None:
+    """Two records sources already disjoint by `sub_types` are legal
+    regardless of their predicates — even identical, intersecting `where`
+    values never reach the selection gate."""
+    events = _events(
+        SourceEventSourceDecl(
+            kind="actor", sub_types=("consultant",), where={"name": "Dr. Lee"}
+        ),
+        SourceEventSourceDecl(
+            kind="actor", sub_types=("nurse",), where={"name": "Dr. Lee"}
+        ),
+    )
+    plan = _open_plan(build_source_test_emit(tmp_path), _config(events=events))
+    assert plan.events is not None

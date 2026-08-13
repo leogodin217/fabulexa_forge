@@ -2068,6 +2068,13 @@ def _build_event_source_plan(
 ) -> SourceEventSourcePlan:
     """Resolve one `events.sources[]` declaration to a `SourceEventSourcePlan`.
 
+    A membership source's `decl.sub_types` resolves against the owner kind's
+    discriminator domain exactly as a records source's does (doc § The
+    parent lookup) — the narrowed addressed set feeds `item_surface` and the
+    downstream overlap / union-safety gates. `decl.where` resolves against
+    the subject kind's payload properties in bare form for both source
+    shapes (records: the declared kind; membership: the owner kind).
+
     Args:
         sidecar: The open emit's sidecar.
         election: The resolved election.
@@ -2076,7 +2083,8 @@ def _build_event_source_plan(
             (junction-member-column admission).
         decl: The events source declaration.
         owner: The declaring source's message label (`events source #<n>`).
-        notice_sink: Receiver for slice-only-column-omitted notices.
+        notice_sink: Receiver for slice-only-column-omitted /
+            out-of-domain-`where`-value notices.
         kind_labels: The resolved `source.kind_labels` map (§
             `_resolve_kind_labels`) — item-type default resolution and the
             render's `<f>_kind` entry labeling.
@@ -2094,6 +2102,9 @@ def _build_event_source_plan(
             `rename` entry is unresolved.
         SourceNameCollision: Two audited properties (or a membership pair's
             expanded `_kind` / `_id` names) resolve one `changes` key.
+        SourceWhereColumnUnresolved, SourceWhereNotConstant,
+            SourceWhereOnDiscriminator, SourceWhereValueUncastable: `where`
+            resolution fails (the constant-column gate).
         ElectionUnionUnsafe: A change-edge gate fails.
     """
     kind_labels_map = dict(kind_labels)
@@ -2118,6 +2129,14 @@ def _build_event_source_plan(
             (p.sub_type, election.surface_for(kind, p.sub_type)) for p in populations
         )
         item_type = _resolve_event_source_item_type(decl, kind_labels_map, kind, None)
+        where = (
+            _resolve_where_selection(
+                sidecar, decl.where, kind, key_form="bare", label=owner
+            )
+            if decl.where is not None
+            else ()
+        )
+        _check_where_values_observed(sidecar, where, kind, owner, notice_sink)
         return SourceEventSourcePlan(
             item_type=item_type,
             kind=kind,
@@ -2127,6 +2146,7 @@ def _build_event_source_plan(
             kind_labels=kind_labels,
             item_surface=item_surface,
             change_edges=change_edges,
+            where=where,
         )
 
     assert decl.membership is not None, "an events source carries kind or membership"
@@ -2140,7 +2160,7 @@ def _build_event_source_plan(
             f"{owner}: no membership table for ({owner_kind}, {property_name})"
         ) from exc
 
-    populations = _owner_kind_domain_populations(sidecar, owner_kind)
+    populations = resolve_populations(sidecar, owner, owner_kind, decl.sub_types)
     audited = _resolve_membership_audited_fields(
         sidecar, table_name, decl.only, decl.ignore, owner
     )
@@ -2155,6 +2175,14 @@ def _build_event_source_plan(
     item_surface = tuple(
         (p.sub_type, election.surface_for(owner_kind, p.sub_type)) for p in populations
     )
+    where = (
+        _resolve_where_selection(
+            sidecar, decl.where, owner_kind, key_form="bare", label=owner
+        )
+        if decl.where is not None
+        else ()
+    )
+    _check_where_values_observed(sidecar, where, owner_kind, owner, notice_sink)
     return SourceEventSourcePlan(
         item_type=_resolve_event_source_item_type(
             decl, kind_labels_map, owner_kind, property_name
@@ -2166,6 +2194,7 @@ def _build_event_source_plan(
         kind_labels=kind_labels,
         item_surface=item_surface,
         change_edges=change_edges,
+        where=where,
     )
 
 
@@ -2176,38 +2205,98 @@ def _population_label(population: Population) -> str:
     return f"{population.kind}.{population.sub_type}"
 
 
-def _check_events_source_overlap(sources: tuple[SourceEventSourcePlan, ...]) -> None:
-    """Enforce pairwise-disjoint population sets across `events.sources`.
+def _events_share_item_space(
+    a: SourceEventSourcePlan, b: SourceEventSourcePlan
+) -> bool:
+    """Whether two events sources could double-log one item (doc § Event-source
+    disjointness): records sources of one kind, or membership sources of one
+    `(kind, property)`, whose addressed population sets intersect.
 
-    Records sources are compared by population atom; membership sources by
-    `(kind, property)` identity (each resolves to one fixed population set,
-    so two membership sources sharing that identity always fully overlap).
+    Owner `sub_types` narrows a membership source's addressed `populations`
+    exactly as `sub_types` narrows a records source's — both-declared
+    disjoint owner `sub_types` sets already show up here as disjoint
+    population sets, so one population-set-intersection test covers both
+    source shapes; a records source and a membership source never share an
+    item space (different grains).
+
+    Args:
+        a: One resolved events source.
+        b: Another resolved events source.
+
+    Returns:
+        True iff `a` and `b` audit one item space.
+    """
+    if a.property != b.property or a.kind != b.kind:
+        return False
+    return not set(a.populations).isdisjoint(b.populations)
+
+
+def _common_disjoint_where_column(
+    a: SourceEventSourcePlan, b: SourceEventSourcePlan
+) -> bool:
+    """Whether `a` and `b` both declare a `where` entry on a common column
+    whose typed value sets are disjoint (doc § Event-source disjointness —
+    existential over common columns, entries the sources do not share never
+    defeat a disjointness another common column establishes).
+
+    Args:
+        a: One resolved events source.
+        b: Another resolved events source.
+
+    Returns:
+        True iff at least one shared `source_column` carries disjoint
+        `typed_values` sets.
+    """
+    b_by_column = {entry.source_column: entry for entry in b.where}
+    for a_entry in a.where:
+        b_entry = b_by_column.get(a_entry.source_column)
+        if b_entry is not None and set(a_entry.typed_values).isdisjoint(
+            b_entry.typed_values
+        ):
+            return True
+    return False
+
+
+def _first_shared_population(
+    a: SourceEventSourcePlan, b: SourceEventSourcePlan
+) -> Population:
+    """The first population atom (declaration order of `a`) common to both
+    sources — for the overlap error's message only; callers already
+    confirmed the sets intersect."""
+    b_set = set(b.populations)
+    for population in a.populations:
+        if population in b_set:
+            return population
+    raise AssertionError("caller already confirmed the population sets intersect")
+
+
+def _check_events_source_overlap(sources: tuple[SourceEventSourcePlan, ...]) -> None:
+    """Enforce selection-aware disjointness across `events.sources` (doc §
+    Event-source disjointness): two sources auditing one item space
+    (`_events_share_item_space`) are legal only via a common `where` column
+    whose typed value sets are disjoint (`_common_disjoint_where_column`) —
+    population-disjoint sources (including both-declared disjoint owner
+    `sub_types`) never reach the selection check at all.
 
     Args:
         sources: The resolved events sources, declaration order.
 
     Raises:
-        SourceEventSourceOverlap: Two sources resolve an overlapping
-            population.
+        SourceEventSourceOverlap: Two sources share an item space that no
+            declared selection disjoins.
     """
-    seen_populations: dict[Population, None] = {}
-    seen_membership: dict[tuple[str, str], None] = {}
-    for source in sources:
-        if source.property is None:
-            for population in source.populations:
-                if population in seen_populations:
-                    raise SourceEventSourceOverlap(
-                        f"events: sources overlap on population"
-                        f" '{_population_label(population)}'"
-                    )
-                seen_populations[population] = None
-        else:
-            key = (source.kind, source.property)
-            if key in seen_membership:
-                raise SourceEventSourceOverlap(
-                    f"events: sources overlap on population '{source.item_type}'"
-                )
-            seen_membership[key] = None
+    for index, a in enumerate(sources):
+        for b in sources[index + 1 :]:
+            if not _events_share_item_space(a, b):
+                continue
+            if _common_disjoint_where_column(a, b):
+                continue
+            shared = _first_shared_population(a, b)
+            raise SourceEventSourceOverlap(
+                f"events: sources overlap on population"
+                f" '{_population_label(shared)}'; selections do not"
+                " establish disjointness"
+            )
 
 
 def _check_item_type_pairwise_distinctness(
@@ -2217,9 +2306,12 @@ def _check_item_type_pairwise_distinctness(
 
     Two records sources of one kind may share one resolved item-type (the
     joint union-safety-gate group, today's shape for a kind split across
-    sources); any other sharing is refused — two records sources of
-    different kinds, or a membership source sharing any other source's
-    item-type (its own owner's included).
+    sources), as may two membership sources of one `(kind, property)` (the
+    same shape, extended to the membership grain — doc § Event-source
+    disjointness); any other sharing is refused — two records sources of
+    different kinds, two membership sources of differing `(kind, property)`,
+    or a records source sharing with a membership source (its own owner's
+    included).
 
     Args:
         sources: The resolved events sources, declaration order (1-based
@@ -2237,8 +2329,7 @@ def _check_item_type_pairwise_distinctness(
             continue
         prior_index, prior_source = prior
         legal = (
-            source.property is None
-            and prior_source.property is None
+            source.property == prior_source.property
             and source.kind == prior_source.kind
         )
         if not legal:
@@ -2404,7 +2495,12 @@ def _build_event_log_plan(
         SourceColumnUnresolved, SourceSliceOnlyRead: An `only` / `ignore` /
             `rename` entry is unresolved.
         SourceNameCollision: A source's resolved `changes` keys collide.
-        SourceEventSourceOverlap: Two sources resolve overlapping populations.
+        SourceWhereColumnUnresolved, SourceWhereNotConstant,
+            SourceWhereOnDiscriminator, SourceWhereValueUncastable: A
+            source's `where` resolution fails (the constant-column gate).
+        SourceEventSourceOverlap: Two sources sharing an item space are not
+            disjoined by declared population or selection (doc §
+            Event-source disjointness).
         SourceItemTypeCollision: Two sources illegally share a resolved
             item-type, or a resolved item-type collides with a kind's
             rendered name.

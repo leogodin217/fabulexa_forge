@@ -26,13 +26,14 @@ from fabulexa_forge.exporters.source.events import (
     build_changes_object_expr,
     build_event_log_sql,
 )
-from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
+from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceWhereEntry
 from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
     build_event_log_suppressed_update_test_emit,
     build_event_tie_test_emit,
     build_events_test_emit,
+    build_source_junction_selection_emit,
     build_windowed_source_test_emit,
     windowed_test_windows,
 )
@@ -103,6 +104,7 @@ def _ticket_source(
     item_type: str = "ticket",
     rename: dict[str, str] | None = None,
     kind_labels: tuple[tuple[str, str], ...] = (),
+    where: tuple[SourceWhereEntry, ...] = (),
 ) -> SourceEventSourcePlan:
     """A records-source unit over `ticket`, addressing `sub_types` (default:
     both bug and feature)."""
@@ -116,6 +118,7 @@ def _ticket_source(
         kind_labels=kind_labels,
         item_surface=item_surface,
         change_edges=change_edges,
+        where=where,
     )
 
 
@@ -154,6 +157,29 @@ def _visit_source() -> SourceEventSourcePlan:
         kind_labels=(),
         item_surface=((None, "record_id"),),
         change_edges=(),
+    )
+
+
+def _worker_ward_source(
+    *, where: tuple[SourceWhereEntry, ...] = ()
+) -> SourceEventSourcePlan:
+    """A membership-source unit over `worker.ward`
+    (`build_source_junction_selection_emit`): two owners, day/night,
+    `prop__region` constant east/west, one interval each — the owner
+    `where` narrowing fixture (doc § The parent lookup)."""
+    return SourceEventSourcePlan(
+        item_type="worker.ward",
+        kind="worker",
+        property="ward",
+        populations=(
+            Population(kind="worker", sub_type="day"),
+            Population(kind="worker", sub_type="night"),
+        ),
+        audited_properties=_identity_pairs(("desk",)),
+        kind_labels=(),
+        item_surface=(("day", "record_id"), ("night", "record_id")),
+        change_edges=(),
+        where=where,
     )
 
 
@@ -300,6 +326,136 @@ class TestSubTypesNarrowedRecordsSource:
         item_ids = {r["item_id"] for r in rows}
         assert item_ids == {"t001", "t002"}
         assert "t003" not in item_ids
+
+
+# ---------------------------------------------------------------------------
+# `where` narrowing (source-row-selection sprint § Phase 3, doc § Row
+# selection): the fold input narrows to the selection spine; every event of
+# an excluded record/owner is excluded, create and destroy (join/leave)
+# alike.
+# ---------------------------------------------------------------------------
+
+
+class TestWhereNarrowedRecordsSource:
+    def test_where_excludes_every_event_of_a_non_satisfying_record(
+        self, tmp_path: Path
+    ) -> None:
+        """Only the satisfying record's events remain — its own create and
+        destroy both included; the excluded records' events (including
+        their own destroy) are entirely absent."""
+        where = (
+            SourceWhereEntry(
+                key="assignee_id",
+                source_column="prop__assignee_id",
+                sql_type="VARCHAR",
+                value="agent_b",
+                typed_values=(),
+            ),
+        )
+        source = _ticket_source(("status",), where=where)
+        log = SourceEventLogPlan(
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        assert {r["item_id"] for r in rows} == {"t002"}
+        assert {r["event"] for r in rows} == {"create", "destroy"}
+
+    def test_predicated_property_need_not_be_audited(self, tmp_path: Path) -> None:
+        """`where` is orthogonal to the audited property set: a property may
+        be predicated and never appear in `changes`."""
+        where = (
+            SourceWhereEntry(
+                key="assignee_id",
+                source_column="prop__assignee_id",
+                sql_type="VARCHAR",
+                value="agent_a",
+                typed_values=(),
+            ),
+        )
+        source = _ticket_source(("status",), where=where)
+        log = SourceEventLogPlan(
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        assert {r["item_id"] for r in rows} == {"t001"}
+        for row in rows:
+            assert "assignee_id" not in _changes(row)
+
+    def test_where_narrowed_id_stays_dense_and_one_based(self, tmp_path: Path) -> None:
+        """`id` is dense and 1-based over the narrowed whole-tape set —
+        excluded records reserve no numbers."""
+        where = (
+            SourceWhereEntry(
+                key="assignee_id",
+                source_column="prop__assignee_id",
+                sql_type="VARCHAR",
+                value="agent_b",
+                typed_values=(),
+            ),
+        )
+        source = _ticket_source(("status",), where=where)
+        log = SourceEventLogPlan(
+            name="versions", sources=(source,), item_id_type="VARCHAR", keys=None
+        )
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        ids = [r["id"] for r in rows]
+        assert ids == list(range(1, len(rows) + 1))
+
+
+class TestWhereNarrowedMembershipSource:
+    def test_owner_where_excludes_both_join_and_leave_of_excluded_owner(
+        self, tmp_path: Path
+    ) -> None:
+        """The owner `where` narrows through the parent lookup: w1 (region
+        east) satisfies and contributes both its join and leave; w2's
+        (region west) collection is excluded wholesale — it never even
+        contributes its own join-only row."""
+        where = (
+            SourceWhereEntry(
+                key="region",
+                source_column="prop__region",
+                sql_type="VARCHAR",
+                value="east",
+                typed_values=(),
+            ),
+        )
+        log = SourceEventLogPlan(
+            name="versions",
+            sources=(_worker_ward_source(where=where),),
+            item_id_type="VARCHAR",
+            keys=None,
+        )
+        emit_dir = build_source_junction_selection_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            rows = _rows(emit, sql)
+
+        assert {r["item_id"] for r in rows} == {"w1"}
+        assert {r["event"] for r in rows} == {"create", "destroy"}
 
 
 class TestEmptyAuditedSet:

@@ -802,23 +802,6 @@ def _require_exactly_one_population_source(
         raise ValueError(f"{label} must set exactly one of 'kind' / 'membership'")
 
 
-def _require_sub_types_only_with_kind(
-    kind: str | None, sub_types: tuple[str, ...] | None, label: str
-) -> None:
-    """`sub_types` only accompanies a `kind` address, never a `membership` one.
-
-    Args:
-        kind: The declaration's `kind` field.
-        sub_types: The declaration's `sub_types` field.
-        label: The declaring unit's message label.
-
-    Raises:
-        ValueError: `sub_types` is set while `kind` is not.
-    """
-    if sub_types is not None and kind is None:
-        raise ValueError(f"{label}: 'sub_types' is only valid together with 'kind'")
-
-
 class MembershipRef(StrictBaseModel):
     """Addresses one membership table by its contract identity."""
 
@@ -880,7 +863,9 @@ class SourceEventSourceDecl(StrictBaseModel):
     kind: str | None = None
     """A records kind, exclusive with `membership` (`source_shape`)."""
     sub_types: tuple[str, ...] | None = None
-    """Explicit population subset; only valid alongside `kind`. Absent =
+    """Explicit population subset (with `kind`) or owner sub-type subset
+    (with `membership` — the source's join/leave stream narrows to owners
+    in these sub-types, resolved through the parent lookup). Absent =
     every declared sub-type."""
     membership: MembershipRef | None = None
     """A membership-table address, exclusive with `kind`."""
@@ -899,6 +884,13 @@ class SourceEventSourceDecl(StrictBaseModel):
     Keys are source identities, never output keys, so a default-key
     collision is always resolvable. A membership reference field's entry
     renames its expanded `<f>_kind` / `<f>_id` pair in place."""
+    where: dict[str, PredicateValue] | None = None
+    """Record predicate over the subject kind (the declared kind, or the
+    owner kind for a membership source), keyed by bare property name;
+    entries AND-joined; keys must name `constant`-class payload properties
+    (gated at plan time). Selects which records' (owners') events feed this
+    source's audit stream — orthogonal to `only` / `ignore`, which select
+    the audited property set."""
 
     @model_validator(mode="after")
     def source_shape(self) -> Self:
@@ -906,15 +898,14 @@ class SourceEventSourceDecl(StrictBaseModel):
 
         Raises:
             ValueError: Not exactly one of `kind` / `membership` is set;
-                `sub_types` is set without `kind`; `sub_types` / `only` /
-                `ignore` is present-but-empty or carries a duplicate entry;
-                both `only` and `ignore` are set; `item_type` is empty;
-                `rename` is present-but-empty, has an empty key or value, or
-                two keys share a target value.
+                `sub_types` / `only` / `ignore` is present-but-empty or
+                carries a duplicate entry; both `only` and `ignore` are set;
+                `item_type` is empty; `rename` is present-but-empty, has an
+                empty key or value, or two keys share a target value;
+                `where` is present-but-empty or has an empty key.
         """
         label = "events source"
         _require_exactly_one_population_source(self.kind, self.membership, label)
-        _require_sub_types_only_with_kind(self.kind, self.sub_types, label)
         _require_distinct_nonempty_tuple(
             self.sub_types, "SourceEventSourceDecl.sub_types"
         )
@@ -926,6 +917,7 @@ class SourceEventSourceDecl(StrictBaseModel):
             _require_nonempty_str(self.item_type, "SourceEventSourceDecl.item_type")
         _require_rename_map_valid(self.rename, "SourceEventSourceDecl.rename")
         _require_dict_entries_nonempty(self.rename, "SourceEventSourceDecl.rename")
+        _require_where_map_valid(self.where, "SourceEventSourceDecl.where")
         return self
 
 
@@ -1007,12 +999,12 @@ class SourceConfig(StrictBaseModel):
         """Cross-declaration checks the per-declaration validators cannot
         see: `tables[].name` is distinct across the declaration list. Every
         other rule the design doc's `table_source_exclusive` docstring
-        describes — exactly one of `kind` / `membership`, `sub_types` only
-        with `kind`, non-empty distinct collections, `rename` values
-        distinct, `only`/`ignore` mutually exclusive — is already enforced
-        per-declaration by `SourceTableDecl.table_shape` /
-        `SourceEventSourceDecl.source_shape`; "at most one events block" is
-        structural (`events` is a single optional field, never a list).
+        describes — exactly one of `kind` / `membership`, non-empty distinct
+        collections, `rename` values distinct, `only`/`ignore` mutually
+        exclusive — is already enforced per-declaration by
+        `SourceTableDecl.table_shape` / `SourceEventSourceDecl.source_shape`;
+        "at most one events block" is structural (`events` is a single
+        optional field, never a list).
 
         Raises:
             ValueError: Two `tables` entries share the same `name`.

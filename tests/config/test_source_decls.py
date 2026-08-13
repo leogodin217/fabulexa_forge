@@ -259,13 +259,16 @@ def test_event_source_decl_both_kind_and_membership_rejected() -> None:
         )
 
 
-def test_event_source_decl_sub_types_only_with_kind() -> None:
-    """sub_types on a membership-source events source -> rejected."""
-    with pytest.raises(ValidationError, match="sub_types"):
-        SourceEventSourceDecl(
-            membership=MembershipRef(kind="trip", property="drivers"),
-            sub_types=("standard",),
-        )
+def test_event_source_decl_sub_types_with_membership_parses() -> None:
+    """`sub_types` alongside `membership` parses (owner sub-type subset,
+    doc § The parent lookup) — no longer a parse error; validated against
+    the owner kind's discriminator domain at plan time
+    (`tests/exporters/source/test_where_plan.py`)."""
+    decl = SourceEventSourceDecl(
+        membership=MembershipRef(kind="trip", property="drivers"),
+        sub_types=("standard",),
+    )
+    assert decl.sub_types == ("standard",)
 
 
 def test_event_source_decl_only_ignore_mutually_exclusive() -> None:

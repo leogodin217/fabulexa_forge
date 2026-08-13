@@ -2,7 +2,7 @@ sprint: source-row-selection
 parent_branch: ci_fixes_and_bugs
 baseline_sha: 8bd6e6e679af1de6201d61fc4abda93bfffde946
 started: 2026-08-12
-current_phase: 3
+current_phase: 4
 capabilities:
   - source-exporter: [row-selection-where, membership-owner-selection, selection-aware-disjointness, init-membership-proposals]
   - row-predicates: [source-surfaces]
@@ -29,7 +29,7 @@ phases:
     name: "Membership-unit selection on junction tables"
     demo: "docs/sprints/source-row-selection/demos/phase_2_junction_split.py"
   3:
-    status: pending
+    status: complete
     name: "Event-log selection and selection-aware disjointness"
     demo: "docs/sprints/source-row-selection/demos/phase_3_event_log_split.py"
     steps:
