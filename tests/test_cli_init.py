@@ -1644,6 +1644,85 @@ def test_mode_source_dispatches_to_source_engine(tmp_path: Path) -> None:
     assert "mode: dimensional" not in content
 
 
+def build_source_subtyped_membership_emit(tmp_path: Path) -> Path:
+    """A sub-typed `actor` owner (consultant/nurse) with a membership table
+    it owns -- CLI-level reflection of the Phase 4 per-sub-type junction
+    split."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    actor_columns: list[dict[str, object]] = [
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "created_sim_time", "type": "BIGINT"},
+        {"name": "active", "type": "BOOLEAN"},
+        {"name": "deactivated_at", "type": "BIGINT"},
+        {"name": "last_mutation_sim_time", "type": "BIGINT"},
+        identity_column("record_index", "BIGINT"),
+        prop_column(
+            "prop__actor_type",
+            "VARCHAR",
+            history_tracked=False,
+            temporal_class="constant",
+        ),
+    ]
+    membership_columns: list[dict[str, object]] = [
+        identity_column("fork_path", "VARCHAR"),
+        identity_column("record_id", "VARCHAR"),
+        {"name": "joined_sim_time", "type": "BIGINT"},
+        {"name": "left_sim_time", "type": "BIGINT"},
+        {"name": "elem__seat", "type": "VARCHAR"},
+    ]
+    conn.execute(_create_ddl("records__actor", actor_columns))
+    conn.execute(_create_ddl("membership__actor__team", membership_columns))
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "a1", 10, True, 10, 0, "consultant"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__actor__team" VALUES (?, ?, ?, NULL, ?)',
+        ["trunk", "a1", 10, "front"],
+    )
+    conn.close()
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[
+                _table_spec(
+                    "records__actor", "records", actor_columns, 1, record_kind="actor"
+                ),
+                _table_spec(
+                    "membership__actor__team",
+                    "membership",
+                    membership_columns,
+                    1,
+                    record_kind="actor",
+                    property_name="team",
+                ),
+            ],
+            record_roles=None,
+            enum_domains={"actor": {"actor_type": ["consultant", "nurse"]}},
+        ),
+    )
+    return tmp_path
+
+
+def test_mode_source_reflects_subtyped_membership_junction_split(
+    tmp_path: Path,
+) -> None:
+    """`init --mode source` end-to-end reflects the Phase 4 per-sub-type
+    junction split for a sub-typed owner's membership table."""
+    emit_dir = build_source_subtyped_membership_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    exit_code = main(["init", str(emit_dir), str(out_path), "--mode", "source"])
+    assert exit_code == 0
+    content = out_path.read_text(encoding="utf-8")
+    assert "- name: actor_consultant_team\n" in content
+    assert "sub_types: [consultant]\n" in content
+    assert "- name: actor_nurse_team\n" in content
+    assert "sub_types: [nurse]\n" in content
+
+
 def test_bare_init_byte_identical_to_dimensional_default(tmp_path: Path) -> None:
     """Bare `init` (no `--mode`) is byte-identical to `--mode dimensional`."""
     emit_dir = build_bare_dim_emit(tmp_path / "emit")

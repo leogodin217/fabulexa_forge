@@ -10,9 +10,14 @@ sub-type's stub carries a header comment naming the kind's full declared
 domain; the last carries a commented combine-alternative (one shared table
 across every sub-type, `sub_types:` omitted) for a kind whose sub-types share
 an identical column set. One `junction` table per `membership__<K>__<p>`
-table, and one `events` stub named `versions` — an active source per
+table for a flat owner; a sub-typed owner instead proposes one junction stub
+per declared sub-type (`sub_types: [<sub_type>]`), the last carrying a
+commented combine-alternative — mirroring the owner's own per-sub-type state
+stubs. One `events` stub named `versions` — an active source per
 tracked-property kind, membership sources and lifecycle-only kinds appended
-commented-out; fully commented when no kind carries a tracked property.
+commented-out (one commented entry per declared sub-type for a sub-typed
+owner's membership, carrying `sub_types: [<sub_type>]`); fully commented when
+no kind carries a tracked property.
 Absent `columns` / `only` / `ignore` propose the full classified default
 (source's own absent-selection rule), so no column enumeration is needed
 here; non-exempt `slice_only` columns are never proposed and each gets one
@@ -78,11 +83,19 @@ class _StateUnit:
 
 @dataclass(frozen=True)
 class _JunctionUnit:
-    """One proposed `junction` table: `<K>_<p>`, one per membership table."""
+    """One proposed `junction` table: one per membership table for a flat
+    owner (`name` = `<K>_<p>`), one per declared sub-type for a sub-typed
+    owner (`name` = `<K>_<sub_type>_<p>`, `sub_type` set) — mirroring
+    `_StateUnit`'s per-sub-type split, keyed off the owner kind's
+    `Sidecar.subtype_values`.
+    """
 
     name: str
     owner_kind: str
     property: str
+    sub_type: str | None
+    """The owner sub-type this stub addresses, or None for a flat owner /
+    whole junction."""
 
 
 # ---------------------------------------------------------------------------
@@ -140,27 +153,46 @@ def _proposed_units(sidecar: "Sidecar") -> "tuple[_StateUnit | _JunctionUnit, ..
             assert owner_kind is not None and property_name is not None, (
                 "membership table must declare record_kind and property"
             )
-            units.append(
-                _JunctionUnit(
-                    name=f"{owner_kind}_{property_name}",
-                    owner_kind=owner_kind,
-                    property=property_name,
+            owner_domain = sidecar.subtype_values(owner_kind)
+            if owner_domain:
+                for sub_type in owner_domain:
+                    units.append(
+                        _JunctionUnit(
+                            name=f"{owner_kind}_{sub_type}_{property_name}",
+                            owner_kind=owner_kind,
+                            property=property_name,
+                            sub_type=sub_type,
+                        )
+                    )
+            else:
+                units.append(
+                    _JunctionUnit(
+                        name=f"{owner_kind}_{property_name}",
+                        owner_kind=owner_kind,
+                        property=property_name,
+                        sub_type=None,
+                    )
                 )
-            )
     return tuple(units)
 
 
-def _membership_sources(sidecar: "Sidecar") -> tuple[tuple[str, str], ...]:
-    """Every `(owner_kind, property)` membership table, sidecar order.
+def _membership_sources(
+    sidecar: "Sidecar",
+) -> tuple[tuple[str, str, str | None], ...]:
+    """Every `(owner_kind, property, sub_type)` membership triple, sidecar
+    order — one triple per declared sub-type of a sub-typed owner, one
+    (`sub_type=None`) for a flat owner.
 
     Args:
         sidecar: The open emit's sidecar.
 
     Returns:
-        (owner_kind, property) pairs, sidecar table-declaration order.
+        `(owner_kind, property, sub_type | None)` triples, sidecar
+        table-declaration order (sub-types in declared-domain order within
+        an owner).
     """
     return tuple(
-        (unit.owner_kind, unit.property)
+        (unit.owner_kind, unit.property, unit.sub_type)
         for unit in _proposed_units(sidecar)
         if isinstance(unit, _JunctionUnit)
     )
@@ -291,22 +323,43 @@ def _write_state_unit(
 
 
 def _write_junction_unit(
-    w: Callable[[str], None], unit: _JunctionUnit, commented: bool
+    w: Callable[[str], None],
+    unit: _JunctionUnit,
+    domain: tuple[str, ...],
+    commented: bool,
 ) -> None:
-    """Write one proposed `junction` table entry.
+    """Write one proposed `junction` table entry; a per-sub-type stub
+    carries `sub_types: [<sub_type>]`, and the last stub of a sub-typed
+    owner's set carries the commented combine-alternative (one whole
+    junction, `sub_types:` omitted), mirroring `_write_state_unit`.
+    No `where` is ever proposed.
 
     Args:
         w: Line-writing callable.
         unit: The proposed unit.
+        domain: The owner kind's declared discriminator domain (empty for a
+            flat owner) — last-stub detection, as `_write_state_unit`'s.
         commented: True when a same-named proposal was already emitted.
     """
     if commented:
         _write_collision_note(w, unit.name)
         w(f"    # - name: {unit.name}")
         w(f"    #   membership: {{kind: {unit.owner_kind}, property: {unit.property}}}")
+        if unit.sub_type is not None:
+            w(f"    #   sub_types: [{unit.sub_type}]")
         return
     w(f"    - name: {unit.name}")
     w(f"      membership: {{kind: {unit.owner_kind}, property: {unit.property}}}")
+    if unit.sub_type is not None:
+        w(f"      sub_types: [{unit.sub_type}]")
+    if unit.sub_type is not None and unit.sub_type == domain[-1]:
+        w(
+            "    # Combine alternative: one shared junction across every"
+            " declared sub-type instead of the per-sub-type split above"
+            " (valid when the sub-types share an identical column set)"
+        )
+        w(f"    # - name: {unit.owner_kind}_{unit.property}")
+        w(f"    #   membership: {{kind: {unit.owner_kind}, property: {unit.property}}}")
 
 
 def _write_tables_block(
@@ -332,7 +385,8 @@ def _write_tables_block(
             domain = sidecar.subtype_values(unit.kind)
             _write_state_unit(w, unit, domain, commented)
         else:
-            _write_junction_unit(w, unit, commented)
+            domain = sidecar.subtype_values(unit.owner_kind)
+            _write_junction_unit(w, unit, domain, commented)
 
 
 # ---------------------------------------------------------------------------
@@ -346,7 +400,9 @@ def _write_events_block(
     """Write the `source.events` stub, named `versions`.
 
     An active source per tracked-property kind; membership sources and
-    lifecycle-only kinds (no tracked property) appended commented-out. When
+    lifecycle-only kinds (no tracked property) appended commented-out — one
+    commented entry per declared sub-type of a sub-typed owner, carrying
+    `sub_types: [<sub_type>]`, one (no `sub_types`) for a flat owner. When
     no kind carries a tracked property, the whole block — name included — is
     commented out under a note that the emit's history is lifecycle-only.
 
@@ -376,8 +432,10 @@ def _write_events_block(
         w("  #   sources:")
         for kind in lifecycle_only:
             w(f"  #     - kind: {kind}")
-        for owner_kind, prop in memberships:
+        for owner_kind, prop, sub_type in memberships:
             w(f"  #     - membership: {{kind: {owner_kind}, property: {prop}}}")
+            if sub_type is not None:
+                w(f"  #       sub_types: [{sub_type}]")
         return
 
     w("  events:")
@@ -387,8 +445,10 @@ def _write_events_block(
         w(f"      - kind: {kind}")
     for kind in lifecycle_only:
         w(f"      # - kind: {kind}  # lifecycle-only: no tracked property")
-    for owner_kind, prop in memberships:
+    for owner_kind, prop, sub_type in memberships:
         w(f"      # - membership: {{kind: {owner_kind}, property: {prop}}}")
+        if sub_type is not None:
+            w(f"      #   sub_types: [{sub_type}]")
 
 
 # ---------------------------------------------------------------------------
@@ -460,8 +520,10 @@ def generate_source_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
         proposed `keys:` block, one `state` table stub per population (per
         declared sub-type for a sub-typed kind, carrying a commented
         combine-alternative after the last one) / one `junction` stub per
-        membership table, and a `versions` events stub (fully commented when
-        no kind carries a tracked property).
+        membership table (per declared sub-type of a sub-typed owner,
+        likewise carrying a commented combine-alternative after the last
+        one), and a `versions` events stub (fully commented when no kind
+        carries a tracked property).
 
     Raises:
         SourceHistoryTrackedRequired: The sidecar predates per-column

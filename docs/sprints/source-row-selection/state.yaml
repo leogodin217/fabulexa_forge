@@ -43,6 +43,6 @@ phases:
           - "tests/exporters/source/test_events_render.py"
           - "tests/incremental/test_driver.py"
   4:
-    status: pending
+    status: complete
     name: "init membership-estate proposals"
     demo: "docs/sprints/source-row-selection/demos/phase_4_init_membership.py"

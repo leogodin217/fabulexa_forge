@@ -6,7 +6,13 @@ Covers:
   [<sub_type>]`) for a sub-typed kind -- `init`'s default split -- with a
   header comment naming the full domain and a commented combine-alternative
   after the last sub-type's stub.
-- One junction per membership table, named `<K>_<p>`.
+- One junction per membership table, named `<K>_<p>` for a flat owner; one
+  stub per declared sub-type (`<K>_<sub_type>_<p>`, `sub_types:
+  [<sub_type>]`) for a sub-typed owner, with a commented combine-alternative
+  after the last stub -- mirroring the state-table split.
+- Membership event-source entries: one commented entry per declared
+  sub-type, carrying `sub_types: [<sub_type>]`; uncommenting the full set
+  still parses and plans clean.
 - The `versions` events stub: one active source per tracked-property kind,
   membership sources and lifecycle-only kinds appended commented-out.
 - No tracked property anywhere -> the events stub is fully commented, with
@@ -185,6 +191,148 @@ def test_junction_named_owner_kind_property(tmp_path: Path) -> None:
         "    - name: visit_team\n"
         "      membership: {kind: visit, property: team}\n" in content
     )
+
+
+# ---------------------------------------------------------------------------
+# Sub-typed owner membership estate (Phase 4)
+# ---------------------------------------------------------------------------
+
+_SUBTYPED_TRACKED_ACTOR_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__actor_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+_SUBTYPED_TRACKED_ACTOR_ROW: list[object] = [
+    "trunk",
+    "a1",
+    10,
+    True,
+    10,
+    0,
+    "consultant",
+    "on-duty",
+]
+
+_OWNER_MEMBERSHIP_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__seat", "type": "VARCHAR"},
+]
+
+
+def _build_subtyped_owner_membership_emit(tmp_path: Path) -> Path:
+    """A sub-typed `actor` owner (consultant/nurse, itself tracked, so the
+    events block stays live) plus a `membership__actor__team` table it owns
+    -- the sub-typed membership estate `init` splits per sub-type."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    conn = duckdb.connect(str(emit_dir / "run.duckdb"))
+    conn.execute(_create_ddl("records__actor", _SUBTYPED_TRACKED_ACTOR_COLUMNS))
+    conn.execute(_create_ddl("membership__actor__team", _OWNER_MEMBERSHIP_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        _SUBTYPED_TRACKED_ACTOR_ROW,
+    )
+    conn.execute(
+        'INSERT INTO "membership__actor__team" VALUES (?, ?, ?, NULL, ?)',
+        ["trunk", "a1", 10, "front"],
+    )
+    conn.close()
+    write_emit(
+        emit_dir,
+        tables=[
+            _table_spec(
+                "records__actor",
+                "records",
+                _SUBTYPED_TRACKED_ACTOR_COLUMNS,
+                1,
+                record_kind="actor",
+            ),
+            _table_spec(
+                "membership__actor__team",
+                "membership",
+                _OWNER_MEMBERSHIP_COLUMNS,
+                1,
+                record_kind="actor",
+                property_name="team",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={"enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}}},
+    )
+    return emit_dir
+
+
+def test_subtyped_owner_junction_splits_per_subtype_with_combine_alternative(
+    tmp_path: Path,
+) -> None:
+    """A sub-typed owner's membership table proposes one junction stub per
+    declared sub-type, named `<K>_<sub_type>_<p>` with `sub_types:
+    [<sub_type>]`; the last stub carries the commented combine-alternative."""
+    emit_dir = _build_subtyped_owner_membership_emit(tmp_path)
+    content = _generate(emit_dir)
+    assert (
+        "    - name: actor_consultant_team\n"
+        "      membership: {kind: actor, property: team}\n"
+        "      sub_types: [consultant]\n" in content
+    )
+    assert (
+        "    - name: actor_nurse_team\n"
+        "      membership: {kind: actor, property: team}\n"
+        "      sub_types: [nurse]\n"
+        "    # Combine alternative: one shared junction across every"
+        " declared sub-type instead of the per-sub-type split above"
+        " (valid when the sub-types share an identical column set)\n"
+        "    # - name: actor_team\n"
+        "    #   membership: {kind: actor, property: team}\n" in content
+    )
+    assert "\n    - name: actor_team\n" not in content
+
+
+def test_membership_event_source_entries_carry_subtypes(tmp_path: Path) -> None:
+    """Membership event-source entries: one commented entry per declared
+    sub-type, carrying `sub_types: [<sub_type>]`."""
+    emit_dir = _build_subtyped_owner_membership_emit(tmp_path)
+    content = _generate(emit_dir)
+    assert (
+        "      # - membership: {kind: actor, property: team}\n"
+        "      #   sub_types: [consultant]\n"
+        "      # - membership: {kind: actor, property: team}\n"
+        "      #   sub_types: [nurse]\n" in content
+    )
+
+
+def test_uncommenting_membership_event_sources_plans_clean(tmp_path: Path) -> None:
+    """Uncommenting the full per-sub-type membership event-source set stays
+    plan-clean: the entries share the default item-type `actor.team` under
+    the extended sharing exception, and their both-declared disjoint
+    `sub_types` satisfy the overlap gate."""
+    emit_dir = _build_subtyped_owner_membership_emit(tmp_path)
+    content = _generate(emit_dir)
+    uncommented = content.replace("# - membership:", "- membership:").replace(
+        "#   sub_types:", "  sub_types:"
+    )
+    _assert_round_trip_plans_clean(emit_dir, uncommented, tmp_path)
+
+
+def test_no_where_ever_proposed(tmp_path: Path) -> None:
+    """No `where` key is ever proposed anywhere in `init` output."""
+    emit_dir = _build_subtyped_owner_membership_emit(tmp_path)
+    content = _generate(emit_dir)
+    assert "where" not in content
 
 
 # ---------------------------------------------------------------------------
