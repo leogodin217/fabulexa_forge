@@ -24,13 +24,15 @@ resolves each `SourceStateTablePlan.keys` via `resolve_state_table_keys`
 when `config.source.declare_keys` is true.
 
 Layer-direction invariant: imports the reader, the derivations layer only
-via the mode-neutral `election` module, `fabulexa_forge.errors`, the
-mode-neutral `reserved_names` / `slice_only` / `query_spec` (`TableKeys`) /
-`populations` modules, the sibling `source.columns` (`_PROP_PREFIX`) and
-`source.events` (`SourceEventSourcePlan`, `SourceEventLogPlan`) modules,
-`notices`, `derivations.guard` (`require_single_branch`), config.models
-(TYPE_CHECKING only except `KeySurface`), and stdlib. Never imports
-exporters.dimensional.* or exporters.streaming.*.
+via the mode-neutral `election` module, `fabulexa_forge.errors`,
+`fabulexa_forge._sql` (`cast_predicate_element`, the `where` constant-cast
+seam), the mode-neutral `reserved_names` / `slice_only` / `query_spec`
+(`TableKeys`) / `populations` modules, the sibling `source.columns`
+(`_PROP_PREFIX`) and `source.events` (`SourceEventSourcePlan`,
+`SourceEventLogPlan`) modules, `notices`, `derivations.guard`
+(`require_single_branch`), config.models (TYPE_CHECKING only except
+`KeySurface`), and stdlib. Never imports exporters.dimensional.* or
+exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import (
         ExportConfig,
         KeySurface,
+        PredicateValue,
         SourceEventsDecl,
         SourceEventSourceDecl,
         SourceTableDecl,
@@ -51,6 +54,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import PresentationKeys, Sidecar
 
+from fabulexa_forge._sql import cast_predicate_element
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import (
     ExportError,
@@ -65,6 +69,10 @@ from fabulexa_forge.errors import (
     SourceSliceOnlyRead,
     SourceTableMembershipUnknown,
     SourceUnclassifiedColumn,
+    SourceWhereColumnUnresolved,
+    SourceWhereNotConstant,
+    SourceWhereOnDiscriminator,
+    SourceWhereValueUncastable,
 )
 from fabulexa_forge.exporters.election import (
     Election,
@@ -163,6 +171,24 @@ class SourceEdgeSurface:
 
 
 @dataclass(frozen=True)
+class SourceWhereEntry:
+    """One resolved `where` entry: gate-passed and plan-time-typed."""
+
+    key: str
+    """The key as written (source-column or bare form)."""
+    source_column: str
+    """The base-table column identity (`prop__<p>`) on the subject kind's
+    records table."""
+    sql_type: str
+    """The column's sidecar-declared DuckDB type."""
+    value: "str | list[str]"
+    """The config value, verbatim — what the rendering authority compiles."""
+    typed_values: tuple[object, ...]
+    """Per-element `cast_predicate_element` results, config element order —
+    the disjointness gate's comparison set (doc § Event-source disjointness)."""
+
+
+@dataclass(frozen=True)
 class SourceStateTablePlan:
     """One resolved `state` table: a declared thing-table over the
     populations of exactly one kind.
@@ -200,6 +226,12 @@ class SourceStateTablePlan:
     keys: TableKeys | None
     """The table's declared keys (§ 4), resolved at plan time; None when
     `declare_keys` is off."""
+    where: tuple[SourceWhereEntry, ...] = ()
+    """The table's resolved row predicate, `where` declaration order; empty
+    when `where` is absent — config absence is already detected at the
+    decl. Defaults to empty so existing construction call sites (a table
+    with no `where`) need no change; `_build_state_table_plan` always
+    passes it explicitly."""
 
 
 @dataclass(frozen=True)
@@ -1081,6 +1113,219 @@ def _apply_junction_rename(
 
 
 # ---------------------------------------------------------------------------
+# `where` predicate resolution (the constant-column gate, doc § The
+# constant-column gate)
+# ---------------------------------------------------------------------------
+
+
+def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:
+    """Map every column of `table_name` to its declared sidecar DuckDB type.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        table_name: A sidecar table name.
+
+    Returns:
+        {column name -> DuckDB type}, in no particular order.
+    """
+    return {col.name: col.type for col in sidecar.columns(table_name)}
+
+
+def _where_predicate_elements(value: "str | list[str]") -> list[str]:
+    """Normalize a `where` value to its element list, in config order.
+
+    Args:
+        value: A scalar (treated as a one-element list) or a list.
+
+    Returns:
+        The value's elements, in order.
+    """
+    return [value] if isinstance(value, str) else list(value)
+
+
+def _resolve_where_selection(
+    sidecar: "Sidecar",
+    where: "dict[str, PredicateValue]",
+    subject_kind: str,
+    key_form: Literal["source_column", "bare"],
+    label: str,
+) -> tuple[SourceWhereEntry, ...]:
+    """The constant-column gate (doc § The constant-column gate): resolve
+    every `where` key against the subject kind's payload-property set in the
+    unit's key form, gate class and discriminator, and constant-evaluate
+    every element's cast. Declaration entry order.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        where: The declaration's `where` mapping (present; callers skip the
+            call when the field is absent).
+        subject_kind: The declared kind, or the owner kind for a membership
+            unit.
+        key_form: 'source_column' (`prop__<p>`, records-backed tables) or
+            'bare' (events sources and membership units).
+        label: The declaring unit's message label (`table '<name>'` /
+            `events source #<n>`).
+
+    Returns:
+        The resolved entries, `where` declaration order.
+
+    Raises:
+        SourceWhereColumnUnresolved: A key resolves to no payload property.
+        SourceWhereNotConstant: A resolved column is tracked / slice_only.
+        SourceWhereOnDiscriminator: A key names the discriminator.
+        SourceWhereValueUncastable: An element fails its column's cast.
+        TemporalClassUnavailableError: A consulted column's class is
+            unavailable (C13, reader-owned).
+        ExportError: A consulted column's declared type is unrecognized.
+    """
+    source_table = f"{_RECORDS_TABLE_PREFIX}{subject_kind}"
+    bare_names = _records_bare_property_names(sidecar, source_table)
+    discriminator_col = (
+        f"{_PROP_PREFIX}{subject_kind}_type"
+        if sidecar.subtype_values(subject_kind)
+        else None
+    )
+    col_types = _column_types(sidecar, source_table)
+
+    entries: list[SourceWhereEntry] = []
+    for key, value in where.items():
+        if key_form == "source_column":
+            if not key.startswith(_PROP_PREFIX):
+                raise SourceWhereColumnUnresolved(
+                    f"{label}: where key '{key}' not a payload property"
+                    f" of kind '{subject_kind}'"
+                )
+            bare_prop = key[len(_PROP_PREFIX) :]
+            source_column = key
+        else:
+            bare_prop = key
+            source_column = f"{_PROP_PREFIX}{key}"
+
+        if bare_prop not in bare_names:
+            raise SourceWhereColumnUnresolved(
+                f"{label}: where key '{key}' not a payload property"
+                f" of kind '{subject_kind}'"
+            )
+        if source_column == discriminator_col:
+            raise SourceWhereOnDiscriminator(
+                f"{label}: '{key}' is the sub-type discriminator; select"
+                " sub-types via sub_types, not where"
+            )
+
+        temporal_class = sidecar.temporal_class(source_table, source_column)
+        if temporal_class == "tracked":
+            raise SourceWhereNotConstant(
+                f"{label}: where key '{key}' is temporal_class: tracked;"
+                " under a horizon reconstruction its as-of and current"
+                " values select different rows — row selection requires a"
+                " constant column"
+            )
+        if temporal_class == "slice_only":
+            raise SourceWhereNotConstant(
+                f"{label}: where key '{key}' is temporal_class: slice_only;"
+                " its past is unknowable, so row selection cannot read it"
+            )
+
+        sql_type = col_types[source_column]
+        elements = _where_predicate_elements(value)
+        typed_values: list[object] = []
+        for element in elements:
+            try:
+                typed_values.append(cast_predicate_element(element, sql_type))
+            except ValueError as exc:
+                raise SourceWhereValueUncastable(
+                    f"{label}: where value '{element}' for '{key}' does not"
+                    f" cast to {sql_type}"
+                ) from exc
+
+        entries.append(
+            SourceWhereEntry(
+                key=key,
+                source_column=source_column,
+                sql_type=sql_type,
+                value=value,
+                typed_values=tuple(typed_values),
+            )
+        )
+    return tuple(entries)
+
+
+def _where_value_unobserved_message(
+    label: str, key: str, element: str, wholly_unobserved: bool
+) -> str:
+    """Render one `where`-value-unobserved notice's message.
+
+    Dimensional's shipped `discriminator-value-unobserved` granularity
+    (`check_discriminator_value_observed`): a scalar or wholly-unobserved
+    list states the unit renders no rows; a partially-covered list's
+    unobserved elements take the weaker per-element wording.
+
+    Args:
+        label: The declaring unit's message label.
+        key: The `where` key as written.
+        element: The unobserved element.
+        wholly_unobserved: Whether every element of the entry's value is
+            unobserved.
+
+    Returns:
+        The notice message text.
+    """
+    if wholly_unobserved:
+        return (
+            f"{label}: where value '{element}' for '{key}' not observed;"
+            " the unit renders no rows"
+        )
+    return (
+        f"{label}: where value '{element}' for '{key}' not observed;"
+        " it contributes no rows"
+    )
+
+
+def _check_where_values_observed(
+    sidecar: "Sidecar",
+    entries: "tuple[SourceWhereEntry, ...]",
+    subject_kind: str,
+    label: str,
+    notice_sink: "NoticeSink",
+) -> None:
+    """Emit dimensional's `discriminator-value-unobserved` notice per
+    out-of-domain `where` element — shipped code, message granularity, and
+    element order reused (doc § The constant-column gate; dimensional's
+    `check_discriminator_value_observed`). A column with no `enum_domains`
+    entry is unchecked. Never an error.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        entries: The unit's resolved `where` entries.
+        subject_kind: The `enum_domains` key.
+        label: The declaring unit's message label.
+        notice_sink: Receiver for the notices.
+    """
+    kind_domains = sidecar.enum_domains().get(subject_kind, {})
+    for entry in entries:
+        bare_prop = entry.source_column[len(_PROP_PREFIX) :]
+        observed_values = kind_domains.get(bare_prop, ())
+        if not observed_values:
+            continue
+
+        elements = _where_predicate_elements(entry.value)
+        unobserved = [e for e in elements if e not in observed_values]
+        if not unobserved:
+            continue
+
+        wholly_unobserved = len(unobserved) == len(elements)
+        for element in unobserved:
+            notice_sink(
+                Notice(
+                    code="discriminator-value-unobserved",
+                    message=_where_value_unobserved_message(
+                        label, entry.key, element, wholly_unobserved
+                    ),
+                )
+            )
+
+
+# ---------------------------------------------------------------------------
 # `tables[]` declaration resolution
 # ---------------------------------------------------------------------------
 
@@ -1118,6 +1363,9 @@ def _build_state_table_plan(
             fail.
         PresentationKeysInvalidError: `declare_keys` and the block is
             present and incoherent.
+        SourceWhereColumnUnresolved, SourceWhereNotConstant,
+            SourceWhereOnDiscriminator, SourceWhereValueUncastable: `where`
+            resolution fails (the constant-column gate).
     """
     assert decl.kind is not None, "a records tables[] declaration carries kind"
     kind = decl.kind
@@ -1172,6 +1420,21 @@ def _build_state_table_plan(
         else None
     )
 
+    where = (
+        _resolve_where_selection(
+            sidecar,
+            decl.where,
+            kind,
+            key_form="source_column",
+            label=f"table '{decl.name}'",
+        )
+        if decl.where is not None
+        else ()
+    )
+    _check_where_values_observed(
+        sidecar, where, kind, f"table '{decl.name}'", notice_sink
+    )
+
     return SourceStateTablePlan(
         name=decl.name,
         kind=kind,
@@ -1180,6 +1443,7 @@ def _build_state_table_plan(
         identity_surface=identity_surface,
         edge_surfaces=edge_surfaces,
         keys=keys,
+        where=where,
     )
 
 

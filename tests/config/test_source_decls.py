@@ -1,8 +1,10 @@
 """Tests for the source declared-table decl models: MembershipRef,
 SourceTableDecl, SourceEventSourceDecl, SourceEventsDecl.
 
-Phase 1: these models are standalone (not yet wired into SourceConfig), so
-tests construct them directly rather than through ExportConfig / the loader.
+These models are exercised standalone here (`ExportConfig` / plan-time wiring
+is `test_plan.py` / `test_where_plan.py`'s), since every shape rule they carry
+(`table_shape` / `source_shape`, including `SourceTableDecl.where`'s
+present-but-empty / empty-key clause) is decidable from the decl alone.
 """
 
 from __future__ import annotations
@@ -163,6 +165,56 @@ def test_table_decl_rename_distinct_values_parses() -> None:
     """Distinct rename targets parse."""
     decl = SourceTableDecl(name="trips", kind="trip", rename={"prop__fare": "fare_usd"})
     assert decl.rename == {"prop__fare": "fare_usd"}
+
+
+# ---------------------------------------------------------------------------
+# SourceTableDecl.where — shape clause (doc § Config Models; PredicateValue
+# per-entry emptiness/duplication rides the type, not this validator)
+# ---------------------------------------------------------------------------
+
+
+def test_table_decl_where_empty_dict_rejected() -> None:
+    """`where: {}` (present but empty) -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceTableDecl(name="trips", kind="trip", where={})
+
+
+def test_table_decl_where_empty_key_rejected() -> None:
+    """A `where` entry with an empty key -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceTableDecl(name="trips", kind="trip", where={"": "standard"})
+
+
+def test_table_decl_where_empty_list_value_rejected() -> None:
+    """A `where` value that is an empty list -> rejected by `PredicateValue`
+    at the offending entry's path, not by `table_shape`."""
+    with pytest.raises(ValidationError, match="empty list"):
+        SourceTableDecl(name="trips", kind="trip", where={"prop__fare": []})
+
+
+def test_table_decl_where_duplicate_list_element_rejected() -> None:
+    """A `where` list value carrying a duplicate element -> rejected by
+    `PredicateValue` at the offending entry's path."""
+    with pytest.raises(ValidationError, match="duplicate element"):
+        SourceTableDecl(name="trips", kind="trip", where={"prop__fare": ["5", "5"]})
+
+
+def test_table_decl_where_scalar_parses() -> None:
+    """A scalar `where` value parses."""
+    decl = SourceTableDecl(name="trips", kind="trip", where={"prop__fare": "5"})
+    assert decl.where == {"prop__fare": "5"}
+
+
+def test_table_decl_where_list_parses() -> None:
+    """A non-empty, duplicate-free list `where` value parses."""
+    decl = SourceTableDecl(name="trips", kind="trip", where={"prop__fare": ["5", "10"]})
+    assert decl.where == {"prop__fare": ["5", "10"]}
+
+
+def test_table_decl_where_absent_defaults_none() -> None:
+    """A table decl declaring no `where` parses exactly as today: None."""
+    decl = SourceTableDecl(name="trips", kind="trip")
+    assert decl.where is None
 
 
 def test_table_decl_extra_field_forbidden() -> None:

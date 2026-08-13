@@ -735,6 +735,30 @@ def _require_rename_map_valid(value: dict[str, str] | None, field_name: str) -> 
         raise ValueError(f"{field_name} values must be distinct: {duplicates}")
 
 
+def _require_where_map_valid(
+    value: dict[str, PredicateValue] | None, field_name: str
+) -> None:
+    """A `where` mapping: when present, non-empty, with non-empty keys.
+
+    Per-entry value emptiness / duplication rides the `PredicateValue` type
+    itself (`_reject_malformed_predicate`) and is not re-checked here.
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty dict, or contains an empty key.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    for key in value:
+        if not key:
+            raise ValueError(f"{field_name} keys must be non-empty")
+
+
 def _require_dict_entries_nonempty(
     value: dict[str, str] | None, field_name: str
 ) -> None:
@@ -820,6 +844,11 @@ class SourceTableDecl(StrictBaseModel):
     """Source-column selection; absent = full classified projection."""
     rename: dict[str, str] | None = None
     """Source column name -> output name overrides."""
+    where: dict[str, PredicateValue] | None = None
+    """Row predicate; entries AND-joined. Keys name `constant`-class payload
+    properties of the subject kind (gated at plan time): source column names
+    (`prop__<p>`) with `kind`, bare owner-property names with `membership`.
+    Absent = every row of the selected populations."""
 
     @model_validator(mode="after")
     def table_shape(self) -> Self:
@@ -830,7 +859,9 @@ class SourceTableDecl(StrictBaseModel):
                 `membership` is set; `sub_types` is set without `kind`;
                 `sub_types` / `columns` is present-but-empty or carries a
                 duplicate entry; `rename` is present-but-empty or two keys
-                share a target value.
+                share a target value; `where` is present-but-empty or has an
+                empty key. (Value emptiness / duplication is carried by
+                `PredicateValue` per entry.)
         """
         _require_nonempty_str(self.name, "SourceTableDecl.name")
         label = f"table {self.name!r}"
@@ -839,6 +870,7 @@ class SourceTableDecl(StrictBaseModel):
         _require_distinct_nonempty_tuple(self.sub_types, "SourceTableDecl.sub_types")
         _require_distinct_nonempty_tuple(self.columns, "SourceTableDecl.columns")
         _require_rename_map_valid(self.rename, "SourceTableDecl.rename")
+        _require_where_map_valid(self.where, "SourceTableDecl.where")
         return self
 
 

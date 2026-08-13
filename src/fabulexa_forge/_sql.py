@@ -4,6 +4,7 @@ corrupter layers."""
 from __future__ import annotations
 
 import re
+from decimal import Decimal, InvalidOperation
 
 from fabulexa_forge.errors import ExportError
 
@@ -169,3 +170,69 @@ def render_predicate_condition(
 
     literals = ", ".join(render_typed_literal(element, sql_type) for element in value)
     return f"{qualified} IN ({literals})"
+
+
+# DuckDB's VARCHAR->BOOLEAN literal grammar (case-insensitive), mirrored here so
+# `cast_predicate_element` never needs a live connection to decide castability.
+_BOOLEAN_TRUE_LITERALS = frozenset({"true", "t", "yes", "y", "1"})
+_BOOLEAN_FALSE_LITERALS = frozenset({"false", "f", "no", "n", "0"})
+
+
+def cast_predicate_element(element: str, sql_type: str) -> object:
+    """The plan-time constant evaluation of the CAST `render_typed_literal`
+    compiles: one predicate element's typed value under a column's declared
+    DuckDB type.
+
+    Returned values are hashable, and `==` / `hash` realize typed-value
+    identity under `sql_type` — two spellings of one value ('5' / '05'
+    under BIGINT) are one value. Reads no rows.
+
+    Args:
+        element: The raw config string element.
+        sql_type: The column's DuckDB type from the sidecar.
+
+    Returns:
+        The typed value.
+
+    Raises:
+        ValueError: `sql_type` cannot cast `element` (the caller wraps this
+            into `SourceWhereValueUncastable` with owner context).
+        ExportError: `sql_type` is not a recognized DuckDB type — never a
+            silent VARCHAR fallback (per `render_typed_literal`).
+    """
+    if not is_recognized_sql_type(sql_type):
+        raise ExportError(
+            f"cast_predicate_element: unrecognized SQL type {sql_type!r}"
+            " — no silent VARCHAR fallback"
+        )
+
+    upper = sql_type.upper()
+
+    if upper == "VARCHAR" or upper.startswith("VARCHAR("):
+        return element
+
+    if upper in _INTEGER_TYPES:
+        try:
+            return int(element)
+        except ValueError as exc:
+            raise ValueError(f"{element!r} does not cast to {sql_type}") from exc
+
+    if upper in _FLOAT_TYPES:
+        try:
+            return float(element)
+        except ValueError as exc:
+            raise ValueError(f"{element!r} does not cast to {sql_type}") from exc
+
+    if upper == "BOOLEAN":
+        lowered = element.strip().lower()
+        if lowered in _BOOLEAN_TRUE_LITERALS:
+            return True
+        if lowered in _BOOLEAN_FALSE_LITERALS:
+            return False
+        raise ValueError(f"{element!r} does not cast to {sql_type}")
+
+    # The remaining recognized family: DECIMAL(p[,s]) / NUMERIC(p[,s]).
+    try:
+        return Decimal(element)
+    except InvalidOperation as exc:
+        raise ValueError(f"{element!r} does not cast to {sql_type}") from exc

@@ -36,16 +36,17 @@ via `build_state_at_sql` (windowed `state` reconstruction), the mode-neutral
 election module (`build_identity_translation_sql`, and the record-index /
 presentation-key horizon dispatchers `_record_index_sql` / `_presentation_key_sql`
 the self-identity join composes, shared with base's renders — doc § module
-placement), fabulexa_forge.anchor, fabulexa_forge._sql, the sibling
-source.columns (`_PROP_PREFIX`, and the one labeling authority
-`build_kind_label_expr` the junction render's `member__<f>__kind` column
-renders through) and source.plan modules (the latter's `_MEMBER_PREFIX` /
+placement), fabulexa_forge.anchor, fabulexa_forge._sql (`render_predicate_condition`
+composes a `where` entry's condition), the sibling source.columns
+(`_PROP_PREFIX`, and the one labeling authority `build_kind_label_expr` the
+junction render's `member__<f>__kind` column renders through) and source.plan
+modules (`_column_types` and the latter's `_MEMBER_PREFIX` /
 `_MEMBER_ID_SUFFIX` / `_MEMBER_KIND_SUFFIX` / `_RECORDS_TABLE_PREFIX` name
 constants at runtime, mirroring base's runtime import of `_self_identity`;
-`SourceEdgeSurface` / `SourceStateTablePlan` / `SourceJunctionTablePlan`
-TYPE_CHECKING only), `exporters.populations` (`Population`, TYPE_CHECKING
-only), config.models (TYPE_CHECKING only), and stdlib. Never imports
-exporters.dimensional.* or exporters.streaming.*.
+`SourceEdgeSurface` / `SourceStateTablePlan` / `SourceJunctionTablePlan` /
+`SourceWhereEntry` TYPE_CHECKING only), `exporters.populations` (`Population`,
+TYPE_CHECKING only), config.models (TYPE_CHECKING only), and stdlib. Never
+imports exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -64,7 +65,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import _sql_literal
+from fabulexa_forge._sql import _sql_literal, render_predicate_condition
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
 from fabulexa_forge.derivations.state_at import build_state_at_sql
 from fabulexa_forge.exporters.election import (
@@ -78,6 +79,7 @@ from fabulexa_forge.exporters.source.plan import (
     _MEMBER_KIND_SUFFIX,
     _MEMBER_PREFIX,
     _RECORDS_TABLE_PREFIX,
+    _column_types,
 )
 from fabulexa_forge.reader.records_columns import structural_instant_columns
 from fabulexa_forge.reader.relations import (
@@ -112,19 +114,6 @@ _JUNCTION_FIXED_COLUMNS: frozenset[str] = frozenset(
 #: other windowed column (`presentation_id`, `prop__<p>`) is codec VARCHAR
 #: and CASTs back to its sidecar type.
 _STATE_AT_VERBATIM_COLUMNS: frozenset[str] = frozenset({"record_id", "active"})
-
-
-def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:
-    """Map every column of `table_name` to its declared sidecar DuckDB type.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        table_name: A sidecar table name.
-
-    Returns:
-        {column name -> DuckDB type}, in no particular order.
-    """
-    return {col.name: col.type for col in sidecar.columns(table_name)}
 
 
 def _render_wallclock_column(
@@ -399,7 +388,15 @@ def build_state_render_sql(
     non-default surface, mirroring the current elected-identity join
     pattern), reference columns per `table.edge_surfaces` (LEFT JOIN on
     `build_identity_translation_sql` per non-default edge, CAST to the
-    edge's rendered_type), NULL stays NULL. Total ORDER BY
+    edge's rendered_type), NULL stays NULL. When `table.where` is
+    non-empty, each entry's `render_predicate_condition` (source column,
+    sidecar type, base-relation alias) AND-composes into the population
+    filter; windowed, a `where` column's value is the state-at fold's
+    current-value codec-VARCHAR after-image (constant columns render
+    current at every horizon — the mode's declared temporal-honesty
+    exception), and DuckDB's implicit VARCHAR-to-typed comparison renders
+    the identical typed predicate the full export's raw column carries, so
+    row membership is window-invariant. Total ORDER BY
     `(created_sim_time, record_id)` — raw keys, never rendered timestamps.
     A table with every surface at its default composes join-free SQL.
 
@@ -434,6 +431,9 @@ def build_state_render_sql(
         )
         if needs_filter:
             bare_props = bare_props | {f"{kind}_type"}
+        bare_props = bare_props | {
+            entry.source_column[len(_PROP_PREFIX) :] for entry in table.where
+        }
         relation_sql = build_state_at_sql(
             sidecar, fork_path, kind, bare_props, horizon_ns
         )
@@ -486,16 +486,21 @@ def build_state_render_sql(
             )
     select_list = ", ".join(select_parts)
 
-    where_clause = ""
+    conditions: list[str] = []
     if needs_filter:
         values = ", ".join(
             _sql_literal(p.sub_type)
             for p in table.populations
             if p.sub_type is not None
         )
-        where_clause = (
-            f' WHERE "{base_alias}"."{_PROP_PREFIX}{kind}_type" IN ({values})'
+        conditions.append(f'"{base_alias}"."{_PROP_PREFIX}{kind}_type" IN ({values})')
+    conditions.extend(
+        render_predicate_condition(
+            entry.source_column, entry.value, entry.sql_type, base_alias
         )
+        for entry in table.where
+    )
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
     return (
         f'SELECT {select_list} FROM ({relation_sql}) AS "{base_alias}"{joins_sql}'

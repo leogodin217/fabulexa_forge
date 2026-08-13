@@ -302,6 +302,35 @@ class SourceEventSourceOverlap(ExportError):
     tie-free and no event is double-logged."""
 
 
+class SourceWhereColumnUnresolved(ExportError):
+    """A `where` key names no payload property of the declaring unit's
+    subject kind (the owner kind for a membership unit) — structural
+    columns, membership element fields, and unknown columns all land here.
+    Message per doc § Business Rules:
+    `"{owner}: where key '{key}' not a payload property of kind '{kind}'"`."""
+
+
+class SourceWhereNotConstant(ExportError):
+    """A resolved `where` column's `temporal_class` is not `constant` —
+    `tracked` and `slice_only` each carry their own message variant, per
+    doc § Business Rules. `where` keys are this rule's to refuse; the
+    existing `SourceSliceOnlyRead` population does not extend to them."""
+
+
+class SourceWhereOnDiscriminator(ExportError):
+    """A `where` key names the subject kind's declared discriminator;
+    sub-type selection is `sub_types`' axis. Message per doc § Business
+    Rules."""
+
+
+class SourceWhereValueUncastable(ExportError):
+    """A `where` element does not cast to its resolved column's
+    sidecar-declared DuckDB type — constant-evaluated at plan time, before
+    any write; the disjointness gate's typed-value comparison reuses these
+    cast results. Message per doc § Business Rules:
+    `"{owner}: where value '{element}' for '{key}' does not cast to {type}"`."""
+
+
 class BaseExcludeUnresolved(ExportError):
     """A `base.exclude.kinds`/`base.exclude.tables` entry matches nothing base emits."""
 
