@@ -44,11 +44,13 @@ from fabulexa_forge.exporters.source.renders import (
     build_junction_render_sql,
     build_state_render_sql,
 )
+from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
     build_degenerate_slice_only_source_emit,
     build_slice_only_source_emit,
+    build_source_junction_selection_emit,
     build_source_test_emit,
     build_windowed_source_test_emit,
     slice_only_horizon_window,
@@ -56,7 +58,6 @@ from ._source_fixtures import (
 )
 
 if TYPE_CHECKING:
-    from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
 
 # ---------------------------------------------------------------------------
@@ -333,6 +334,128 @@ def test_junction_render_determinism(tmp_path: Path) -> None:
             plan.sidecar, plan.fork_path, table, plan.anchor, None
         )
     assert sql_a == sql_b
+
+
+# ---------------------------------------------------------------------------
+# `junction` render: owner selection (`sub_types` / `where`, the parent
+# lookup, source-row-selection sprint § Phase 2)
+# ---------------------------------------------------------------------------
+
+_WARD_TABLES: "tuple[SourceTableDecl, ...]" = (
+    SourceTableDecl(
+        name="day_ward",
+        membership=MembershipRef(kind="worker", property="ward"),
+        sub_types=("day",),
+    ),
+)
+
+
+def test_junction_sub_types_renders_only_narrowed_owner_intervals(
+    tmp_path: Path,
+) -> None:
+    """A junction narrowed by owner `sub_types` renders only the intervals
+    of owners in that sub-type."""
+    with _plan(build_source_junction_selection_emit(tmp_path), _WARD_TABLES) as (
+        emit,
+        plan,
+    ):
+        table = _junction(plan, "day_ward")
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    assert len(rows) == 1
+    assert rows[0]["worker_id"] == "w1"
+    assert rows[0]["desk"] == "A"
+
+
+def test_junction_where_renders_only_satisfying_owner_intervals(
+    tmp_path: Path,
+) -> None:
+    """A junction narrowed by owner `where` renders only the intervals of
+    satisfying owners — no owner attribute (`region`) projects."""
+    tables = (
+        SourceTableDecl(
+            name="east_ward",
+            membership=MembershipRef(kind="worker", property="ward"),
+            where={"region": "west"},
+        ),
+    )
+    with _plan(build_source_junction_selection_emit(tmp_path), tables) as (emit, plan):
+        table = _junction(plan, "east_ward")
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    assert len(rows) == 1
+    assert rows[0]["worker_id"] == "w2"
+    assert "region" not in rows[0]
+
+
+def test_junction_sub_types_and_where_and_composed(tmp_path: Path) -> None:
+    """`sub_types` and `where` AND-compose: a sub_types match whose `where`
+    predicate fails renders no rows."""
+    tables = (
+        SourceTableDecl(
+            name="day_west_ward",
+            membership=MembershipRef(kind="worker", property="ward"),
+            sub_types=("day",),
+            where={"region": "west"},
+        ),
+    )
+    with _plan(build_source_junction_selection_emit(tmp_path), tables) as (emit, plan):
+        table = _junction(plan, "day_west_ward")
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    assert rows == []
+
+
+def test_junction_unrestricted_owner_selection_composes_no_semi_join(
+    tmp_path: Path,
+) -> None:
+    """No `sub_types` / `where`: the owner's full domain needs no
+    restriction — no `record_id IN (...)` semi-join composed, byte-identical
+    to a junction declared with no selection at all."""
+    tables = (
+        SourceTableDecl(
+            name="all_ward", membership=MembershipRef(kind="worker", property="ward")
+        ),
+    )
+    with _plan(build_source_junction_selection_emit(tmp_path), tables) as (emit, plan):
+        table = _junction(plan, "all_ward")
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    assert '"_mem"."record_id" IN' not in sql
+    assert len(rows) == 2
+
+
+def test_junction_sub_types_windowed_membership_window_invariant(
+    tmp_path: Path,
+) -> None:
+    """Owner selection is window-invariant (constant-gated): the narrowed
+    junction's windowed render still excludes the unselected owner's
+    interval at every window, never re-evaluating the predicate per-window."""
+    ms = 1_000_000
+    window0 = Window(index=0, start_ns=0, end_ns=100 * ms, label="w0")
+    window1 = Window(index=1, start_ns=100 * ms, end_ns=200 * ms, label="w1")
+    with _plan(
+        build_source_junction_selection_emit(tmp_path), _WARD_TABLES, windowed=True
+    ) as (emit, plan):
+        table = _junction(plan, "day_ward")
+        sql0 = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, window0
+        )
+        sql1 = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, window1
+        )
+        rows0 = _mapped_rows(emit, table, sql0)
+        rows1 = _mapped_rows(emit, table, sql1)
+    assert all(r["worker_id"] == "w1" for r in rows0)
+    assert all(r["worker_id"] == "w1" for r in rows1)
 
 
 # ---------------------------------------------------------------------------

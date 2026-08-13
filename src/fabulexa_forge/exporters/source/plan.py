@@ -266,6 +266,19 @@ class SourceJunctionTablePlan:
     """The resolved (kind, label) map for projected `member__<f>__kind`
     column values; identity fall-through. Empty when no labels are
     declared."""
+    owner_populations: "tuple[Population, ...]" = ()
+    """The unit's addressed owner population set (doc § The parent lookup):
+    the owner kind's full declared domain when `sub_types` is absent, else
+    the narrowed subset `sub_types` addresses. `where` never narrows this —
+    it is value-level, not population-level. Drives the owner column's
+    typing (`_resolve_junction_edges`) and the render's owner-narrowing
+    semi-join. Defaults to empty so a unit built for pure type
+    discrimination (never compiled) needs no change; `_build_junction_table_plan`
+    always passes it explicitly."""
+    where: "tuple[SourceWhereEntry, ...]" = ()
+    """The unit's resolved owner row predicate (doc § The parent lookup),
+    `where` declaration order; empty when `where` is absent. Defaults to
+    empty for the same reason as `owner_populations`."""
 
 
 @dataclass(frozen=True)
@@ -463,15 +476,24 @@ def _resolve_single_kind_edge(
     sidecar: "Sidecar",
     election: Election,
     target_kind: str,
+    populations: "tuple[Population, ...]",
     source_column: str,
     edge_name: str,
 ) -> SourceEdgeSurface:
-    """Gate and resolve one single-target-kind referencing column.
+    """Gate and resolve one single-target-kind referencing column over an
+    explicit admitted population set.
 
     Args:
         sidecar: The open emit's sidecar.
         election: The resolved election.
         target_kind: The referencing column's one target kind.
+        populations: The admitted target populations — the kind's full
+            declared domain for a reference-annotated `prop__<p>` column
+            (`_owner_kind_domain_populations`); the narrowed
+            `owner_populations` for a junction owner column (doc § The
+            parent lookup), which types the column by the addressed set's
+            own agreement rather than always falling back to the kind's
+            full domain.
         source_column: The referencing column's source identity.
         edge_name: The referencing table · column identity, for the gate's
             error.
@@ -480,13 +502,13 @@ def _resolve_single_kind_edge(
         The resolved `SourceEdgeSurface`, `target_kinds` a one-element tuple.
 
     Raises:
-        ElectionUnionUnsafe: The target kind's admitted populations' resolved
-            key spaces contain a pairwise-unsafe pair.
+        ElectionUnionUnsafe: The admitted populations' resolved key spaces
+            contain a pairwise-unsafe pair.
     """
-    domain = sidecar.subtype_values(target_kind)
+    domain = tuple(p.sub_type for p in populations if p.sub_type is not None)
     check_edge_union_safety(election, target_kind, domain, edge_name)
     per_population = tuple(
-        (p.sub_type, p.surface) for p in election.populations_for(target_kind)
+        (p.sub_type, election.surface_for(target_kind, p.sub_type)) for p in populations
     )
     rendered_type = _resolve_single_kind_rendered_type(
         sidecar, target_kind, per_population
@@ -588,7 +610,14 @@ def _resolve_reference_prop_edges(
             continue
         edge_name = f"table '{table_name}'.{src}"
         edges.append(
-            _resolve_single_kind_edge(sidecar, election, target_kind, src, edge_name)
+            _resolve_single_kind_edge(
+                sidecar,
+                election,
+                target_kind,
+                _owner_kind_domain_populations(sidecar, target_kind),
+                src,
+                edge_name,
+            )
         )
     return tuple(edges)
 
@@ -598,6 +627,7 @@ def _resolve_junction_edges(
     election: Election,
     source_table: str,
     owner_kind: str,
+    owner_populations: "tuple[Population, ...]",
     known_kinds: "tuple[str, ...]",
     table_name: str,
     columns: "tuple[tuple[str, str], ...]",
@@ -613,6 +643,11 @@ def _resolve_junction_edges(
         election: The resolved election.
         source_table: The `membership__<K>__<p>` table.
         owner_kind: The owning kind (`<K>`).
+        owner_populations: The unit's addressed owner population set (doc §
+            The parent lookup) — the owner kind's full declared domain when
+            `sub_types` is absent, else the narrowed subset; types the owner
+            column by this set's own agreement rather than the kind's full
+            domain.
         known_kinds: Every kind with a declared records table in the emit.
         table_name: The table's output name, for the gates' errors.
         columns: The table's final (source, output) column pairs — member
@@ -635,6 +670,7 @@ def _resolve_junction_edges(
                 sidecar,
                 election,
                 owner_kind,
+                owner_populations,
                 "record_id",
                 f"table '{table_name}'.{owner_kind}_id",
             )
@@ -1453,8 +1489,16 @@ def _build_junction_table_plan(
     known_kinds: "tuple[str, ...]",
     decl: "SourceTableDecl",
     kind_labels: "tuple[tuple[str, str], ...]",
+    notice_sink: "NoticeSink",
 ) -> SourceJunctionTablePlan:
     """Resolve one `tables[]` membership declaration to a `junction` table plan.
+
+    `decl.sub_types` resolves against the **owner** kind's discriminator
+    domain into `owner_populations` (doc § The parent lookup) — the addressed
+    owner set the owner column's edge gate and typing range over; absent =
+    the owner's full declared domain. `decl.where` resolves against the owner
+    kind's payload properties in bare form (the parent lookup, doc §
+    Business Rules).
 
     Args:
         sidecar: The open emit's sidecar.
@@ -1464,6 +1508,7 @@ def _build_junction_table_plan(
         kind_labels: The resolved `source.kind_labels` map (§
             `_resolve_kind_labels`), carried onto the unit for the render's
             `member__<f>__kind` values.
+        notice_sink: Receiver for out-of-domain `where`-value notices.
 
     Returns:
         The resolved `SourceJunctionTablePlan`.
@@ -1471,8 +1516,14 @@ def _build_junction_table_plan(
     Raises:
         SourceTableMembershipUnknown: The membership reference resolves to
             no sidecar table.
+        SourceTableSubTypeUnknown, SourceSubTypesOnFlatKind: `sub_types`
+            resolution against the owner kind's domain fails.
         SourceColumnUnresolved, SourceColumnNotAddressable: Column
             resolution fails.
+        SourceWhereColumnUnresolved, SourceWhereNotConstant,
+            SourceWhereOnDiscriminator, SourceWhereValueUncastable: `where`
+            resolution fails (the constant-column gate, applied to the owner
+            kind).
         ElectionUnionUnsafe: An edge gate fails.
     """
     assert decl.membership is not None, "a membership tables[] declaration carries it"
@@ -1487,6 +1538,9 @@ def _build_junction_table_plan(
             f" ({owner_kind}, {property_name})"
         ) from exc
 
+    label = f"table '{decl.name}'"
+    owner_populations = resolve_populations(sidecar, label, owner_kind, decl.sub_types)
+
     candidate = _junction_candidate_columns(sidecar, source_table, owner_kind)
     all_source_columns = frozenset(col.name for col in sidecar.columns(source_table))
     columns = _apply_junction_columns_decl(
@@ -1497,8 +1551,24 @@ def _build_junction_table_plan(
     )
 
     edge_surfaces = _resolve_junction_edges(
-        sidecar, election, source_table, owner_kind, known_kinds, decl.name, columns
+        sidecar,
+        election,
+        source_table,
+        owner_kind,
+        owner_populations,
+        known_kinds,
+        decl.name,
+        columns,
     )
+
+    where = (
+        _resolve_where_selection(
+            sidecar, decl.where, owner_kind, key_form="bare", label=label
+        )
+        if decl.where is not None
+        else ()
+    )
+    _check_where_values_observed(sidecar, where, owner_kind, label, notice_sink)
 
     return SourceJunctionTablePlan(
         name=decl.name,
@@ -1508,6 +1578,8 @@ def _build_junction_table_plan(
         columns=columns,
         edge_surfaces=edge_surfaces,
         kind_labels=kind_labels,
+        owner_populations=owner_populations,
+        where=where,
     )
 
 
@@ -1854,7 +1926,12 @@ def _resolve_records_change_edges(
             continue
         edges.append(
             _resolve_single_kind_edge(
-                sidecar, election, target_kind, src, f"{owner}.{prop}"
+                sidecar,
+                election,
+                target_kind,
+                _owner_kind_domain_populations(sidecar, target_kind),
+                src,
+                f"{owner}.{prop}",
             )
         )
     return tuple(edges)
@@ -2878,7 +2955,7 @@ def build_source_plan(
         else:
             tables.append(
                 _build_junction_table_plan(
-                    sidecar, election, known_kinds, decl, kind_labels
+                    sidecar, election, known_kinds, decl, kind_labels, notices
                 )
             )
     tables_t = tuple(tables)

@@ -829,15 +829,17 @@ class MembershipRef(StrictBaseModel):
 
 
 class SourceTableDecl(StrictBaseModel):
-    """One declared output table: a name, one population source, optional column selection and renames."""  # noqa: E501
+    """One declared output table: a name, one population source, optional column selection, renames, and row selection."""  # noqa: E501
 
     name: str
     """Author-verbatim output table name."""
     kind: str | None = None
     """A records kind, exclusive with `membership` (`table_shape`)."""
     sub_types: tuple[str, ...] | None = None
-    """Explicit population subset; only valid alongside `kind`. Absent =
-    every declared sub-type."""
+    """Explicit population subset (with `kind`) or owner sub-type subset
+    (with `membership` — the junction renders intervals of owners in these
+    sub-types, resolved through the parent lookup). Absent = every declared
+    sub-type."""
     membership: MembershipRef | None = None
     """A membership-table address, exclusive with `kind`."""
     columns: tuple[str, ...] | None = None
@@ -856,17 +858,15 @@ class SourceTableDecl(StrictBaseModel):
 
         Raises:
             ValueError: `name` is empty; not exactly one of `kind` /
-                `membership` is set; `sub_types` is set without `kind`;
-                `sub_types` / `columns` is present-but-empty or carries a
-                duplicate entry; `rename` is present-but-empty or two keys
-                share a target value; `where` is present-but-empty or has an
-                empty key. (Value emptiness / duplication is carried by
-                `PredicateValue` per entry.)
+                `membership` is set; `sub_types` / `columns` is
+                present-but-empty or carries a duplicate entry; `rename` is
+                present-but-empty or two keys share a target value; `where` is
+                present-but-empty or has an empty key. (Value emptiness /
+                duplication is carried by `PredicateValue` per entry.)
         """
         _require_nonempty_str(self.name, "SourceTableDecl.name")
         label = f"table {self.name!r}"
         _require_exactly_one_population_source(self.kind, self.membership, label)
-        _require_sub_types_only_with_kind(self.kind, self.sub_types, label)
         _require_distinct_nonempty_tuple(self.sub_types, "SourceTableDecl.sub_types")
         _require_distinct_nonempty_tuple(self.columns, "SourceTableDecl.columns")
         _require_rename_map_valid(self.rename, "SourceTableDecl.rename")

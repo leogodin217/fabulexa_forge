@@ -81,14 +81,17 @@ def test_table_decl_both_kind_and_membership_rejected() -> None:
         )
 
 
-def test_table_decl_sub_types_only_with_kind() -> None:
-    """sub_types on a membership-source table decl -> rejected."""
-    with pytest.raises(ValidationError, match="sub_types"):
-        SourceTableDecl(
-            name="trip_drivers",
-            membership=MembershipRef(kind="trip", property="drivers"),
-            sub_types=("standard",),
-        )
+def test_table_decl_sub_types_with_membership_parses() -> None:
+    """`sub_types` alongside `membership` parses (owner sub-type subset,
+    doc § The parent lookup) — no longer a parse error; validated against
+    the owner kind's discriminator domain at plan time
+    (`tests/exporters/source/test_where_plan.py`)."""
+    decl = SourceTableDecl(
+        name="trip_drivers",
+        membership=MembershipRef(kind="trip", property="drivers"),
+        sub_types=("standard",),
+    )
+    assert decl.sub_types == ("standard",)
 
 
 def test_table_decl_sub_types_with_kind_parses() -> None:
