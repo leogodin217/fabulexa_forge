@@ -1,0 +1,17 @@
+streams:
+  # Both sub-types (nurse, physician) fold into one `clinicians` stream; nurse
+  # and physician topics do not materialise. The merged stream keeps the
+  # global seq order.
+  clinicians:
+    event_count: 2
+    contains_events:
+      - seq: 1
+        op: c
+        kind: staff
+        record_id: s001
+        after.prop__name: Nora Vega
+      - seq: 2
+        op: c
+        kind: staff
+        record_id: s002
+        after.prop__name: Owen Reed

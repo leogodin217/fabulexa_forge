@@ -143,7 +143,10 @@ def _ensure_topics(
 
     A topic that already exists with exactly 1 partition is used as-is. A topic
     with a partition count other than 1 raises KafkaDeliveryError naming the topic
-    and partition count.
+    and partition count. The check fails closed: a topic the broker reports as
+    already existing but that is absent from the re-read cluster metadata is an
+    error, not a pass — an unverifiable partition count must never reach the
+    producer, since per-topic ordering rests on the single-partition guarantee.
 
     Args:
         AdminClient: The confluent_kafka.admin.AdminClient class.
@@ -153,8 +156,9 @@ def _ensure_topics(
         topic_set: The full topic set to create/validate.
 
     Raises:
-        KafkaDeliveryError: Topic creation fails or a pre-existing topic has ≠ 1
-            partition.
+        KafkaDeliveryError: Topic creation fails, a pre-existing topic has ≠ 1
+            partition, or a topic reported as already existing is absent from the
+            re-read cluster metadata (partition count unverifiable).
     """
     admin = AdminClient({"bootstrap.servers": bootstrap_servers})
     new_topics = [
@@ -169,14 +173,22 @@ def _ensure_topics(
             err = exc.args[0]
             if err.code() == 36:  # TOPIC_ALREADY_EXISTS
                 meta = admin.list_topics(timeout=10)
-                if topic in meta.topics:
-                    part_count = len(meta.topics[topic].partitions)
-                    if part_count != 1:
-                        raise KafkaDeliveryError(
-                            f"topic {topic!r} already exists with {part_count}"
-                            f" partition(s); exactly 1 required"
-                        ) from exc
-                # else: exists with 1 partition — use as-is
+                if topic not in meta.topics:
+                    # Broker said the topic exists, yet metadata omits it — the
+                    # partition count is unverifiable. Fail closed: proceeding
+                    # would produce to a topic the guard never checked.
+                    raise KafkaDeliveryError(
+                        f"topic {topic!r} reported as already existing but absent"
+                        f" from cluster metadata; cannot verify it has exactly 1"
+                        f" partition"
+                    ) from exc
+                part_count = len(meta.topics[topic].partitions)
+                if part_count != 1:
+                    raise KafkaDeliveryError(
+                        f"topic {topic!r} already exists with {part_count}"
+                        f" partition(s); exactly 1 required"
+                    ) from exc
+                # exists with exactly 1 partition — use as-is
             else:
                 raise KafkaDeliveryError(
                     f"failed to create topic {topic!r}: {exc}"
@@ -214,10 +226,10 @@ def write_kafka_stream(
     the selected format), so this sink holds no jsonl/debezium knowledge. Pre-creates
     every topic in topic_set (1 partition, replication factor 1, idempotent) before the
     first produce, configures an ordered idempotent fully-acked producer, produces each
-    event keyed by encode_pinned({"record_id": event.record_id}) (UTF-8) with record
-    timestamp rebased_epoch_ms(event.event_sim_time, anchor), and flushes (blocks on all
-    acks) before returning. A topic that receives zero events still appears in
-    events_per_topic with count 0.
+    event keyed by encode_pinned({event.key_column: event.key_value}) (UTF-8) with
+    record timestamp rebased_epoch_ms(event.event_sim_time, anchor), and flushes
+    (blocks on all acks) before returning. A topic that receives zero events still
+    appears in events_per_topic with count 0.
 
     paced=True serves delivery incrementally as each event arrives (the pacer governs
     arrival); paced=False produces all events then flushes once. In both modes
@@ -249,8 +261,10 @@ def write_kafka_stream(
             not installed).
         KafkaDeliveryError: connection, topic creation, produce (including a full
             local producer queue, surfaced from BufferError), or flush fails; a
-            delivery callback reports failure; flush leaves unacked messages; or a
-            pre-existing topic has a partition count other than 1.
+            delivery callback reports failure; flush leaves unacked messages; a
+            pre-existing topic has a partition count other than 1; or a topic
+            reported as already existing is absent from the re-read cluster
+            metadata (partition count unverifiable).
     """
     from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
     from fabulexa_forge.exporters.streaming.types import StreamOutcome
@@ -278,7 +292,7 @@ def write_kafka_stream(
     for event in events:
         if delivery_errors:
             raise KafkaDeliveryError(f"Kafka delivery failure: {delivery_errors[0]}")
-        key_bytes = encode_pinned({"record_id": event.record_id}).encode("utf-8")
+        key_bytes = encode_pinned({event.key_column: event.key_value}).encode("utf-8")
         value_bytes = render_value(event)
         timestamp_ms = rebased_epoch_ms(event.event_sim_time, anchor)
 

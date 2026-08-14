@@ -101,22 +101,20 @@ def _build_emit(tmp_path: Path, kind: str) -> Path:
 
 
 def _write_jsonl_kafka_config(config_path: Path, kind: str, topic: str) -> None:
-    """Write a JSONL stream config with kafka block and custom topic template."""
+    """Write a JSONL stream config with kafka block and a named stream (topic=name)."""
     doc = {
         "content": "state-changes",
-        "kinds": [{"kind": kind, "properties": ["status"]}],
-        "routing": {"topic_template": topic},
+        "streams": [{"name": topic, "kind": kind, "properties": ["status"]}],
         "kafka": {"bootstrap_servers": bootstrap_servers()},
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
 
 
 def _write_debezium_kafka_config(config_path: Path, kind: str, topic: str) -> None:
-    """Write a Debezium stream config with kafka block and custom topic template."""
+    """Write a Debezium stream config with kafka block and a named stream (topic=name)."""
     doc = {
         "content": "state-changes",
-        "kinds": [{"kind": kind, "properties": ["status"]}],
-        "routing": {"topic_template": topic},
+        "streams": [{"name": topic, "kind": kind, "properties": ["status"]}],
         "kafka": {"bootstrap_servers": bootstrap_servers()},
         "debezium": {
             "schemas_enable": False,

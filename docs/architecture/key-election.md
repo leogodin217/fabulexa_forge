@@ -6,7 +6,9 @@ projection-minted `presentation_id` where the `presentation_keys` registry
 declares it. This doc owns the cross-mode **key election** surface: a top-level
 `keys` config block electing, per population, which surface presents as that
 population's exported identity, with every referencing column rendered in its
-*target's* elected surface. The flagship shape is the fully-declared kind, where
+*target's* elected surface. Four modes consume it — source, base, dimensional,
+and streaming (where the elected surface is the message key — § Rendering:
+streaming). The flagship shape is the fully-declared kind, where
 every identity and edge value is an operational code (`location: ALPHA_007`
 joined to a table keyed `ALPHA_007`) rather than a substrate id the contract
 forbids consumers to interpret. Forge never mints and never formats — it selects
@@ -26,7 +28,8 @@ uniqueness guard),
 [`tests/exporters/test_election.py`](../../tests/exporters/test_election.py),
 [`tests/derivations/test_presentation_key.py`](../../tests/derivations/test_presentation_key.py),
 plus per-mode suites (`tests/exporters/{source,base}/test_election_{plan,renders}.py`,
-[`tests/exporters/dimensional/test_election_fk.py`](../../tests/exporters/dimensional/test_election_fk.py)).
+[`tests/exporters/dimensional/test_election_fk.py`](../../tests/exporters/dimensional/test_election_fk.py),
+[`tests/exporters/streaming/test_election_stream.py`](../../tests/exporters/streaming/test_election_stream.py)).
 
 ## Boundary
 
@@ -98,9 +101,9 @@ source's and base's and dimensional runs only the edge gates).
 | Kind exists | resolution | Every `keys` key names a kind with a declared `records__<kind>` table | `ElectionKindUnknown` |
 | Sub-type exists | resolution | Every map key is in the kind's discriminator domain | `ElectionSubTypeUnknown` |
 | `presentation_id` declared | resolution | A population electing `presentation_id` has a registry entry — the flat kind's `key`, or the sub-type's `sub_types` entry (`key_for` presence). The uniform-scalar shorthand on a sub-typed kind requires *every* domain sub-type declared | `ElectionPresentationUndeclared`, naming kind, population, and (when the block is absent entirely) that the emit carries no claims |
-| Identity uniformity | mode plan (source, base) | An output table whose rows span several populations of one kind requires every spanned population to elect the **same surface** — one table, one identity surface | `ElectionMixedIdentity`, naming the table and the differing (population, surface) pairs |
-| Identity union safety | mode plan (source, base) | Under a uniform `presentation_id` election, the spanned populations' key spaces must additionally be pairwise union-safe (`union_safe` over the table above) — two bare-counter siblings collide even on one surface | `ElectionUnionUnsafe`, naming the table and the unsafe pair |
-| Edge union safety | mode plan | Every referencing column — a reference edge, a junction owner column, or a junction member column — requires its **admitted** target populations' key spaces pairwise union-safe, applied per column. The admitted set is the target kind's full declared domain in source and base (the owner kind's domain for a junction owner column; per member kind for a junction member column), the destination dim's source population set in dimensional. The spaces range over the edge's **resolved surfaces**: the populations' own elections in the kind-targeted modes; in dimensional, the FK's one resolved surface (inherited, or the explicit `target_key`) applied to every admitted population | `ElectionUnionUnsafe`, naming the referencing table · column and the unsafe pair |
+| Identity uniformity | mode plan (source, base, streaming) | An output table — or a declared stream: a topic's key is one identity space — whose rows span several populations of one kind requires every spanned population to elect the **same surface**. One table, one identity surface; one stream, one key surface (kind-shaped: the spanned populations; membership-shaped: the owner kind's full domain, its owners span it) | `ElectionMixedIdentity`, naming the table or stream and the differing (population, surface) pairs |
+| Identity union safety | mode plan (source, base, streaming) | Under a uniform `presentation_id` election, the spanned populations' key spaces must additionally be pairwise union-safe (`union_safe` over the table above) — two bare-counter siblings collide even on one surface | `ElectionUnionUnsafe`, naming the table or stream and the unsafe pair |
+| Edge union safety | mode plan | Every referencing column — a reference edge, a junction owner column, a junction member column, a streaming after-image reference column, or a membership member field — requires its **admitted** target populations' key spaces pairwise union-safe, applied per column. The admitted set is the target kind's full declared domain in the kind-targeted modes — source, base, and streaming (the owner kind's domain for a junction owner column; per member kind for a junction/membership member column; a stream's `sub_types` scope narrows its own rows, never which target populations an edge admits) — and the destination dim's source population set in dimensional. The spaces range over the edge's **resolved surfaces**: the populations' own elections in the kind-targeted modes; in dimensional, the FK's one resolved surface (inherited, or the explicit `target_key`) applied to every admitted population | `ElectionUnionUnsafe`, naming the referencing table/stream · column and the unsafe pair |
 | Edge `presentation_id` declared | mode plan (dimensional) | An FK resolving `presentation_id` — inherited or explicit `target_key` — requires every population of the destination dim's source set registry-declared | `ElectionPresentationUndeclared`, naming the edge and the uncovered population |
 
 The kind-exists gate has a consequence worth naming: an emit legally omits
@@ -363,14 +366,43 @@ same refuse-silently-broken-joins posture as the uniqueness guard, applied
 statically: the two sides of every dimensional join are forced to agree before
 any data is read.
 
-### Mixed-election edge columns (source and base)
+### Rendering: streaming
+
+Streaming's declared streams are topics, and the elected surface is the
+**message key** ([`streaming.md`](streaming.md) § Message key). The
+identity-uniformity gate runs per declared stream (one stream, one key
+surface), and the render sites are:
+
+| Render site | Rendering |
+|---|---|
+| Message key (every op, including the `d` tombstone) | The record's — for membership-events, the **owner's** — elected surface, as the one-entry key map `{<surface's contract column>: <codec value>}`: the Kafka key, the JSONL `key` map, and the Debezium `d` key-only before-image |
+| After-image identity (`c`/`u`; the membership `after`'s owner entry) | The elected surface via the identity join at the fold's `record_id`, keyed by the surface's contract column name. Under a `presentation_id` election the standalone `presentation_id` payload column is absorbed (source's absorption rule); under `record_id` / `record_index` it ships verbatim when the kind carries one |
+| Reference-valued `prop__<p>` after-image entries | The target's elected surface through the target's identity join — the state-render analog |
+| Membership `member__<f>` reference fields | The member row's kind's elected surface (`__kind` remains the disambiguator) — the junction-member analog |
+
+Elected values keep the streaming codec at every site — codec `VARCHAR`
+(`str`) or `null`, `record_index` digit-form, `presentation_id` its declared
+value's codec rendering — so no site emits a typed JSON number and streaming's
+byte-determinism needs no extra case. Streaming composes every identity
+relation at the **end-of-tape entry point** (a record's creation precedes its
+every event — the event-log argument), and the uniqueness guard runs per
+composed relation naming the stream or edge. The canonical order and merge key
+still read the fold's `record_id`: election renders identity, it never
+re-sorts. Every electable surface is creation-constant, so a record's events
+keep one key for life and the `d` keys the tombstone — the compaction property
+the gates guarantee.
+
+### Mixed-election edge columns (source, base, and streaming)
 
 Only a kind-targeted *referencing* column can mix — an identity column is
 uniformity-gated and a dimensional FK column is single-surface by
-construction. A source or base referencing column — a reference-valued
-`prop__` column, a junction owner column, or a junction member column — into a
+construction. A source, base, or streaming referencing column — a
+reference-valued `prop__` column, a junction owner column, a junction member
+column, or their streaming after-image analogs — into a
 kind whose populations elect different surfaces renders per target row's
-population. Its type: the common declared type when all admitted surfaces
+population (streaming's after-image values are codec `VARCHAR` at every site,
+so the column-type rule below is source's and base's alone). Its type: the
+common declared type when all admitted surfaces
 agree, else `VARCHAR` with `record_index` values digit-rendered — the
 algebra's own rendering model, which is precisely what its collision guarantee
 ranges over. A single-election column keeps its native type (`BIGINT` for
@@ -422,9 +454,12 @@ construction, and where the election is `presentation_id` the natural-key
 advisory comment is not emitted (the key sourcing consumes the claim) — while
 FK candidates remain comments and remain `target_key`-free (an uncommented
 candidate inherits, which *is* the aligned rendering; the self-gate runs over
-the proposal's grammar, and comments are not grammar). As with every `init`
-output, the proposal lands in the author's file where they see, edit, and own
-it.
+the proposal's grammar, and comments are not grammar); a streaming proposal
+runs the gates over its proposed single-population streams (per-stream
+uniformity is trivially satisfied there; edge union safety ranges over the
+proposed after-images' reference columns and membership member fields). As
+with every `init` output, the proposal lands in the author's file where they
+see, edit, and own it.
 
 ### Interplay
 
@@ -445,10 +480,11 @@ it.
 2. **Faithful selection.** Every elected value traces verbatim to a base-layer
    cell (`record_id`, `record_index`, `presentation_id`); forge mints,
    formats, and renumbers nothing.
-3. **One table, one surface.** No output table's identity column mixes
-   surfaces: where the mode renders identity from the election (source, base),
-   populations combined into one table elect uniformly or the export refuses;
-   a dimensional identity column is a single author-declared projection. Only
+3. **One table, one surface.** No output table's identity column — and no
+   declared stream's message key — mixes surfaces: where the mode renders
+   identity from the election (source, base, streaming), populations combined
+   into one table or stream elect uniformly or the export refuses; a
+   dimensional identity column is a single author-declared projection. Only
    kind-targeted edge columns render per row.
 4. **Edges agree with identities.** Within one export, a referencing column
    and its target table's identity column render the same surface per
@@ -534,10 +570,6 @@ uniqueness guard) is the single data-touching rule, raising
 - **Forge never mints.** No id formats, prefixes, templates, or surrogate
   generation. Formatting is the projection layer's surface; forge selects
   among surfaces the emit carries.
-- **Streaming is outside election.** CDC events, Kafka message keying, and
-  `StreamConfig` read none of this surface. `record_id` keying is a
-  correctness choice — always present, always stable — and election never
-  changes what streaming reads.
 - **The reader and the C-set are consumed, not extended.**
   `Sidecar.presentation_keys()`, `union_safe`, `combined_claim`,
   strict-on-read, and conformance C1–C14 are composed as the reader ships
@@ -554,8 +586,9 @@ uniqueness guard) is the single data-touching rule, raising
   [`base.md`](base.md); election adds the sibling presentation-key relation
   and composes both.
 - **The row-state-events fold is untouched by election.** Elected identity is
-  joined onto the fold's output by the source render; the fold's column set,
-  ordering contract, and streaming composition are the fold's own.
+  joined onto the fold's output by the source and streaming renders; the
+  fold's column set, ordering contract, and two-scope contract are the fold's
+  own.
 - **No new notice codes.** Election's failure modes are errors, not
   degradations; `rename`, `exclude`, `slice_only`, anchor resolution, and the
   notice channel compose with their own semantics.
@@ -571,6 +604,7 @@ uniqueness guard) is the single data-touching rule, raising
 | [`reader.md`](reader.md) | The strict `presentation_keys` accessor and the union-safety algebra every gate composes |
 | [`derivations.md`](derivations.md) | The record-index and presentation-key join relations elected values resolve through |
 | [`source.md`](source.md) · [`base.md`](base.md) | The kind-targeted modes — identity columns rendered from the election, per-declared-table / per-table render surfaces; source's event-log `item_id` edge render |
+| [`streaming.md`](streaming.md) | The fourth consuming mode — the elected surface as the message key, the after-image render sites, and streaming's per-stream uniformity gate |
 | [`dimensional.md`](dimensional.md) | The FK pathfind the resolved surface rides; author-declared keys, `target_key`, `init` stubs |
 | [`declared-keys.md`](declared-keys.md) | The declared primary key follows the elected identity column |
 | [`incremental.md`](incremental.md) | The window driver; elected values are creation-constant merge keys |

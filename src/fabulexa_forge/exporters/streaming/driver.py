@@ -12,14 +12,18 @@ import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from fabulexa_forge.config.models import KindStream, MembershipStream
 from fabulexa_forge.errors import (
     ExportError,
     ExportRuntimeError,
     KafkaBootstrapUnresolvable,
 )
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
+    elect_after_image_columns,
     iter_stream_events,
+    resolve_stream_surfaces,
 )
 from fabulexa_forge.exporters.streaming.jsonl import write_jsonl_stream
 from fabulexa_forge.exporters.streaming.types import StreamOutcome
@@ -30,12 +34,13 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import (
         DebeziumSourceIdentity,
-        RoutingConfig,
+        KeySurface,
         StreamConfig,
     )
     from fabulexa_forge.exporters.streaming.pacer import ResolvedClock
     from fabulexa_forge.exporters.streaming.types import StreamEvent
     from fabulexa_forge.reader.emit import Emit
+    from fabulexa_forge.reader.sidecar import Sidecar
 
 _DEBEZIUM_REQUIRES_CONFIG_MSG = (
     "format 'debezium' requires a 'debezium' config block with a 'source' identity"
@@ -55,127 +60,6 @@ _KAFKA_REQUIRES_ANCHOR_MSG = (
 )
 
 
-def _effective_routing(config: "StreamConfig") -> "RoutingConfig":
-    """Return the effective RoutingConfig for this run.
-
-    Args:
-        config: The validated streaming configuration.
-
-    Returns:
-        config.routing when present, else a default RoutingConfig.
-    """
-    if config.routing is not None:
-        return config.routing
-    from fabulexa_forge.config.models import RoutingConfig
-
-    return RoutingConfig()
-
-
-def _check_topic_schema_unambiguous(
-    emit: "Emit",
-    config: "StreamConfig",
-    topic_set: tuple[str, ...],
-    routing: "RoutingConfig",
-) -> None:
-    """Enforce StreamTopicSchemaUnambiguous: no topic merges multiple table identities.
-
-    Under table_identity='topic' + debezium format + schemas_enable=True, each
-    topic must receive events from exactly one kind (state-changes) or one
-    membership table (membership-events). Otherwise the per-topic Debezium schema
-    is ambiguous.
-
-    Args:
-        emit: The open emit.
-        config: The validated streaming configuration.
-        topic_set: The full enumerated topic set.
-        routing: The effective routing policy.
-
-    Raises:
-        ExportError: A topic merges events from more than one kind or membership
-            table.
-    """
-    if config.content == "membership-events":
-        _check_topic_schema_unambiguous_membership(config, topic_set, routing)
-    else:
-        _check_topic_schema_unambiguous_kinds(emit, config, topic_set, routing)
-
-
-def _check_topic_schema_unambiguous_kinds(
-    emit: "Emit",
-    config: "StreamConfig",
-    topic_set: tuple[str, ...],
-    routing: "RoutingConfig",
-) -> None:
-    """Enforce unambiguous topic schema for state-changes content.
-
-    Args:
-        emit: The open emit.
-        config: The validated streaming configuration.
-        topic_set: The full enumerated topic set.
-        routing: The effective routing policy.
-
-    Raises:
-        ExportError: A topic merges events from more than one kind.
-    """
-    from fabulexa_forge.exporters.streaming.engine import selected_attributes_for_kind
-    from fabulexa_forge.exporters.streaming.routing import resolve_topic
-
-    topic_to_kinds: dict[str, set[str]] = {topic: set() for topic in topic_set}
-
-    for kind_sel in config.kinds:
-        kind = kind_sel.kind
-        attrs_list = selected_attributes_for_kind(kind, kind_sel.types, emit.sidecar)
-        for attrs in attrs_list:
-            topic = resolve_topic(routing, attrs)
-            topic_to_kinds[topic].add(kind)
-
-    for topic, kinds in topic_to_kinds.items():
-        if len(kinds) > 1:
-            sorted_kinds = sorted(kinds)
-            raise ExportError(
-                f"topic '{topic}' merges kinds {sorted_kinds}"
-                f" under table_identity='topic';"
-                f" per-topic Debezium schema is ambiguous"
-            )
-
-
-def _check_topic_schema_unambiguous_membership(
-    config: "StreamConfig",
-    topic_set: tuple[str, ...],
-    routing: "RoutingConfig",
-) -> None:
-    """Enforce unambiguous topic schema for membership-events content.
-
-    Args:
-        config: The validated streaming configuration.
-        topic_set: The full enumerated topic set.
-        routing: The effective routing policy.
-
-    Raises:
-        ExportError: A topic merges events from more than one membership table.
-    """
-    from fabulexa_forge.exporters.streaming.routing import (
-        membership_route_attributes,
-        resolve_topic,
-    )
-
-    topic_to_tables: dict[str, set[str]] = {topic: set() for topic in topic_set}
-
-    for mem_sel in config.memberships:
-        attrs = membership_route_attributes(mem_sel.owner_kind, mem_sel.property)
-        topic = resolve_topic(routing, attrs)
-        topic_to_tables[topic].add(attrs["route_table"])
-
-    for topic, tables in topic_to_tables.items():
-        if len(tables) > 1:
-            sorted_tables = sorted(tables)
-            raise ExportError(
-                f"topic '{topic}' merges membership tables {sorted_tables}"
-                f" under table_identity='topic';"
-                f" per-topic Debezium schema is ambiguous"
-            )
-
-
 def stream_export(
     emit: "Emit",
     config: "StreamConfig",
@@ -193,12 +77,12 @@ def stream_export(
     requires a resolved anchor (KafkaRequiresAnchor — ExportError, reusing a message
     constant exactly as the debezium-requires-anchor rule does) and a resolved
     bootstrap_servers; reuses the existing debezium business rules and value-schema
-    build when fmt='debezium' (DebeziumRequiresConfig, StreamTopicSchemaUnambiguous);
-    builds the per-event value-render closure (jsonl: encode_pinned(render_jsonl_object
-    (event)).encode('utf-8'); debezium: encode_pinned(render_debezium_message(...))
-    .encode('utf-8') with ts_ms = rebased_epoch_ms and the table_identity-keyed schema);
-    and delegates delivery to write_kafka_stream. Pacing composes with the kafka sink
-    exactly as with the others (paced = clock is not None).
+    build when fmt='debezium' (DebeziumRequiresConfig); builds the per-event
+    value-render closure (jsonl: encode_pinned(render_jsonl_object(event)).encode(
+    'utf-8'); debezium: encode_pinned(render_debezium_message(...)).encode('utf-8')
+    with ts_ms = rebased_epoch_ms and the table_identity-keyed schema); and delegates
+    delivery to write_kafka_stream. Pacing composes with the kafka sink exactly as
+    with the others (paced = clock is not None).
 
     Args:
         emit: The open emit.
@@ -217,7 +101,7 @@ def stream_export(
     Raises:
         ExportError: fmt='debezium' with no resolved anchor or no debezium block;
             sink='kafka' with no resolved anchor (KafkaRequiresAnchor); a single-branch,
-            config-resolvability, or routing failure from the engine.
+            config-resolvability, or business-rule failure from the engine.
         ExportRuntimeError: an unsupported fmt or a sink/out mismatch.
         KafkaDeliveryError: sink='kafka' and a connection, topic-creation, produce, or
             flush failure (a child of ExportRuntimeError).
@@ -238,17 +122,16 @@ def stream_export(
             "sink='stdout' requires out=None (no output directory)"
         )
 
-    routing = _effective_routing(config)
-    topic_set = build_topic_set(config, emit.sidecar)
+    topic_set = build_topic_set(config)
 
     if sink == "kafka":
         return _stream_export_kafka(
-            emit, config, fmt, anchor, routing, topic_set, clock, bootstrap_servers
+            emit, config, fmt, anchor, topic_set, clock, bootstrap_servers
         )
 
     if fmt == "debezium":
         return _stream_export_debezium(
-            emit, config, sink, out, anchor, routing, topic_set, clock
+            emit, config, sink, out, anchor, topic_set, clock
         )
 
     raw_events = iter_stream_events(emit, config, anchor)
@@ -270,7 +153,6 @@ def build_kafka_render_value(
     config: "StreamConfig",
     fmt: Literal["jsonl", "debezium"],
     anchor: "EffectiveAnchor",
-    routing: "RoutingConfig",
     topic_set: tuple[str, ...],
 ) -> "Callable[[StreamEvent], bytes]":
     """Build the per-event value-render closure for a Kafka run (stream or mixer).
@@ -278,34 +160,29 @@ def build_kafka_render_value(
     Encapsulates the format branch and the Debezium business rules in one place so
     the streaming Kafka path and the mixer share them. For fmt='jsonl', returns the
     pinned-encoded JSONL object bytes (no trailing newline). For fmt='debezium',
-    enforces DebeziumRequiresConfig and (when table_identity='topic' and schemas are
-    enabled) StreamTopicSchemaUnambiguous, builds the table-identity-keyed value
-    schemas when enabled, and returns the pinned-encoded Debezium message bytes with
-    the rebased ts_ms. The returned bytes are byte-identical to the corresponding
-    file/stdout line minus its trailing newline.
+    enforces DebeziumRequiresConfig, builds the per-stream value schemas keyed by
+    config.debezium.table_identity when schemas are enabled, and returns the
+    pinned-encoded Debezium message bytes with the rebased ts_ms. The returned bytes
+    are byte-identical to the corresponding file/stdout line minus its trailing
+    newline.
 
     The typed anchor: EffectiveAnchor parameter means each caller has already
     resolved and non-None-checked the anchor (KafkaRequiresAnchor) before calling;
-    this builder enforces only the Debezium rules (DebeziumRequiresConfig then
-    StreamTopicSchemaUnambiguous), preserving the existing
-    KafkaRequiresAnchor -> DebeziumRequiresConfig -> StreamTopicSchemaUnambiguous
-    precedence across the extraction.
+    this builder enforces only DebeziumRequiresConfig, preserving the existing
+    KafkaRequiresAnchor -> DebeziumRequiresConfig precedence across the extraction.
 
     Args:
         emit: The open emit (read for Debezium value schemas; unused for jsonl).
         config: The validated streaming configuration.
         fmt: 'jsonl' or 'debezium'.
         anchor: The resolved effective anchor (non-None).
-        routing: The effective routing policy (table_identity governs Debezium table).
-        topic_set: The full enumerated topic set.
+        topic_set: The full topic set.
 
     Returns:
         A callable mapping a StreamEvent to its UTF-8 message-value bytes.
 
     Raises:
-        ExportError: fmt='debezium' with no debezium block (DebeziumRequiresConfig)
-            or an ambiguous topic->table mapping under schemas
-            (StreamTopicSchemaUnambiguous).
+        ExportError: fmt='debezium' with no debezium block (DebeziumRequiresConfig).
     """
     if fmt == "debezium":
         # Business rule: DebeziumRequiresConfig
@@ -314,16 +191,12 @@ def build_kafka_render_value(
 
         debezium_cfg = config.debezium
         source_identity = debezium_cfg.source
-        table_identity = routing.table_identity
-
-        # StreamTopicSchemaUnambiguous
-        if table_identity == "topic" and debezium_cfg.schemas_enable:
-            _check_topic_schema_unambiguous(emit, config, topic_set, routing)
+        table_identity = debezium_cfg.table_identity
 
         value_schemas: dict[str, dict[str, object]] | None = None
         if debezium_cfg.schemas_enable:
             value_schemas = _build_value_schemas(
-                emit, config, routing, source_identity, table_identity
+                emit, config, source_identity, table_identity
             )
 
         return _build_debezium_render_closure(
@@ -393,7 +266,6 @@ def _stream_export_kafka(
     config: "StreamConfig",
     fmt: Literal["jsonl", "debezium"],
     anchor: "EffectiveAnchor | None",
-    routing: "RoutingConfig",
     topic_set: tuple[str, ...],
     clock: "ResolvedClock | None",
     bootstrap_servers: str | None,
@@ -405,8 +277,7 @@ def _stream_export_kafka(
         config: The validated streaming configuration.
         fmt: 'jsonl' or 'debezium'.
         anchor: The resolved effective anchor, or None.
-        routing: The effective routing policy.
-        topic_set: The full enumerated topic set.
+        topic_set: The full topic set.
         clock: The resolved realtime pacing policy, or None.
         bootstrap_servers: The resolved bootstrap-servers string.
 
@@ -414,8 +285,7 @@ def _stream_export_kafka(
         The StreamOutcome.
 
     Raises:
-        ExportError: KafkaRequiresAnchor; DebeziumRequiresConfig or
-            StreamTopicSchemaUnambiguous when fmt='debezium'.
+        ExportError: KafkaRequiresAnchor; DebeziumRequiresConfig when fmt='debezium'.
         KafkaDeliveryError: Delivery failure.
         KafkaClientUnavailable: confluent-kafka not installed.
     """
@@ -425,9 +295,7 @@ def _stream_export_kafka(
     if anchor is None:
         raise ExportError(_KAFKA_REQUIRES_ANCHOR_MSG)
 
-    render_value = build_kafka_render_value(
-        emit, config, fmt, anchor, routing, topic_set
-    )
+    render_value = build_kafka_render_value(emit, config, fmt, anchor, topic_set)
 
     raw_events = iter_stream_events(emit, config, anchor)
     paced = clock is not None
@@ -458,7 +326,6 @@ def _stream_export_debezium(
     sink: Literal["stdout", "file"],
     out: Path | None,
     anchor: "EffectiveAnchor | None",
-    routing: "RoutingConfig",
     topic_set: tuple[str, ...],
     clock: "ResolvedClock | None" = None,
 ) -> StreamOutcome:
@@ -470,15 +337,14 @@ def _stream_export_debezium(
         sink: 'stdout' or 'file'.
         out: The output directory for the file sink; None for stdout.
         anchor: The resolved effective anchor, or None.
-        routing: The effective routing policy.
-        topic_set: The full enumerated topic set.
+        topic_set: The full topic set.
+        clock: The resolved realtime pacing policy, or None.
 
     Returns:
         The StreamOutcome.
 
     Raises:
-        ExportError: DebeziumRequiresAnchor, DebeziumRequiresConfig, or
-            StreamTopicSchemaUnambiguous.
+        ExportError: DebeziumRequiresConfig or DebeziumRequiresAnchor.
     """
     from fabulexa_forge.exporters.streaming.debezium import (
         write_debezium_stream,
@@ -494,17 +360,14 @@ def _stream_export_debezium(
 
     debezium_cfg = config.debezium
     source_identity = debezium_cfg.source
-    table_identity = routing.table_identity
+    table_identity = debezium_cfg.table_identity
 
-    # StreamTopicSchemaUnambiguous — enforce before building schemas
-    if table_identity == "topic" and debezium_cfg.schemas_enable:
-        _check_topic_schema_unambiguous(emit, config, topic_set, routing)
-
-    # Build value schemas keyed by table_identity when schemas_enable is True
+    # Build value schemas keyed by table_identity when schemas_enable is True.
+    # Well-defined by construction: one topic = one stream = one column list.
     value_schemas: dict[str, dict[str, object]] | None = None
     if debezium_cfg.schemas_enable:
         value_schemas = _build_value_schemas(
-            emit, config, routing, source_identity, table_identity
+            emit, config, source_identity, table_identity
         )
 
     raw_events = iter_stream_events(emit, config, anchor)
@@ -531,78 +394,115 @@ def _stream_export_debezium(
     return _merge_outcome(outcome, topic_set, sink, out)
 
 
+def _stream_route_tables(
+    sidecar: "Sidecar",
+    stream: "KindStream",
+) -> tuple[str, ...]:
+    """The route_table leaves a kind-shaped stream's events can carry.
+
+    Mirrors the engine's route_attributes leaf rule: a flat kind's sole leaf is
+    the bare kind name; a sub-typed kind's leaves are its declared sub_types
+    scope (the stream's own scope when given, else the kind's full domain).
+
+    Args:
+        sidecar: The open emit's sidecar view.
+        stream: The kind-shaped stream declaration.
+
+    Returns:
+        The distinct route_table values this stream's events can carry.
+    """
+    domain = sidecar.subtype_values(stream.kind)
+    if not domain:
+        return (stream.kind,)
+    return tuple(stream.sub_types) if stream.sub_types is not None else domain
+
+
 def _build_value_schemas(
     emit: "Emit",
     config: "StreamConfig",
-    routing: "RoutingConfig",
     source_identity: "DebeziumSourceIdentity",
     table_identity: str,
 ) -> dict[str, dict[str, object]]:
     """Build Debezium value schemas keyed by the table_identity value.
 
     For table_identity='source_table', keys are route_table values.
-    For table_identity='topic', keys are resolved topic names.
+    For table_identity='topic', keys are stream names.
 
-    Dispatches on config.content: 'membership-events' loops config.memberships
-    with a leading 'event' column; all other content loops config.kinds.
+    Dispatches on config.content: 'membership-events' loops the config's
+    membership-shaped streams with a leading 'event' column; all other content
+    loops its kind-shaped streams. Every stream's declared column list is
+    re-keyed through `elect_after_image_columns` under its gated elected
+    surface (`resolve_stream_surfaces`) — a pure recomputation of the same
+    gates and surfaces the engine's own validation pass resolves, so the
+    declared schema and the rendered after-image stay the same list by
+    construction (mirrors `exporters.base.engine`'s recompute-not-thread
+    posture).
 
     Args:
         emit: The open emit.
         config: The validated streaming configuration.
-        routing: The effective routing policy.
         source_identity: The masquerade source identity.
         table_identity: 'source_table' or 'topic'.
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
+
+    Raises:
+        ElectionMixedIdentity: A stream's spanned populations elect differing
+            surfaces.
+        ElectionUnionUnsafe: A uniform presentation_id election's spanned key
+            spaces, or an edge's admitted target key spaces, contain a
+            pairwise-unsafe pair.
     """
+    election = resolve_election(emit.sidecar, config.keys)
+    surfaces = resolve_stream_surfaces(emit.sidecar, election, config)
     if config.content == "membership-events":
         return _build_value_schemas_membership(
-            emit, config, routing, source_identity, table_identity
+            emit, config, source_identity, table_identity, surfaces
         )
     return _build_value_schemas_kinds(
-        emit, config, routing, source_identity, table_identity
+        emit, config, source_identity, table_identity, surfaces
     )
 
 
 def _build_value_schemas_kinds(
     emit: "Emit",
     config: "StreamConfig",
-    routing: "RoutingConfig",
     source_identity: "DebeziumSourceIdentity",
     table_identity: str,
+    surfaces: "dict[str, KeySurface]",
 ) -> dict[str, dict[str, object]]:
-    """Build value schemas for state-changes content.
+    """Build value schemas for state-changes content, one per declared stream.
 
     Args:
         emit: The open emit.
         config: The validated streaming configuration.
-        routing: The effective routing policy.
         source_identity: The masquerade source identity.
         table_identity: 'source_table' or 'topic'.
+        surfaces: Every stream's gated uniform elected surface.
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
     """
     from fabulexa_forge.derivations.row_state_events import resolve_stream_columns
     from fabulexa_forge.exporters.streaming.debezium import build_debezium_value_schema
-    from fabulexa_forge.exporters.streaming.engine import _selected_attributes_for_kind
-    from fabulexa_forge.exporters.streaming.routing import resolve_topic
 
     value_schemas: dict[str, dict[str, object]] = {}
 
-    for kind_sel in config.kinds:
-        kind = kind_sel.kind
-        columns = resolve_stream_columns(
-            emit.sidecar, kind, frozenset(kind_sel.properties)
+    for stream in config.streams:
+        assert isinstance(stream, KindStream)
+        columns = elect_after_image_columns(
+            resolve_stream_columns(
+                emit.sidecar, stream.kind, frozenset(stream.properties)
+            ),
+            surfaces[stream.name],
         )
-        attrs_list = _selected_attributes_for_kind(kind, kind_sel.types, emit.sidecar)
-        for attrs in attrs_list:
-            if table_identity == "topic":
-                schema_key = resolve_topic(routing, attrs)
-            else:
-                schema_key = attrs["route_table"]
+        if table_identity == "topic":
+            schema_keys: tuple[str, ...] = (stream.name,)
+        else:
+            schema_keys = _stream_route_tables(emit.sidecar, stream)
 
+        for schema_key in schema_keys:
             if schema_key not in value_schemas:
                 value_schemas[schema_key] = build_debezium_value_schema(
                     table=schema_key,
@@ -617,48 +517,48 @@ def _build_value_schemas_kinds(
 def _build_value_schemas_membership(
     emit: "Emit",
     config: "StreamConfig",
-    routing: "RoutingConfig",
     source_identity: "DebeziumSourceIdentity",
     table_identity: str,
+    surfaces: "dict[str, KeySurface]",
 ) -> dict[str, dict[str, object]]:
-    """Build value schemas for membership-events content.
-
-    Per selection: calls membership_route_attributes once for the schema key,
-    and ('event',) + resolve_membership_columns(...) for columns.
+    """Build value schemas for membership-events content, one per declared stream.
 
     Args:
         emit: The open emit.
         config: The validated streaming configuration.
-        routing: The effective routing policy.
         source_identity: The masquerade source identity.
         table_identity: 'source_table' or 'topic'.
+        surfaces: Every stream's gated uniform owner elected surface.
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
     """
     from fabulexa_forge.derivations.membership_events import resolve_membership_columns
     from fabulexa_forge.exporters.streaming.debezium import build_debezium_value_schema
-    from fabulexa_forge.exporters.streaming.routing import (
-        membership_route_attributes,
-        resolve_topic,
-    )
+    from fabulexa_forge.exporters.streaming.routing import membership_route_attributes
 
     value_schemas: dict[str, dict[str, object]] = {}
 
-    for mem_sel in config.memberships:
-        attrs = membership_route_attributes(mem_sel.owner_kind, mem_sel.property)
-        if table_identity == "topic":
-            schema_key = resolve_topic(routing, attrs)
-        else:
-            schema_key = attrs["route_table"]
+    for stream in config.streams:
+        assert isinstance(stream, MembershipStream)
+        owner_kind = stream.membership.kind
+        property_name = stream.membership.property
+        attrs = membership_route_attributes(owner_kind, property_name)
+        schema_key = stream.name if table_identity == "topic" else attrs["route_table"]
 
         if schema_key not in value_schemas:
-            columns = ("event",) + resolve_membership_columns(
-                emit.sidecar, mem_sel.owner_kind, mem_sel.property, mem_sel.fields
+            payload_columns = elect_after_image_columns(
+                list(
+                    resolve_membership_columns(
+                        emit.sidecar, owner_kind, property_name, stream.fields
+                    )
+                ),
+                surfaces[stream.name],
             )
+            columns = ["event", *payload_columns]
             value_schemas[schema_key] = build_debezium_value_schema(
                 table=schema_key,
-                columns=list(columns),
+                columns=columns,
                 source_name=source_identity.name,
                 connector=source_identity.connector,
             )

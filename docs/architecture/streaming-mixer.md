@@ -256,7 +256,6 @@ The mixer owns the headless scheduler and nothing downstream of it:
 
 | Doc | Why |
 |---|---|
-| [`streaming.md`](streaming.md) | The streaming exporter whose `iter_stream_events` / `build_topic_set` / `StreamEvent` the mixer consumes unchanged as its event source and dial-set enumerator. |
+| [`streaming.md`](streaming.md) | The streaming exporter whose `iter_stream_events` / `build_topic_set` / `StreamEvent` the mixer consumes unchanged as its event source and dial-set enumerator — the declared stream names are the topic set (declared-but-empty topics included) the mixer seeds one buffer and one dial strip per. |
 | [`streaming-pacing.md`](streaming-pacing.md) | The pure, deterministic pacing sibling — the same pure-core / injected-clock split, the opposite determinism contract. |
-| [`streaming-routing.md`](streaming-routing.md) | Defines the topic set (`build_topic_set`, declared-but-empty topics) the mixer seeds one buffer and one dial strip per. |
 | [`mixer-control-plane.md`](mixer-control-plane.md) | The control plane that drives this scheduler — the run lifecycle, the HTTP control API, the async Kafka sink, and the meters derivation built over `schedule_releases`'s injection seam. |

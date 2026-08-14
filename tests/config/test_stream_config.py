@@ -1,4 +1,5 @@
-"""Tests for StreamKindSelection, StreamConfig, and load_stream_config."""
+"""Tests for the declared-stream grammar: KindStream, MembershipStream,
+StreamDeclaration union discrimination, StreamConfig, and load_stream_config."""
 
 from __future__ import annotations
 
@@ -14,98 +15,290 @@ from fabulexa_forge.config.models import (
     DebeziumConfig,
     DebeziumSourceIdentity,
     KafkaConfig,
-    MembershipSelection,
+    KindStream,
+    MembershipStream,
     RebaseConfig,
-    RoutingConfig,
     StreamConfig,
-    StreamKindSelection,
 )
 from fabulexa_forge.errors import ConfigError
 
 # ---------------------------------------------------------------------------
-# StreamKindSelection
+# KindStream
 # ---------------------------------------------------------------------------
 
 
-def test_stream_kind_selection_valid() -> None:
-    """Valid StreamKindSelection with bare property names parses cleanly."""
-    ks = StreamKindSelection.model_validate(
-        {"kind": "patient", "properties": ["name", "status"]}
-    )
+def _make_kind_stream(**overrides: object) -> dict[object, object]:
+    base: dict[object, object] = {
+        "name": "patients",
+        "kind": "patient",
+        "properties": ["name", "status"],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_kind_stream_valid() -> None:
+    """A valid KindStream with bare property names parses cleanly."""
+    ks = KindStream.model_validate(_make_kind_stream())
+    assert ks.name == "patients"
     assert ks.kind == "patient"
     assert ks.properties == ["name", "status"]
+    assert ks.sub_types is None
 
 
-def test_stream_kind_selection_empty_properties_accepted() -> None:
-    """Empty properties list is accepted (identity + lifecycle only)."""
-    ks = StreamKindSelection.model_validate({"kind": "patient", "properties": []})
+def test_kind_stream_properties_empty_accepted() -> None:
+    """properties: [] is accepted — the explicit notification-feed declaration."""
+    ks = KindStream.model_validate(_make_kind_stream(properties=[]))
     assert ks.properties == []
 
 
-def test_stream_kind_selection_prop_prefix_raises() -> None:
+def test_kind_stream_properties_missing_raises() -> None:
+    """`properties` has no default; omitting it raises (required field)."""
+    entry = _make_kind_stream()
+    del entry["properties"]
+    with pytest.raises(ValidationError):
+        KindStream.model_validate(entry)
+
+
+def test_kind_stream_properties_prop_prefix_raises() -> None:
     """A property carrying the prop__ prefix raises ValueError."""
     with pytest.raises(ValidationError, match="prop__"):
-        StreamKindSelection.model_validate(
-            {"kind": "patient", "properties": ["prop__name"]}
-        )
+        KindStream.model_validate(_make_kind_stream(properties=["prop__name"]))
 
 
-def test_stream_kind_selection_unknown_field_raises() -> None:
-    """An unknown field on StreamKindSelection raises (extra='forbid')."""
+def test_kind_stream_properties_duplicate_raises() -> None:
+    """A repeated property name raises ValueError."""
+    with pytest.raises(ValidationError, match="duplicate names"):
+        KindStream.model_validate(_make_kind_stream(properties=["name", "name"]))
+
+
+def test_kind_stream_sub_types_absent_is_none() -> None:
+    """Absent `sub_types` -> None (full discriminator domain)."""
+    ks = KindStream.model_validate(_make_kind_stream())
+    assert ks.sub_types is None
+
+
+def test_kind_stream_sub_types_valid() -> None:
+    """A non-empty, duplicate-free sub_types list parses correctly."""
+    ks = KindStream.model_validate(
+        _make_kind_stream(kind="actor", sub_types=["doctor", "nurse"], properties=[])
+    )
+    assert ks.sub_types == ["doctor", "nurse"]
+
+
+def test_kind_stream_sub_types_empty_raises() -> None:
+    """`sub_types: []` raises ValueError (omit the field instead)."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(sub_types=[]))
+
+
+def test_kind_stream_sub_types_duplicate_raises() -> None:
+    """A repeated sub_types value raises ValueError."""
+    with pytest.raises(ValidationError, match="duplicate names"):
+        KindStream.model_validate(_make_kind_stream(sub_types=["doctor", "doctor"]))
+
+
+def test_kind_stream_unknown_field_raises() -> None:
+    """An unknown field on KindStream raises (extra='forbid')."""
     with pytest.raises(ValidationError):
-        StreamKindSelection.model_validate(
-            {"kind": "patient", "properties": [], "extra": "bad"}
-        )
+        KindStream.model_validate(_make_kind_stream(extra="bad"))
 
 
 # ---------------------------------------------------------------------------
-# StreamConfig
+# MembershipStream
+# ---------------------------------------------------------------------------
+
+
+def _make_membership_stream(**overrides: object) -> dict[object, object]:
+    base: dict[object, object] = {
+        "name": "queue-waiters",
+        "membership": {"kind": "queue", "property": "waiters"},
+        "fields": ["priority"],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_membership_stream_valid() -> None:
+    """A valid MembershipStream with bare field names parses cleanly."""
+    ms = MembershipStream.model_validate(_make_membership_stream())
+    assert ms.name == "queue-waiters"
+    assert ms.membership.kind == "queue"
+    assert ms.membership.property == "waiters"
+    assert ms.fields == ["priority"]
+
+
+def test_membership_stream_fields_empty_accepted() -> None:
+    """fields: [] is accepted — the explicit owner-identity-only declaration."""
+    ms = MembershipStream.model_validate(_make_membership_stream(fields=[]))
+    assert ms.fields == []
+
+
+def test_membership_stream_fields_missing_raises() -> None:
+    """`fields` has no default; omitting it raises (required field)."""
+    entry = _make_membership_stream()
+    del entry["fields"]
+    with pytest.raises(ValidationError):
+        MembershipStream.model_validate(entry)
+
+
+def test_membership_stream_fields_elem_prefix_raises() -> None:
+    """A field beginning with 'elem__' raises ValueError."""
+    with pytest.raises(ValidationError, match="elem__"):
+        MembershipStream.model_validate(_make_membership_stream(fields=["elem__x"]))
+
+
+def test_membership_stream_fields_member_prefix_raises() -> None:
+    """A field beginning with 'member__' raises ValueError."""
+    with pytest.raises(ValidationError, match="member__"):
+        MembershipStream.model_validate(_make_membership_stream(fields=["member__y"]))
+
+
+def test_membership_stream_fields_duplicate_raises() -> None:
+    """A repeated field name raises ValueError."""
+    with pytest.raises(ValidationError, match="duplicate names"):
+        MembershipStream.model_validate(
+            _make_membership_stream(fields=["priority", "priority"])
+        )
+
+
+def test_membership_stream_unknown_field_raises() -> None:
+    """An unknown field on MembershipStream raises (extra='forbid')."""
+    with pytest.raises(ValidationError):
+        MembershipStream.model_validate(_make_membership_stream(extra="bad"))
+
+
+# ---------------------------------------------------------------------------
+# Stream name rule (shared by KindStream and MembershipStream)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "bad_name",
+    [
+        "../../etc/cron.d/evil",
+        "/etc/cron.d/evil",
+        "a/b",
+        "topic name",
+        ".",
+        "..",
+        "",
+    ],
+)
+def test_kind_stream_invalid_name_raises(bad_name: str) -> None:
+    """A name outside ^[A-Za-z0-9._-]+$ (or '.'/'..') raises on KindStream."""
+    with pytest.raises(ValidationError, match="valid topic name"):
+        KindStream.model_validate(_make_kind_stream(name=bad_name))
+
+
+def test_membership_stream_invalid_name_raises() -> None:
+    """The same name rule is enforced on MembershipStream."""
+    with pytest.raises(ValidationError, match="valid topic name"):
+        MembershipStream.model_validate(_make_membership_stream(name="a/b"))
+
+
+def test_kind_stream_kafka_convention_name_passes() -> None:
+    """Dots, dashes, and underscores are all legal in a stream name."""
+    ks = KindStream.model_validate(_make_kind_stream(name="cdc.public.patients-v2_x"))
+    assert ks.name == "cdc.public.patients-v2_x"
+
+
+# ---------------------------------------------------------------------------
+# StreamDeclaration — union discrimination (via StreamConfig.streams)
+# ---------------------------------------------------------------------------
+
+
+def test_stream_declaration_kind_shape_discriminates_to_kindstream() -> None:
+    """An entry carrying 'kind' parses as KindStream."""
+    cfg = StreamConfig.model_validate(
+        {"content": "state-changes", "streams": [_make_kind_stream()]}
+    )
+    assert isinstance(cfg.streams[0], KindStream)
+
+
+def test_stream_declaration_membership_shape_discriminates_to_membershipstream() -> (
+    None
+):
+    """An entry carrying 'membership' parses as MembershipStream."""
+    cfg = StreamConfig.model_validate(
+        {
+            "content": "membership-events",
+            "streams": [_make_membership_stream()],
+        }
+    )
+    assert isinstance(cfg.streams[0], MembershipStream)
+
+
+def test_stream_declaration_both_kind_and_membership_raises() -> None:
+    """An entry carrying both 'kind' and 'membership' fails naming the two shapes."""
+    entry = _make_kind_stream()
+    entry["membership"] = {"kind": "queue", "property": "waiters"}
+    with pytest.raises(ValidationError, match="both 'kind' and 'membership'"):
+        StreamConfig.model_validate({"content": "state-changes", "streams": [entry]})
+
+
+def test_stream_declaration_neither_kind_nor_membership_raises() -> None:
+    """An entry carrying neither 'kind' nor 'membership' fails naming the two shapes."""
+    entry = {"name": "orphan", "properties": []}
+    with pytest.raises(ValidationError, match="neither 'kind' nor 'membership'"):
+        StreamConfig.model_validate({"content": "state-changes", "streams": [entry]})
+
+
+# ---------------------------------------------------------------------------
+# StreamConfig — content/shape match
 # ---------------------------------------------------------------------------
 
 
 def _make_stream_config(**overrides: object) -> dict[object, object]:
     base: dict[object, object] = {
         "content": "state-changes",
-        "kinds": [
-            {"kind": "patient", "properties": ["name", "status"]},
-            {"kind": "ward", "properties": []},
-        ],
+        "streams": [_make_kind_stream()],
     }
     base.update(overrides)
     return base
 
 
-def test_stream_config_valid_two_kinds() -> None:
-    """Valid StreamConfig with two kinds and optional rebase parses correctly."""
+def test_stream_config_state_changes_valid() -> None:
+    """content='state-changes' with KindStream entries parses correctly."""
     cfg = StreamConfig.model_validate(
-        {
-            "content": "state-changes",
-            "kinds": [
-                {"kind": "patient", "properties": ["name", "status"]},
-                {"kind": "ward", "properties": []},
-            ],
-            "rebase": {"timezone": "Europe/London"},
-        }
+        _make_stream_config(
+            streams=[
+                _make_kind_stream(name="patients", kind="patient"),
+                _make_kind_stream(name="wards", kind="ward", properties=[]),
+            ]
+        )
     )
     assert cfg.content == "state-changes"
-    assert len(cfg.kinds) == 2
-    assert cfg.kinds[0].kind == "patient"
-    assert cfg.kinds[1].kind == "ward"
-    assert cfg.rebase is not None
-    assert cfg.rebase.timezone == "Europe/London"
+    assert len(cfg.streams) == 2
 
 
-def test_stream_config_rebase_absent_is_none() -> None:
-    """Absent rebase block → rebase is None."""
-    cfg = StreamConfig.model_validate(_make_stream_config())
-    assert cfg.rebase is None
+def test_stream_config_membership_events_valid() -> None:
+    """content='membership-events' with MembershipStream entries parses correctly."""
+    cfg = StreamConfig.model_validate(
+        {
+            "content": "membership-events",
+            "streams": [_make_membership_stream()],
+        }
+    )
+    assert cfg.content == "membership-events"
+    assert len(cfg.streams) == 1
+    assert isinstance(cfg.streams[0], MembershipStream)
 
 
-def test_stream_config_rebase_present_parsed() -> None:
-    """Present rebase block is parsed as RebaseConfig."""
-    cfg = StreamConfig.model_validate(_make_stream_config(rebase={"timezone": "UTC"}))
-    assert isinstance(cfg.rebase, RebaseConfig)
-    assert cfg.rebase.timezone == "UTC"
+def test_stream_config_kind_stream_under_membership_content_raises() -> None:
+    """A KindStream entry under content='membership-events' fails (shape mismatch)."""
+    with pytest.raises(ValidationError, match="do not match"):
+        StreamConfig.model_validate(
+            {"content": "membership-events", "streams": [_make_kind_stream()]}
+        )
+
+
+def test_stream_config_membership_stream_under_state_changes_content_raises() -> None:
+    """A MembershipStream entry under content='state-changes' fails (shape mismatch)."""
+    with pytest.raises(ValidationError, match="do not match"):
+        StreamConfig.model_validate(
+            _make_stream_config(streams=[_make_membership_stream()])
+        )
 
 
 def test_stream_config_invalid_content_raises() -> None:
@@ -114,166 +307,10 @@ def test_stream_config_invalid_content_raises() -> None:
         StreamConfig.model_validate(_make_stream_config(content="snapshots"))
 
 
-def test_stream_config_empty_kinds_raises() -> None:
-    """content='state-changes' with empty kinds raises from selection_matches_content."""
+def test_stream_config_streams_empty_raises() -> None:
+    """An empty `streams` list raises from streams_match_content."""
     with pytest.raises(ValidationError, match="non-empty"):
-        StreamConfig.model_validate(_make_stream_config(kinds=[]))
-
-
-def test_stream_config_duplicate_kind_raises() -> None:
-    """Duplicate kind name raises ValueError from kinds_unique."""
-    with pytest.raises(ValidationError, match="duplicate"):
-        StreamConfig.model_validate(
-            _make_stream_config(
-                kinds=[
-                    {"kind": "patient", "properties": []},
-                    {"kind": "patient", "properties": ["status"]},
-                ]
-            )
-        )
-
-
-# ---------------------------------------------------------------------------
-# StreamConfig — membership-events content
-# ---------------------------------------------------------------------------
-
-_MEMBERSHIP_ENTRY = {
-    "owner_kind": "queue",
-    "property": "waiters",
-    "fields": ["priority"],
-}
-
-
-def _make_membership_stream_config(**overrides: object) -> dict[object, object]:
-    base: dict[object, object] = {
-        "content": "membership-events",
-        "memberships": [_MEMBERSHIP_ENTRY],
-    }
-    base.update(overrides)
-    return base
-
-
-def test_stream_config_membership_events_valid() -> None:
-    """content='membership-events' with non-empty memberships and empty kinds is valid."""
-    cfg = StreamConfig.model_validate(_make_membership_stream_config())
-    assert cfg.content == "membership-events"
-    assert len(cfg.memberships) == 1
-    assert cfg.memberships[0].owner_kind == "queue"
-    assert cfg.memberships[0].property == "waiters"
-    assert cfg.memberships[0].fields == ["priority"]
-    assert cfg.kinds == []
-
-
-def test_stream_config_membership_empty_memberships_raises() -> None:
-    """content='membership-events' with empty memberships raises selection_matches_content."""
-    with pytest.raises(ValidationError, match="non-empty"):
-        StreamConfig.model_validate(_make_membership_stream_config(memberships=[]))
-
-
-def test_stream_config_membership_non_empty_kinds_raises() -> None:
-    """content='membership-events' with non-empty kinds raises selection_matches_content."""
-    with pytest.raises(ValidationError, match="empty"):
-        StreamConfig.model_validate(
-            _make_membership_stream_config(
-                kinds=[{"kind": "patient", "properties": []}]
-            )
-        )
-
-
-def test_stream_config_state_changes_non_empty_memberships_raises() -> None:
-    """content='state-changes' with non-empty memberships raises selection_matches_content."""
-    with pytest.raises(ValidationError, match="empty"):
-        StreamConfig.model_validate(
-            _make_stream_config(memberships=[_MEMBERSHIP_ENTRY])
-        )
-
-
-def test_stream_config_memberships_duplicate_pair_raises() -> None:
-    """Duplicate (owner_kind, property) pair in memberships raises memberships_unique."""
-    with pytest.raises(ValidationError, match="duplicate"):
-        StreamConfig.model_validate(
-            _make_membership_stream_config(
-                memberships=[
-                    {"owner_kind": "queue", "property": "waiters", "fields": []},
-                    {
-                        "owner_kind": "queue",
-                        "property": "waiters",
-                        "fields": ["priority"],
-                    },
-                ]
-            )
-        )
-
-
-def test_stream_config_memberships_unknown_field_raises() -> None:
-    """Unknown field inside a memberships entry raises (extra='forbid')."""
-    with pytest.raises(ValidationError):
-        StreamConfig.model_validate(
-            _make_membership_stream_config(
-                memberships=[
-                    {
-                        "owner_kind": "queue",
-                        "property": "waiters",
-                        "fields": [],
-                        "extra": "bad",
-                    }
-                ]
-            )
-        )
-
-
-# ---------------------------------------------------------------------------
-# MembershipSelection
-# ---------------------------------------------------------------------------
-
-
-def test_membership_selection_fields_empty_accepted() -> None:
-    """MembershipSelection.fields = [] accepted (owner identity only)."""
-    ms = MembershipSelection.model_validate(
-        {"owner_kind": "queue", "property": "waiters", "fields": []}
-    )
-    assert ms.fields == []
-
-
-def test_membership_selection_fields_are_bare_elem_prefix_raises() -> None:
-    """A field name beginning with 'elem__' raises fields_are_bare."""
-    with pytest.raises(ValidationError, match="elem__"):
-        MembershipSelection.model_validate(
-            {"owner_kind": "queue", "property": "waiters", "fields": ["elem__x"]}
-        )
-
-
-def test_membership_selection_fields_are_bare_member_prefix_raises() -> None:
-    """A field name beginning with 'member__' raises fields_are_bare."""
-    with pytest.raises(ValidationError, match="member__"):
-        MembershipSelection.model_validate(
-            {"owner_kind": "queue", "property": "waiters", "fields": ["member__y"]}
-        )
-
-
-def test_membership_selection_fields_unique_raises() -> None:
-    """A repeated field name in fields raises fields_unique."""
-    with pytest.raises(ValidationError, match="duplicate"):
-        MembershipSelection.model_validate(
-            {
-                "owner_kind": "queue",
-                "property": "waiters",
-                "fields": ["priority", "priority"],
-            }
-        )
-
-
-def test_membership_selection_unknown_field_raises() -> None:
-    """Unknown field inside a memberships entry raises (extra='forbid')."""
-    with pytest.raises(ValidationError):
-        MembershipSelection.model_validate(
-            {
-                "owner_kind": "queue",
-                "property": "waiters",
-                "fields": [],
-                "unknown": "bad",
-            }
-        )
+        StreamConfig.model_validate(_make_stream_config(streams=[]))
 
 
 def test_stream_config_unknown_top_level_field_raises() -> None:
@@ -282,22 +319,48 @@ def test_stream_config_unknown_top_level_field_raises() -> None:
         StreamConfig.model_validate(_make_stream_config(unknown_field="bad"))
 
 
-def test_stream_config_unknown_kinds_field_raises() -> None:
-    """Unknown field inside a kinds entry raises (extra='forbid')."""
+def test_stream_config_routing_field_no_longer_parses() -> None:
+    """A `routing:` block on StreamConfig raises — RoutingConfig is retired;
+    table_identity now lives under debezium."""
     with pytest.raises(ValidationError):
         StreamConfig.model_validate(
+            _make_stream_config(routing={"topic_template": "{kind}"})
+        )
+
+
+# ---------------------------------------------------------------------------
+# StreamConfig — stream-name uniqueness
+# ---------------------------------------------------------------------------
+
+
+def test_stream_config_duplicate_stream_name_raises() -> None:
+    """Two streams sharing a name raises from stream_names_unique."""
+    with pytest.raises(ValidationError, match="duplicate stream names"):
+        StreamConfig.model_validate(
             _make_stream_config(
-                kinds=[{"kind": "patient", "properties": [], "extra": "bad"}]
+                streams=[
+                    _make_kind_stream(name="patients", kind="patient"),
+                    _make_kind_stream(name="patients", kind="ward"),
+                ]
             )
         )
 
 
-def test_stream_config_properties_empty_accepted() -> None:
-    """A kind with properties: [] is accepted."""
+def test_stream_config_same_kind_two_streams_parses() -> None:
+    """The same kind fed to two distinctly-named streams parses correctly
+    (identity is the name, not the kind)."""
     cfg = StreamConfig.model_validate(
-        _make_stream_config(kinds=[{"kind": "ward", "properties": []}])
+        _make_stream_config(
+            streams=[
+                _make_kind_stream(name="patients-all", kind="patient"),
+                _make_kind_stream(
+                    name="patients-status", kind="patient", properties=["status"]
+                ),
+            ]
+        )
     )
-    assert cfg.kinds[0].properties == []
+    assert len(cfg.streams) == 2
+    assert {s.name for s in cfg.streams} == {"patients-all", "patients-status"}
 
 
 # ---------------------------------------------------------------------------
@@ -309,19 +372,21 @@ def test_load_stream_config_valid(tmp_path: Path) -> None:
     """load_stream_config parses a valid YAML file correctly."""
     yaml_text = textwrap.dedent("""\
         content: state-changes
-        kinds:
-          - kind: patient
+        streams:
+          - name: patients
+            kind: patient
             properties:
               - name
               - status
-          - kind: ward
+          - name: wards
+            kind: ward
             properties: []
     """)
     cfg_path = tmp_path / "stream.yaml"
     cfg_path.write_text(yaml_text, encoding="utf-8")
     cfg = load_stream_config(cfg_path)
     assert cfg.content == "state-changes"
-    assert len(cfg.kinds) == 2
+    assert len(cfg.streams) == 2
 
 
 def test_load_stream_config_missing_file_raises(tmp_path: Path) -> None:
@@ -342,7 +407,7 @@ def test_load_stream_config_pydantic_invalid_raises(tmp_path: Path) -> None:
     """Pydantic-invalid YAML document raises ConfigError."""
     yaml_text = textwrap.dedent("""\
         content: state-changes
-        kinds: []
+        streams: []
     """)
     cfg_path = tmp_path / "invalid.yaml"
     cfg_path.write_text(yaml_text, encoding="utf-8")
@@ -354,9 +419,11 @@ def test_load_stream_config_membership_events_round_trip(tmp_path: Path) -> None
     """load_stream_config parses a content: membership-events YAML file correctly."""
     yaml_text = textwrap.dedent("""\
         content: membership-events
-        memberships:
-          - owner_kind: queue
-            property: waiters
+        streams:
+          - name: queue-waiters
+            membership:
+              kind: queue
+              property: waiters
             fields:
               - priority
               - position
@@ -365,11 +432,28 @@ def test_load_stream_config_membership_events_round_trip(tmp_path: Path) -> None
     cfg_path.write_text(yaml_text, encoding="utf-8")
     cfg = load_stream_config(cfg_path)
     assert cfg.content == "membership-events"
-    assert len(cfg.memberships) == 1
-    assert cfg.memberships[0].owner_kind == "queue"
-    assert cfg.memberships[0].property == "waiters"
-    assert cfg.memberships[0].fields == ["priority", "position"]
-    assert cfg.kinds == []
+    assert len(cfg.streams) == 1
+    stream = cfg.streams[0]
+    assert isinstance(stream, MembershipStream)
+    assert stream.membership.kind == "queue"
+    assert stream.membership.property == "waiters"
+    assert stream.fields == ["priority", "position"]
+
+
+def test_load_stream_config_prop_prefix_raises(tmp_path: Path) -> None:
+    """A prop__-prefixed property name in YAML raises ConfigError."""
+    yaml_text = textwrap.dedent("""\
+        content: state-changes
+        streams:
+          - name: patients
+            kind: patient
+            properties:
+              - prop__name
+    """)
+    cfg_path = tmp_path / "bad_props.yaml"
+    cfg_path.write_text(yaml_text, encoding="utf-8")
+    with pytest.raises(ConfigError, match="validation failed"):
+        load_stream_config(cfg_path)
 
 
 # ---------------------------------------------------------------------------
@@ -480,6 +564,34 @@ def test_debezium_config_unknown_field_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# DebeziumConfig.table_identity (moved here from the retired RoutingConfig)
+# ---------------------------------------------------------------------------
+
+
+def test_debezium_config_table_identity_defaults_source_table() -> None:
+    """table_identity defaults to 'source_table' when omitted."""
+    cfg = DebeziumConfig.model_validate(_make_debezium_config())
+    assert cfg.table_identity == "source_table"
+
+
+def test_debezium_config_table_identity_topic_parses() -> None:
+    """The explicit 'topic' table_identity value (the declaring stream's name
+    as Debezium source.table) parses — the non-default arm of the Literal."""
+    cfg = DebeziumConfig.model_validate(
+        {**_make_debezium_config(), "table_identity": "topic"}
+    )
+    assert cfg.table_identity == "topic"
+
+
+def test_debezium_config_table_identity_unknown_value_raises() -> None:
+    """A table_identity outside Literal['source_table', 'topic'] raises."""
+    with pytest.raises(ValidationError, match="table_identity"):
+        DebeziumConfig.model_validate(
+            {**_make_debezium_config(), "table_identity": "resolved_topic"}
+        )
+
+
+# ---------------------------------------------------------------------------
 # StreamConfig.debezium
 # ---------------------------------------------------------------------------
 
@@ -517,82 +629,26 @@ def test_stream_config_debezium_unknown_field_raises() -> None:
         )
 
 
-def test_load_stream_config_prop_prefix_raises(tmp_path: Path) -> None:
-    """A prop__-prefixed property name in YAML raises ConfigError."""
-    yaml_text = textwrap.dedent("""\
-        content: state-changes
-        kinds:
-          - kind: patient
-            properties:
-              - prop__name
-    """)
-    cfg_path = tmp_path / "bad_props.yaml"
-    cfg_path.write_text(yaml_text, encoding="utf-8")
-    with pytest.raises(ConfigError, match="validation failed"):
-        load_stream_config(cfg_path)
-
-
 # ---------------------------------------------------------------------------
-# StreamKindSelection — types field (at StreamConfig level)
+# StreamConfig.rebase
 # ---------------------------------------------------------------------------
 
 
-def test_stream_kind_selection_types_default_empty() -> None:
-    """StreamKindSelection.types defaults to empty list."""
-    ks = StreamKindSelection.model_validate({"kind": "patient", "properties": []})
-    assert ks.types == []
+def test_stream_config_rebase_absent_is_none() -> None:
+    """Absent rebase block → rebase is None."""
+    cfg = StreamConfig.model_validate(_make_stream_config())
+    assert cfg.rebase is None
 
 
-def test_stream_kind_selection_types_non_empty() -> None:
-    """A non-empty types list parses correctly."""
-    ks = StreamKindSelection.model_validate(
-        {"kind": "actor", "types": ["doctor", "nurse"], "properties": []}
-    )
-    assert ks.types == ["doctor", "nurse"]
-
-
-def test_stream_kind_selection_types_prop_prefix_raises() -> None:
-    """A types value with prop__ prefix raises ValueError."""
-    with pytest.raises(ValidationError, match="prop__"):
-        StreamKindSelection.model_validate(
-            {"kind": "actor", "types": ["prop__role"], "properties": []}
-        )
+def test_stream_config_rebase_present_parsed() -> None:
+    """Present rebase block is parsed as RebaseConfig."""
+    cfg = StreamConfig.model_validate(_make_stream_config(rebase={"timezone": "UTC"}))
+    assert isinstance(cfg.rebase, RebaseConfig)
+    assert cfg.rebase.timezone == "UTC"
 
 
 # ---------------------------------------------------------------------------
-# StreamConfig — routing field
-# ---------------------------------------------------------------------------
-
-
-def test_stream_config_routing_absent_is_none() -> None:
-    """StreamConfig.routing omitted resolves to None."""
-    cfg = StreamConfig.model_validate(
-        {
-            "content": "state-changes",
-            "kinds": [{"kind": "patient", "properties": []}],
-        }
-    )
-    assert cfg.routing is None
-
-
-def test_stream_config_routing_present_parses() -> None:
-    """A present routing block parses to RoutingConfig."""
-    cfg = StreamConfig.model_validate(
-        {
-            "content": "state-changes",
-            "routing": {"topic_template": "{kind}.{route_table}"},
-            "kinds": [{"kind": "patient", "properties": []}],
-        }
-    )
-    assert cfg.routing is not None
-    assert isinstance(cfg.routing, RoutingConfig)
-    assert cfg.routing.topic_template == "{kind}.{route_table}"
-    assert cfg.routing.groups == {}
-    assert cfg.routing.table_identity == "source_table"
-
-
-# ---------------------------------------------------------------------------
-# StreamConfig — clock field
+# StreamConfig.clock
 # ---------------------------------------------------------------------------
 
 
@@ -661,3 +717,64 @@ def test_stream_config_kafka_unknown_field_raises() -> None:
                 kafka={"bootstrap_servers": "localhost:9092", "unknown": "val"}
             )
         )
+
+
+# ---------------------------------------------------------------------------
+# StreamConfig.keys — key election grammar (parse-time only; emit-independent;
+# the shared _check_keys_well_formed rule is exercised in full against
+# ExportConfig in tests/config/test_models.py — this section covers the
+# StreamConfig wiring only)
+# ---------------------------------------------------------------------------
+
+
+def test_stream_config_keys_absent_is_none() -> None:
+    """Absent `keys` block -> keys is None (byte-identical no-election default)."""
+    cfg = StreamConfig.model_validate(_make_stream_config())
+    assert cfg.keys is None
+
+
+def test_stream_config_keys_empty_map_raises() -> None:
+    """`keys: {}` (present but empty) is rejected."""
+    with pytest.raises(ValidationError, match="must not be empty"):
+        StreamConfig.model_validate(_make_stream_config(keys={}))
+
+
+@pytest.mark.parametrize("surface", ["record_id", "record_index", "presentation_id"])
+def test_stream_config_keys_scalar_election_parses_for_each_surface(
+    surface: str,
+) -> None:
+    """A scalar per-kind election parses for each of the three surfaces."""
+    cfg = StreamConfig.model_validate(_make_stream_config(keys={"patient": surface}))
+    assert cfg.keys == {"patient": surface}
+
+
+def test_stream_config_keys_per_sub_type_map_parses() -> None:
+    """A per-sub-type map elects independently per sub-type."""
+    cfg = StreamConfig.model_validate(
+        _make_stream_config(
+            keys={"patient": {"alpha": "presentation_id", "beta": "record_index"}}
+        )
+    )
+    assert cfg.keys == {"patient": {"alpha": "presentation_id", "beta": "record_index"}}
+
+
+def test_stream_config_keys_empty_per_kind_map_raises() -> None:
+    """`keys: {patient: {}}` (empty per-kind map) is rejected."""
+    with pytest.raises(ValidationError, match="per-sub-type map must not be empty"):
+        StreamConfig.model_validate(_make_stream_config(keys={"patient": {}}))
+
+
+def test_stream_config_keys_non_surface_value_raises() -> None:
+    """An election value outside the KeySurface literal is refused."""
+    with pytest.raises(ValidationError):
+        StreamConfig.model_validate(_make_stream_config(keys={"patient": "uuid"}))
+
+
+def test_stream_config_keys_kind_existence_not_checked_at_parse_time() -> None:
+    """`keys` accepts a kind name Pydantic can't check against any emit — kind/
+    sub-type existence is a streaming-time gate (resolve_election), not a
+    parse-time error (mirrors ExportConfig.keys)."""
+    cfg = StreamConfig.model_validate(
+        _make_stream_config(keys={"no_such_kind": "presentation_id"})
+    )
+    assert cfg.keys == {"no_such_kind": "presentation_id"}

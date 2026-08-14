@@ -7,18 +7,12 @@
 #
 #   content: state-changes  — `history` replayed as an ordered c/u/d CDC stream.
 #
-# Routing — two steps to domain-named topics:
-#   topic_template nhs.{kind}  renders one topic per kind. {kind} is used (not
-#                              the default {route_table}) because `actor`'s only
-#                              sub-type discriminator value is the degenerate
-#                              `actor_type = "default"`, which would otherwise
-#                              name the topic `default`.
-#   groups                     then fold each engine-ontology name into the
-#                              domain name (same mapping as base/source rename):
-#                              nhs.actor -> nhs.patient, nhs.resource ->
-#                              nhs.consultant, nhs.journey_instance ->
-#                              nhs.pathway_episode. nhs.diary keeps its name —
-#                              a clinic diary is genuine NHS vocabulary.
+# Domain-named topics — one declared stream per kind, named directly:
+#   nhs.patient (actor), nhs.diary (diary), nhs.pathway_episode
+#   (journey_instance), nhs.consultant (resource). `actor`'s only sub-type
+#   discriminator value is the degenerate `actor_type = "default"`, so its
+#   stream omits `sub_types` (the full — single-value — domain) rather than
+#   naming the topic after the discriminator.
 #
 # Topic set: nhs.patient, nhs.diary, nhs.pathway_episode, nhs.consultant — four
 # channel strips.
@@ -44,19 +38,16 @@
 
 content: state-changes
 
-kinds:
-  - kind: actor
+streams:
+  - name: nhs.patient
+    kind: actor
     properties: [status, hai_status, admission_count, cancer_referred, fft_outcome, surgical_referred, fft_invited]
-  - kind: diary
+  - name: nhs.diary
+    kind: diary
     properties: [next_opening]
-  - kind: journey_instance
+  - name: nhs.pathway_episode
+    kind: journey_instance
     properties: [current_state]
-  - kind: resource
+  - name: nhs.consultant
+    kind: resource
     properties: [allocated]
-
-routing:
-  topic_template: "nhs.{kind}"
-  groups:
-    nhs.patient: [nhs.actor]
-    nhs.consultant: [nhs.resource]
-    nhs.pathway_episode: [nhs.journey_instance]

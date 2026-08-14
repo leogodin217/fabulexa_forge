@@ -1,0 +1,25 @@
+# Recipe: streaming / combined-stream
+# ============================================================
+# Fold several sub-types of one kind into a single declared stream — one
+# topic, one column list — by naming them all in `sub_types`.
+#
+# A `KindStream` with `sub_types: [nurse, physician]` selects both staff
+# sub-types into ONE stream: they share the declared name, and every row —
+# regardless of its own sub-type — is projected through the same `properties`
+# list. (Omitting `sub_types` entirely on a sub-typed kind has the same
+# combining effect: the full discriminator domain in one stream. See
+# multi-sub-type-streams for the opposite choice — one stream per sub-type.)
+#
+# Fixture world (recipe emit):
+#   records__staff — s001 (nurse), s002 (physician); one `c` each.
+#
+# Output — one combined topic carrying both kinds of staff in global seq order:
+#   clinicians.jsonl   c s001 (Nora Vega)  +  c s002 (Owen Reed)
+
+content: state-changes
+
+streams:
+  - name: clinicians
+    kind: staff
+    sub_types: [nurse, physician]   # fold both sub-types into one stream
+    properties: [name]

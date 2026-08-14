@@ -1,11 +1,11 @@
 format: debezium
 
 streams:
-  # topic_template renamed the leaf `patient` to `cdc.patient`
+  # the stream is declared as cdc.patient — a name distinct from the leaf `patient`
   cdc.patient:
     event_count: 4
     contains_events:
-      # table_identity: topic -> source.table is the topic `cdc.patient`,
+      # table_identity: topic -> source.table is the stream name `cdc.patient`,
       # NOT the leaf route_table `patient` (the default source_table policy)
       - op: c
         after.record_id: p001

@@ -194,7 +194,7 @@ Sidecar extras:
 - `runtime`: `timezone=UTC`, `start_datetime=2024-01-01T00:00:00+00:00`
 - `pinned_ids`: `{patient: {alice: p001}}`
 - `enum_domains`: `{patient: {status: [active, discharged, pending]}, staff: {staff_type: [nurse, physician]}}`
-- `record_roles`: `{patient: dimension, doctor: dimension, staff: {nurse: dimension, physician: dimension}, admission: fact, queue: dimension}` — `staff` is sub-typed because its `staff_type` discriminator domain (above) is non-empty (sub-typing follows the `<kind>_type` domain, not the record_roles shape), so its streaming routing leaf is the `prop__staff_type` discriminator value
+- `record_roles`: `{patient: dimension, doctor: dimension, staff: {nurse: dimension, physician: dimension}, admission: fact, queue: dimension}` — `staff` is sub-typed because its `staff_type` discriminator domain (above) is non-empty (sub-typing follows the `<kind>_type` domain, not the record_roles shape), so a stream's `sub_types` may scope it and its `route_table` leaf is the `prop__staff_type` discriminator value
 
 Time constants are nanosecond offsets from the anchor `2024-01-01T00:00:00Z`:
 `1×DAY` = 2024-01-02, `2×DAY` = 2024-01-03, `3×DAY` = 2024-01-04.
@@ -256,10 +256,9 @@ streams:
 ```
 
 The declared stream-key set must equal the set of emitted `<topic>.jsonl` stems (file
-sink), including any topic that emits zero events. Without a `routing` block the topic
-is the kind (one `<kind>.jsonl` per selected kind); routing renames the stems — a
-sub-typed kind splits per sub-type, `topic_template` and `groups` rename and merge them
-(see the Routing recipes).
+sink), including any topic that emits zero events. The topic is the declared stream's
+`name`, verbatim — one `<name>.jsonl` per declared stream (see the Declared-streams
+recipes for naming, combining, and sub-type scoping).
 
 `format: debezium` runs the recipe through the Debezium renderer (`--fmt debezium`); the
 config must then carry a `debezium` block and resolve an anchor. The output is still one
@@ -363,27 +362,27 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | Recipe | What it teaches |
 |---|---|
 | [`streaming/state-changes`](../../examples/recipes/streaming/state-changes/config.yaml) | The canonical CDC stream: a kind's lifecycle as `c`/`u`/`d` events, each carrying a full after-image; type-2 properties spawn a `u` per change while type-1 properties ride every event at the current value |
-| [`streaming/identity-tombstone`](../../examples/recipes/streaming/identity-tombstone/config.yaml) | `properties: []` streams identity + lifecycle only — the pure create/delete signal; a deactivated record emits a `d` with a null after-image (the log-compaction tombstone) |
-| [`streaming/multi-kind-routing`](../../examples/recipes/streaming/multi-kind-routing/config.yaml) | Stream several kinds in one run (one `<kind>.jsonl` per kind); `seq` is a single global sequence across all kinds, so merging the files by `seq` recovers the one true order |
+| [`streaming/identity-tombstone`](../../examples/recipes/streaming/identity-tombstone/config.yaml) | `properties: []` declares an identity-only notification feed — the event set is unchanged (payload-independent); a deactivated record emits a `d` with a null after-image (the log-compaction tombstone) |
+| [`streaming/multi-kind-routing`](../../examples/recipes/streaming/multi-kind-routing/config.yaml) | Stream several kinds in one run — one declared stream (and one `<name>.jsonl`) per kind; `seq` is a single global sequence across all streams, so merging the files by `seq` recovers the one true order |
 | [`streaming/rebase-ts`](../../examples/recipes/streaming/rebase-ts/config.yaml) | top-level `rebase` block on a stream: choose the wallclock origin/zone each event's `ts` renders through; events and `seq` are unchanged, only `ts` moves |
 | [`streaming/clock-realtime`](../../examples/recipes/streaming/clock-realtime/config.yaml) | `clock.mode: realtime` paces delivery to a controlled real-time rate (`speed` = sim-to-real multiplier; `idle_cap_seconds` collapses long quiet gaps); pacing governs only wall-clock timing — bytes, topics, and counts are byte-identical to an unpaced run |
 
-**Routing (`history` → topics)**
+**Declared streams (naming, combining, sub-type scoping)**
 
 | Recipe | What it teaches |
 |---|---|
-| [`streaming/routing-subtype-topics`](../../examples/recipes/streaming/routing-subtype-topics/config.yaml) | A sub-typed kind splits into one topic per sub-type under the default policy — no `routing:` block needed; the routing leaf (`route_table`) is the `prop__<kind>_type` discriminator, read from the spine independent of carried `properties` |
-| [`streaming/routing-subtype-select`](../../examples/recipes/streaming/routing-subtype-select/config.yaml) | `kinds[].types` streams a subset of a sub-typed kind's sub-types; unselected sub-types drop before the merge (a faithful selection), so `seq` numbers only emitted events and no empty topic is declared |
-| [`streaming/routing-groups`](../../examples/recipes/streaming/routing-groups/config.yaml) | `routing.groups` many-to-one regroup: fold several rendered topic names into one target topic; absorbed names do not materialise, the merged stream keeps global `seq` order |
-| [`streaming/routing-topic-template`](../../examples/recipes/streaming/routing-topic-template/config.yaml) | `routing.topic_template` names topics from route attributes — a literal `cdc.` prefix plus the `{route_table}` leaf placeholder; distinct attributes rendering to the same name would deterministically merge |
+| [`streaming/multi-sub-type-streams`](../../examples/recipes/streaming/multi-sub-type-streams/config.yaml) | A sub-typed kind splits into one topic per sub-type by declaring one stream per sub-type, each `sub_types`-scoped to one discriminator value; there is no implicit split — declaration is the mechanism |
+| [`streaming/combined-stream`](../../examples/recipes/streaming/combined-stream/config.yaml) | Several sub-types fold into one declared stream — one topic, one column list — by listing them in `sub_types`; omitting `sub_types` on a sub-typed kind combines the full discriminator domain the same way |
+| [`streaming/subtype-select`](../../examples/recipes/streaming/subtype-select/config.yaml) | Stream a subset of a sub-typed kind's sub-types: rows outside the `sub_types` scope drop before the merge (a faithful selection), `seq` numbers only emitted events, and an undeclared sub-type gets no topic — not even a declared-but-empty one |
+| [`streaming/custom-stream-name`](../../examples/recipes/streaming/custom-stream-name/config.yaml) | `name` is fully author-chosen (the topic-name rule is the only constraint) — a `cdc.`-prefixed topic is just the `name` string, verbatim; no templating mechanism |
 
 **Membership-events (membership intervals → topics)**
 
 | Recipe | What it teaches |
 |---|---|
-| [`streaming/membership-events`](../../examples/recipes/streaming/membership-events/config.yaml) | `content: membership-events` streams a collection property's `membership__<owner>__<property>` intervals as an append-only log: each interval unpivots to a `join` (always) and a `leave` (only when the element left — an open interval emits a `join` only). Both carry a full after-image; the owner `record_id` is the message key; `fields` names bare element-schema fields (`priority` → `elem__priority`; a reference `patient` → `member__patient__kind`/`__id`) |
-| [`streaming/membership-identity-only`](../../examples/recipes/streaming/membership-identity-only/config.yaml) | `fields: []` carries owner identity only — the pure join/leave presence signal, no element columns; the membership analog of a state-changes `properties: []` selection |
-| [`streaming/membership-routing`](../../examples/recipes/streaming/membership-routing/config.yaml) | Membership Layer-A route attributes (`{owner_kind}`, `{property}`, `{route_table}` — no `sub_type`); `topic_template: "{owner_kind}.{property}"` names one topic per relation, and a single global `seq` orders events across several streamed tables |
+| [`streaming/membership-events`](../../examples/recipes/streaming/membership-events/config.yaml) | `content: membership-events` streams a collection property's `membership__<owner>__<property>` intervals as an append-only log: each interval unpivots to a `join` (always) and a `leave` (only when the element left — an open interval emits a `join` only). Both carry a full after-image; the owner's identity is the message key; `fields` names bare element-schema fields (`priority` → `elem__priority`; a reference `patient` → `member__patient__kind`/`__id`) |
+| [`streaming/membership-identity-only`](../../examples/recipes/streaming/membership-identity-only/config.yaml) | `fields: []` carries owner identity only — the pure join/leave presence signal, no element columns; the membership analog of a state-changes `properties: []` declaration |
+| [`streaming/multi-membership-streams`](../../examples/recipes/streaming/multi-membership-streams/config.yaml) | Several membership tables in one run, each under its own author-chosen `name` (independent of the owner/property identity it feeds from); a single global `seq` orders events across all streamed relations |
 
 **Debezium format (`--fmt debezium`)**
 
@@ -391,7 +390,7 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 |---|---|
 | [`streaming/debezium-state-changes`](../../examples/recipes/streaming/debezium-state-changes/config.yaml) | The state-changes stream as Debezium value messages: the self-describing `{schema, payload}` envelope, the upsert-log `op→before/after` mapping (`c`/`u` carry `before: null`, `d` carries the key-only `before: {record_id}` with `after: null`), the author-set `source` masquerade (`connector`/`name`/`db`/`schema`/`version`) plus derived `lsn`/`table`/`ts_ms`, and the anchor-derived epoch-millisecond `ts_ms` (Debezium requires a resolved anchor) |
 | [`streaming/debezium-membership-events`](../../examples/recipes/streaming/debezium-membership-events/config.yaml) | Membership-events as Debezium: the append-only event log renders insert-only (every join *and* leave is envelope `op: c`, `before: null`, `after` never null — no `d`, no tombstone), with the domain op carried as the leading `event` column of the after-image |
-| [`streaming/routing-table-identity`](../../examples/recipes/streaming/routing-table-identity/config.yaml) | `routing.table_identity` chooses what the Debezium `source.table` masquerade reports — `source_table` (the leaf route_table) or `topic` (the resolved topic name); with a renaming `topic_template` the two diverge (`cdc.patient` vs `patient`). Debezium-only; the jsonl format ignores it |
+| [`streaming/debezium-table-identity`](../../examples/recipes/streaming/debezium-table-identity/config.yaml) | `debezium.table_identity` chooses what the Debezium `source.table` masquerade reports — `source_table` (the per-event `route_table` leaf) or `topic` (the declaring stream's `name`); with a stream named off its leaf the two diverge (`cdc.patient` vs `patient`). Debezium-only; the jsonl format ignores it |
 
 ### Corrupters
 

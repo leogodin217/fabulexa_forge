@@ -8,11 +8,19 @@ from __future__ import annotations
 
 import math
 import re
-import string
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Discriminator,
+    Field,
+    Tag,
+    model_validator,
+)
 from typing_extensions import Self
 
 from fabulexa_forge._sql import is_recognized_sql_type
@@ -33,6 +41,30 @@ _TOPIC_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 KeySurface = Literal["record_id", "record_index", "presentation_id"]
 """The three identity surfaces a population or FK edge may elect."""
+
+
+def _check_keys_well_formed(
+    keys: "dict[str, KeySurface | dict[str, KeySurface]] | None",
+) -> None:
+    """Shared `keys` block shape check for ExportConfig and StreamConfig.
+
+    `keys` (when present) is non-empty; every per-kind map is non-empty.
+    Emit-dependent checks (kind/sub-type existence, registry declaration,
+    union safety) are deliberately not here — the config is emit-independent.
+
+    Args:
+        keys: The config `keys` block, verbatim.
+
+    Raises:
+        ValueError: `keys` is an empty map, or a per-kind map value is empty.
+    """
+    if keys is None:
+        return
+    if not keys:
+        raise ValueError("keys: must not be empty (omit the field instead)")
+    for kind, election in keys.items():
+        if isinstance(election, dict) and not election:
+            raise ValueError(f"keys.{kind}: per-sub-type map must not be empty")
 
 
 def _require_sql_identifier(value: str, context: str) -> None:
@@ -703,6 +735,30 @@ def _require_rename_map_valid(value: dict[str, str] | None, field_name: str) -> 
         raise ValueError(f"{field_name} values must be distinct: {duplicates}")
 
 
+def _require_where_map_valid(
+    value: dict[str, PredicateValue] | None, field_name: str
+) -> None:
+    """A `where` mapping: when present, non-empty, with non-empty keys.
+
+    Per-entry value emptiness / duplication rides the `PredicateValue` type
+    itself (`_reject_malformed_predicate`) and is not re-checked here.
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty dict, or contains an empty key.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    for key in value:
+        if not key:
+            raise ValueError(f"{field_name} keys must be non-empty")
+
+
 def _require_dict_entries_nonempty(
     value: dict[str, str] | None, field_name: str
 ) -> None:
@@ -746,23 +802,6 @@ def _require_exactly_one_population_source(
         raise ValueError(f"{label} must set exactly one of 'kind' / 'membership'")
 
 
-def _require_sub_types_only_with_kind(
-    kind: str | None, sub_types: tuple[str, ...] | None, label: str
-) -> None:
-    """`sub_types` only accompanies a `kind` address, never a `membership` one.
-
-    Args:
-        kind: The declaration's `kind` field.
-        sub_types: The declaration's `sub_types` field.
-        label: The declaring unit's message label.
-
-    Raises:
-        ValueError: `sub_types` is set while `kind` is not.
-    """
-    if sub_types is not None and kind is None:
-        raise ValueError(f"{label}: 'sub_types' is only valid together with 'kind'")
-
-
 class MembershipRef(StrictBaseModel):
     """Addresses one membership table by its contract identity."""
 
@@ -773,21 +812,28 @@ class MembershipRef(StrictBaseModel):
 
 
 class SourceTableDecl(StrictBaseModel):
-    """One declared output table: a name, one population source, optional column selection and renames."""  # noqa: E501
+    """One declared output table: a name, one population source, optional column selection, renames, and row selection."""  # noqa: E501
 
     name: str
     """Author-verbatim output table name."""
     kind: str | None = None
     """A records kind, exclusive with `membership` (`table_shape`)."""
     sub_types: tuple[str, ...] | None = None
-    """Explicit population subset; only valid alongside `kind`. Absent =
-    every declared sub-type."""
+    """Explicit population subset (with `kind`) or owner sub-type subset
+    (with `membership` — the junction renders intervals of owners in these
+    sub-types, resolved through the parent lookup). Absent = every declared
+    sub-type."""
     membership: MembershipRef | None = None
     """A membership-table address, exclusive with `kind`."""
     columns: tuple[str, ...] | None = None
     """Source-column selection; absent = full classified projection."""
     rename: dict[str, str] | None = None
     """Source column name -> output name overrides."""
+    where: dict[str, PredicateValue] | None = None
+    """Row predicate; entries AND-joined. Keys name `constant`-class payload
+    properties of the subject kind (gated at plan time): source column names
+    (`prop__<p>`) with `kind`, bare owner-property names with `membership`.
+    Absent = every row of the selected populations."""
 
     @model_validator(mode="after")
     def table_shape(self) -> Self:
@@ -795,18 +841,19 @@ class SourceTableDecl(StrictBaseModel):
 
         Raises:
             ValueError: `name` is empty; not exactly one of `kind` /
-                `membership` is set; `sub_types` is set without `kind`;
-                `sub_types` / `columns` is present-but-empty or carries a
-                duplicate entry; `rename` is present-but-empty or two keys
-                share a target value.
+                `membership` is set; `sub_types` / `columns` is
+                present-but-empty or carries a duplicate entry; `rename` is
+                present-but-empty or two keys share a target value; `where` is
+                present-but-empty or has an empty key. (Value emptiness /
+                duplication is carried by `PredicateValue` per entry.)
         """
         _require_nonempty_str(self.name, "SourceTableDecl.name")
         label = f"table {self.name!r}"
         _require_exactly_one_population_source(self.kind, self.membership, label)
-        _require_sub_types_only_with_kind(self.kind, self.sub_types, label)
         _require_distinct_nonempty_tuple(self.sub_types, "SourceTableDecl.sub_types")
         _require_distinct_nonempty_tuple(self.columns, "SourceTableDecl.columns")
         _require_rename_map_valid(self.rename, "SourceTableDecl.rename")
+        _require_where_map_valid(self.where, "SourceTableDecl.where")
         return self
 
 
@@ -816,7 +863,9 @@ class SourceEventSourceDecl(StrictBaseModel):
     kind: str | None = None
     """A records kind, exclusive with `membership` (`source_shape`)."""
     sub_types: tuple[str, ...] | None = None
-    """Explicit population subset; only valid alongside `kind`. Absent =
+    """Explicit population subset (with `kind`) or owner sub-type subset
+    (with `membership` — the source's join/leave stream narrows to owners
+    in these sub-types, resolved through the parent lookup). Absent =
     every declared sub-type."""
     membership: MembershipRef | None = None
     """A membership-table address, exclusive with `kind`."""
@@ -835,6 +884,13 @@ class SourceEventSourceDecl(StrictBaseModel):
     Keys are source identities, never output keys, so a default-key
     collision is always resolvable. A membership reference field's entry
     renames its expanded `<f>_kind` / `<f>_id` pair in place."""
+    where: dict[str, PredicateValue] | None = None
+    """Record predicate over the subject kind (the declared kind, or the
+    owner kind for a membership source), keyed by bare property name;
+    entries AND-joined; keys must name `constant`-class payload properties
+    (gated at plan time). Selects which records' (owners') events feed this
+    source's audit stream — orthogonal to `only` / `ignore`, which select
+    the audited property set."""
 
     @model_validator(mode="after")
     def source_shape(self) -> Self:
@@ -842,15 +898,14 @@ class SourceEventSourceDecl(StrictBaseModel):
 
         Raises:
             ValueError: Not exactly one of `kind` / `membership` is set;
-                `sub_types` is set without `kind`; `sub_types` / `only` /
-                `ignore` is present-but-empty or carries a duplicate entry;
-                both `only` and `ignore` are set; `item_type` is empty;
-                `rename` is present-but-empty, has an empty key or value, or
-                two keys share a target value.
+                `sub_types` / `only` / `ignore` is present-but-empty or
+                carries a duplicate entry; both `only` and `ignore` are set;
+                `item_type` is empty; `rename` is present-but-empty, has an
+                empty key or value, or two keys share a target value;
+                `where` is present-but-empty or has an empty key.
         """
         label = "events source"
         _require_exactly_one_population_source(self.kind, self.membership, label)
-        _require_sub_types_only_with_kind(self.kind, self.sub_types, label)
         _require_distinct_nonempty_tuple(
             self.sub_types, "SourceEventSourceDecl.sub_types"
         )
@@ -862,6 +917,7 @@ class SourceEventSourceDecl(StrictBaseModel):
             _require_nonempty_str(self.item_type, "SourceEventSourceDecl.item_type")
         _require_rename_map_valid(self.rename, "SourceEventSourceDecl.rename")
         _require_dict_entries_nonempty(self.rename, "SourceEventSourceDecl.rename")
+        _require_where_map_valid(self.where, "SourceEventSourceDecl.where")
         return self
 
 
@@ -943,12 +999,12 @@ class SourceConfig(StrictBaseModel):
         """Cross-declaration checks the per-declaration validators cannot
         see: `tables[].name` is distinct across the declaration list. Every
         other rule the design doc's `table_source_exclusive` docstring
-        describes — exactly one of `kind` / `membership`, `sub_types` only
-        with `kind`, non-empty distinct collections, `rename` values
-        distinct, `only`/`ignore` mutually exclusive — is already enforced
-        per-declaration by `SourceTableDecl.table_shape` /
-        `SourceEventSourceDecl.source_shape`; "at most one events block" is
-        structural (`events` is a single optional field, never a list).
+        describes — exactly one of `kind` / `membership`, non-empty distinct
+        collections, `rename` values distinct, `only`/`ignore` mutually
+        exclusive — is already enforced per-declaration by
+        `SourceTableDecl.table_shape` / `SourceEventSourceDecl.source_shape`;
+        "at most one events block" is structural (`events` is a single
+        optional field, never a list).
 
         Raises:
             ValueError: Two `tables` entries share the same `name`.
@@ -1178,12 +1234,7 @@ class ExportConfig(StrictBaseModel):
         Raises:
             ValueError: `keys` is an empty map, or a per-kind map value is empty.
         """
-        if self.keys is not None:
-            if not self.keys:
-                raise ValueError("keys: must not be empty (omit the field instead)")
-            for kind, election in self.keys.items():
-                if isinstance(election, dict) and not election:
-                    raise ValueError(f"keys.{kind}: per-sub-type map must not be empty")
+        _check_keys_well_formed(self.keys)
         return self
 
     @model_validator(mode="after")
@@ -1246,137 +1297,196 @@ class ExportConfig(StrictBaseModel):
         return self
 
 
-def _validate_topic_template(template: str) -> None:
-    """Validate a topic_template for well-formedness.
+def _validate_stream_name(name: str) -> None:
+    """Validate a declared stream's `name` against the topic-name rule.
 
-    Checks that the template is non-empty, has balanced braces, and contains
-    no format-spec or conversion on any placeholder.
+    The retired RoutingConfig groups-target rule, carried over verbatim: a
+    stream's `name` is the topic — the Kafka topic, the `<name>.jsonl`
+    filename, and the `events_per_topic` key — so it must be legal for all
+    three sinks up front (the sink is a CLI flag; the config never knows it).
 
     Raises:
-        ValueError: Template is empty, has unbalanced braces, a format-spec, or
-            a conversion on a placeholder.
+        ValueError: `name` does not match ^[A-Za-z0-9._-]+$, or is "." or "..".
     """
-    if not template:
-        raise ValueError("topic_template must be non-empty")
-    formatter = string.Formatter()
-    try:
-        parsed = list(formatter.parse(template))
-    except (ValueError, KeyError) as exc:
-        raise ValueError(f"topic_template has unbalanced braces: {template!r}") from exc
-    for _literal, field_name, format_spec, conversion in parsed:
-        if field_name is None:
-            continue
-        if format_spec:
-            raise ValueError(
-                f"topic_template placeholder {{{field_name}:{format_spec}}} must not"
-                f" carry a format-spec; use a bare {{name}}"
-            )
-        if conversion:
-            raise ValueError(
-                f"topic_template placeholder {{{field_name}!{conversion}}} must not"
-                f" carry a conversion; use a bare {{name}}"
-            )
+    if not _TOPIC_NAME_RE.fullmatch(name) or name in {".", ".."}:
+        raise ValueError(
+            f"stream name {name!r} must be a valid topic name"
+            " (^[A-Za-z0-9._-]+$ and not '.' or '..')"
+        )
 
 
-class RoutingConfig(StrictBaseModel):
-    """Layer-B routing policy: content-agnostic topic naming and regrouping."""
+def _reject_prefixed_names(
+    values: list[str], prefixes: tuple[str, ...], label: str
+) -> None:
+    """Raise if any of `values` carries one of `prefixes`.
 
-    topic_template: str = "{route_table}"
-    """Template rendered via `str.format(**attributes)` to produce each event's base
-    topic name. Placeholders: {route_table} (always present), {kind} (state-changes),
-    {sub_type} (sub-typed kinds only). Validated by `groups_well_formed`."""
+    Shared by KindStream.properties (prop__) and MembershipStream.fields
+    (elem__ / member__) so the bare-name rule never drifts between them.
 
-    groups: dict[str, list[str]] = {}
-    """Many-to-one regrouping: target topic → list of rendered base-topic names it
-    absorbs. A rendered name appears in at most one group."""
-
-    table_identity: Literal["source_table", "topic"] = "source_table"
-    """Debezium source.table / value-schema name: 'source_table' = route_table;
-    'topic' = resolved topic. Ignored by the jsonl format."""
-
-    @model_validator(mode="after")
-    def groups_well_formed(self) -> Self:
-        """Validate topic_template and groups.
-
-        topic_template must be non-empty with balanced braces and no format-spec or
-        conversion on any placeholder. Every groups target must be a valid topic
-        name — Kafka convention ^[A-Za-z0-9._-]+$ and not "." or ".." (a target
-        also becomes the jsonl sink's filename stem, so this forecloses path
-        traversal). Every member must be a non-empty string; a member may appear
-        in at most one group.
-
-        Raises:
-            ValueError: An empty template, a malformed template (unbalanced brace,
-                format-spec, or conversion on a placeholder), an empty or invalid
-                target topic name, an empty member string, or a member shared by
-                two groups.
-        """
-        _validate_topic_template(self.topic_template)
-        seen_members: set[str] = set()
-        for target, members in self.groups.items():
-            if not target:
-                raise ValueError("groups target topic must be a non-empty string")
-            if not _TOPIC_NAME_RE.fullmatch(target) or target in {".", ".."}:
-                raise ValueError(
-                    f"groups target topic {target!r} must be a valid topic name"
-                    " (^[A-Za-z0-9._-]+$ and not '.' or '..')"
-                )
-            for member in members:
-                if not member:
-                    raise ValueError(
-                        f"groups[{target!r}] contains an empty member string"
-                    )
-                if member in seen_members:
-                    raise ValueError(
-                        f"groups member {member!r} appears in more than one group"
-                    )
-                seen_members.add(member)
-        return self
+    Raises:
+        ValueError: naming the offending values, prefixed with `label`.
+    """
+    bad = [v for v in values if v.startswith(prefixes)]
+    if bad:
+        prefix_desc = " or ".join(prefixes)
+        raise ValueError(f"{label} must not carry {prefix_desc} prefixes: {bad}")
 
 
-class StreamKindSelection(StrictBaseModel):
-    """One kind's participation in the stream: its sub-type scope and carried properties."""  # noqa: E501
+def _reject_duplicate_names(values: list[str], label: str) -> None:
+    """Raise if any of `values` repeats.
+
+    Shared by KindStream.properties, KindStream.sub_types, and
+    MembershipStream.fields.
+
+    Raises:
+        ValueError: naming the duplicated values, prefixed with `label`.
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for v in values:
+        if v in seen:
+            duplicates.append(v)
+        seen.add(v)
+    if duplicates:
+        raise ValueError(f"{label} contains duplicate names: {duplicates}")
+
+
+class KindStream(StrictBaseModel):
+    """A kind-shaped declared stream: an author-named topic fed by one kind's populations (content: state-changes)."""  # noqa: E501
+
+    name: str
+    """The topic — author-verbatim, matching the topic-name rule
+    (^[A-Za-z0-9._-]+$ and not '.' or '..'). The Kafka topic, the
+    <name>.jsonl filename, and the events_per_topic key."""
 
     kind: str
-    """The base-layer record kind to stream; resolves to records__<kind>."""
-    types: list[str] = []
-    """Bare <kind>_type values to stream; empty selects all sub-types. A non-empty
-    list on a non-sub-typed kind or an unknown value is a business-pass error."""
+    """The records kind; resolves to records__<kind>."""
+
+    sub_types: list[str] | None = None
+    """Population scope for a sub-typed kind: declared `<kind>_type` values,
+    non-empty and duplicate-free when present. Omitted on a sub-typed kind =
+    the full discriminator domain. A flat kind refuses it (business pass)."""
+
     properties: list[str]
-    """Bare prop__ names (type-1 and type-2) carried in each event's after-image;
-    the sidecar's history_tracked flag classifies each. Empty selects identity +
-    lifecycle only (no prop columns)."""
+    """Bare property names projected into the after-image — required, no
+    default: `[]` must be written to declare a notification feed (identity-only
+    payload; the event set is payload-independent). Never `prop__`-prefixed;
+    duplicate-free."""
 
     @model_validator(mode="after")
-    def types_are_bare(self) -> Self:
-        """No entry in `types` carries the prop__ prefix or names the <kind>_type
-        column.
+    def kind_stream_well_formed(self) -> Self:
+        """name matches the topic-name rule; properties never prop__-prefixed
+        and duplicate-free; sub_types non-empty and duplicate-free when present.
 
         Raises:
-            ValueError: A value begins with 'prop__'.
+            ValueError: Any of the above.
         """
-        prefixed = [t for t in self.types if t.startswith("prop__")]
-        if prefixed:
-            raise ValueError(
-                f"types must be bare discriminator values"
-                f" (no 'prop__' prefix): {prefixed}"
-            )
+        _validate_stream_name(self.name)
+        label = f"stream {self.name!r}: properties"
+        _reject_prefixed_names(self.properties, ("prop__",), label)
+        _reject_duplicate_names(self.properties, label)
+        if self.sub_types is not None:
+            if not self.sub_types:
+                raise ValueError(
+                    f"stream {self.name!r}: sub_types must be non-empty when"
+                    " present (omit the field for the full discriminator domain)"
+                )
+            _reject_duplicate_names(self.sub_types, f"stream {self.name!r}: sub_types")
         return self
+
+
+class MembershipStream(StrictBaseModel):
+    """A membership-shaped declared stream: an author-named topic fed by one membership table (content: membership-events)."""  # noqa: E501
+
+    name: str
+    """The topic — same contract as KindStream.name."""
+
+    membership: MembershipRef
+    """The membership table."""
+
+    fields: list[str]
+    """Bare element-schema field names — required, no default: `[]` must be
+    written to declare an owner-identity-only feed. Never `elem__`/`member__`-
+    prefixed; duplicate-free."""
 
     @model_validator(mode="after")
-    def properties_are_bare(self) -> Self:
-        """No entry in `properties` carries the prop__ prefix.
+    def membership_stream_well_formed(self) -> Self:
+        """name matches the topic-name rule; fields never elem__/member__-
+        prefixed and duplicate-free.
 
         Raises:
-            ValueError: A property name begins with 'prop__' (it must be the bare
-                name; the prefix is implied).
+            ValueError: Any of the above.
         """
-        prefixed = [p for p in self.properties if p.startswith("prop__")]
-        if prefixed:
-            raise ValueError(
-                f"properties must be bare names (no 'prop__' prefix): {prefixed}"
-            )
+        _validate_stream_name(self.name)
+        label = f"stream {self.name!r}: fields"
+        _reject_prefixed_names(self.fields, ("elem__", "member__"), label)
+        _reject_duplicate_names(self.fields, label)
         return self
+
+
+def _check_stream_declaration_shape(value: object) -> object:
+    """Reject a `streams[]` entry that carries neither or both of `kind` /
+    `membership`, before union discrimination runs.
+
+    Args:
+        value: The raw entry (a dict from YAML, or an already-built model).
+
+    Returns:
+        `value` unchanged when exactly one of `kind` / `membership` is
+        present (or `value` is not a dict — an already-built model has
+        already been shape-checked by its own constructor).
+
+    Raises:
+        ValueError: `value` is a dict carrying neither or both of `kind` /
+            `membership`, naming the two shapes.
+    """
+    if isinstance(value, dict):
+        has_kind = "kind" in value
+        has_membership = "membership" in value
+        if has_kind and has_membership:
+            raise ValueError(
+                "streams[] entry carries both 'kind' and 'membership';"
+                " declare exactly one shape (KindStream or MembershipStream)"
+            )
+        if not has_kind and not has_membership:
+            raise ValueError(
+                "streams[] entry carries neither 'kind' nor 'membership';"
+                " declare exactly one shape (KindStream or MembershipStream)"
+            )
+    return value
+
+
+def _stream_declaration_tag(value: object) -> str | None:
+    """Discriminate a `streams[]` entry by which of `kind` / `membership` it
+    carries.
+
+    Args:
+        value: The raw entry (a dict from YAML, or an already-built model).
+
+    Returns:
+        'kind' or 'membership' when exactly one is present; None otherwise
+        (unreachable in practice — `_check_stream_declaration_shape` already
+        rejected the neither/both cases).
+    """
+    if isinstance(value, dict):
+        has_kind = "kind" in value
+    else:
+        has_kind = getattr(value, "kind", None) is not None
+    return "kind" if has_kind else "membership"
+
+
+StreamDeclaration = Annotated[
+    Annotated[
+        Annotated[KindStream, Tag("kind")]
+        | Annotated[MembershipStream, Tag("membership")],
+        Discriminator(_stream_declaration_tag),
+    ],
+    BeforeValidator(_check_stream_declaration_shape),
+]
+"""A declared stream: discriminated by which of `kind` / `membership` the
+entry carries — a declaration mixing the two shapes' fields is
+unrepresentable, not validated away. An entry with neither or both fails
+parse with a message naming the two shapes."""
 
 
 class DebeziumSourceIdentity(StrictBaseModel):
@@ -1417,6 +1527,11 @@ class DebeziumSourceIdentity(StrictBaseModel):
 class DebeziumConfig(StrictBaseModel):
     """Debezium options on a streaming run; read for 'debezium', ignored for 'jsonl'."""
 
+    table_identity: Literal["source_table", "topic"] = "source_table"
+    """What source.table (and the value-schema name) reports: the event's
+    route_table leaf (canonical Debezium, the default) or the declaring
+    stream's name. Moved here from the retired RoutingConfig; meaning
+    unchanged."""
     schemas_enable: bool = True
     """Wrap each message as {schema, payload} (true) or emit the bare payload
     (false). Global to the run."""
@@ -1477,76 +1592,21 @@ class KafkaConfig(StrictBaseModel):
         return self
 
 
-class MembershipSelection(StrictBaseModel):
-    """One membership table's participation: owner kind, property, carried fields."""
-
-    owner_kind: str
-    """The kind that owns the collection-struct property; resolves to
-    membership__<owner_kind>__<property>."""
-
-    property: str
-    """The collection-struct property naming the membership table."""
-
-    fields: list[str]
-    """Bare element-schema field names carried in each event's payload. A scalar
-    field f maps to elem__<f>; a reference field f maps to member__<f>__kind /
-    member__<f>__id. Empty carries owner identity (record_id) only. A non-empty
-    list naming a field with no elem__/member__ column on the table is a
-    business-pass error."""
-
-    @model_validator(mode="after")
-    def fields_are_bare(self) -> Self:
-        """No entry in `fields` carries the elem__ or member__ prefix.
-
-        Raises:
-            ValueError: A field name begins with 'elem__' or 'member__'.
-        """
-        bad = [
-            f for f in self.fields if f.startswith("elem__") or f.startswith("member__")
-        ]
-        if bad:
-            raise ValueError(
-                "MembershipSelection.fields must not carry elem__ or"
-                f" member__ prefixes: {bad}"
-            )
-        return self
-
-    @model_validator(mode="after")
-    def fields_unique(self) -> Self:
-        """No field name appears twice in `fields`.
-
-        Raises:
-            ValueError: A field name appears more than once.
-        """
-        seen: set[str] = set()
-        duplicates: list[str] = []
-        for f in self.fields:
-            if f in seen:
-                duplicates.append(f)
-            seen.add(f)
-        if duplicates:
-            raise ValueError(
-                f"MembershipSelection.fields contains duplicate names: {duplicates}"
-            )
-        return self
-
-
 class StreamConfig(StrictBaseModel):
-    """Streaming delivery envelope: content, routing policy, and per-kind scope."""
+    """Streaming delivery envelope: content and the declared streams."""
 
     content: Literal["state-changes", "membership-events"]
-    """The event content axis. Selects the fold the engine materializes and the
-    selection list it reads (kinds for state-changes, memberships for
-    membership-events). Closed Literal so a further content type is additive."""
-    routing: RoutingConfig | None = None
-    """Optional Layer-B routing policy; None applies the default policy (leaf topics, no
-    groups, source_table). The optional-block `= None` exception, mirroring rebase /
-    debezium."""
-    kinds: list[StreamKindSelection] = []
-    """Non-empty for content='state-changes'; empty otherwise. (Was required+non-empty;
-    now content-conditional.)"""
-    memberships: list[MembershipSelection] = []
-    """Non-empty for content='membership-events'; empty otherwise."""
+    """The event content axis. Selects the fold family and the required
+    declaration shape: KindStream for state-changes, MembershipStream for
+    membership-events. Closed Literal so a further content type is additive."""
+    streams: list[StreamDeclaration]
+    """The declared streams — required, non-empty, names unique. Replaces
+    `kinds`, `memberships`, and `routing`. Every entry's shape must match
+    `content`."""
+    keys: dict[str, KeySurface | dict[str, KeySurface]] | None = None
+    """Per-kind key election — the ExportConfig.keys grammar and
+    keys_well_formed validator, verbatim. Absent: record_id throughout (every
+    identity render site renders byte-identically to today)."""
     rebase: RebaseConfig | None = None
     """Optional wallclock origin/zone for event timestamps; falls back to the
     sidecar runtime anchor. The `= None` default is the one optional-block exception
@@ -1557,82 +1617,66 @@ class StreamConfig(StrictBaseModel):
     DebeziumRequiresConfig business rule."""
     clock: ClockConfig | None = None
     """Optional pace policy for delivery; None (absent) ≡ mode: fast (unpaced),
-    today's behavior. The optional-block `= None` exception, mirroring routing /
-    rebase / debezium."""
+    today's behavior. The optional-block `= None` exception, mirroring rebase /
+    debezium."""
     kafka: KafkaConfig | None = None
     """Optional Kafka connection block; None ⇒ bootstrap comes from --bootstrap-servers
     or FABEXPORT_KAFKA_BOOTSTRAP. The optional-block `= None` exception, mirroring
-    routing / rebase / debezium / clock. Inert unless --sink kafka."""
+    rebase / debezium / clock. Inert unless --sink kafka."""
 
     @model_validator(mode="after")
-    def selection_matches_content(self) -> Self:
-        """Exactly the selected content's selection list is populated; the other empty.
+    def streams_match_content(self) -> Self:
+        """`streams` is non-empty; every entry's shape matches `content`
+        (KindStream for state-changes, MembershipStream for
+        membership-events). Replaces selection_matches_content.
 
         Raises:
-            ValueError: content='state-changes' with empty `kinds` or non-empty
-                `memberships`; or content='membership-events' with empty `memberships`
-                or non-empty `kinds`.
+            ValueError: `streams` is empty, or an entry's shape does not
+                match `content`.
         """
-        if self.content == "state-changes":
-            if not self.kinds:
-                raise ValueError(
-                    "StreamConfig.kinds must be non-empty for content='state-changes'"
-                )
-            if self.memberships:
-                raise ValueError(
-                    "StreamConfig.memberships must be empty for content='state-changes'"
-                )
-        else:  # membership-events
-            if not self.memberships:
-                raise ValueError(
-                    "StreamConfig.memberships must be non-empty"
-                    " for content='membership-events'"
-                )
-            if self.kinds:
-                raise ValueError(
-                    "StreamConfig.kinds must be empty for content='membership-events'"
-                )
+        if not self.streams:
+            raise ValueError("StreamConfig.streams must be non-empty")
+        expected = KindStream if self.content == "state-changes" else MembershipStream
+        mismatched = [s.name for s in self.streams if not isinstance(s, expected)]
+        if mismatched:
+            raise ValueError(
+                f"StreamConfig.streams entries {mismatched} do not match"
+                f" content={self.content!r} (expected {expected.__name__})"
+            )
         return self
 
     @model_validator(mode="after")
-    def kinds_unique(self) -> Self:
-        """`kinds` names no kind twice (uniqueness half of the former
-        kinds_non_empty_and_unique). A no-op when `kinds` is empty.
+    def stream_names_unique(self) -> Self:
+        """No two streams share a `name` (replaces kinds_unique /
+        memberships_unique — same-kind and same-table repeats are now legal;
+        identity is the name).
 
         Raises:
-            ValueError: A kind name appears more than once.
+            ValueError: A name appears more than once.
         """
         seen: set[str] = set()
         duplicates: list[str] = []
-        for ks in self.kinds:
-            if ks.kind in seen:
-                duplicates.append(ks.kind)
-            seen.add(ks.kind)
+        for s in self.streams:
+            if s.name in seen:
+                duplicates.append(s.name)
+            seen.add(s.name)
         if duplicates:
             raise ValueError(
-                f"StreamConfig.kinds contains duplicate kind names: {duplicates}"
+                f"StreamConfig.streams contains duplicate stream names: {duplicates}"
             )
         return self
 
     @model_validator(mode="after")
-    def memberships_unique(self) -> Self:
-        """`memberships` names no (owner_kind, property) pair twice.
+    def keys_well_formed(self) -> Self:
+        """`keys` (when present) is non-empty; every per-kind map is non-empty.
+
+        Emit-dependent checks (kind/sub-type existence, registry declaration,
+        union safety) are deliberately not here — the config is emit-independent.
 
         Raises:
-            ValueError: A (owner_kind, property) pair appears more than once.
+            ValueError: `keys` is an empty map, or a per-kind map value is empty.
         """
-        seen: set[tuple[str, str]] = set()
-        duplicates: list[tuple[str, str]] = []
-        for ms in self.memberships:
-            key = (ms.owner_kind, ms.property)
-            if key in seen:
-                duplicates.append(key)
-            seen.add(key)
-        if duplicates:
-            raise ValueError(
-                "StreamConfig.memberships contains duplicate"
-                f" (owner_kind, property) pairs: {duplicates}"
-            )
+        _check_keys_well_formed(self.keys)
         return self
 
 

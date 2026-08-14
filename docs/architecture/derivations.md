@@ -174,25 +174,36 @@ untouched and renders no condition of its own. Behavioral cases are exercised in
 
 ### The row-state-events derivation
 
-`build_row_state_events_sql(sidecar, fork_path, kind, properties)` produces one event
-row per `(record_id, sim_time)` at which a record of `kind` changes state — the
-per-record `c`/`u`/`d` change-event stream the streaming exporter replays (see
-[`streaming.md`](streaming.md)). Canonical columns are `ROW_STATE_EVENT_COLUMNS` —
-`record_id`, `event_sim_time` (raw ns), `event_class`, `op` — followed by
-`presentation_id` when the kind carries it and one `prop__<p>` after-image column per
-selected property, in the kind's sidecar column-declaration order. Rows are ordered
-`(event_sim_time, event_class, record_id)`. It reads `history` (filtered to the kind
-and the selected history-tracked subset) and `records__<kind>` (lifecycle spine,
-current values, column order). It is distinct from versioned-intervals: it anchors a
-genesis event on `created_sim_time`, carries type-1 current values in the after-image,
-and emits delete events.
+`build_row_state_events_sql(sidecar, fork_path, kind, properties, change_scope)`
+produces one event row per `(record_id, sim_time)` at which a record of `kind` changes
+state — the per-record `c`/`u`/`d` change-event stream the streaming exporter replays
+(see [`streaming.md`](streaming.md)). The fold takes **two independently-scoped
+property sets** — the two-scope contract: `change_scope` governs `u` **event
+membership** (a `u` at each distinct change point of its history-tracked subset), and
+`properties` is the after-image **projection** the SELECT emits. The projection scope
+never widens or narrows the event set, and the change scope never adds a column to the
+SELECT. Callers state both scopes explicitly — there is no default: source's event log
+and the playback seam pass equal sets (one property set serving both roles — source's
+audited-change-point event-membership rule and the seam's normative full-set
+invocation both live in that equality), while streaming passes change scope = the
+kind's full property set and projection = the stream's declared `properties`, which is
+what makes a stream's event set a fact of its population rather than of its column
+selection (see [`streaming.md`](streaming.md) § Events are the facts). Canonical
+columns are `ROW_STATE_EVENT_COLUMNS` — `record_id`, `event_sim_time` (raw ns),
+`event_class`, `op` — followed by `presentation_id` when the kind carries it and one
+`prop__<p>` after-image column per projected property, in the kind's sidecar
+column-declaration order. Rows are ordered `(event_sim_time, event_class, record_id)`.
+It reads `history` (filtered to the kind and each scope's history-tracked subset) and
+`records__<kind>` (lifecycle spine, current values, column order). It is distinct from
+versioned-intervals: it anchors a genesis event on `created_sim_time`, carries type-1
+current values in the after-image, and emits delete events.
 
 Three event sources, one per `event_class`:
 
 | Source | `event_class` | `op` | Time | Condition |
 |---|---|---|---|---|
 | `records__<kind>.created_sim_time` | 0 | `c` | `C` | always — exactly one genesis per record, including records with zero history-tracked properties |
-| selected type-2 `history` change points | 1 | `u` | each distinct `sim_time > C` | one per distinct history `sim_time` strictly after creation |
+| `change_scope`'s type-2 `history` change points | 1 | `u` | each distinct `sim_time > C` | one per distinct history `sim_time` strictly after creation |
 | `records__<kind>.deactivated_at` | 2 | `d` | `D` | only when `deactivated_at IS NOT NULL` |
 
 `op` is a deterministic, invertible 1-to-1 recoding of `event_class`, projected in SQL
@@ -222,11 +233,12 @@ preceding `c`/`u`. The after-image keys are the fold's output column names verba
 `prop__` prefix the base table uses), so a property selected by its bare config name
 `name` appears under the key `prop__name`.
 
-**Type-1 vs type-2 by the sidecar.** `properties` is partitioned by each column's
-sidecar `history_tracked` flag under the `is True` convention: exactly `True` is type-2
-(history-tracked, as-of value); `False` — or `None` on a non-conformant emit — is
-type-1 (current value). The split is never inferred from `history` and has no
-inference fallback; the version gate admits the emit but does not re-check
+**Type-1 vs type-2 by the sidecar.** Both `properties` and `change_scope` are
+partitioned by each column's sidecar `history_tracked` flag under the `is True`
+convention: exactly `True` is type-2 (history-tracked, as-of value); `False` — or
+`None` on a non-conformant emit — is type-1 (current value). A current-value name in
+`change_scope` contributes no `u` events. The split is never inferred from `history`
+and has no inference fallback; the version gate admits the emit but does not re-check
 conformance, so the `None`-as-current-value rule defines the otherwise-undefined case
 rather than failing. Every history-tracked property carries a genesis `history` row at
 its record's `created_sim_time` (the unconditional creation seed —
@@ -244,26 +256,27 @@ versioned-intervals `sim_time <= version_start` rule applied at `t = C`, and it 
 record with zero type-2 history still gets a `c` carrying its creation values.
 
 The event-time key is `event_sim_time`. `properties` may be empty (identity + lifecycle
-only — a `c` for every record and a `d` for the deactivated, no `prop__` columns); one
+only — no `prop__` columns; the event set is whatever `change_scope` drives); one
 event is emitted per distinct `(record_id, sim_time)`, so multiple property changes at
 one instant coalesce into a single after-image with no per-property events. Behavioral
 cases are exercised in
 [`tests/derivations/test_row_state_events.py`](../../tests/derivations/test_row_state_events.py).
 
 **One column-order producer.** The after-image column order — `record_id`, then
-`presentation_id` when the kind carries a surrogate, then each selected `prop__<p>` in
+`presentation_id` when the kind carries a surrogate, then each projected `prop__<p>` in
 sidecar column-declaration order — is produced by the single function
 `resolve_stream_columns(sidecar, kind, properties)`. It takes a sidecar, a bare kind,
-and a property set and imports no config, so every consumer of that order calls it: the
-fold's SELECT ordering, the streaming engine's after-image keying, and the Debezium
-value-schema builder (see [`streaming.md`](streaming.md)). The fold — itself a
-derivation-layer module that imports no config — calls it directly; the engine and the
-schema builder destructure their `StreamKindSelection` at the call site. One producer,
-three callers, pinned by a test: a single producer is what keeps the after-image key
-order and the fold's SELECT order identical by construction, so a kind whose sidecar
-interleaves history-tracked and current properties cannot mis-pair after-image keys with
-their values. The engine's fold-row column list is `ROW_STATE_EVENT_COLUMNS` plus this
-list past `record_id`.
+and a property set (the projection scope — `change_scope` plays no part in column
+order) and imports no config, so every consumer of that order calls it: the fold's
+SELECT ordering, the streaming engine's after-image keying, and the Debezium
+value-schema builder — the latter two once per declared stream (see
+[`streaming.md`](streaming.md)). The fold — itself a derivation-layer module that
+imports no config — calls it directly; the engine and the schema builder destructure
+their stream declaration at the call site. One producer, three callers, pinned by a
+test: a single producer is what keeps the after-image key order and the fold's SELECT
+order identical by construction, so a kind whose sidecar interleaves history-tracked
+and current properties cannot mis-pair after-image keys with their values. The engine's
+fold-row column list is `ROW_STATE_EVENT_COLUMNS` plus this list past `record_id`.
 
 ### The membership-events derivation
 

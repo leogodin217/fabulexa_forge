@@ -31,6 +31,8 @@ def make_event(seq: int, event_sim_time: int) -> StreamEvent:
         after={"id": f"r{seq}"},
         topic="patients",
         route_table="patient",
+        key_column="record_id",
+        key_value=f"r{seq}",
     )
 
 

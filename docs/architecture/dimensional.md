@@ -615,10 +615,20 @@ takes its role from `record_roles[<kind>]`; the object-valued kind (today only `
 splits per declared sub-type, each sub-type's role resolved independently from
 `record_roles[<kind>][<sub_type>]`. The registry's contract tokens `"dimension"` /
 `"fact"` map to the config `role` tokens `dim` / `fact` — the only transformation between
-registry value and emitted token. `init` does not consult `enum_domains`: the registry
-carries the same declared sub-type set *and* the per-sub-type role, so one field keeps the
-set and the roles coherent, and its object-vs-string shape is itself the sub-typed-kind
-signal.
+registry value and emitted token.
+
+**Splitting into per-sub-type stubs is a separate question from role, answered by
+`Sidecar.subtype_values`.** `record_roles`'s object-vs-string shape tells `init` whether
+*role* varies by sub-type (true only for `actor` — the only kind whose warehouse role the
+contract allows to differ by sub-type, `base-format.md` § Record roles); it does not tell
+`init` whether the kind is *sub-typed* at all. That is `Sidecar.subtype_values(kind)`
+(sourced from `enum_domains[<kind>][<kind>_type]`), independent of `record_roles[kind]`'s
+shape — a bare-string kind (`entity`, `resource`, `diary` in the nhs/retail example
+bundles) can still carry a real `<kind>_type` domain and split into per-sub-type stubs,
+each resolving the *same* uniform role via `record_roles.role_of(kind, sub_type)`. One
+combined stub over a polymorphic bare-role kind would union unrelated sub-type schemas
+into a mostly-NULL table — exactly the shape the nhs/retail example configs' `SPLIT`
+header notes hand-correct today.
 
 `init` trusts a C1–C14-conformant emit exactly as the engine does — it does not
 re-validate — and relies on these guarantees:
@@ -641,9 +651,10 @@ The proposal per kind:
 | Bare-string kind, role `dimension`, no `history_tracked` column | One `role: dim`, `scd: type1` stub |
 | Bare-string kind, role `dimension`, ≥ 1 `history_tracked` column | One `role: dim`, `scd: type2` stub; tracked columns marked, `valid_from` / `valid_to` `scd_window` columns added |
 | Bare-string kind, role `fact`, no `prop__<kind>_type` discriminator | One `role: fact` stub; an FK-candidate comment per `references` column |
-| Bare-string kind, role `fact`, carries a `prop__<kind>_type` discriminator | One `role: fact` stub per `SELECT DISTINCT` observed value (native order), `filter` pre-filled; FK-candidate comments |
-| Object-valued kind, sub-type role `dimension` | Per sub-type: a `role: dim` stub (`scd: type2` with window columns when the kind has a `history_tracked` column, else `scd: type1`), `filter: {prop__<kind>_type: <sub_type>}` |
+| Bare-string kind, role `fact`, carries a `prop__<kind>_type` column but no declared `enum_domains[<kind>][<kind>_type]` domain | One `role: fact` stub per `SELECT DISTINCT` observed value (native order), `filter` pre-filled; FK-candidate comments |
+| Object-valued kind, sub-type role `dimension` | Per sub-type (from `record_roles[kind]`'s keys): a `role: dim` stub (`scd: type2` with window columns when the kind has a `history_tracked` column, else `scd: type1`), `filter: {prop__<kind>_type: <sub_type>}` |
 | Object-valued kind, sub-type role `fact` | Per such sub-type: one `role: fact` stub, `filter` pre-filled; FK-candidate comments |
+| Bare-string kind, role `dimension` or `fact`, carries a declared `enum_domains[<kind>][<kind>_type]` domain (`Sidecar.subtype_values(kind)` non-empty) | Per declared sub-type: one stub in the kind's uniform role (`role_of(kind, None)`), same shape as the object-valued row above — `entity`, `resource`, `diary` in the nhs/retail bundles |
 | Any proposed kind owning a `membership__<kind>__<property>` table | Membership-FK candidate comments appended |
 
 - **`scd` class is per-kind; role is per-sub-type.** `history_tracked` is a property of the
@@ -825,15 +836,22 @@ always receives a validated `Literal["csv","duckdb"]`.
   declaration directly: it runs no topology role heuristic and proposes no structural-island
   `exclude` entry. The engine never reads `record_roles` — role is author-declared
   (Principle #7) and the registry informs only `init`'s proposal.
-- **`init` sources the sub-type split from `record_roles`, not `enum_domains`.** Both fields
-  project the one author-declared sub-type taxonomy and agree in a conformant emit
-  (`record_roles["actor"]` keys == `enum_domains["actor"]["actor_type"]`), but the registry
-  also carries the per-sub-type role, so sourcing the split from it keeps the set and the
-  roles coherent with no second field to disagree, and its object-vs-string surface is itself
-  the sub-typed-kind signal. The equality is a producer obligation the contract states but
-  does not machine-check (C12 checks only observed-value coverage); `init` trusts it, and a
-  divergence could only degrade `init`'s *proposal* — a missing or phantom empty stub the
-  author edits — never the engine, which reads neither field.
+- **`init` sources the sub-type split from `enum_domains` via `Sidecar.subtype_values`, role
+  from `record_roles`.** These are two different questions the contract answers with two
+  different fields, and only `actor` happens to make them look like one: `record_roles`'s
+  object-vs-string shape is guaranteed to vary only for `actor` (`base-format.md` § Record
+  roles — "every other kind has one fixed role uniform across its sub-types"), but a
+  bare-role kind (`entity`, `resource`, `diary`) can still carry a real `<kind>_type`
+  domain and needs splitting just as much as `actor` does. An earlier revision sourced the
+  split from `record_roles`'s object-vs-string shape on the theory that the two fields
+  "agree in a conformant emit" and a divergence "could only degrade `init`'s proposal" —
+  that theory is false: `record_roles["entity"]` is a bare string by contract regardless of
+  `enum_domains["entity"]["entity_type"]`, so the two fields were never testing the same
+  condition, and the bare-role-but-subtyped case is not an edge-case divergence but the
+  contract's stated norm. For `actor`, `record_roles[kind]`'s keys remain the authoritative
+  sub-type set (they alone carry the per-sub-type role); for every other sub-typed kind,
+  `subtype_values` drives the split and `record_roles.role_of(kind, sub_type)` resolves the
+  one uniform role per stub.
 - **SCD window columns are explicit `derived: scd_window` columns**, not columns
   synthesized implicitly from `scd: type2`. This keeps the column tier uniform — every
   output column names exactly one source mode — and lets the author choose the window

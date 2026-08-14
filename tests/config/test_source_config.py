@@ -340,6 +340,58 @@ def test_rebase_and_incremental_are_valid_siblings_under_mode_source() -> None:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# Events source `where` / owner `sub_types` — source-row-selection sprint §
+# Phase 3 (accepted through the full `ExportConfig` grammar; the decl-level
+# shape rules are `test_source_decls.py`'s)
+# ---------------------------------------------------------------------------
+
+
+def test_events_records_source_where_parses() -> None:
+    """A records events source declaring `where` parses through the full
+    grammar."""
+    config = ExportConfig.model_validate(
+        {
+            "mode": "source",
+            "source": {
+                "events": {
+                    "name": "versions",
+                    "sources": [{"kind": "trip", "where": {"status": "closed"}}],
+                }
+            },
+        }
+    )
+    assert config.source is not None
+    assert config.source.events is not None
+    assert config.source.events.sources[0].where == {"status": "closed"}
+
+
+def test_events_membership_source_sub_types_parses() -> None:
+    """A membership events source declaring `sub_types` (the owner sub-type
+    subset, doc § The parent lookup) parses — no longer a load-time error
+    now that the grammar admits it alongside `membership`."""
+    config = ExportConfig.model_validate(
+        {
+            "mode": "source",
+            "source": {
+                "events": {
+                    "name": "versions",
+                    "sources": [
+                        {
+                            "membership": {"kind": "trip", "property": "drivers"},
+                            "sub_types": ["standard"],
+                        }
+                    ],
+                }
+            },
+        }
+    )
+    assert config.source is not None
+    events = config.source.events
+    assert events is not None
+    assert events.sources[0].sub_types == ("standard",)
+
+
 def test_loader_round_trips_the_declared_grammar(tmp_path: Path) -> None:
     """`load_export_config` round-trips the declared grammar from a YAML
     file on disk, identically to `ExportConfig.model_validate`."""

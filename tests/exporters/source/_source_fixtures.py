@@ -1804,3 +1804,95 @@ def build_split_actor_presentation_id_emit(
         },
     )
     return tmp_path
+
+
+# ---------------------------------------------------------------------------
+# Junction owner selection: a sub-typed owner ('worker', day/night) with a
+# constant `prop__region` property, owning `membership__worker__ward`, one
+# interval per owner — source-row-selection sprint § Phase 2, the parent
+# lookup's junction render.
+# ---------------------------------------------------------------------------
+
+_WORKER_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__worker_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__region", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+_WARD_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__desk", "type": "VARCHAR"},
+]
+
+
+def build_source_junction_selection_emit(tmp_path: Path) -> Path:
+    """Build a source-mode emit for junction owner selection: two `worker`
+    owners split day/night and by `prop__region`, each with one
+    `membership__worker__ward` interval, activity spanning two windows.
+
+    - w1 (day, region=east): interval joined 60ms, left 120ms (closed,
+        window 0).
+    - w2 (night, region=west): interval joined 130ms, left NULL (still
+        open, window 1).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__worker", _WORKER_COLUMNS))
+    conn.execute(_create_ddl("membership__worker__ward", _WARD_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__worker" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "w1", 50 * _MS, True, 50 * _MS, 0, "day", "east"],
+    )
+    conn.execute(
+        'INSERT INTO "records__worker" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "w2", 50 * _MS, True, 50 * _MS, 1, "night", "west"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__worker__ward" VALUES (?, ?, ?, ?, ?)',
+        ["trunk", "w1", 60 * _MS, 120 * _MS, "A"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__worker__ward" VALUES (?, ?, ?, NULL, ?)',
+        ["trunk", "w2", 130 * _MS, "B"],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__worker", "records", _WORKER_COLUMNS, 2, record_kind="worker"
+            ),
+            _table_spec(
+                "membership__worker__ward",
+                "membership",
+                _WARD_COLUMNS,
+                2,
+                record_kind="worker",
+                property_name="ward",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra={
+            "enum_domains": {"worker": {"worker_type": ["day", "night"]}},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path

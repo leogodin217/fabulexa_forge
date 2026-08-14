@@ -172,7 +172,9 @@ def _build_record_event_rows(
     kind = resolved_record.kind
     full_properties = frozenset(resolved_record.full_properties)
 
-    sql = build_row_state_events_sql(sidecar, fork_path, kind, full_properties)
+    sql = build_row_state_events_sql(
+        sidecar, fork_path, kind, full_properties, change_scope=full_properties
+    )
     rows = emit.query(sql, ())
     col_names = record_fold_row_column_names(sidecar, kind, full_properties)
 

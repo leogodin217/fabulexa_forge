@@ -16,7 +16,13 @@ Both renders wrap a faithful reader relation (`build_records_relation_sql`,
 column renders wallclock through the shared anchor renderer
 (`render_anchor_timestamp_expr`); every render carries its own total
 `ORDER BY` over raw sim-time keys and identity — never a rendered timestamp
-(§ Ordering and determinism).
+(§ Ordering and determinism). `build_selection_spine_sql` is the one row-
+selection seam (source-row-selection sprint § The parent lookup): a
+`record_id`-producing SELECT over a kind's records spine, AND-composing a
+population filter with a resolved `where` conjunction — `build_state_render_sql`
+composes its own predicate inline (over its own base relation), while
+`build_junction_render_sql` semi-joins the membership rows' owner `record_id`
+against this seam called on the owner kind.
 
 Elected identity (`table.identity_surface`, `state` only) and edge
 (`table.edge_surfaces`) columns are rendered via `build_identity_translation_sql`
@@ -36,16 +42,17 @@ via `build_state_at_sql` (windowed `state` reconstruction), the mode-neutral
 election module (`build_identity_translation_sql`, and the record-index /
 presentation-key horizon dispatchers `_record_index_sql` / `_presentation_key_sql`
 the self-identity join composes, shared with base's renders — doc § module
-placement), fabulexa_forge.anchor, fabulexa_forge._sql, the sibling
-source.columns (`_PROP_PREFIX`, and the one labeling authority
-`build_kind_label_expr` the junction render's `member__<f>__kind` column
-renders through) and source.plan modules (the latter's `_MEMBER_PREFIX` /
+placement), fabulexa_forge.anchor, fabulexa_forge._sql (`render_predicate_condition`
+composes a `where` entry's condition), the sibling source.columns
+(`_PROP_PREFIX`, and the one labeling authority `build_kind_label_expr` the
+junction render's `member__<f>__kind` column renders through) and source.plan
+modules (`_column_types` and the latter's `_MEMBER_PREFIX` /
 `_MEMBER_ID_SUFFIX` / `_MEMBER_KIND_SUFFIX` / `_RECORDS_TABLE_PREFIX` name
 constants at runtime, mirroring base's runtime import of `_self_identity`;
-`SourceEdgeSurface` / `SourceStateTablePlan` / `SourceJunctionTablePlan`
-TYPE_CHECKING only), `exporters.populations` (`Population`, TYPE_CHECKING
-only), config.models (TYPE_CHECKING only), and stdlib. Never imports
-exporters.dimensional.* or exporters.streaming.*.
+`SourceEdgeSurface` / `SourceStateTablePlan` / `SourceJunctionTablePlan` /
+`SourceWhereEntry` TYPE_CHECKING only), `exporters.populations` (`Population`,
+TYPE_CHECKING only), config.models (TYPE_CHECKING only), and stdlib. Never
+imports exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -60,11 +67,12 @@ if TYPE_CHECKING:
         SourceEdgeSurface,
         SourceJunctionTablePlan,
         SourceStateTablePlan,
+        SourceWhereEntry,
     )
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import _sql_literal
+from fabulexa_forge._sql import _sql_literal, render_predicate_condition
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
 from fabulexa_forge.derivations.state_at import build_state_at_sql
 from fabulexa_forge.exporters.election import (
@@ -78,6 +86,7 @@ from fabulexa_forge.exporters.source.plan import (
     _MEMBER_KIND_SUFFIX,
     _MEMBER_PREFIX,
     _RECORDS_TABLE_PREFIX,
+    _column_types,
 )
 from fabulexa_forge.reader.records_columns import structural_instant_columns
 from fabulexa_forge.reader.relations import (
@@ -112,19 +121,6 @@ _JUNCTION_FIXED_COLUMNS: frozenset[str] = frozenset(
 #: other windowed column (`presentation_id`, `prop__<p>`) is codec VARCHAR
 #: and CASTs back to its sidecar type.
 _STATE_AT_VERBATIM_COLUMNS: frozenset[str] = frozenset({"record_id", "active"})
-
-
-def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:
-    """Map every column of `table_name` to its declared sidecar DuckDB type.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        table_name: A sidecar table name.
-
-    Returns:
-        {column name -> DuckDB type}, in no particular order.
-    """
-    return {col.name: col.type for col in sidecar.columns(table_name)}
 
 
 def _render_wallclock_column(
@@ -353,19 +349,21 @@ def _edge_join_and_expr(
 # ---------------------------------------------------------------------------
 
 
-def _state_needs_population_filter(
+def _needs_population_filter(
     sidecar: "Sidecar", kind: str, populations: "tuple[Population, ...]"
 ) -> bool:
-    """Whether a state table's populations need a discriminator filter.
+    """Whether an addressed population set needs a discriminator filter.
 
-    False for a flat kind (single population, `sub_type=None` — no
+    Shared by the `state` render's own population filter and
+    `build_selection_spine_sql`'s owner-narrowing (doc § The parent lookup):
+    false for a flat kind (single population, `sub_type=None` — no
     discriminator column exists) or when `populations` addresses the kind's
     full declared domain (the design doc's no-op-filter-not-composed rule).
 
     Args:
         sidecar: The open emit's sidecar.
-        kind: The table's record kind.
-        populations: The table's resolved population set.
+        kind: The addressed kind.
+        populations: The resolved population set.
 
     Returns:
         True iff a discriminator IN-predicate must be composed.
@@ -374,6 +372,58 @@ def _state_needs_population_filter(
         return False
     domain = set(sidecar.subtype_values(kind))
     return {p.sub_type for p in populations} != domain
+
+
+def build_selection_spine_sql(
+    sidecar: "Sidecar",
+    fork_path: str,
+    kind: str,
+    populations: "tuple[Population, ...]",
+    where: "tuple[SourceWhereEntry, ...]",
+) -> str | None:
+    """The per-row selection spine: a `record_id`-producing SELECT over the
+    kind's records spine of the records satisfying the population set AND
+    the predicate conjunction (each entry via `render_predicate_condition`
+    on its `source_column` / `sql_type`), or None when neither restricts
+    (`populations` covers the declared domain or the kind is flat, and
+    `where` is empty). Fan-out-free (`record_id` is unique on the spine);
+    evaluates current spine values (doc § Invariants #1). One seam for both
+    directions: records-source narrowing, and the parent lookup when callers
+    pass the owner kind of a membership unit.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        fork_path: The sole branch.
+        kind: The subject kind (the owner kind for a membership caller).
+        populations: The unit's addressed populations.
+        where: The unit's resolved predicate entries; empty = none.
+
+    Returns:
+        The spine SELECT for an `IN`-semi-join, or None when no restriction
+        applies.
+    """
+    needs_filter = _needs_population_filter(sidecar, kind, populations)
+    if not needs_filter and not where:
+        return None
+
+    relation_sql = build_records_relation_sql(sidecar, fork_path, kind, {})
+    conditions: list[str] = []
+    if needs_filter:
+        values = ", ".join(
+            _sql_literal(p.sub_type) for p in populations if p.sub_type is not None
+        )
+        conditions.append(f'"_spine"."{_PROP_PREFIX}{kind}_type" IN ({values})')
+    conditions.extend(
+        render_predicate_condition(
+            entry.source_column, entry.value, entry.sql_type, "_spine"
+        )
+        for entry in where
+    )
+    return (
+        'SELECT "record_id" FROM ('
+        f"{relation_sql}"
+        f') AS "_spine" WHERE {" AND ".join(conditions)}'
+    )
 
 
 def build_state_render_sql(
@@ -399,7 +449,15 @@ def build_state_render_sql(
     non-default surface, mirroring the current elected-identity join
     pattern), reference columns per `table.edge_surfaces` (LEFT JOIN on
     `build_identity_translation_sql` per non-default edge, CAST to the
-    edge's rendered_type), NULL stays NULL. Total ORDER BY
+    edge's rendered_type), NULL stays NULL. When `table.where` is
+    non-empty, each entry's `render_predicate_condition` (source column,
+    sidecar type, base-relation alias) AND-composes into the population
+    filter; windowed, a `where` column's value is the state-at fold's
+    current-value codec-VARCHAR after-image (constant columns render
+    current at every horizon — the mode's declared temporal-honesty
+    exception), and DuckDB's implicit VARCHAR-to-typed comparison renders
+    the identical typed predicate the full export's raw column carries, so
+    row membership is window-invariant. Total ORDER BY
     `(created_sim_time, record_id)` — raw keys, never rendered timestamps.
     A table with every surface at its default composes join-free SQL.
 
@@ -416,7 +474,7 @@ def build_state_render_sql(
         The render SELECT.
     """
     kind = table.kind
-    needs_filter = _state_needs_population_filter(sidecar, kind, table.populations)
+    needs_filter = _needs_population_filter(sidecar, kind, table.populations)
 
     horizon_ns: int | None
     if window is None:
@@ -434,6 +492,9 @@ def build_state_render_sql(
         )
         if needs_filter:
             bare_props = bare_props | {f"{kind}_type"}
+        bare_props = bare_props | {
+            entry.source_column[len(_PROP_PREFIX) :] for entry in table.where
+        }
         relation_sql = build_state_at_sql(
             sidecar, fork_path, kind, bare_props, horizon_ns
         )
@@ -486,16 +547,21 @@ def build_state_render_sql(
             )
     select_list = ", ".join(select_parts)
 
-    where_clause = ""
+    conditions: list[str] = []
     if needs_filter:
         values = ", ".join(
             _sql_literal(p.sub_type)
             for p in table.populations
             if p.sub_type is not None
         )
-        where_clause = (
-            f' WHERE "{base_alias}"."{_PROP_PREFIX}{kind}_type" IN ({values})'
+        conditions.append(f'"{base_alias}"."{_PROP_PREFIX}{kind}_type" IN ({values})')
+    conditions.extend(
+        render_predicate_condition(
+            entry.source_column, entry.value, entry.sql_type, base_alias
         )
+        for entry in table.where
+    )
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
     return (
         f'SELECT {select_list} FROM ({relation_sql}) AS "{base_alias}"{joins_sql}'
@@ -527,11 +593,16 @@ def build_junction_render_sql(
     internally even when `<f>_kind` is omitted). A projected
     `member__<f>__kind` column's value renders through
     `build_kind_label_expr(table.kind_labels)` — identity fall-through,
-    byte-identical passthrough when no labels are declared. Windowed:
+    byte-identical passthrough when no labels are declared. When
+    `table.owner_populations` restricts or `table.where` is non-empty, the
+    membership rows' owner `record_id` is semi-joined against
+    `build_selection_spine_sql(table.owner_kind, …)` (doc § The parent
+    lookup) — no owner attribute projects, only membership. Windowed:
     extract-on-change over interval activity, `left_at` horizon-masked at
-    `window.end_ns`. Total ORDER BY `(record_id, joined_sim_time, element
-    fields in element-schema declaration order, VARCHAR-compared, NULLS
-    FIRST)`.
+    `window.end_ns`; owner selection is window-invariant (constant-gated), so
+    it applies identically at every horizon. Total ORDER BY `(record_id,
+    joined_sim_time, element fields in element-schema declaration order,
+    VARCHAR-compared, NULLS FIRST)`.
 
     Args:
         sidecar: The plan's sidecar.
@@ -583,13 +654,20 @@ def build_junction_render_sql(
             )
     select_list = ", ".join(select_parts)
 
-    where_clause = ""
+    spine_sql = build_selection_spine_sql(
+        sidecar, fork_path, table.owner_kind, table.owner_populations, table.where
+    )
+    conditions: list[str] = []
+    if spine_sql is not None:
+        conditions.append(f'"_mem"."record_id" IN ({spine_sql})')
     if window is not None:
-        where_clause = (
-            f" WHERE ({_half_open_predicate('_mem', 'joined_sim_time', window)})"
+        window_condition = (
+            f"({_half_open_predicate('_mem', 'joined_sim_time', window)})"
             ' OR ("_mem"."left_sim_time" IS NOT NULL AND'
             f" {_half_open_predicate('_mem', 'left_sim_time', window)})"
         )
+        conditions.append(f"({window_condition})" if conditions else window_condition)
+    where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
     element_columns = [
         col.name

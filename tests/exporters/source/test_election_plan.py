@@ -45,6 +45,7 @@ from fabulexa_forge.errors import (
     SourceColumnUnresolved,
 )
 from fabulexa_forge.exporters.election import resolve_election
+from fabulexa_forge.exporters.populations import Population
 from fabulexa_forge.exporters.source.plan import (
     SourceJunctionTablePlan,
     SourceStateTablePlan,
@@ -454,6 +455,65 @@ def test_junction_owner_edge_gate_raises_union_unsafe(tmp_path: Path) -> None:
     )
     with pytest.raises(ElectionUnionUnsafe):
         _open_plan(emit_dir, config, keys={"device": "presentation_id"})
+
+
+def test_junction_owner_edge_unrestricted_mixed_election_falls_back_to_varchar(
+    tmp_path: Path,
+) -> None:
+    """Without `sub_types`, a junction's owner column ranges over the owner
+    kind's full domain: a mixed election (day -> presentation_id, night ->
+    record_index) falls back to VARCHAR, as any mixed-column edge does."""
+    emit_dir = _device_owned_junction_emit(tmp_path, safe=True)
+    config = _config(
+        tables=(
+            SourceTableDecl(
+                name="watchers",
+                membership=MembershipRef(kind="device", property="watchers"),
+            ),
+        )
+    )
+    plan = _open_plan(
+        emit_dir,
+        config,
+        keys={"device": {"day": "presentation_id", "night": "record_index"}},
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceJunctionTablePlan)
+    assert table.owner_populations == (
+        Population(kind="device", sub_type="day"),
+        Population(kind="device", sub_type="night"),
+    )
+    owner_edge = next(e for e in table.edge_surfaces if e.source_column == "record_id")
+    assert owner_edge.rendered_type == "VARCHAR"
+
+
+def test_junction_owner_edge_narrowed_by_sub_types_resolves_agreed_type(
+    tmp_path: Path,
+) -> None:
+    """A junction narrowed to one sub-type via `sub_types` types its owner
+    column by that population's own election (doc § The parent lookup) — the
+    same mixed election that falls back to VARCHAR unrestricted resolves
+    BIGINT once narrowed to the record_index-electing population alone."""
+    emit_dir = _device_owned_junction_emit(tmp_path, safe=True)
+    config = _config(
+        tables=(
+            SourceTableDecl(
+                name="watchers",
+                membership=MembershipRef(kind="device", property="watchers"),
+                sub_types=("night",),
+            ),
+        )
+    )
+    plan = _open_plan(
+        emit_dir,
+        config,
+        keys={"device": {"day": "presentation_id", "night": "record_index"}},
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceJunctionTablePlan)
+    assert table.owner_populations == (Population(kind="device", sub_type="night"),)
+    owner_edge = next(e for e in table.edge_surfaces if e.source_column == "record_id")
+    assert owner_edge.rendered_type == "BIGINT"
 
 
 def test_junction_member_field_gates_each_known_kind_independently_raises(

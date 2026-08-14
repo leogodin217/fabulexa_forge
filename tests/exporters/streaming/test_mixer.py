@@ -13,9 +13,10 @@ from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.config.models import (
-    MembershipSelection,
+    KindStream,
+    MembershipRef,
+    MembershipStream,
     StreamConfig,
-    StreamKindSelection,
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.streaming.mixer import (
@@ -58,6 +59,8 @@ def make_event(
         after={"id": f"r{seq}"},
         topic=topic,
         route_table="patient",
+        key_column="record_id",
+        key_value=f"r{seq}",
     )
 
 
@@ -811,10 +814,10 @@ def _build_two_kind_emit(
 
 
 def _make_stream_config(kinds: list[str]) -> StreamConfig:
-    """Build a StreamConfig selecting the given kinds (no properties)."""
+    """Build a StreamConfig with one kind-named stream per kind (no properties)."""
     return StreamConfig(
         content="state-changes",
-        kinds=[StreamKindSelection(kind=k, properties=[]) for k in kinds],
+        streams=[KindStream(name=k, kind=k, properties=[]) for k in kinds],
     )
 
 
@@ -847,7 +850,7 @@ def test_seed_buffer_keys_equal_topic_set(tmp_path: Path) -> None:
     config = _make_stream_config(["alpha", "beta"])
 
     with open_emit(emit_dir) as emit:
-        expected_topics = set(build_topic_set(config, emit.sidecar))
+        expected_topics = set(build_topic_set(config))
         buffers, _, _ = seed_mixer_run(
             emit, config, None, emit.sidecar, _make_transport()
         )
@@ -958,7 +961,7 @@ def test_seed_control_topics_one_per_topic_in_order(tmp_path: Path) -> None:
     config = _make_stream_config(["alpha", "beta"])
 
     with open_emit(emit_dir) as emit:
-        expected = build_topic_set(config, emit.sidecar)
+        expected = build_topic_set(config)
         _, control, _ = seed_mixer_run(
             emit, config, None, emit.sidecar, _make_transport()
         )
@@ -1017,7 +1020,7 @@ def test_seed_frontier_state_fresh(tmp_path: Path) -> None:
     config = _make_stream_config(["alpha", "beta"])
 
     with open_emit(emit_dir) as emit:
-        expected_topics = list(build_topic_set(config, emit.sidecar))
+        expected_topics = list(build_topic_set(config))
         _, _, frontier = seed_mixer_run(
             emit, config, None, emit.sidecar, _make_transport()
         )
@@ -1087,7 +1090,9 @@ def _build_single_membership_emit(
     property_name: str,
     mem_rows: list[tuple[Any, ...]],
 ) -> Path:
-    """Build a minimal emit with one membership table."""
+    """Build a minimal emit with one membership table and its owner's minimal
+    records table — election resolution requires the owner kind to carry a
+    declared records table, even under the no-`keys` default."""
     table_name = f"membership__{owner_kind}__{property_name}"
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -1095,6 +1100,7 @@ def _build_single_membership_emit(
     ph = ", ".join("?" for _ in _MEMBERSHIP_BASIC_COLS)
     for row in mem_rows:
         conn.execute(f'INSERT INTO "{table_name}" VALUES ({ph})', list(row))
+    conn.execute(_ddl(f"records__{owner_kind}", _RECORD_COLS))
     conn.close()
 
     _write_sidecar(
@@ -1107,7 +1113,14 @@ def _build_single_membership_emit(
                 "rows": len(mem_rows),
                 "record_kind": owner_kind,
                 "property": property_name,
-            }
+            },
+            {
+                "name": f"records__{owner_kind}",
+                "category": "records",
+                "record_kind": owner_kind,
+                "columns": _RECORD_COLS,
+                "rows": 0,
+            },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
     )
@@ -1121,8 +1134,12 @@ def test_seed_membership_events_content_stamped(tmp_path: Path) -> None:
     )
     config = StreamConfig(
         content="membership-events",
-        memberships=[
-            MembershipSelection(owner_kind="queue", property="waiters", fields=[])
+        streams=[
+            MembershipStream(
+                name="queue.waiters",
+                membership=MembershipRef(kind="queue", property="waiters"),
+                fields=[],
+            )
         ],
     )
 

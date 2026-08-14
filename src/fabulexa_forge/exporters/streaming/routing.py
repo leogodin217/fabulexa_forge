@@ -1,19 +1,23 @@
-"""Layer-A and Layer-B routing surface for the streaming exporter.
+"""Layer-A routing surface for the streaming exporter.
 
-Layer A: derive the per-event route attributes (kind, route_table, sub_type).
-Layer B: apply the RoutingConfig policy to produce a resolved topic name.
+Derives per-event route attributes (kind, route_table, sub_type) — the
+per-event leaf logical table, consumed solely by the Debezium
+`source_table` masquerade and the discriminator index. Layer B (topic
+template rendering, groups regrouping) is retired: topic naming is now the
+author-declared stream name (`StreamDeclaration.name`), carried straight
+through by the engine.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.reader.errors import TableNotFoundError
 
 if TYPE_CHECKING:
-    from fabulexa_forge.config.models import RoutingConfig
     from fabulexa_forge.reader.emit import Emit
+    from fabulexa_forge.reader.sidecar import Sidecar
 
 
 def route_attributes(
@@ -38,8 +42,7 @@ def route_attributes(
 
     Returns:
         A mapping with keys 'kind' and 'route_table', plus 'sub_type' when the
-        kind is sub-typed. Used as template variables for ``resolve_topic`` and
-        ``enumerate_topics``.
+        kind is sub-typed.
 
     Raises:
         ValueError: ``is_subtyped`` is True but ``sub_type`` is None, or
@@ -60,88 +63,6 @@ def route_attributes(
     return {"kind": kind, "route_table": kind}
 
 
-def _member_to_target(routing: "RoutingConfig") -> dict[str, str]:
-    """Build a reverse index: member base-topic -> group target topic.
-
-    Args:
-        routing: The resolved Layer-B policy.
-
-    Returns:
-        A mapping member -> target for every member in every group.
-    """
-    index: dict[str, str] = {}
-    for target, members in routing.groups.items():
-        for member in members:
-            index[member] = target
-    return index
-
-
-def resolve_topic(
-    routing: "RoutingConfig",
-    attributes: dict[str, str],
-) -> str:
-    """Apply Layer-B policy to one event's route attributes to produce its topic.
-
-    Renders routing.topic_template against `attributes`, then remaps the rendered name
-    to a groups target when it is a member of one. Content-agnostic: it reads only
-    `attributes` and the policy, never kind / sub_type by name.
-
-    Args:
-        routing: The resolved Layer-B policy.
-        attributes: The event's route attributes from route_attributes.
-
-    Returns:
-        The resolved topic name.
-
-    Raises:
-        KeyError: The template references a placeholder absent from `attributes` (e.g.
-            {sub_type} for a non-sub-typed kind) — surfaced to the author as a config
-            error by the validation pass before any event is routed.
-    """
-    base_name = routing.topic_template.format(**attributes)
-    member_to_target = _member_to_target(routing)
-    return member_to_target.get(base_name, base_name)
-
-
-def enumerate_topics(
-    routing: "RoutingConfig",
-    selected_attributes: list[dict[str, str]],
-) -> tuple[str, ...]:
-    """Enumerate the run's full topic set, including declared-but-empty topics.
-
-    The union of each selected route attribute's resolved topic and every groups target
-    topic, in deterministic order (selection order, then group-config order,
-    de-duplicated).
-
-    Args:
-        routing: The resolved Layer-B policy.
-        selected_attributes: One route-attribute mapping per selected (kind, sub_type)
-            in enumeration order — every sub-type the run may emit, whether or not
-            it has rows.
-
-    Returns:
-        The ordered, de-duplicated topic set the sink must materialize. De-duplication
-        keeps each topic's first occurrence: a groups target that coincides with an
-        already-rendered name stays at that earlier position rather than reappearing in
-        group-config order.
-    """
-    seen: set[str] = set()
-    topics: list[str] = []
-
-    for attrs in selected_attributes:
-        topic = resolve_topic(routing, attrs)
-        if topic not in seen:
-            seen.add(topic)
-            topics.append(topic)
-
-    for target in routing.groups:
-        if target not in seen:
-            seen.add(target)
-            topics.append(target)
-
-    return tuple(topics)
-
-
 def membership_route_attributes(
     owner_kind: str,
     property_name: str,
@@ -150,8 +71,8 @@ def membership_route_attributes(
 
     The membership analog of route_attributes: {owner_kind, property, route_table}
     with route_table = f"{owner_kind}__{property_name}". No sub_type. The sole place
-    that interprets the membership relation identity; used as template variables for
-    resolve_topic and enumerate_topics. Total over its inputs — raises nothing.
+    that interprets the membership relation identity. Total over its inputs — raises
+    nothing.
 
     Returns:
         A mapping with keys 'owner_kind', 'property', and 'route_table'.
@@ -208,3 +129,79 @@ def resolve_subtype_index(
         (),
     )
     return {str(record_id): str(sub_type) for record_id, sub_type in rows}
+
+
+def known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
+    """Every kind with a declared `records__<kind>` table, sidecar table order.
+
+    Reads the sidecar's structured `TableSpec.category` / `record_kind`
+    fields (the established codebase convention — `exporters.source.plan`
+    and `exporters.source.init` read the same fields), never the table name.
+
+    Args:
+        sidecar: The open emit's sidecar.
+
+    Returns:
+        Record kinds, in sidecar table-declaration order.
+    """
+    kinds: list[str] = []
+    for table in sidecar.tables():
+        if table.category == "records":
+            kind = table.record_kind
+            assert kind is not None, "records table must declare record_kind"
+            kinds.append(kind)
+    return tuple(kinds)
+
+
+def kind_reference_targets(
+    sidecar: "Sidecar",
+    kind: str,
+    properties: Sequence[str],
+    known_kinds: frozenset[str],
+) -> dict[str, str]:
+    """Selected reference-valued properties of a kind, mapped to their target kind.
+
+    A target absent from the emit (not in `known_kinds`) is excluded — it
+    carries no election and renders its default record_id verbatim.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The kind owning the properties.
+        properties: The stream's selected bare property names.
+        known_kinds: Every kind with a declared records table in the emit.
+
+    Returns:
+        Bare property name -> target kind, for every selected property whose
+        `prop__<p>` column declares a `references` target present in the emit.
+    """
+    cols = sidecar.columns(f"records__{kind}")
+    by_name = {c.name: c.references for c in cols if c.name.startswith("prop__")}
+    targets: dict[str, str] = {}
+    for prop in properties:
+        target = by_name.get(f"prop__{prop}")
+        if target is not None and target in known_kinds:
+            targets[prop] = target
+    return targets
+
+
+def membership_reference_fields(
+    sidecar: "Sidecar", owner_kind: str, property_name: str, fields: Sequence[str]
+) -> frozenset[str]:
+    """Selected membership fields backed by a `member__<f>__kind`/`__id` pair.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        owner_kind: The membership table's owner kind.
+        property_name: The membership property name.
+        fields: The stream's selected bare field names.
+
+    Returns:
+        The subset of `fields` that are reference-valued.
+    """
+    table_name = f"membership__{owner_kind}__{property_name}"
+    col_names = {c.name for c in sidecar.columns(table_name)}
+    return frozenset(
+        field
+        for field in fields
+        if f"member__{field}__kind" in col_names and f"member__{field}__id" in col_names
+    )

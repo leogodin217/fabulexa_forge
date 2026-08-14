@@ -1,15 +1,11 @@
-# Recipe: streaming / membership-routing
+# Recipe: streaming / multi-membership-streams
 # ============================================================
-# Route membership-events to topics by their relation identity.
+# Stream more than one membership table in a single run, each under its own
+# author-chosen name — `streams[].name` is free-form (the topic-name rule
+# only), independent of the owner/property identity it feeds from.
 #
-# Membership-events carry a different route-attribute set from state-changes
-# (Layer A): a membership relation has no <kind>_type sub-type, so its attributes
-# are {owner_kind, property, route_table}, where route_table = <owner>__<property>
-# (the leaf, used by the default policy). Layer B is unchanged — `topic_template`
-# renders against those attributes exactly as it does for record events.
-#
-# Here the template `{owner_kind}.{property}` names one topic per selected table
-# from the owner kind and property. Stream several tables in one run and a single
+# Both streams below happen to use `<owner_kind>.<property>` names, but that is
+# an author choice, not a policy: any legal topic name would do. A single
 # global `seq` orders all their events together — merging the files by seq
 # recovers the one true cross-relation order.
 #
@@ -27,13 +23,10 @@
 
 content: membership-events
 
-routing:
-  topic_template: "{owner_kind}.{property}"   # override the default "{route_table}"
-
-memberships:
-  - owner_kind: queue
-    property: waiters
+streams:
+  - name: queue.waiters
+    membership: {kind: queue, property: waiters}
     fields: [patient, priority]
-  - owner_kind: patient
-    property: visits
+  - name: patient.visits
+    membership: {kind: patient, property: visits}
     fields: [slot, doctor]

@@ -14,9 +14,29 @@
 #   actor/rider             -> rider
 #   actor/driver            -> driver
 #   entity/zone_market      -> zone
-#   journey_instance        -> agent_journey
+#   journey_instance        -> user_session
 #   pairing                 -> match
 #   the event log           -> audit_log
+#
+# RENAMES (realism QA, aug11 round): the mapping above is applied to the
+# VOCABULARY surfaces too — the naming gate failed this config because the
+# tables were renamed while `audit_log.item_type` still declared raw kinds and
+# the FK columns kept engine names.
+#   - `agent_journey` -> `user_session`: "agent" and "journey" are both
+#     simulator words. The kind has NO declared sub-types (journey_type is a
+#     plain property, not the discriminator), so the rider/driver lifecycles
+#     cannot be split into two tables; `user_session` is the app-database name
+#     that honestly covers both (a rider's trip session, a driver's shift
+#     session), with user_id / session_type as its columns. The
+#     rider_journey/driver_journey VALUES are data and stay — values are the
+#     base layer's, not the config's to rewrite.
+#   - The events sources split per actor sub-type so `item_type` carries the
+#     exported table's own name (rider / driver / zone / user_session).
+#   - Per-table `rename:` puts reference columns on the <target_table>_id
+#     convention: match.requester -> rider_id and match.counterpart ->
+#     driver_id (verified: all 4,969 matches pair a rider requester with a
+#     driver counterpart), zone refs -> zone_id / dest_zone_id / base_zone_id.
+#   - Per-source `rename:` keeps the `changes` payload keys in step.
 #
 #   SPLIT  actor -> rider + driver, two `state` tables over the same `kind: actor`
 #          (one shared wide records table, `actor_type` discriminator), each
@@ -79,6 +99,9 @@ source:
                 prop__home_place_area_code, prop__payment_card, prop__app_user_agent,
                 prop__propensity, prop__status, prop__zone, prop__dest_zone,
                 prop__ride_count, prop__loyalty_band]
+      rename:
+        prop__zone: zone_id
+        prop__dest_zone: dest_zone_id
     - name: driver
       kind: actor
       sub_types: [driver]
@@ -88,20 +111,45 @@ source:
                 prop__vehicle_year, prop__vehicle_color, prop__license_plate,
                 prop__strategy, prop__status, prop__zone, prop__base_zone,
                 prop__session_earnings, prop__loyalty_band]
+      rename:
+        prop__zone: zone_id
+        prop__base_zone: base_zone_id
     - name: zone
       kind: entity
-    - name: agent_journey
+    - name: user_session
       kind: journey_instance
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__actor, prop__journey_type, prop__current_state]
+      rename:
+        prop__actor: user_id
+        prop__journey_type: session_type
     - name: match
       kind: pairing
+      rename:
+        prop__requester: rider_id
+        prop__counterpart: driver_id
   events:
     name: audit_log
     sources:
       - kind: actor
+        sub_types: [rider]
+        item_type: rider
+        rename:
+          zone: zone_id
+          dest_zone: dest_zone_id
+      - kind: actor
+        sub_types: [driver]
+        item_type: driver
+        rename:
+          zone: zone_id
+          base_zone: base_zone_id
       - kind: entity
+        item_type: zone
       - kind: journey_instance
+        item_type: user_session
+        rename:
+          actor: user_id
+          journey_type: session_type
 
 # rebase:
 #   base_date: 2024-01-01

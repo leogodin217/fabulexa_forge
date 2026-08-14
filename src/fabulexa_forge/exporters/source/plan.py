@@ -24,13 +24,15 @@ resolves each `SourceStateTablePlan.keys` via `resolve_state_table_keys`
 when `config.source.declare_keys` is true.
 
 Layer-direction invariant: imports the reader, the derivations layer only
-via the mode-neutral `election` module, `fabulexa_forge.errors`, the
-mode-neutral `reserved_names` / `slice_only` / `query_spec` (`TableKeys`) /
-`populations` modules, the sibling `source.columns` (`_PROP_PREFIX`) and
-`source.events` (`SourceEventSourcePlan`, `SourceEventLogPlan`) modules,
-`notices`, `derivations.guard` (`require_single_branch`), config.models
-(TYPE_CHECKING only except `KeySurface`), and stdlib. Never imports
-exporters.dimensional.* or exporters.streaming.*.
+via the mode-neutral `election` module, `fabulexa_forge.errors`,
+`fabulexa_forge._sql` (`cast_predicate_element`, the `where` constant-cast
+seam), the mode-neutral `reserved_names` / `slice_only` / `query_spec`
+(`TableKeys`) / `populations` modules, the sibling `source.columns`
+(`_PROP_PREFIX`) and `source.events` (`SourceEventSourcePlan`,
+`SourceEventLogPlan`) modules, `notices`, `derivations.guard`
+(`require_single_branch`), config.models (TYPE_CHECKING only except
+`KeySurface`), and stdlib. Never imports exporters.dimensional.* or
+exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -43,6 +45,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import (
         ExportConfig,
         KeySurface,
+        PredicateValue,
         SourceEventsDecl,
         SourceEventSourceDecl,
         SourceTableDecl,
@@ -51,6 +54,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import PresentationKeys, Sidecar
 
+from fabulexa_forge._sql import cast_predicate_element
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import (
     ExportError,
@@ -65,6 +69,10 @@ from fabulexa_forge.errors import (
     SourceSliceOnlyRead,
     SourceTableMembershipUnknown,
     SourceUnclassifiedColumn,
+    SourceWhereColumnUnresolved,
+    SourceWhereNotConstant,
+    SourceWhereOnDiscriminator,
+    SourceWhereValueUncastable,
 )
 from fabulexa_forge.exporters.election import (
     Election,
@@ -87,7 +95,7 @@ from fabulexa_forge.exporters.slice_only import (
     is_non_exempt_slice_only,
     slice_only_refusal_message,
 )
-from fabulexa_forge.exporters.source.columns import _PROP_PREFIX
+from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, _scalar_properties
 from fabulexa_forge.exporters.source.events import (
     SourceEventLogPlan,
     SourceEventSourcePlan,
@@ -163,6 +171,24 @@ class SourceEdgeSurface:
 
 
 @dataclass(frozen=True)
+class SourceWhereEntry:
+    """One resolved `where` entry: gate-passed and plan-time-typed."""
+
+    key: str
+    """The key as written (source-column or bare form)."""
+    source_column: str
+    """The base-table column identity (`prop__<p>`) on the subject kind's
+    records table."""
+    sql_type: str
+    """The column's sidecar-declared DuckDB type."""
+    value: "str | list[str]"
+    """The config value, verbatim — what the rendering authority compiles."""
+    typed_values: tuple[object, ...]
+    """Per-element `cast_predicate_element` results, config element order —
+    the disjointness gate's comparison set (doc § Event-source disjointness)."""
+
+
+@dataclass(frozen=True)
 class SourceStateTablePlan:
     """One resolved `state` table: a declared thing-table over the
     populations of exactly one kind.
@@ -200,6 +226,12 @@ class SourceStateTablePlan:
     keys: TableKeys | None
     """The table's declared keys (§ 4), resolved at plan time; None when
     `declare_keys` is off."""
+    where: tuple[SourceWhereEntry, ...] = ()
+    """The table's resolved row predicate, `where` declaration order; empty
+    when `where` is absent — config absence is already detected at the
+    decl. Defaults to empty so existing construction call sites (a table
+    with no `where`) need no change; `_build_state_table_plan` always
+    passes it explicitly."""
 
 
 @dataclass(frozen=True)
@@ -234,6 +266,19 @@ class SourceJunctionTablePlan:
     """The resolved (kind, label) map for projected `member__<f>__kind`
     column values; identity fall-through. Empty when no labels are
     declared."""
+    owner_populations: "tuple[Population, ...]" = ()
+    """The unit's addressed owner population set (doc § The parent lookup):
+    the owner kind's full declared domain when `sub_types` is absent, else
+    the narrowed subset `sub_types` addresses. `where` never narrows this —
+    it is value-level, not population-level. Drives the owner column's
+    typing (`_resolve_junction_edges`) and the render's owner-narrowing
+    semi-join. Defaults to empty so a unit built for pure type
+    discrimination (never compiled) needs no change; `_build_junction_table_plan`
+    always passes it explicitly."""
+    where: "tuple[SourceWhereEntry, ...]" = ()
+    """The unit's resolved owner row predicate (doc § The parent lookup),
+    `where` declaration order; empty when `where` is absent. Defaults to
+    empty for the same reason as `owner_populations`."""
 
 
 @dataclass(frozen=True)
@@ -431,15 +476,24 @@ def _resolve_single_kind_edge(
     sidecar: "Sidecar",
     election: Election,
     target_kind: str,
+    populations: "tuple[Population, ...]",
     source_column: str,
     edge_name: str,
 ) -> SourceEdgeSurface:
-    """Gate and resolve one single-target-kind referencing column.
+    """Gate and resolve one single-target-kind referencing column over an
+    explicit admitted population set.
 
     Args:
         sidecar: The open emit's sidecar.
         election: The resolved election.
         target_kind: The referencing column's one target kind.
+        populations: The admitted target populations — the kind's full
+            declared domain for a reference-annotated `prop__<p>` column
+            (`_owner_kind_domain_populations`); the narrowed
+            `owner_populations` for a junction owner column (doc § The
+            parent lookup), which types the column by the addressed set's
+            own agreement rather than always falling back to the kind's
+            full domain.
         source_column: The referencing column's source identity.
         edge_name: The referencing table · column identity, for the gate's
             error.
@@ -448,13 +502,13 @@ def _resolve_single_kind_edge(
         The resolved `SourceEdgeSurface`, `target_kinds` a one-element tuple.
 
     Raises:
-        ElectionUnionUnsafe: The target kind's admitted populations' resolved
-            key spaces contain a pairwise-unsafe pair.
+        ElectionUnionUnsafe: The admitted populations' resolved key spaces
+            contain a pairwise-unsafe pair.
     """
-    domain = sidecar.subtype_values(target_kind)
+    domain = tuple(p.sub_type for p in populations if p.sub_type is not None)
     check_edge_union_safety(election, target_kind, domain, edge_name)
     per_population = tuple(
-        (p.sub_type, p.surface) for p in election.populations_for(target_kind)
+        (p.sub_type, election.surface_for(target_kind, p.sub_type)) for p in populations
     )
     rendered_type = _resolve_single_kind_rendered_type(
         sidecar, target_kind, per_population
@@ -556,7 +610,14 @@ def _resolve_reference_prop_edges(
             continue
         edge_name = f"table '{table_name}'.{src}"
         edges.append(
-            _resolve_single_kind_edge(sidecar, election, target_kind, src, edge_name)
+            _resolve_single_kind_edge(
+                sidecar,
+                election,
+                target_kind,
+                _owner_kind_domain_populations(sidecar, target_kind),
+                src,
+                edge_name,
+            )
         )
     return tuple(edges)
 
@@ -566,6 +627,7 @@ def _resolve_junction_edges(
     election: Election,
     source_table: str,
     owner_kind: str,
+    owner_populations: "tuple[Population, ...]",
     known_kinds: "tuple[str, ...]",
     table_name: str,
     columns: "tuple[tuple[str, str], ...]",
@@ -581,6 +643,11 @@ def _resolve_junction_edges(
         election: The resolved election.
         source_table: The `membership__<K>__<p>` table.
         owner_kind: The owning kind (`<K>`).
+        owner_populations: The unit's addressed owner population set (doc §
+            The parent lookup) — the owner kind's full declared domain when
+            `sub_types` is absent, else the narrowed subset; types the owner
+            column by this set's own agreement rather than the kind's full
+            domain.
         known_kinds: Every kind with a declared records table in the emit.
         table_name: The table's output name, for the gates' errors.
         columns: The table's final (source, output) column pairs — member
@@ -603,6 +670,7 @@ def _resolve_junction_edges(
                 sidecar,
                 election,
                 owner_kind,
+                owner_populations,
                 "record_id",
                 f"table '{table_name}'.{owner_kind}_id",
             )
@@ -1081,6 +1149,219 @@ def _apply_junction_rename(
 
 
 # ---------------------------------------------------------------------------
+# `where` predicate resolution (the constant-column gate, doc § The
+# constant-column gate)
+# ---------------------------------------------------------------------------
+
+
+def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:
+    """Map every column of `table_name` to its declared sidecar DuckDB type.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        table_name: A sidecar table name.
+
+    Returns:
+        {column name -> DuckDB type}, in no particular order.
+    """
+    return {col.name: col.type for col in sidecar.columns(table_name)}
+
+
+def _where_predicate_elements(value: "str | list[str]") -> list[str]:
+    """Normalize a `where` value to its element list, in config order.
+
+    Args:
+        value: A scalar (treated as a one-element list) or a list.
+
+    Returns:
+        The value's elements, in order.
+    """
+    return [value] if isinstance(value, str) else list(value)
+
+
+def _resolve_where_selection(
+    sidecar: "Sidecar",
+    where: "dict[str, PredicateValue]",
+    subject_kind: str,
+    key_form: Literal["source_column", "bare"],
+    label: str,
+) -> tuple[SourceWhereEntry, ...]:
+    """The constant-column gate (doc § The constant-column gate): resolve
+    every `where` key against the subject kind's payload-property set in the
+    unit's key form, gate class and discriminator, and constant-evaluate
+    every element's cast. Declaration entry order.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        where: The declaration's `where` mapping (present; callers skip the
+            call when the field is absent).
+        subject_kind: The declared kind, or the owner kind for a membership
+            unit.
+        key_form: 'source_column' (`prop__<p>`, records-backed tables) or
+            'bare' (events sources and membership units).
+        label: The declaring unit's message label (`table '<name>'` /
+            `events source #<n>`).
+
+    Returns:
+        The resolved entries, `where` declaration order.
+
+    Raises:
+        SourceWhereColumnUnresolved: A key resolves to no payload property.
+        SourceWhereNotConstant: A resolved column is tracked / slice_only.
+        SourceWhereOnDiscriminator: A key names the discriminator.
+        SourceWhereValueUncastable: An element fails its column's cast.
+        TemporalClassUnavailableError: A consulted column's class is
+            unavailable (C13, reader-owned).
+        ExportError: A consulted column's declared type is unrecognized.
+    """
+    source_table = f"{_RECORDS_TABLE_PREFIX}{subject_kind}"
+    bare_names = _scalar_properties(sidecar, source_table)
+    discriminator_col = (
+        f"{_PROP_PREFIX}{subject_kind}_type"
+        if sidecar.subtype_values(subject_kind)
+        else None
+    )
+    col_types = _column_types(sidecar, source_table)
+
+    entries: list[SourceWhereEntry] = []
+    for key, value in where.items():
+        if key_form == "source_column":
+            if not key.startswith(_PROP_PREFIX):
+                raise SourceWhereColumnUnresolved(
+                    f"{label}: where key '{key}' not a payload property"
+                    f" of kind '{subject_kind}'"
+                )
+            bare_prop = key[len(_PROP_PREFIX) :]
+            source_column = key
+        else:
+            bare_prop = key
+            source_column = f"{_PROP_PREFIX}{key}"
+
+        if bare_prop not in bare_names:
+            raise SourceWhereColumnUnresolved(
+                f"{label}: where key '{key}' not a payload property"
+                f" of kind '{subject_kind}'"
+            )
+        if source_column == discriminator_col:
+            raise SourceWhereOnDiscriminator(
+                f"{label}: '{key}' is the sub-type discriminator; select"
+                " sub-types via sub_types, not where"
+            )
+
+        temporal_class = sidecar.temporal_class(source_table, source_column)
+        if temporal_class == "tracked":
+            raise SourceWhereNotConstant(
+                f"{label}: where key '{key}' is temporal_class: tracked;"
+                " under a horizon reconstruction its as-of and current"
+                " values select different rows — row selection requires a"
+                " constant column"
+            )
+        if temporal_class == "slice_only":
+            raise SourceWhereNotConstant(
+                f"{label}: where key '{key}' is temporal_class: slice_only;"
+                " its past is unknowable, so row selection cannot read it"
+            )
+
+        sql_type = col_types[source_column]
+        elements = _where_predicate_elements(value)
+        typed_values: list[object] = []
+        for element in elements:
+            try:
+                typed_values.append(cast_predicate_element(element, sql_type))
+            except ValueError as exc:
+                raise SourceWhereValueUncastable(
+                    f"{label}: where value '{element}' for '{key}' does not"
+                    f" cast to {sql_type}"
+                ) from exc
+
+        entries.append(
+            SourceWhereEntry(
+                key=key,
+                source_column=source_column,
+                sql_type=sql_type,
+                value=value,
+                typed_values=tuple(typed_values),
+            )
+        )
+    return tuple(entries)
+
+
+def _where_value_unobserved_message(
+    label: str, key: str, element: str, wholly_unobserved: bool
+) -> str:
+    """Render one `where`-value-unobserved notice's message.
+
+    Dimensional's shipped `discriminator-value-unobserved` granularity
+    (`check_discriminator_value_observed`): a scalar or wholly-unobserved
+    list states the unit renders no rows; a partially-covered list's
+    unobserved elements take the weaker per-element wording.
+
+    Args:
+        label: The declaring unit's message label.
+        key: The `where` key as written.
+        element: The unobserved element.
+        wholly_unobserved: Whether every element of the entry's value is
+            unobserved.
+
+    Returns:
+        The notice message text.
+    """
+    if wholly_unobserved:
+        return (
+            f"{label}: where value '{element}' for '{key}' not observed;"
+            " the unit renders no rows"
+        )
+    return (
+        f"{label}: where value '{element}' for '{key}' not observed;"
+        " it contributes no rows"
+    )
+
+
+def _check_where_values_observed(
+    sidecar: "Sidecar",
+    entries: "tuple[SourceWhereEntry, ...]",
+    subject_kind: str,
+    label: str,
+    notice_sink: "NoticeSink",
+) -> None:
+    """Emit dimensional's `discriminator-value-unobserved` notice per
+    out-of-domain `where` element — shipped code, message granularity, and
+    element order reused (doc § The constant-column gate; dimensional's
+    `check_discriminator_value_observed`). A column with no `enum_domains`
+    entry is unchecked. Never an error.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        entries: The unit's resolved `where` entries.
+        subject_kind: The `enum_domains` key.
+        label: The declaring unit's message label.
+        notice_sink: Receiver for the notices.
+    """
+    kind_domains = sidecar.enum_domains().get(subject_kind, {})
+    for entry in entries:
+        bare_prop = entry.source_column[len(_PROP_PREFIX) :]
+        observed_values = kind_domains.get(bare_prop, ())
+        if not observed_values:
+            continue
+
+        elements = _where_predicate_elements(entry.value)
+        unobserved = [e for e in elements if e not in observed_values]
+        if not unobserved:
+            continue
+
+        wholly_unobserved = len(unobserved) == len(elements)
+        for element in unobserved:
+            notice_sink(
+                Notice(
+                    code="discriminator-value-unobserved",
+                    message=_where_value_unobserved_message(
+                        label, entry.key, element, wholly_unobserved
+                    ),
+                )
+            )
+
+
+# ---------------------------------------------------------------------------
 # `tables[]` declaration resolution
 # ---------------------------------------------------------------------------
 
@@ -1118,6 +1399,9 @@ def _build_state_table_plan(
             fail.
         PresentationKeysInvalidError: `declare_keys` and the block is
             present and incoherent.
+        SourceWhereColumnUnresolved, SourceWhereNotConstant,
+            SourceWhereOnDiscriminator, SourceWhereValueUncastable: `where`
+            resolution fails (the constant-column gate).
     """
     assert decl.kind is not None, "a records tables[] declaration carries kind"
     kind = decl.kind
@@ -1172,6 +1456,21 @@ def _build_state_table_plan(
         else None
     )
 
+    where = (
+        _resolve_where_selection(
+            sidecar,
+            decl.where,
+            kind,
+            key_form="source_column",
+            label=f"table '{decl.name}'",
+        )
+        if decl.where is not None
+        else ()
+    )
+    _check_where_values_observed(
+        sidecar, where, kind, f"table '{decl.name}'", notice_sink
+    )
+
     return SourceStateTablePlan(
         name=decl.name,
         kind=kind,
@@ -1180,6 +1479,7 @@ def _build_state_table_plan(
         identity_surface=identity_surface,
         edge_surfaces=edge_surfaces,
         keys=keys,
+        where=where,
     )
 
 
@@ -1189,8 +1489,16 @@ def _build_junction_table_plan(
     known_kinds: "tuple[str, ...]",
     decl: "SourceTableDecl",
     kind_labels: "tuple[tuple[str, str], ...]",
+    notice_sink: "NoticeSink",
 ) -> SourceJunctionTablePlan:
     """Resolve one `tables[]` membership declaration to a `junction` table plan.
+
+    `decl.sub_types` resolves against the **owner** kind's discriminator
+    domain into `owner_populations` (doc § The parent lookup) — the addressed
+    owner set the owner column's edge gate and typing range over; absent =
+    the owner's full declared domain. `decl.where` resolves against the owner
+    kind's payload properties in bare form (the parent lookup, doc §
+    Business Rules).
 
     Args:
         sidecar: The open emit's sidecar.
@@ -1200,6 +1508,7 @@ def _build_junction_table_plan(
         kind_labels: The resolved `source.kind_labels` map (§
             `_resolve_kind_labels`), carried onto the unit for the render's
             `member__<f>__kind` values.
+        notice_sink: Receiver for out-of-domain `where`-value notices.
 
     Returns:
         The resolved `SourceJunctionTablePlan`.
@@ -1207,8 +1516,14 @@ def _build_junction_table_plan(
     Raises:
         SourceTableMembershipUnknown: The membership reference resolves to
             no sidecar table.
+        SourceTableSubTypeUnknown, SourceSubTypesOnFlatKind: `sub_types`
+            resolution against the owner kind's domain fails.
         SourceColumnUnresolved, SourceColumnNotAddressable: Column
             resolution fails.
+        SourceWhereColumnUnresolved, SourceWhereNotConstant,
+            SourceWhereOnDiscriminator, SourceWhereValueUncastable: `where`
+            resolution fails (the constant-column gate, applied to the owner
+            kind).
         ElectionUnionUnsafe: An edge gate fails.
     """
     assert decl.membership is not None, "a membership tables[] declaration carries it"
@@ -1223,6 +1538,9 @@ def _build_junction_table_plan(
             f" ({owner_kind}, {property_name})"
         ) from exc
 
+    label = f"table '{decl.name}'"
+    owner_populations = resolve_populations(sidecar, label, owner_kind, decl.sub_types)
+
     candidate = _junction_candidate_columns(sidecar, source_table, owner_kind)
     all_source_columns = frozenset(col.name for col in sidecar.columns(source_table))
     columns = _apply_junction_columns_decl(
@@ -1233,8 +1551,24 @@ def _build_junction_table_plan(
     )
 
     edge_surfaces = _resolve_junction_edges(
-        sidecar, election, source_table, owner_kind, known_kinds, decl.name, columns
+        sidecar,
+        election,
+        source_table,
+        owner_kind,
+        owner_populations,
+        known_kinds,
+        decl.name,
+        columns,
     )
+
+    where = (
+        _resolve_where_selection(
+            sidecar, decl.where, owner_kind, key_form="bare", label=label
+        )
+        if decl.where is not None
+        else ()
+    )
+    _check_where_values_observed(sidecar, where, owner_kind, label, notice_sink)
 
     return SourceJunctionTablePlan(
         name=decl.name,
@@ -1244,6 +1578,8 @@ def _build_junction_table_plan(
         columns=columns,
         edge_surfaces=edge_surfaces,
         kind_labels=kind_labels,
+        owner_populations=owner_populations,
+        where=where,
     )
 
 
@@ -1301,25 +1637,6 @@ def _validate_event_property_name(
         )
 
 
-def _records_bare_property_names(
-    sidecar: "Sidecar", source_table: str
-) -> frozenset[str]:
-    """Every real `prop__` bare property name of a records table.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        source_table: The kind's `records__<kind>` table.
-
-    Returns:
-        Bare property names, unordered.
-    """
-    return frozenset(
-        col.name[len(_PROP_PREFIX) :]
-        for col in sidecar.columns(source_table)
-        if col.name.startswith(_PROP_PREFIX)
-    )
-
-
 def _resolve_records_audited_properties(
     sidecar: "Sidecar",
     kind: str,
@@ -1352,7 +1669,7 @@ def _resolve_records_audited_properties(
         TemporalClassUnavailableError: Propagated.
     """
     source_table = f"{_RECORDS_TABLE_PREFIX}{kind}"
-    all_bare_set = _records_bare_property_names(sidecar, source_table)
+    all_bare_set = _scalar_properties(sidecar, source_table)
     candidates: list[str] = []
     for col in sidecar.columns(source_table):
         name = col.name
@@ -1590,7 +1907,12 @@ def _resolve_records_change_edges(
             continue
         edges.append(
             _resolve_single_kind_edge(
-                sidecar, election, target_kind, src, f"{owner}.{prop}"
+                sidecar,
+                election,
+                target_kind,
+                _owner_kind_domain_populations(sidecar, target_kind),
+                src,
+                f"{owner}.{prop}",
             )
         )
     return tuple(edges)
@@ -1727,6 +2049,13 @@ def _build_event_source_plan(
 ) -> SourceEventSourcePlan:
     """Resolve one `events.sources[]` declaration to a `SourceEventSourcePlan`.
 
+    A membership source's `decl.sub_types` resolves against the owner kind's
+    discriminator domain exactly as a records source's does (doc § The
+    parent lookup) — the narrowed addressed set feeds `item_surface` and the
+    downstream overlap / union-safety gates. `decl.where` resolves against
+    the subject kind's payload properties in bare form for both source
+    shapes (records: the declared kind; membership: the owner kind).
+
     Args:
         sidecar: The open emit's sidecar.
         election: The resolved election.
@@ -1735,7 +2064,8 @@ def _build_event_source_plan(
             (junction-member-column admission).
         decl: The events source declaration.
         owner: The declaring source's message label (`events source #<n>`).
-        notice_sink: Receiver for slice-only-column-omitted notices.
+        notice_sink: Receiver for slice-only-column-omitted /
+            out-of-domain-`where`-value notices.
         kind_labels: The resolved `source.kind_labels` map (§
             `_resolve_kind_labels`) — item-type default resolution and the
             render's `<f>_kind` entry labeling.
@@ -1753,6 +2083,9 @@ def _build_event_source_plan(
             `rename` entry is unresolved.
         SourceNameCollision: Two audited properties (or a membership pair's
             expanded `_kind` / `_id` names) resolve one `changes` key.
+        SourceWhereColumnUnresolved, SourceWhereNotConstant,
+            SourceWhereOnDiscriminator, SourceWhereValueUncastable: `where`
+            resolution fails (the constant-column gate).
         ElectionUnionUnsafe: A change-edge gate fails.
     """
     kind_labels_map = dict(kind_labels)
@@ -1763,7 +2096,7 @@ def _build_event_source_plan(
         audited = _resolve_records_audited_properties(
             sidecar, kind, decl.only, decl.ignore, owner, notice_sink
         )
-        all_bare_names = _records_bare_property_names(sidecar, source_table)
+        all_bare_names = _scalar_properties(sidecar, source_table)
         audited_pairs = _apply_records_property_rename(
             audited, decl.rename, all_bare_names, sidecar, kind, owner
         )
@@ -1777,6 +2110,14 @@ def _build_event_source_plan(
             (p.sub_type, election.surface_for(kind, p.sub_type)) for p in populations
         )
         item_type = _resolve_event_source_item_type(decl, kind_labels_map, kind, None)
+        where = (
+            _resolve_where_selection(
+                sidecar, decl.where, kind, key_form="bare", label=owner
+            )
+            if decl.where is not None
+            else ()
+        )
+        _check_where_values_observed(sidecar, where, kind, owner, notice_sink)
         return SourceEventSourcePlan(
             item_type=item_type,
             kind=kind,
@@ -1786,6 +2127,7 @@ def _build_event_source_plan(
             kind_labels=kind_labels,
             item_surface=item_surface,
             change_edges=change_edges,
+            where=where,
         )
 
     assert decl.membership is not None, "an events source carries kind or membership"
@@ -1799,7 +2141,7 @@ def _build_event_source_plan(
             f"{owner}: no membership table for ({owner_kind}, {property_name})"
         ) from exc
 
-    populations = _owner_kind_domain_populations(sidecar, owner_kind)
+    populations = resolve_populations(sidecar, owner, owner_kind, decl.sub_types)
     audited = _resolve_membership_audited_fields(
         sidecar, table_name, decl.only, decl.ignore, owner
     )
@@ -1814,6 +2156,14 @@ def _build_event_source_plan(
     item_surface = tuple(
         (p.sub_type, election.surface_for(owner_kind, p.sub_type)) for p in populations
     )
+    where = (
+        _resolve_where_selection(
+            sidecar, decl.where, owner_kind, key_form="bare", label=owner
+        )
+        if decl.where is not None
+        else ()
+    )
+    _check_where_values_observed(sidecar, where, owner_kind, owner, notice_sink)
     return SourceEventSourcePlan(
         item_type=_resolve_event_source_item_type(
             decl, kind_labels_map, owner_kind, property_name
@@ -1825,6 +2175,7 @@ def _build_event_source_plan(
         kind_labels=kind_labels,
         item_surface=item_surface,
         change_edges=change_edges,
+        where=where,
     )
 
 
@@ -1835,38 +2186,98 @@ def _population_label(population: Population) -> str:
     return f"{population.kind}.{population.sub_type}"
 
 
-def _check_events_source_overlap(sources: tuple[SourceEventSourcePlan, ...]) -> None:
-    """Enforce pairwise-disjoint population sets across `events.sources`.
+def _events_share_item_space(
+    a: SourceEventSourcePlan, b: SourceEventSourcePlan
+) -> bool:
+    """Whether two events sources could double-log one item (doc § Event-source
+    disjointness): records sources of one kind, or membership sources of one
+    `(kind, property)`, whose addressed population sets intersect.
 
-    Records sources are compared by population atom; membership sources by
-    `(kind, property)` identity (each resolves to one fixed population set,
-    so two membership sources sharing that identity always fully overlap).
+    Owner `sub_types` narrows a membership source's addressed `populations`
+    exactly as `sub_types` narrows a records source's — both-declared
+    disjoint owner `sub_types` sets already show up here as disjoint
+    population sets, so one population-set-intersection test covers both
+    source shapes; a records source and a membership source never share an
+    item space (different grains).
+
+    Args:
+        a: One resolved events source.
+        b: Another resolved events source.
+
+    Returns:
+        True iff `a` and `b` audit one item space.
+    """
+    if a.property != b.property or a.kind != b.kind:
+        return False
+    return not set(a.populations).isdisjoint(b.populations)
+
+
+def _common_disjoint_where_column(
+    a: SourceEventSourcePlan, b: SourceEventSourcePlan
+) -> bool:
+    """Whether `a` and `b` both declare a `where` entry on a common column
+    whose typed value sets are disjoint (doc § Event-source disjointness —
+    existential over common columns, entries the sources do not share never
+    defeat a disjointness another common column establishes).
+
+    Args:
+        a: One resolved events source.
+        b: Another resolved events source.
+
+    Returns:
+        True iff at least one shared `source_column` carries disjoint
+        `typed_values` sets.
+    """
+    b_by_column = {entry.source_column: entry for entry in b.where}
+    for a_entry in a.where:
+        b_entry = b_by_column.get(a_entry.source_column)
+        if b_entry is not None and set(a_entry.typed_values).isdisjoint(
+            b_entry.typed_values
+        ):
+            return True
+    return False
+
+
+def _first_shared_population(
+    a: SourceEventSourcePlan, b: SourceEventSourcePlan
+) -> Population:
+    """The first population atom (declaration order of `a`) common to both
+    sources — for the overlap error's message only; callers already
+    confirmed the sets intersect."""
+    b_set = set(b.populations)
+    for population in a.populations:
+        if population in b_set:
+            return population
+    raise AssertionError("caller already confirmed the population sets intersect")
+
+
+def _check_events_source_overlap(sources: tuple[SourceEventSourcePlan, ...]) -> None:
+    """Enforce selection-aware disjointness across `events.sources` (doc §
+    Event-source disjointness): two sources auditing one item space
+    (`_events_share_item_space`) are legal only via a common `where` column
+    whose typed value sets are disjoint (`_common_disjoint_where_column`) —
+    population-disjoint sources (including both-declared disjoint owner
+    `sub_types`) never reach the selection check at all.
 
     Args:
         sources: The resolved events sources, declaration order.
 
     Raises:
-        SourceEventSourceOverlap: Two sources resolve an overlapping
-            population.
+        SourceEventSourceOverlap: Two sources share an item space that no
+            declared selection disjoins.
     """
-    seen_populations: dict[Population, None] = {}
-    seen_membership: dict[tuple[str, str], None] = {}
-    for source in sources:
-        if source.property is None:
-            for population in source.populations:
-                if population in seen_populations:
-                    raise SourceEventSourceOverlap(
-                        f"events: sources overlap on population"
-                        f" '{_population_label(population)}'"
-                    )
-                seen_populations[population] = None
-        else:
-            key = (source.kind, source.property)
-            if key in seen_membership:
-                raise SourceEventSourceOverlap(
-                    f"events: sources overlap on population '{source.item_type}'"
-                )
-            seen_membership[key] = None
+    for index, a in enumerate(sources):
+        for b in sources[index + 1 :]:
+            if not _events_share_item_space(a, b):
+                continue
+            if _common_disjoint_where_column(a, b):
+                continue
+            shared = _first_shared_population(a, b)
+            raise SourceEventSourceOverlap(
+                f"events: sources overlap on population"
+                f" '{_population_label(shared)}'; selections do not"
+                " establish disjointness"
+            )
 
 
 def _check_item_type_pairwise_distinctness(
@@ -1876,9 +2287,12 @@ def _check_item_type_pairwise_distinctness(
 
     Two records sources of one kind may share one resolved item-type (the
     joint union-safety-gate group, today's shape for a kind split across
-    sources); any other sharing is refused — two records sources of
-    different kinds, or a membership source sharing any other source's
-    item-type (its own owner's included).
+    sources), as may two membership sources of one `(kind, property)` (the
+    same shape, extended to the membership grain — doc § Event-source
+    disjointness); any other sharing is refused — two records sources of
+    different kinds, two membership sources of differing `(kind, property)`,
+    or a records source sharing with a membership source (its own owner's
+    included).
 
     Args:
         sources: The resolved events sources, declaration order (1-based
@@ -1896,8 +2310,7 @@ def _check_item_type_pairwise_distinctness(
             continue
         prior_index, prior_source = prior
         legal = (
-            source.property is None
-            and prior_source.property is None
+            source.property == prior_source.property
             and source.kind == prior_source.kind
         )
         if not legal:
@@ -2063,7 +2476,12 @@ def _build_event_log_plan(
         SourceColumnUnresolved, SourceSliceOnlyRead: An `only` / `ignore` /
             `rename` entry is unresolved.
         SourceNameCollision: A source's resolved `changes` keys collide.
-        SourceEventSourceOverlap: Two sources resolve overlapping populations.
+        SourceWhereColumnUnresolved, SourceWhereNotConstant,
+            SourceWhereOnDiscriminator, SourceWhereValueUncastable: A
+            source's `where` resolution fails (the constant-column gate).
+        SourceEventSourceOverlap: Two sources sharing an item space are not
+            disjoined by declared population or selection (doc §
+            Event-source disjointness).
         SourceItemTypeCollision: Two sources illegally share a resolved
             item-type, or a resolved item-type collides with a kind's
             rendered name.
@@ -2614,7 +3032,7 @@ def build_source_plan(
         else:
             tables.append(
                 _build_junction_table_plan(
-                    sidecar, election, known_kinds, decl, kind_labels
+                    sidecar, election, known_kinds, decl, kind_labels, notices
                 )
             )
     tables_t = tuple(tables)

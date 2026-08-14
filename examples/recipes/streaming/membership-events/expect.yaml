@@ -1,5 +1,5 @@
 streams:
-  # Default routing: one topic per membership table, named <owner>__<property>.
+  # The declared stream name matches the leaf route_table <owner>__<property>.
   queue__waiters:
     event_count: 3
     contains_events:

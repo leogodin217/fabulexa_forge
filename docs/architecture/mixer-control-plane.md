@@ -201,10 +201,9 @@ debezium}`; `--speed ∈ [0.1, 1000]`; `--tick > 0`; `--port ∈ [1, 65535]`.
 **Business rules (setup, surfaced via the funnel as `ExportError`).**
 `KafkaRequiresAnchor` (a mixer run requires a resolved anchor for the `CreateTime` and
 meter rendering); `DebeziumRequiresConfig` (`--fmt debezium` requires a `debezium`
-block); `StreamTopicSchemaUnambiguous` (`table_identity='topic'` under Debezium schemas
-requires an unambiguous topic→table mapping); and the engine's eager validation at the
-`seed_mixer_run` drain (single-branch guard, unresolvable kind / membership / property /
-routing rule).
+block); and the engine's eager validation at the `seed_mixer_run` drain (single-branch
+guard, the per-stream resolvability rules, the election gates — see
+[`streaming.md`](streaming.md) § Validation Rules).
 
 **HTTP-level rules (serving).** `PUT /api/topics/{topic}` with no matching dial → `404`;
 an out-of-bounds body → `422`; an unknown route / method → the framework default `404` /

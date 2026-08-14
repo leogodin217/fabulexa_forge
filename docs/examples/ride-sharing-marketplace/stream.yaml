@@ -17,13 +17,14 @@
 #   zone_market       — zone-market DIMENSION. supply/demand surge pressure -> c/u.
 #                       Three zones, lowest volume (~2k events): the laggable dim.
 #
-# Routing (all default policy, no routing block needed):
-#   - `actor` sub-types into `driver` / `rider` topics. Sub-typing is driven by the
-#     `<kind>_type` discriminator domain in enum_domains, NOT by record_roles.
-#   - `entity` likewise sub-types: its `entity_type` domain is [zone_market], so it
-#     routes to topic `zone_market` (one sub-type), NOT `entity`.
-#   - `journey_instance` and `pairing` carry single-value/string roles -> one topic
-#     named for the kind.
+# Declared streams (no routing block — each stream names its own topic):
+#   - `actor` gets two streams, `rider` and `driver`, each scoped via `sub_types`.
+#     Sub-typing is driven by the `<kind>_type` discriminator domain in
+#     enum_domains, NOT by record_roles.
+#   - `entity` gets one stream, `zone_market`: its `entity_type` domain is
+#     [zone_market] (one sub-type), so the stream is scoped to it, NOT named `entity`.
+#   - `journey_instance` and `pairing` carry single-value/string roles -> one stream
+#     each, named for the kind.
 #
 # `pairing.prop__requester -> actor` (always a rider) and `prop__counterpart -> actor`
 # (always a driver) are contract-true edges (base.json references). The producer
@@ -43,15 +44,25 @@
 
 content: state-changes
 
-kinds:
-  - kind: actor
+streams:
+  - name: rider
+    kind: actor
+    sub_types: [rider]
     # status + zone (FSM + spatial), plus the rider/driver SCD-2 scorecards.
     # All history-tracked; null-safe across both sub-types.
     properties: [status, zone, loyalty_band, ride_count, session_earnings]
-  - kind: entity
+  - name: driver
+    kind: actor
+    sub_types: [driver]
+    properties: [status, zone, loyalty_band, ride_count, session_earnings]
+  - name: zone_market
+    kind: entity
+    sub_types: [zone_market]
     properties: [demand_pressure, supply_pressure]
-  - kind: journey_instance
+  - name: journey_instance
+    kind: journey_instance
     properties: [current_state]
-  - kind: pairing
+  - name: pairing
+    kind: pairing
     # No history-tracked property -> pure create/delete lifecycle (match / release).
     properties: []

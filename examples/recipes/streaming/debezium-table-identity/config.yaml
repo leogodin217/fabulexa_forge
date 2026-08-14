@@ -1,0 +1,48 @@
+# Recipe: streaming / debezium-table-identity
+# ============================================================
+# Choose what the Debezium `source.table` masquerade reports — the leaf
+# source table, or the resolved stream (topic) name.
+#
+# `debezium.table_identity` (Debezium only; the jsonl format ignores it):
+#   source_table  (default) -> source.table = the event's route_table (the
+#                              leaf logical table — here the kind `patient`)
+#   topic                    -> source.table = the declaring stream's `name`
+#
+# This matters when a stream's `name` differs from its leaf: a downstream
+# consumer that keys off `source.table` then sees either the physical source
+# table or the logical stream name, your choice. The value-schema name
+# (<source.name>.<table>.Value) follows the same identity.
+#
+# Here the stream is named `cdc.patient` while its leaf route_table stays
+# `patient`. With `table_identity: topic`, `source.table` reports
+# `cdc.patient`; the default `source_table` would report `patient`. (Per-topic
+# value schemas are well-defined by construction — one topic = one stream =
+# one column list — for both `table_identity` values.)
+#
+# Fixture world (recipe emit):
+#   records__patient — p001 status pending@1d -> active@2d -> discharged@3d
+#                      p002 status pending@2d
+#
+# Output — one `cdc.patient.jsonl` stream; every message's source.table is the
+# stream name `cdc.patient`, not the leaf `patient`.
+
+content: state-changes
+
+debezium:
+  table_identity: topic           # source.table follows the declaring stream's name
+  schemas_enable: true
+  source:
+    connector: postgres
+    name: hospital
+    db: hospital
+    schema: public
+    version: 2.5.0.Final
+
+streams:
+  - name: cdc.patient             # the stream's own name — independent of the kind
+    kind: patient
+    properties: [status]
+
+rebase:
+  base_date: 2024-01-01T00:00:00
+  timezone: UTC

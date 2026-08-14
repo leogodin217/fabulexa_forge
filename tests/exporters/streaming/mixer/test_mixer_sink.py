@@ -180,6 +180,8 @@ def _make_event(
         after={"record_id": record_id},
         topic=topic,
         route_table="entity",
+        key_column="record_id",
+        key_value=record_id,
     )
 
 

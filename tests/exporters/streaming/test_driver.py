@@ -23,10 +23,10 @@ from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     DebeziumConfig,
     DebeziumSourceIdentity,
-    MembershipSelection,
-    RoutingConfig,
+    KindStream,
+    MembershipRef,
+    MembershipStream,
     StreamConfig,
-    StreamKindSelection,
 )
 from fabulexa_forge.errors import (
     ExportError,
@@ -127,7 +127,7 @@ def _make_config(kind: str, properties: list[str] | None = None) -> StreamConfig
     """Build a minimal StreamConfig for one kind."""
     return StreamConfig(
         content="state-changes",
-        kinds=[StreamKindSelection(kind=kind, properties=properties or [])],
+        streams=[KindStream(name=kind, kind=kind, properties=properties or [])],
     )
 
 
@@ -155,7 +155,7 @@ def _make_debezium_stream_config(
     """Build a StreamConfig with a debezium block for one kind."""
     return StreamConfig(
         content="state-changes",
-        kinds=[StreamKindSelection(kind=kind, properties=properties or ["status"])],
+        streams=[KindStream(name=kind, kind=kind, properties=properties or ["status"])],
         debezium=_make_debezium_config(schemas_enable=schemas_enable),
     )
 
@@ -712,9 +712,10 @@ class TestKafkaJsonlRenderValue:
         call = captured[0]
         events = call["events"]
         render_value: Callable[[StreamEvent], bytes] = call["render_value"]
-        # _make_config uses properties=[] → one CREATE event per record (1 record → 1
-        # event); history rows are not emitted when no properties are tracked.
-        assert len(events) == 1
+        # _make_config uses properties=[] → the event set is payload-independent
+        # (change_scope = the kind's full tracked property set): a 'c' at creation
+        # plus a 'u' at the tracked status change from _build_emit_with_events.
+        assert len(events) == 2
 
         # Compare to what the file sink would write (minus the newline)
         from fabulexa_forge.exporters.streaming.encoding import encode_pinned
@@ -738,7 +739,7 @@ class TestKafkaJsonlRenderValue:
             side_effect=_fake_write_kafka_stream(captured),
         ):
             with open_emit(emit_dir) as emit:
-                expected_topic_set = build_topic_set(config, emit.sidecar)
+                expected_topic_set = build_topic_set(config)
                 stream_export(
                     emit,
                     config,
@@ -818,7 +819,6 @@ class TestKafkaDebeziumRules:
         debezium_cfg = config.debezium
         assert debezium_cfg is not None and debezium_cfg.schemas_enable is True
 
-        from fabulexa_forge.config.models import RoutingConfig
         from fabulexa_forge.exporters.streaming.debezium import (
             _serialize_message,
             rebased_epoch_ms,
@@ -826,23 +826,20 @@ class TestKafkaDebeziumRules:
         )
         from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
 
-        routing = config.routing if config.routing is not None else RoutingConfig()
+        table_identity = debezium_cfg.table_identity
         with open_emit(emit_dir) as emit2:
             value_schemas = _build_value_schemas(
                 emit2,
                 config,
-                routing,
                 debezium_cfg.source,
-                routing.table_identity,
+                table_identity,
             )
 
         # Build the expected bytes via the FILE-SINK path (independent of the
         # kafka driver's _build_debezium_render_value closure).
         for event in events:
             ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-            table = (
-                event.topic if routing.table_identity == "topic" else event.route_table
-            )
+            table = event.topic if table_identity == "topic" else event.route_table
             value_schema = (
                 value_schemas.get(table) if value_schemas is not None else None
             )
@@ -938,6 +935,19 @@ _MEMBERSHIP_MEMBERS_COLS: list[dict[str, object]] = [
     {"name": "left_sim_time", "type": "BIGINT"},
 ]
 
+#: Election resolution requires the owner kind to carry a declared records
+#: table, even under the no-`keys` default (see test_engine.py's
+#: `_owner_records_table_spec`).
+_OWNER_RECORD_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+]
+
 
 def _build_membership_emit(
     tmp_path: Path,
@@ -969,6 +979,8 @@ def _build_membership_emit(
             f'INSERT INTO "membership__team__members" VALUES ({ph_m})', list(row)
         )
 
+    for owner_kind in ("queue", "team"):
+        conn.execute(_ddl(f"records__{owner_kind}", _OWNER_RECORD_COLS))
     conn.close()
 
     write_emit(
@@ -988,6 +1000,20 @@ def _build_membership_emit(
                 "team",
                 "members",
             ),
+            {
+                "name": "records__queue",
+                "category": "records",
+                "record_kind": "queue",
+                "columns": _OWNER_RECORD_COLS,
+                "rows": 0,
+            },
+            {
+                "name": "records__team",
+                "category": "records",
+                "record_kind": "team",
+                "columns": _OWNER_RECORD_COLS,
+                "rows": 0,
+            },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
     )
@@ -1001,15 +1027,15 @@ def _make_membership_config(
     """Build a StreamConfig for content='membership-events' with two tables."""
     return StreamConfig(
         content="membership-events",
-        memberships=[
-            MembershipSelection(
-                owner_kind="queue",
-                property="waiters",
+        streams=[
+            MembershipStream(
+                name="queue-waiters",
+                membership=MembershipRef(kind="queue", property="waiters"),
                 fields=waiters_fields if waiters_fields is not None else ["priority"],
             ),
-            MembershipSelection(
-                owner_kind="team",
-                property="members",
+            MembershipStream(
+                name="team-members",
+                membership=MembershipRef(kind="team", property="members"),
                 fields=members_fields if members_fields is not None else [],
             ),
         ],
@@ -1042,10 +1068,10 @@ class TestMembershipJsonlFileSink:
                 emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
             )
 
-        assert (out_dir / "queue__waiters.jsonl").exists()
-        assert (out_dir / "team__members.jsonl").exists()
-        assert outcome.events_per_topic["team__members"] == 0
-        assert outcome.events_per_topic["queue__waiters"] > 0
+        assert (out_dir / "queue-waiters.jsonl").exists()
+        assert (out_dir / "team-members.jsonl").exists()
+        assert outcome.events_per_topic["team-members"] == 0
+        assert outcome.events_per_topic["queue-waiters"] > 0
 
     def test_membership_jsonl_lines_parse_to_valid_objects(
         self, tmp_path: Path
@@ -1066,7 +1092,7 @@ class TestMembershipJsonlFileSink:
 
         lines = [
             json.loads(ln)
-            for ln in (out_dir / "queue__waiters.jsonl")
+            for ln in (out_dir / "queue-waiters.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
             if ln.strip()
@@ -1097,7 +1123,7 @@ class TestMembershipJsonlFileSink:
 
         lines = [
             json.loads(ln)
-            for ln in (out_dir / "queue__waiters.jsonl")
+            for ln in (out_dir / "queue-waiters.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
             if ln.strip()
@@ -1125,7 +1151,7 @@ class TestMembershipJsonlFileSink:
 
         lines = [
             json.loads(ln)
-            for ln in (out_dir / "queue__waiters.jsonl")
+            for ln in (out_dir / "queue-waiters.jsonl")
             .read_text(encoding="utf-8")
             .splitlines()
             if ln.strip()
@@ -1151,8 +1177,8 @@ class TestMembershipJsonlFileSink:
 
         # r1 closed: join + leave = 2; r2 open: join = 1; total = 3
         assert outcome.total_events == 3
-        assert outcome.events_per_topic["queue__waiters"] == 3
-        assert outcome.events_per_topic["team__members"] == 0
+        assert outcome.events_per_topic["queue-waiters"] == 3
+        assert outcome.events_per_topic["team-members"] == 0
 
     def test_membership_jsonl_declared_but_empty_topic_creates_empty_file(
         self, tmp_path: Path
@@ -1168,14 +1194,14 @@ class TestMembershipJsonlFileSink:
                 emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
             )
 
-        waiters_file = out_dir / "queue__waiters.jsonl"
-        members_file = out_dir / "team__members.jsonl"
+        waiters_file = out_dir / "queue-waiters.jsonl"
+        members_file = out_dir / "team-members.jsonl"
         assert waiters_file.exists()
         assert members_file.exists()
         assert waiters_file.read_text(encoding="utf-8") == ""
         assert members_file.read_text(encoding="utf-8") == ""
         assert outcome.total_events == 0
-        assert outcome.events_per_topic == {"queue__waiters": 0, "team__members": 0}
+        assert outcome.events_per_topic == {"queue-waiters": 0, "team-members": 0}
 
 
 # ---------------------------------------------------------------------------
@@ -1187,25 +1213,23 @@ def _make_membership_debezium_config(
     schemas_enable: bool = True,
     waiters_fields: list[str] | None = None,
     members_fields: list[str] | None = None,
-    routing: "RoutingConfig | None" = None,
 ) -> StreamConfig:
     """Build a StreamConfig for membership-events with a debezium block."""
     return StreamConfig(
         content="membership-events",
-        memberships=[
-            MembershipSelection(
-                owner_kind="queue",
-                property="waiters",
+        streams=[
+            MembershipStream(
+                name="queue-waiters",
+                membership=MembershipRef(kind="queue", property="waiters"),
                 fields=waiters_fields if waiters_fields is not None else ["priority"],
             ),
-            MembershipSelection(
-                owner_kind="team",
-                property="members",
+            MembershipStream(
+                name="team-members",
+                membership=MembershipRef(kind="team", property="members"),
                 fields=members_fields if members_fields is not None else [],
             ),
         ],
         debezium=_make_debezium_config(schemas_enable=schemas_enable),
-        routing=routing,
     )
 
 
@@ -1313,8 +1337,8 @@ class TestMembershipDebeziumFileSink:
                 emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
             )
 
-        waiters_file = out_dir / "queue__waiters.jsonl"
-        members_file = out_dir / "team__members.jsonl"
+        waiters_file = out_dir / "queue-waiters.jsonl"
+        members_file = out_dir / "team-members.jsonl"
         assert waiters_file.exists()
         assert members_file.exists()
         lines = [
@@ -1327,7 +1351,7 @@ class TestMembershipDebeziumFileSink:
             msg = json.loads(line)
             assert msg["payload"]["op"] == "c"
             assert "event" in msg["payload"]["after"]
-        assert outcome.events_per_topic["queue__waiters"] == len(lines)
+        assert outcome.events_per_topic["queue-waiters"] == len(lines)
 
     def test_membership_debezium_file_empty_table_creates_empty_file(
         self, tmp_path: Path
@@ -1344,8 +1368,8 @@ class TestMembershipDebeziumFileSink:
                 emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
             )
 
-        assert (out_dir / "queue__waiters.jsonl").read_text(encoding="utf-8") == ""
-        assert (out_dir / "team__members.jsonl").read_text(encoding="utf-8") == ""
+        assert (out_dir / "queue-waiters.jsonl").read_text(encoding="utf-8") == ""
+        assert (out_dir / "team-members.jsonl").read_text(encoding="utf-8") == ""
         assert outcome.total_events == 0
 
 
@@ -1407,79 +1431,6 @@ class TestMembershipDebeziumBusinessRules:
                 stream_export(
                     emit, config, fmt="debezium", sink="stdout", out=None, anchor=None
                 )
-
-
-# ---------------------------------------------------------------------------
-# Membership Debezium: topic-schema ambiguity rule
-# ---------------------------------------------------------------------------
-
-
-class TestMembershipDebeziumTopicAmbiguity:
-    """StreamTopicSchemaUnambiguous fires for membership tables under table_identity='topic'."""
-
-    def test_ambiguous_topic_raises_export_error(self, tmp_path: Path) -> None:
-        """table_identity='topic' + topic merging two membership tables → ExportError."""
-        emit_dir = _build_membership_emit(tmp_path / "emit", [], [])
-        # A literal topic_template collapses all memberships into one topic
-        routing = RoutingConfig(
-            topic_template="all_membership",
-            table_identity="topic",
-        )
-        config = _make_membership_debezium_config(schemas_enable=True, routing=routing)
-        anchor = _make_anchor()
-        with open_emit(emit_dir) as emit:
-            with pytest.raises(ExportError, match="merges membership tables"):
-                stream_export(
-                    emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
-                )
-
-    def test_source_table_identity_allows_merge(self, tmp_path: Path) -> None:
-        """table_identity='source_table' (default) with shared topic → no raise."""
-        emit_dir = _build_membership_emit(tmp_path / "emit", [], [])
-        # Same literal template but source_table identity — legal
-        routing = RoutingConfig(
-            topic_template="all_membership",
-            table_identity="source_table",
-        )
-        config = _make_membership_debezium_config(schemas_enable=True, routing=routing)
-        anchor = _make_anchor()
-        with open_emit(emit_dir) as emit:
-            outcome = stream_export(
-                emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
-            )
-        assert outcome.total_events == 0
-
-    def test_schemas_disabled_skips_ambiguity_check(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """schemas_enable=False skips topic-ambiguity check even under table_identity='topic'."""
-        emit_dir = _build_membership_emit(tmp_path / "emit", [], [])
-        routing = RoutingConfig(
-            topic_template="all_membership",
-            table_identity="topic",
-        )
-        config = _make_membership_debezium_config(schemas_enable=False, routing=routing)
-        anchor = _make_anchor()
-        with open_emit(emit_dir) as emit:
-            outcome = stream_export(
-                emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
-            )
-        assert outcome.total_events == 0
-
-    def test_one_table_per_topic_allowed_under_topic_identity(
-        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
-    ) -> None:
-        """table_identity='topic' with distinct topics per table → no raise."""
-        emit_dir = _build_membership_emit(tmp_path / "emit", [], [])
-        # Default {route_table} template gives distinct topics per membership table
-        routing = RoutingConfig(table_identity="topic")
-        config = _make_membership_debezium_config(schemas_enable=True, routing=routing)
-        anchor = _make_anchor()
-        with open_emit(emit_dir) as emit:
-            outcome = stream_export(
-                emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
-            )
-        assert outcome.total_events == 0
 
 
 # ---------------------------------------------------------------------------
@@ -1574,7 +1525,6 @@ class TestMembershipDebeziumKafka:
         render_value: Callable[[StreamEvent], bytes] = call["render_value"]
         assert len(events) >= 1
 
-        from fabulexa_forge.config.models import RoutingConfig as _RoutingConfig
         from fabulexa_forge.exporters.streaming.debezium import (
             _serialize_message,
             rebased_epoch_ms,
@@ -1582,23 +1532,20 @@ class TestMembershipDebeziumKafka:
         )
         from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
 
-        routing = config.routing if config.routing is not None else _RoutingConfig()
         debezium_cfg = config.debezium
         assert debezium_cfg is not None
+        table_identity = debezium_cfg.table_identity
         with open_emit(emit_dir) as emit2:
             value_schemas = _build_value_schemas(
                 emit2,
                 config,
-                routing,
                 debezium_cfg.source,
-                routing.table_identity,
+                table_identity,
             )
 
         for event in events:
             ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-            table = (
-                event.topic if routing.table_identity == "topic" else event.route_table
-            )
+            table = event.topic if table_identity == "topic" else event.route_table
             value_schema = (
                 value_schemas.get(table) if value_schemas is not None else None
             )
@@ -1650,11 +1597,6 @@ class TestMembershipDebeziumKafka:
 # ---------------------------------------------------------------------------
 
 
-def _make_routing() -> "RoutingConfig":
-    """Build a default RoutingConfig."""
-    return RoutingConfig()
-
-
 class TestBuildKafkaRenderValueJsonl:
     """build_kafka_render_value(fmt='jsonl') returns bytes byte-identical to jsonl line."""
 
@@ -1668,13 +1610,10 @@ class TestBuildKafkaRenderValueJsonl:
         anchor = _make_anchor()
 
         with open_emit(emit_dir) as emit:
-            routing = _make_routing()
             from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
-            topic_set = build_topic_set(config, emit.sidecar)
-            render = build_kafka_render_value(
-                emit, config, "jsonl", anchor, routing, topic_set
-            )
+            topic_set = build_topic_set(config)
+            render = build_kafka_render_value(emit, config, "jsonl", anchor, topic_set)
             from fabulexa_forge.exporters.streaming.engine import iter_stream_events
 
             events = list(iter_stream_events(emit, config, anchor))
@@ -1696,35 +1635,11 @@ class TestBuildKafkaRenderValueDebezium:
         anchor = _make_anchor()
 
         with open_emit(emit_dir) as emit:
-            routing = _make_routing()
             from fabulexa_forge.exporters.streaming.engine import build_topic_set
 
-            topic_set = build_topic_set(config, emit.sidecar)
+            topic_set = build_topic_set(config)
             with pytest.raises(ExportError, match="debezium.*config block"):
-                build_kafka_render_value(
-                    emit, config, "debezium", anchor, routing, topic_set
-                )
-
-    def test_ambiguous_topic_raises_stream_topic_schema_unambiguous(
-        self, tmp_path: Path
-    ) -> None:
-        """table_identity='topic' + ambiguous mapping raises ExportError (StreamTopicSchemaUnambiguous)."""
-        emit_dir = _build_membership_emit(tmp_path / "emit", [], [])
-        routing = RoutingConfig(
-            topic_template="all_membership",
-            table_identity="topic",
-        )
-        config = _make_membership_debezium_config(schemas_enable=True, routing=routing)
-        anchor = _make_anchor()
-
-        with open_emit(emit_dir) as emit:
-            from fabulexa_forge.exporters.streaming.engine import build_topic_set
-
-            topic_set = build_topic_set(config, emit.sidecar)
-            with pytest.raises(ExportError, match="merges membership tables"):
-                build_kafka_render_value(
-                    emit, config, "debezium", anchor, routing, topic_set
-                )
+                build_kafka_render_value(emit, config, "debezium", anchor, topic_set)
 
     def test_debezium_bytes_match_file_line_minus_newline(self, tmp_path: Path) -> None:
         """fmt='debezium' render_value bytes == file line bytes (no trailing newline)."""
@@ -1738,7 +1653,6 @@ class TestBuildKafkaRenderValueDebezium:
         emit_dir = _build_emit_with_events(tmp_path / "emit", "item")
         config = _make_debezium_stream_config("item", schemas_enable=True)
         anchor = _make_anchor()
-        routing = _make_routing()
 
         with open_emit(emit_dir) as emit:
             from fabulexa_forge.exporters.streaming.engine import (
@@ -1746,25 +1660,24 @@ class TestBuildKafkaRenderValueDebezium:
                 iter_stream_events,
             )
 
-            topic_set = build_topic_set(config, emit.sidecar)
+            topic_set = build_topic_set(config)
             render = build_kafka_render_value(
-                emit, config, "debezium", anchor, routing, topic_set
+                emit, config, "debezium", anchor, topic_set
             )
             events = list(iter_stream_events(emit, config, anchor))
 
         debezium_cfg = config.debezium
         assert debezium_cfg is not None
+        table_identity = debezium_cfg.table_identity
         with open_emit(emit_dir) as emit2:
             value_schemas = _build_value_schemas(
-                emit2, config, routing, debezium_cfg.source, routing.table_identity
+                emit2, config, debezium_cfg.source, table_identity
             )
 
         assert len(events) > 0
         for event in events:
             ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-            table = (
-                event.topic if routing.table_identity == "topic" else event.route_table
-            )
+            table = event.topic if table_identity == "topic" else event.route_table
             value_schema = (
                 value_schemas.get(table) if value_schemas is not None else None
             )

@@ -30,6 +30,7 @@ clock:
   speed: 3600.0          # 1 sim-hour plays back in 1 real second
   idle_cap_seconds: 2.0  # collapse gaps > 2 s to 2 s
 
-kinds:
-  - kind: patient
+streams:
+  - name: patient
+    kind: patient
     properties: [status, name]   # bare prop__ names; the sidecar classifies each

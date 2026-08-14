@@ -26,6 +26,26 @@
 #   membership holders      -> consultant_allocation
 #   the event log           -> audit_log
 #
+# RENAMES (realism QA, aug11 round): the mapping above is applied to the
+# VOCABULARY surfaces too, not just table names — the naming gate failed this
+# config because the tables were renamed while `audit_log.item_type` still
+# declared raw kinds and every FK column was named for the kind it pointed at.
+#   - `kind_labels` relabels kind-name-as-value surfaces: item_type defaults
+#     (actor -> patient etc.; booking keeps its own kind name) and `<f>_kind`
+#     entries.
+#   - Per-table `rename:` puts every reference column on the <target_table>_id
+#     convention (prop__actor -> patient_id, prop__subject -> patient_id,
+#     prop__journey_instance -> pathway_episode_id, record_id ->
+#     clinical_event_id / consultant_id on the junctions) and de-simulates
+#     vocabulary column names (journey_type -> pathway_type, decision_type ->
+#     event_type, diary_type -> book_type, pick_index -> position).
+#   - The junctions drop their constant kind columns (entity_kind='entity' on
+#     all 23,505 bindings, actor_kind='actor' on all 12,414 allocations — one
+#     simulator word, zero information; role_name / the table's own meaning
+#     already disambiguates) via `columns:`, and rename the surviving member id.
+#   - Per-source `rename:` keeps the `changes` payload keys in step with the
+#     renamed state-table columns.
+#
 # `booking` keeps its sidecar name — it is a genuine NHS term (an e-RS booking),
 # not engine vocabulary that happens to read well.
 #
@@ -137,6 +157,12 @@
 mode: source
 
 source:
+  kind_labels:
+    actor: patient
+    resource: consultant
+    journey_instance: pathway_episode
+    diary: appointment_book
+
   tables:
     - name: patient
       kind: actor
@@ -152,10 +178,18 @@ source:
                 prop__main_specialty, prop__grade]
     - name: pathway_episode
       kind: journey_instance
+      rename:
+        prop__actor: patient_id
+        prop__journey_type: pathway_type
     - name: booking
       kind: booking
+      rename:
+        prop__subject: patient_id
+        prop__diary: appointment_book_id
     - name: appointment_book
       kind: diary
+      rename:
+        prop__diary_type: book_type
 
     # --- the reference catalogue, one table per sub-type ---
     - name: ward
@@ -191,18 +225,42 @@ source:
 
     - name: clinical_event
       kind: tick_decision
+      rename:
+        prop__journey_instance: pathway_episode_id
+        prop__decision_type: event_type
     - name: clinical_event_binding
       membership: {kind: tick_decision, property: bindings}
+      columns: [joined_sim_time, left_sim_time, elem__role_name,
+                member__entity__id, elem__pick_index]
+      rename:
+        record_id: clinical_event_id
+        member__entity__id: catalogue_item_id
+        elem__pick_index: position
+        joined_sim_time: bound_at
+        left_sim_time: released_at
     - name: consultant_allocation
       membership: {kind: resource, property: holders}
+      columns: [joined_sim_time, left_sim_time, member__actor__id,
+                elem__priority, elem__on_preempted_rule, elem__slots_held]
+      rename:
+        record_id: consultant_id
+        member__actor__id: patient_id
   events:
     name: audit_log
     sources:
       - kind: actor
       - kind: resource
       - kind: journey_instance
+        rename:
+          actor: patient_id
+          journey_type: pathway_type
       - kind: booking
+        rename:
+          subject: patient_id
+          diary: appointment_book_id
       - kind: diary
+        rename:
+          diary_type: book_type
 
 # rebase:
 #   base_date: 2023-01-01

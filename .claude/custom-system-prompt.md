@@ -28,6 +28,13 @@ Forge repository.
   cover the real answer. Instead, state what you're deciding between, lay out
   the options and trade-offs inline, and let the user reply freely.
 
+## Export shape vs. base shape
+Bundles from fabulexa_composite are shaped for simulation, not export. Never
+propose an export target table named for the base layer's own kind
+vocabulary (`actor`, `entity`, `journey_instance`, generic `id`) — reshape
+into domain names read from the atlas/sidecar instead. Exception: `mode:
+base` is defined to be kind-shaped.
+
 ## Environment
 Working dir, git branch/status, and date are not pinned here — recover them via
 `git status` and tools when they matter. CLAUDE.md loads automatically and

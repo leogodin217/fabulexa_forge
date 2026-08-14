@@ -1,7 +1,10 @@
-"""Tests for exporters/streaming/routing.py — Phase 2 routing functions.
+"""Tests for exporters/streaming/routing.py — Layer-A-only routing surface.
 
-Covers route_attributes, resolve_topic, enumerate_topics, resolve_subtype_index.
-resolve_subtype_index tests build a minimal in-process emit via duckdb.
+Covers route_attributes, membership_route_attributes, resolve_subtype_index.
+Layer B (topic_template, groups) is retired; a declared stream's `name` is
+the topic, carried straight through by the engine — there is nothing left in
+routing.py to resolve or enumerate. resolve_subtype_index tests build a
+minimal in-process emit via duckdb.
 """
 
 from __future__ import annotations
@@ -14,13 +17,10 @@ import pytest
 from _support.sidecar_builder import identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
-from fabulexa_forge.config.models import RoutingConfig
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.streaming.routing import (
-    enumerate_topics,
     membership_route_attributes,
     resolve_subtype_index,
-    resolve_topic,
     route_attributes,
 )
 from fabulexa_forge.reader.emit import open_emit
@@ -158,175 +158,6 @@ class TestRouteAttributesNonSubtyped:
         """Non-sub-typed kind with sub_type given raises ValueError."""
         with pytest.raises(ValueError, match="not sub-typed"):
             route_attributes(False, "device", "sensor")
-
-    def test_is_subtyped_false_returns_bare_kind_attrs(self) -> None:
-        """is_subtyped=False: bare-kind attributes, no sub_type key."""
-        result = route_attributes(False, "device", None)
-        assert result == {"kind": "device", "route_table": "device"}
-        assert "sub_type" not in result
-
-    def test_is_subtyped_false_with_sub_type_given_raises(self) -> None:
-        """is_subtyped=False with sub_type given raises ValueError."""
-        with pytest.raises(ValueError, match="not sub-typed"):
-            route_attributes(False, "device", "x")
-
-
-# ---------------------------------------------------------------------------
-# Tests: resolve_topic
-# ---------------------------------------------------------------------------
-
-
-_DEFAULT_ROUTING = RoutingConfig()
-
-
-class TestResolveTopic:
-    """resolve_topic applies Layer-B policy."""
-
-    def test_default_template_returns_route_table(self) -> None:
-        """Default template {route_table} -> leaf name."""
-        attrs = {"kind": "device", "route_table": "device"}
-        assert resolve_topic(_DEFAULT_ROUTING, attrs) == "device"
-
-    def test_kind_template_collapses_sub_types(self) -> None:
-        """Template {kind} -> kind name (sub-types collapse to same topic)."""
-        routing = RoutingConfig(topic_template="{kind}")
-        attrs_c = {"kind": "actor", "route_table": "customer", "sub_type": "customer"}
-        attrs_v = {
-            "kind": "actor",
-            "route_table": "vip_customer",
-            "sub_type": "vip_customer",
-        }
-        assert resolve_topic(routing, attrs_c) == "actor"
-        assert resolve_topic(routing, attrs_v) == "actor"
-
-    def test_prefixed_template(self) -> None:
-        """Template cdc.{route_table} -> prefixed name."""
-        routing = RoutingConfig(topic_template="cdc.{route_table}")
-        attrs = {"kind": "device", "route_table": "device"}
-        assert resolve_topic(routing, attrs) == "cdc.device"
-
-    def test_qualified_template(self) -> None:
-        """Template {kind}.{sub_type} -> qualified name."""
-        routing = RoutingConfig(topic_template="{kind}.{sub_type}")
-        attrs = {"kind": "actor", "route_table": "customer", "sub_type": "customer"}
-        assert resolve_topic(routing, attrs) == "actor.customer"
-
-    def test_groups_remap_member_to_target(self) -> None:
-        """A rendered name that is a member gets remapped to the group target."""
-        routing = RoutingConfig(groups={"premium": ["customer", "vip_customer"]})
-        attrs_c = {"kind": "actor", "route_table": "customer", "sub_type": "customer"}
-        attrs_v = {
-            "kind": "actor",
-            "route_table": "vip_customer",
-            "sub_type": "vip_customer",
-        }
-        assert resolve_topic(routing, attrs_c) == "premium"
-        assert resolve_topic(routing, attrs_v) == "premium"
-
-    def test_non_member_passes_through(self) -> None:
-        """A rendered name not in any group passes through unchanged."""
-        routing = RoutingConfig(groups={"premium": ["customer"]})
-        attrs = {"kind": "actor", "route_table": "staff", "sub_type": "staff"}
-        assert resolve_topic(routing, attrs) == "staff"
-
-    def test_missing_placeholder_raises_key_error(self) -> None:
-        """Template referencing an absent placeholder raises KeyError."""
-        routing = RoutingConfig(topic_template="{kind}.{sub_type}")
-        attrs = {"kind": "device", "route_table": "device"}  # no sub_type
-        with pytest.raises(KeyError):
-            resolve_topic(routing, attrs)
-
-    def test_two_attributes_rendering_same_name_resolve_same_topic(self) -> None:
-        """Two distinct attribute mappings rendering to one name resolve identically."""
-        routing = RoutingConfig(topic_template="{kind}")
-        attrs_a = {"kind": "actor", "route_table": "customer", "sub_type": "customer"}
-        attrs_b = {"kind": "actor", "route_table": "staff", "sub_type": "staff"}
-        assert resolve_topic(routing, attrs_a) == resolve_topic(routing, attrs_b)
-
-
-# ---------------------------------------------------------------------------
-# Tests: enumerate_topics
-# ---------------------------------------------------------------------------
-
-
-class TestEnumerateTopics:
-    """enumerate_topics returns deterministic, de-duplicated ordered topic set."""
-
-    def test_selection_order_preserved(self) -> None:
-        """Topics appear in selection order."""
-        routing = RoutingConfig()
-        selected = [
-            {"kind": "actor", "route_table": "customer", "sub_type": "customer"},
-            {"kind": "actor", "route_table": "staff", "sub_type": "staff"},
-            {"kind": "device", "route_table": "device"},
-        ]
-        topics = enumerate_topics(routing, selected)
-        assert topics == ("customer", "staff", "device")
-
-    def test_group_target_added_after_selection_order(self) -> None:
-        """Declared group targets not already present appear after selection topics."""
-        routing = RoutingConfig(groups={"premium": ["customer", "vip_customer"]})
-        selected = [
-            {"kind": "actor", "route_table": "customer", "sub_type": "customer"},
-            {"kind": "actor", "route_table": "staff", "sub_type": "staff"},
-        ]
-        topics = enumerate_topics(routing, selected)
-        # customer -> premium, staff stays; premium declared-but-empty is NOT added
-        # because the group absorbs customer => premium is already in topics at customer position
-        assert "premium" in topics
-        assert "staff" in topics
-
-    def test_group_target_coincides_with_rendered_name_stays_at_first_occurrence(
-        self,
-    ) -> None:
-        """Group target coinciding with a rendered name stays at that earlier position."""
-        # topic_template={route_table}, groups={staff: [customer]}
-        # customer -> staff (remapped); staff sub-type -> staff too
-        routing = RoutingConfig(groups={"staff": ["customer"]})
-        selected = [
-            {"kind": "actor", "route_table": "customer", "sub_type": "customer"},
-            {"kind": "actor", "route_table": "staff", "sub_type": "staff"},
-        ]
-        topics = enumerate_topics(routing, selected)
-        # customer renders to "staff"; staff renders to "staff" — deduplicated
-        # "staff" appears once, group target "staff" not re-added
-        assert topics == ("staff",)
-
-    def test_declared_but_empty_group_target_included(self) -> None:
-        """A group target with no matching rendered selection is still included."""
-        routing = RoutingConfig(groups={"premium": ["customer", "vip_customer"]})
-        # Only staff selected — premium members not selected
-        selected = [
-            {"kind": "actor", "route_table": "staff", "sub_type": "staff"},
-        ]
-        topics = enumerate_topics(routing, selected)
-        assert "staff" in topics
-        assert "premium" in topics
-
-    def test_first_occurrence_deduplication(self) -> None:
-        """De-duplication keeps each topic's first occurrence."""
-        routing = RoutingConfig(topic_template="{kind}")
-        selected = [
-            {"kind": "actor", "route_table": "customer", "sub_type": "customer"},
-            {
-                "kind": "actor",
-                "route_table": "vip_customer",
-                "sub_type": "vip_customer",
-            },
-        ]
-        topics = enumerate_topics(routing, selected)
-        assert topics == ("actor",)
-
-    def test_empty_selection_only_group_targets(self) -> None:
-        """Empty selection yields only group target topics."""
-        routing = RoutingConfig(groups={"premium": ["customer"]})
-        topics = enumerate_topics(routing, [])
-        assert topics == ("premium",)
-
-    def test_empty_selection_and_no_groups_returns_empty(self) -> None:
-        """Empty selection with no groups returns empty tuple."""
-        topics = enumerate_topics(_DEFAULT_ROUTING, [])
-        assert topics == ()
 
 
 # ---------------------------------------------------------------------------

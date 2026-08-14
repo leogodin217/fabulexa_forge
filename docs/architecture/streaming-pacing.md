@@ -41,7 +41,7 @@ Recipe: [`examples/recipes/streaming/clock-realtime`](../../examples/recipes/str
   no resolved anchor (raw-ns `ts`) is valid. It reads no sidecar, no config beyond the
   `ResolvedClock`, and no domain knowledge.
 - **Runs after the merge.** Pacing is the last stage before the sink, downstream of the
-  cross-kind k-way merge, `seq` stamping, and routing.
+  cross-stream k-way merge, `seq` stamping, and topic stamping.
 - **Forbidden imports.** The pacer imports only `errors` and the streaming `types`; the
   driver injects `time.sleep` / `time.monotonic` and selects paced delivery on the sink.
   No payload value derives from `now()`.
@@ -192,9 +192,9 @@ The exact messages are the contract of the raising sites; the tests in
 
 What pacing deliberately does not own:
 
-- **Event production and ordering.** Pacing is strictly post-merge; the per-kind fold,
-  the cross-kind merge, `seq`, the message key, `ts`, and routing are fixed upstream and
-  pass through verbatim.
+- **Event production and ordering.** Pacing is strictly post-merge; the per-stream fold,
+  the cross-stream merge, `seq`, the message key, `ts`, and the topic are fixed upstream
+  and pass through verbatim.
 - **Defending against a sim-time decrease.** The pacer relies on `event_sim_time` being
   non-decreasing in `seq` order; a negative gap is an upstream ordering-contract
   violation, not a paced-delivery concern, and the pacer does not guard against it.
@@ -211,9 +211,8 @@ What pacing deliberately does not own:
 
 | Document | Why |
 |---|---|
-| [`streaming.md`](streaming.md) | The streaming exporter this pacing surface composes — the `content × format × sink` model, the cross-kind merge and `seq`, the sinks whose delivery pacing flushes per line |
+| [`streaming.md`](streaming.md) | The streaming exporter this pacing surface composes — the `content × format × sink` model, the declared streams whose names are the topics each paced `<topic>.jsonl` is flushed to, the cross-stream merge and `seq`, the declared-but-empty-topic guarantee paced delivery preserves, and the sinks whose delivery pacing flushes per line |
 | [`anchor.md`](anchor.md) | The effective-anchor resolution surface whose CLI-wins-per-knob precedence clock resolution mirrors, and whose `None`-for-absent shape `ResolvedClock` follows |
-| [`streaming-routing.md`](streaming-routing.md) | The routing surface that stamps the `topic` each paced `<topic>.jsonl` is flushed to, and the declared-but-empty-topic guarantee paced delivery preserves |
 | [`config-docstrings.md`](config-docstrings.md) | The three-channel docstring convention `ClockConfig` follows |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The `ClockConfig` grammar these semantics bind |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |

@@ -91,7 +91,7 @@ own the rule detail:
 | dimensional | Refuse every config-referenced value-read; `lookup` regated to `constant`; `init` skips proposals with a notice | `SliceOnlyColumnRefused`, `LookupColumnSafety` — [`dimensional.md`](dimensional.md) |
 | source | Omit from every auto-projected surface (the state render's classified projection, the event log's audited set), one notice per unit × column; a declaration entry (`columns` / `rename` / `only` / `ignore`) naming a non-exempt column errors | `SourceSliceOnlyRead` — [`source.md`](source.md) |
 | base | Omit every non-exempt `slice_only` `prop__` column from the flat table, one `slice-only-column-omitted` notice per kind × column; the sub-typed-discriminator carve-out honored; a `rename` naming an omitted column errors | `BaseRenameSliceOnly` — [`base.md`](base.md) |
-| streaming | Refuse-only: the after-image is wholly author-named, so a `kinds[].properties` entry naming a non-exempt `slice_only` property is refused in the eager pass; no notices | `StreamPropertySliceOnly` — [`streaming.md`](streaming.md) |
+| streaming | Refuse-only: the after-image is wholly author-named, so a stream's `properties` entry naming a non-exempt `slice_only` property is refused in the eager pass; no notices. Event membership is unaffected by class: `slice_only` implies `history_tracked: false`, so such a column has no change points to fire | `StreamPropertySliceOnly` — [`streaming.md`](streaming.md) |
 | incremental | No rules of its own: refusal is always-on before any window gate runs | [`incremental.md`](incremental.md) |
 
 Omission and refusal narrow the modes' declared temporal-honesty exception into

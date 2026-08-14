@@ -15,13 +15,19 @@ plan-builder derives by calling those same functions.
 
 Layer-direction invariant: imports the reader (through the derivations
 layer), the derivations layer's two event folds, the mode-neutral election
-module (`build_identity_translation_sql`, `build_population_spine_sql`),
-`fabulexa_forge.anchor`, `fabulexa_forge._sql`, the sibling `source.plan`
-module (`SourceEdgeSurface`, TYPE_CHECKING only), the sibling `source.columns`
+module (`build_identity_translation_sql`), `fabulexa_forge.anchor`,
+`fabulexa_forge._sql`, the sibling `source.plan` module (`SourceEdgeSurface`
+/ `SourceWhereEntry`, TYPE_CHECKING only), the sibling `source.columns`
 module (`build_kind_label_expr` — the one labeling authority, also the
 junction render's call site), `exporters.populations` (`Population`,
 TYPE_CHECKING only), config.models (`KeySurface`, TYPE_CHECKING only), and
 stdlib. Never imports `exporters.dimensional.*` or `exporters.streaming.*`.
+One exception to "imports at module top": `_narrow_fold_by_spine_sql` imports
+the sibling `source.renders` module's `build_selection_spine_sql` locally, at
+call time — `renders.py` imports runtime constants from `plan.py`, which
+imports this module at runtime to construct `SourceEventSourcePlan` /
+`SourceEventLogPlan`, so a module-level import here would cycle back through
+`plan.py` mid-initialization.
 """
 
 from __future__ import annotations
@@ -35,7 +41,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import KeySurface
     from fabulexa_forge.exporters.populations import Population
     from fabulexa_forge.exporters.query_spec import TableKeys
-    from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
+    from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceWhereEntry
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -43,10 +49,7 @@ from fabulexa_forge._sql import _sql_literal
 from fabulexa_forge.anchor import render_anchor_timestamp_expr
 from fabulexa_forge.derivations.membership_events import build_membership_events_sql
 from fabulexa_forge.derivations.row_state_events import build_row_state_events_sql
-from fabulexa_forge.exporters.election import (
-    build_identity_translation_sql,
-    build_population_spine_sql,
-)
+from fabulexa_forge.exporters.election import build_identity_translation_sql
 from fabulexa_forge.exporters.source.columns import build_kind_label_expr
 
 _PROP_PREFIX = "prop__"
@@ -75,8 +78,12 @@ class SourceEventSourcePlan:
     populations: "tuple[Population, ...]"
     """Records source: the addressed atoms (drives the fold's per-row
     discriminator narrowing and the overlap check). Membership source: the
-    owner kind's full declared domain (drives per-row item_id resolution;
-    membership sources are disjoint by (kind, property), not by these)."""
+    owner kind's addressed population set — the full declared domain
+    absent `sub_types`, else the narrowed subset (doc § The parent lookup);
+    drives per-row item_id resolution and, together with a records source's
+    own addressed atoms, the selection-aware overlap check (both-declared
+    disjoint owner `sub_types` sets show up here as disjoint population
+    sets)."""
     audited_properties: "tuple[tuple[str, str], ...]"
     """The audited set as (source bare name, changes output key) pairs,
     sidecar column-declaration order — every tracked- and constant-class
@@ -103,6 +110,13 @@ class SourceEventSourcePlan:
     inside `changes`, gated per audited reference property. `source_column`
     is `prop__<p>` for a records source, `member__<f>__id` for a membership
     source (this module's § docstring convention)."""
+    where: "tuple[SourceWhereEntry, ...]" = ()
+    """The source's resolved record predicate (doc § The constant-column
+    gate; the parent lookup for a membership source), `where` declaration
+    order; empty when `where` is absent — config absence is already
+    detected at the decl. Narrows the fold's records/intervals
+    (`_build_records_arm_sql` / `_build_membership_arm_sql`) and feeds the
+    plan-time selection-aware overlap gate's typed-value comparison."""
 
 
 @dataclass(frozen=True)
@@ -334,35 +348,43 @@ def _item_id_join_and_expr(
     return join, value_expr
 
 
-def _records_population_filter_sql(
+def _narrow_fold_by_spine_sql(
     sidecar: "Sidecar",
     fork_path: str,
     kind: str,
     populations: "tuple[Population, ...]",
-) -> "str | None":
-    """The records-source per-row population semi-join filter, or None.
+    where: "tuple[SourceWhereEntry, ...]",
+    fold_sql: str,
+) -> str:
+    """Narrow one arm's own fold rows to `build_selection_spine_sql`'s
+    selection (doc § Row selection), via a `record_id` semi-join — the
+    records arm's own population + `where`, or the membership arm's owner
+    population + `where` (the parent lookup). Unchanged when the spine
+    applies no restriction. Shared by both arms.
 
-    None when the kind is flat, or `populations` addresses its full
-    declared domain — the full domain needs no restriction (mirrors
-    `build_population_spine_sql`'s own precondition).
+    Local import of `build_selection_spine_sql`: `renders.py` imports
+    runtime constants from this package's `plan.py`, which itself imports
+    this module at runtime to construct `SourceEventSourcePlan` /
+    `SourceEventLogPlan` — a module-level import here would cycle back
+    through `plan.py` mid-initialization.
 
     Args:
         sidecar: The open emit's sidecar.
         fork_path: The sole branch.
-        kind: The audited kind.
-        populations: The source's addressed populations.
+        kind: The subject kind (the owner kind for the membership arm).
+        populations: The arm's addressed populations.
+        where: The arm's resolved predicate entries.
+        fold_sql: The arm's own fold SELECT, `record_id`-bearing.
 
     Returns:
-        A complete `record_id`-producing SELECT (the population spine), or
-        None when no restriction applies.
+        `fold_sql` semi-joined to the spine, or `fold_sql` unchanged.
     """
-    domain = sidecar.subtype_values(kind)
-    if not domain:
-        return None
-    requested = tuple(p.sub_type for p in populations if p.sub_type is not None)
-    if set(requested) == set(domain):
-        return None
-    return build_population_spine_sql(sidecar, fork_path, kind, requested)
+    from fabulexa_forge.exporters.source.renders import build_selection_spine_sql
+
+    spine_sql = build_selection_spine_sql(sidecar, fork_path, kind, populations, where)
+    if spine_sql is None:
+        return fold_sql
+    return f'SELECT * FROM ({fold_sql}) AS "_f" WHERE "_f"."record_id" IN ({spine_sql})'
 
 
 # ---------------------------------------------------------------------------
@@ -379,9 +401,10 @@ def _build_records_arm_sql(
 ) -> str:
     """One records source's UNION-ALL arm of the event-log render.
 
-    Composes `build_row_state_events_sql`, narrowed per row to
-    `source.populations` through the records-spine discriminator; recodes
-    op c/u/d -> create/update/destroy. Old values are a per-record LAG over
+    Composes `build_row_state_events_sql`, narrowed per row to the
+    selection spine (`source.populations` AND `source.where` — doc § Row
+    selection) via `_narrow_fold_by_spine_sql`; recodes op c/u/d ->
+    create/update/destroy. Old values are a per-record LAG over
     the fold's own audited after-images (translated first where a change
     edge applies), ordered by `(event_sim_time, event_class)` — the fold's
     own canonical order, and total within a record because the fold emits at
@@ -409,15 +432,12 @@ def _build_records_arm_sql(
     """
     kind = source.kind
     properties = frozenset(bare for bare, _output in source.audited_properties)
-    fold_sql = build_row_state_events_sql(sidecar, fork_path, kind, properties)
-
-    filter_sql = _records_population_filter_sql(
-        sidecar, fork_path, kind, source.populations
+    fold_sql = build_row_state_events_sql(
+        sidecar, fork_path, kind, properties, change_scope=properties
     )
-    narrowed_sql = (
-        f'SELECT * FROM ({fold_sql}) AS "_f" WHERE "_f"."record_id" IN ({filter_sql})'
-        if filter_sql is not None
-        else fold_sql
+
+    narrowed_sql = _narrow_fold_by_spine_sql(
+        sidecar, fork_path, kind, source.populations, source.where, fold_sql
     )
 
     edges_by_property = {
@@ -599,14 +619,17 @@ def _build_membership_arm_sql(
 ) -> str:
     """One membership source's UNION-ALL arm of the event-log render.
 
-    Composes `build_membership_events_sql`; recodes op join/leave ->
-    create/destroy. Every selected field's value lives on its own row (a
-    membership row carries no history of its own), so old/new derive from
-    the row's own op, not a lag: join -> `[null, value]`, leave ->
-    `[value, null]`. A reference field's pair renders `<key>_kind` /
-    `<key>_id`, its resolved `changes` output key; the `_kind` half's old
-    and new both render through `build_kind_label_expr` (identity
-    fall-through, applied once to the underlying value before the
+    Composes `build_membership_events_sql`, narrowed per row to the owner
+    selection spine (`source.populations` AND `source.where`, the parent
+    lookup — doc § Row selection) via `_narrow_fold_by_spine_sql`: every
+    `join` / `leave` of an excluded owner's collection is excluded; recodes
+    op join/leave -> create/destroy. Every selected field's value lives on
+    its own row (a membership row carries no history of its own), so
+    old/new derive from the row's own op, not a lag: join -> `[null,
+    value]`, leave -> `[value, null]`. A reference field's pair renders
+    `<key>_kind` / `<key>_id`, its resolved `changes` output key; the
+    `_kind` half's old and new both render through `build_kind_label_expr`
+    (identity fall-through, applied once to the underlying value before the
     old/new CASE split, which commutes with labeling). `item_id` joins the
     owner's `item_surface` translation relation on the fold's own
     (already-owner-VARCHAR) `record_id`.
@@ -627,6 +650,9 @@ def _build_membership_arm_sql(
     bare_fields = tuple(bare for bare, _output in source.audited_properties)
     fold_sql = build_membership_events_sql(
         sidecar, fork_path, owner_kind, property_name, bare_fields
+    )
+    fold_sql = _narrow_fold_by_spine_sql(
+        sidecar, fork_path, owner_kind, source.populations, source.where, fold_sql
     )
     table_name = f"membership__{owner_kind}__{property_name}"
 

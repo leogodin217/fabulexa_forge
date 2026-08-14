@@ -1,7 +1,7 @@
 # Recipe: streaming / multi-kind-routing
 # ============================================================
-# Stream more than one kind in a single run. In S1 each kind routes to its own
-# stream — the `file` sink writes one <kind>.jsonl per selected kind.
+# Stream more than one kind in a single run. Each kind gets its own declared
+# stream — the `file` sink writes one <name>.jsonl per declared stream.
 #
 # The teaching point is `seq`: it is a SINGLE global sequence over the whole run,
 # stamped in the canonical total order across all kinds — not reset per stream.
@@ -22,8 +22,10 @@
 
 content: state-changes
 
-kinds:
-  - kind: patient
+streams:
+  - name: patient
+    kind: patient
     properties: [status]
-  - kind: doctor
+  - name: doctor
+    kind: doctor
     properties: [name]

@@ -137,17 +137,18 @@ def _build_spanning_emit(tmp_path: Path) -> Path:
 
 
 def _write_stream_config(config_path: Path, kinds: list[str]) -> None:
-    """Write a minimal stream config YAML for the given kinds."""
+    """Write a minimal stream config YAML for the given kinds (one stream per kind,
+    stream name == kind name)."""
     doc = {
         "content": "state-changes",
-        "kinds": [{"kind": k, "properties": ["status"]} for k in kinds],
+        "streams": [{"name": k, "kind": k, "properties": ["status"]} for k in kinds],
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
 
 
 def _write_bad_stream_config(config_path: Path) -> None:
-    """Write a config YAML that will fail validation (empty kinds)."""
-    doc = {"content": "state-changes", "kinds": []}
+    """Write a config YAML that will fail validation (empty streams)."""
+    doc = {"content": "state-changes", "streams": []}
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
 
 
@@ -155,7 +156,7 @@ def _write_unknown_kind_config(config_path: Path) -> None:
     """Write a config that references a kind not in the emit."""
     doc = {
         "content": "state-changes",
-        "kinds": [{"kind": "nonexistent", "properties": []}],
+        "streams": [{"name": "nonexistent", "kind": "nonexistent", "properties": []}],
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
 
@@ -164,7 +165,7 @@ def _write_debezium_stream_config(config_path: Path, kinds: list[str]) -> None:
     """Write a stream config YAML with a debezium block for the given kinds."""
     doc = {
         "content": "state-changes",
-        "kinds": [{"kind": k, "properties": ["status"]} for k in kinds],
+        "streams": [{"name": k, "kind": k, "properties": ["status"]} for k in kinds],
         "debezium": {
             "schemas_enable": True,
             "source": {
@@ -185,7 +186,7 @@ def _write_debezium_config_no_debezium_block(
     """Write a stream config YAML without a debezium block."""
     doc = {
         "content": "state-changes",
-        "kinds": [{"kind": k, "properties": ["status"]} for k in kinds],
+        "streams": [{"name": k, "kind": k, "properties": ["status"]} for k in kinds],
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
 
@@ -196,7 +197,7 @@ def _write_realtime_stream_config(
     """Write a stream config with a realtime clock block."""
     doc = {
         "content": "state-changes",
-        "kinds": [{"kind": k, "properties": ["status"]} for k in kinds],
+        "streams": [{"name": k, "kind": k, "properties": ["status"]} for k in kinds],
         "clock": {"mode": "realtime", "speed": speed},
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
@@ -206,7 +207,7 @@ def _write_fast_stream_config(config_path: Path, kinds: list[str]) -> None:
     """Write a stream config with an explicit fast clock block."""
     doc = {
         "content": "state-changes",
-        "kinds": [{"kind": k, "properties": ["status"]} for k in kinds],
+        "streams": [{"name": k, "kind": k, "properties": ["status"]} for k in kinds],
         "clock": {"mode": "fast"},
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
@@ -911,7 +912,7 @@ def _write_kafka_stream_config(
     """Write a stream config YAML with a kafka block."""
     doc = {
         "content": "state-changes",
-        "kinds": [{"kind": k, "properties": ["status"]} for k in kinds],
+        "streams": [{"name": k, "kind": k, "properties": ["status"]} for k in kinds],
         "kafka": {"bootstrap_servers": bootstrap_servers},
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
@@ -1298,6 +1299,12 @@ def _build_membership_emit(tmp_path: Path) -> Path:
 
     cols_ddl2 = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _MEMBERS_COLS)
     conn.execute(f'CREATE TABLE "membership__team__members" ({cols_ddl2})')
+
+    # Election resolution requires the owner kind to carry a declared
+    # records table, even under the no-`keys` default.
+    owner_cols_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _RECORD_COLS)
+    for owner_kind in ("queue", "team"):
+        conn.execute(f'CREATE TABLE "records__{owner_kind}" ({owner_cols_ddl})')
     conn.close()
 
     _write_sidecar(
@@ -1313,6 +1320,20 @@ def _build_membership_emit(tmp_path: Path) -> Path:
             _membership_table_spec(
                 "membership__team__members", _MEMBERS_COLS, 0, "team", "members"
             ),
+            {
+                "name": "records__queue",
+                "category": "records",
+                "record_kind": "queue",
+                "columns": _RECORD_COLS,
+                "rows": 0,
+            },
+            {
+                "name": "records__team",
+                "category": "records",
+                "record_kind": "team",
+                "columns": _RECORD_COLS,
+                "rows": 0,
+            },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
     )
@@ -1323,9 +1344,17 @@ def _write_membership_debezium_config(config_path: Path, schemas_enable: bool) -
     """Write a membership-events stream config with a debezium block."""
     doc = {
         "content": "membership-events",
-        "memberships": [
-            {"owner_kind": "queue", "property": "waiters", "fields": ["priority"]},
-            {"owner_kind": "team", "property": "members", "fields": []},
+        "streams": [
+            {
+                "name": "queue__waiters",
+                "membership": {"kind": "queue", "property": "waiters"},
+                "fields": ["priority"],
+            },
+            {
+                "name": "team__members",
+                "membership": {"kind": "team", "property": "members"},
+                "fields": [],
+            },
         ],
         "debezium": {
             "schemas_enable": schemas_enable,
@@ -1345,9 +1374,17 @@ def _write_membership_no_debezium_block_config(config_path: Path) -> None:
     """Write a membership-events stream config WITHOUT a debezium block."""
     doc = {
         "content": "membership-events",
-        "memberships": [
-            {"owner_kind": "queue", "property": "waiters", "fields": ["priority"]},
-            {"owner_kind": "team", "property": "members", "fields": []},
+        "streams": [
+            {
+                "name": "queue__waiters",
+                "membership": {"kind": "queue", "property": "waiters"},
+                "fields": ["priority"],
+            },
+            {
+                "name": "team__members",
+                "membership": {"kind": "team", "property": "members"},
+                "fields": [],
+            },
         ],
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")
@@ -1357,8 +1394,12 @@ def _write_membership_jsonl_config(config_path: Path) -> None:
     """Write a membership-events stream config for JSONL output."""
     doc = {
         "content": "membership-events",
-        "memberships": [
-            {"owner_kind": "queue", "property": "waiters", "fields": ["priority"]},
+        "streams": [
+            {
+                "name": "queue__waiters",
+                "membership": {"kind": "queue", "property": "waiters"},
+                "fields": ["priority"],
+            },
         ],
     }
     config_path.write_text(yaml.dump(doc), encoding="utf-8")

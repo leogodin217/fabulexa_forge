@@ -1,0 +1,284 @@
+# ExportConfig — SaaS bundle, dimensional mode (star schema)
+# ============================================================
+# `fabulexa-forge export docs/examples/saas/bundle docs/examples/saas/dimensional.yaml <out> --fmt duckdb`
+#
+# Started from `fabulexa-forge init docs/examples/saas/bundle`, then curated
+# against the atlas + data into the star a SaaS product-analytics warehouse
+# would actually run. Curation decisions (the author judgment init can't
+# make):
+#
+#   TWO "COMPANIES"  actor.company (541 rows, presentation prefix CMP-) and
+#            entity.company_hub (541 rows, prefix ACC-) are BOTH "the
+#            company" in plain English but carry no structural reference to
+#            each other anywhere in the sidecar (`sub_type_columns` shows
+#            actor.company has no `prop__company_hub`/ref column, and
+#            entity carries no reference columns at all). Read as two
+#            distinct business concepts rather than invented as one:
+#            actor.company is the CRM/sales-stage record (onboarding ->
+#            active -> churned, dim_company below); entity.company_hub is
+#            the billing/workspace tenant (plan, seat price, engagement
+#            metrics, dim_account below). No join is fabricated between
+#            them — consumers who need both correlate by their own means.
+#   DROPPED  journey_instance's company_lifecycle slice as a standalone
+#            table. Its current_state history (1,399 rows over 541
+#            instances) exactly mirrors actor.company.status's own history
+#            (also 1,399 rows) — same event, written twice by the engine.
+#            dim_company's SCD-2 already carries it; a second copy would be
+#            redundant, not additional fidelity.
+#   KEPT     journey_instance's user_lifecycle slice, but NOT as a
+#            dimension. Its current_state toggles active<->using at 105
+#            versions/user on average (up to 434) — confirmed via
+#            consult(composite): each toggle pair is one usage episode,
+#            atomically co-fired with a tick_decision(usage_event) on entry
+#            to `using`, closed by an independently-sampled `session_time`
+#            delay back to `active`. The `using` interval's DURATION is
+#            genuine session-length data unrecoverable from tick_decision
+#            alone (which is create-once, no duration field) — this is a
+#            state-machine masquerading as a dimension (Decision rule:
+#            "a state machine is a fact"). Exported below as
+#            fact_lifecycle_interval, at history_interval grain.
+#   CAVEAT   fact_lifecycle_interval's `active`-state interval durations are
+#            NOT clean idle time: ~30% of `active`-state draws in this
+#            scenario are self-loop "skip_cycle" transitions that leave no
+#            trace anywhere (no history row, no tick_decision) per a
+#            substrate invariant (a same-value `set` is a validated no-op).
+#            Treat `active` gaps as "at least this long," never as measured
+#            dwell.
+#   POLYMORPHIC actor is the target of TWO independent references in this
+#            domain: journey_instance.prop__actor can land on either
+#            actor.company or actor.user depending on journey_type, and
+#            both sub-types are genuinely disjoint in their real columns
+#            (see `sub_type_columns`). Split into dim_company / dim_user
+#            (never conformed into one dim_actor), and fact_lifecycle_interval
+#            carries the reference as a resolved-per-row NULLABLE pair
+#            (company_fk / user_fk) rather than a single ambiguous column —
+#            exactly one of the pair is populated per row, discriminated by
+#            journey_type.
+#   OPAQUE   tick_decision.prop__context is a genuine, well-formed value
+#            (declared `tuple[tuple[str, scalar], ...]`, repr-encoded per
+#            the base-format contract's round-trip convention) — confirmed
+#            via consult(composite) NOT to be engine noise. But this
+#            package's config grammar has no derived-column mode that
+#            parses a repr'd string, so it is carried through opaque as
+#            `context` (VARCHAR) on fact_usage_event rather than fabricated
+#            into a numeric column the grammar cannot actually produce.
+#            Key names inside it (e.g. `volume`) are this scenario's own
+#            authoring, not a base-format vocabulary — do not assume they
+#            generalize to other emits.
+#   RENAMED  actor.company -> dim_company, entity.company_hub -> dim_account,
+#            entity.sku -> dim_sku, actor.user -> dim_user, tick_decision ->
+#            fact_usage_event: output names are the domain's, never the
+#            engine ontology's.
+#   SPLIT    dim_user -> dim_user (Type-1 identity: name/email/account FK)
+#            + dim_user_status (SCD-2 satellite: status only). The SCD-2
+#            builder implements exactly three column modes on a `scd: type2`
+#            table — `from`, `null`, `derived: scd_window` — so an `fk`
+#            column (dim_user's account_id) cannot live on the same table as
+#            the tracked `status` column today. This is a real engine
+#            constraint, not a style choice; the split is the standard
+#            mini-dimension/satellite pattern, not a fidelity loss. The same
+#            constraint drops `created_at` from dim_company/dim_account
+#            (their `valid_from` already carries the wallclock version
+#            start).
+
+mode: dimensional
+
+keys:
+  actor: presentation_id
+  entity: presentation_id
+
+dimensional:
+  tables:
+    # --- dim_company: CRM/sales-stage account (actor.company) ---
+    - name: dim_company
+      role: dim
+      scd: type2  # status is history-tracked: onboarding -> active -> churned
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: company}
+      key: [company_id, valid_from]
+      columns:
+        - name: company_id
+          from: presentation_id
+        - name: status
+          from: prop__status
+        - name: valid_from
+          derived:
+            scd_window: valid_from
+        - name: valid_to
+          derived:
+            scd_window: valid_to
+
+    # --- dim_account: billing/workspace tenant (entity.company_hub) ---
+    - name: dim_account
+      role: dim
+      scd: type2  # attach_weight / churn_flag / engagement_score are tracked
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: company_hub}
+      key: [account_id, valid_from]
+      columns:
+        - name: account_id
+          from: presentation_id
+        - name: name
+          from: prop__name
+        - name: domain
+          from: prop__domain
+        - name: plan
+          from: prop__plan
+        - name: seat_price
+          from: prop__seat_price
+        - name: attach_weight
+          from: prop__attach_weight
+        - name: churn_flag
+          from: prop__churn_flag
+        - name: engagement_score
+          from: prop__engagement_score
+        - name: valid_from
+          derived:
+            scd_window: valid_from
+        - name: valid_to
+          derived:
+            scd_window: valid_to
+
+    # --- dim_sku: product/feature catalog (entity.sku) ---
+    - name: dim_sku
+      role: dim
+      scd: type1  # 3 rows, no tracked properties
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: sku}
+      key: [sku_id]
+      columns:
+        - name: sku_id
+          from: presentation_id
+        - name: name
+          from: prop__name
+        - name: popularity
+          from: prop__popularity
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
+
+    # --- dim_user: individual product user, Type-1 identity (actor.user) ---
+    - name: dim_user
+      role: dim
+      scd: type1  # identity + FK; the tracked status lives on dim_user_status
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: user}
+      key: [user_id]
+      columns:
+        - name: user_id
+          from: presentation_id
+        - name: account_id
+          fk:
+            to: dim_account
+            via: reference
+            path: [prop__company]
+        - name: first_name
+          from: prop__first_name
+        - name: last_name
+          from: prop__last_name
+        - name: email
+          from: prop__email
+        - name: company_name
+          from: prop__company_name
+        - name: company_domain
+          from: prop__company_domain
+        - name: email_convention
+          from: prop__email_convention
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
+
+    # --- dim_user_status: SCD-2 satellite, user lifecycle status only ---
+    - name: dim_user_status
+      role: dim
+      scd: type2  # provisioned -> active -> using -> offboarded
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: user}
+      key: [user_id, valid_from]
+      columns:
+        - name: user_id
+          from: presentation_id
+        - name: status
+          from: prop__status
+        - name: valid_from
+          derived:
+            scd_window: valid_from
+        - name: valid_to
+          derived:
+            scd_window: valid_to
+
+    # --- fact_usage_event: one row per product usage event (tick_decision) ---
+    - name: fact_usage_event
+      role: fact
+      source:
+        grain: records
+        kind: tick_decision
+      key: [usage_event_id]
+      columns:
+        - name: usage_event_id
+          from: record_index
+        - name: occurred_at
+          derived:
+            timestamp:
+              source: created_sim_time
+        - name: user_id
+          fk:
+            to: dim_user
+            via: reference
+            path: [prop__journey_instance, prop__actor]
+        - name: sku_id
+          fk:
+            to: dim_sku
+            via: membership
+            property: bindings
+            member_field: entity
+            where: {elem__role_name: sku}
+        - name: context
+          from: prop__context
+
+    # --- fact_lifecycle_interval: state-occupancy timeline (journey_instance) ---
+    - name: fact_lifecycle_interval
+      role: fact
+      source:
+        grain: history_interval
+        kind: journey_instance
+        property: current_state
+      key: [journey_id, started_at]
+      columns:
+        - name: journey_id
+          from: record_id
+        - name: journey_type
+          lookup:
+            property: journey_type
+        - name: company_fk
+          fk:
+            to: dim_company
+            via: reference
+            path: [prop__actor]
+        - name: user_fk
+          fk:
+            to: dim_user
+            via: reference
+            path: [prop__actor]
+        - name: state
+          from: value
+        - name: started_at
+          derived:
+            timestamp:
+              source: sim_time
+        - name: ended_at
+          derived:
+            timestamp:
+              source: lead_sim_time

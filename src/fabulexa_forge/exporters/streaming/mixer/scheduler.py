@@ -108,7 +108,7 @@ def seed_mixer_run(
 ) -> "tuple[dict[str, deque[StreamEvent]], ControlState, FrontierState]":
     """Drain the engine once into per-topic buffers and build the initial mixer state.
 
-    Enumerates the topic set with build_topic_set(config, sidecar) and creates an
+    Enumerates the topic set with build_topic_set(config) and creates an
     empty FIFO buffer for every topic in it — declared-but-empty topics included. Drains
     iter_stream_events(emit, config, anchor) exactly once, appending each event to the
     buffer for its `topic` (events arrive in global seq order, so each topic's buffer is
@@ -145,7 +145,7 @@ def seed_mixer_run(
         iter_stream_events,
     )
 
-    topics_ordered: tuple[str, ...] = build_topic_set(config, sidecar)
+    topics_ordered: tuple[str, ...] = build_topic_set(config)
 
     buffers: dict[str, deque[StreamEvent]] = {t: deque() for t in topics_ordered}
 
