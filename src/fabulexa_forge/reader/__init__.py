@@ -37,6 +37,7 @@ from fabulexa_forge.reader.relations import (
     distinct_prop_values,
 )
 from fabulexa_forge.reader.sidecar import (
+    BranchCensus,
     BranchEntry,
     ColumnSpec,
     KeySpace,
@@ -44,6 +45,7 @@ from fabulexa_forge.reader.sidecar import (
     PresentationKeys,
     RecordRoles,
     RuntimeAnchor,
+    SeriesCensus,
     Sidecar,
     SubTypeColumns,
     TableSpec,
@@ -54,6 +56,7 @@ from fabulexa_forge.reader.sidecar import (
 )
 
 __all__ = [
+    "BranchCensus",
     "BranchEntry",
     "CheckResult",
     "ColumnNotFoundError",
@@ -71,6 +74,7 @@ __all__ = [
     "RecordsColumnRole",
     "RunDatabaseError",
     "RuntimeAnchor",
+    "SeriesCensus",
     "Sidecar",
     "SidecarParseError",
     "SidecarStructureError",

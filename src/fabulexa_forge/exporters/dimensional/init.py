@@ -74,6 +74,36 @@ def _kind_has_discriminator(kind: str, all_tables: tuple[TableSpec, ...]) -> boo
     return False
 
 
+def _versions_per_record(sidecar: Sidecar, kind: str, prop: str) -> str:
+    """Render the versions-per-record evidence for one tracked property.
+
+    A tracked column whose series carries many versions per record is a timeline,
+    not a slowly-changing attribute: proposing it as an SCD-2 column materializes
+    a dimension that many times its entity count. The ratio is the author's cue to
+    move it to its own fact grain, so the candidate states it rather than leaving
+    the author to measure it after exporting.
+
+    Reads the sidecar's advisory `row_census`; when the emit carries none, says so
+    rather than staying silent, so an unmeasured proposal is never mistaken for a
+    measured-and-fine one.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        kind: The record kind name.
+        prop: The bare property name (no `prop__` prefix), as `history_series` keys it.
+
+    Returns:
+        A comment fragment — the ratio, the absent-series case, or the no-census case.
+    """
+    census = sidecar.row_census
+    if census is None:
+        return "versions/record unknown (no row_census in this emit)"
+    series = census.history_series.get(kind, {}).get(prop)
+    if series is None or series.records == 0:
+        return "versions/record unknown (no rows in this series)"
+    return f"{series.rows / series.records:.1f} versions/record"
+
+
 def _columns_have_history_tracked(kind: str, all_tables: tuple[TableSpec, ...]) -> bool:
     """Return True when any column on the kind's records table is history_tracked.
 
@@ -309,7 +339,11 @@ def _write_dim_scd2_stub(
             continue
         short = col.replace("prop__", "")
         if col in tracked_cols:
-            w(f"        - {{name: {short}, from: {col}}}  # tracked -> per-version")
+            evidence = _versions_per_record(sidecar, kind, short)
+            w(
+                f"        - {{name: {short}, from: {col}}}"
+                f"  # tracked -> per-version; {evidence}"
+            )
         else:
             w(f"        - {{name: {short}, from: {col}}}")
     w("        - {name: valid_from, derived: {scd_window: valid_from}}")

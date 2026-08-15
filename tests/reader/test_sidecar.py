@@ -1109,3 +1109,62 @@ def test_sub_type_columns_present_but_empty_partition_is_not_none() -> None:
     stc = sidecar.sub_type_columns()
     assert isinstance(stc, SubTypeColumns)
     assert stc.kinds() == ()
+
+
+# ---------------------------------------------------------------------------
+# row_census
+# ---------------------------------------------------------------------------
+
+_CENSUS: dict[str, object] = {
+    "trunk": {
+        "table_rows": {"history": 5678, "records__patient": 100},
+        "history_series": {"patient": {"status": {"rows": 412, "records": 50}}},
+        "sub_type_rows": {"patient": {"inpatient": 31, "outpatient": 19}},
+    }
+}
+
+
+def test_row_census_absent_is_none() -> None:
+    """An emit carrying no row_census reads None — the block is optional."""
+    assert Sidecar.from_raw(_minimal_raw()).row_census is None
+
+
+def test_row_census_parses_all_three_sub_blocks() -> None:
+    """Present census exposes table_rows, history_series and sub_type_rows."""
+    census = Sidecar.from_raw(_minimal_raw(row_census=_CENSUS)).row_census
+    assert census is not None
+    assert census.table_rows == {"history": 5678, "records__patient": 100}
+    assert census.sub_type_rows == {"patient": {"inpatient": 31, "outpatient": 19}}
+    series = census.history_series["patient"]["status"]
+    assert (series.rows, series.records) == (412, 50)
+
+
+def test_row_census_for_another_branch_is_none() -> None:
+    """A census keyed by some other fork_path is not this emit's — reads None."""
+    other = {"trunk@branch_a": _CENSUS["trunk"]}
+    assert Sidecar.from_raw(_minimal_raw(row_census=other)).row_census is None
+
+
+def test_row_census_drops_malformed_counts() -> None:
+    """Non-integer counts are dropped rather than refusing the parse.
+
+    The block is advisory, so a malformed entry costs a consumer its evidence
+    for that one series, never the emit.
+    """
+    malformed: dict[str, object] = {
+        "trunk": {
+            "table_rows": {"history": "many", "records__patient": 100},
+            "history_series": {
+                "patient": {
+                    "status": {"rows": 412, "records": True},
+                    "ward": {"rows": 7, "records": 3},
+                }
+            },
+            "sub_type_rows": {"patient": "not-a-split"},
+        }
+    }
+    census = Sidecar.from_raw(_minimal_raw(row_census=malformed)).row_census
+    assert census is not None
+    assert census.table_rows == {"records__patient": 100}
+    assert sorted(census.history_series["patient"]) == ["ward"]
+    assert census.sub_type_rows == {}

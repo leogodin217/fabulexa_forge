@@ -223,7 +223,10 @@ Each mode reads the same emit and writes a different target shape.
   `history_tracked`; when the sidecar carries `sub_type_columns`, each
   per-sub-type stub proposes only that sub-type's declared columns
   (structurally-inapplicable columns pruned); absent the field, it falls back to
-  the full union. Source proposes one state table per records kind (combined,
+  the full union. Each SCD-2 column proposal states its versions-per-record ratio
+  from the sidecar's advisory `row_census` — the evidence that a tracked column is
+  operational state rather than a slowly-changing attribute — and says so
+  explicitly when the emit carries no census. Source proposes one state table per records kind (combined,
   with the per-sub-type split alternative in comments), one junction table per
   membership table, an `events` stub covering every tracked kind
   (lifecycle-only kinds and membership sources commented out), and the aligned

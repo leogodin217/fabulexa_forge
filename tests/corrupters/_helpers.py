@@ -169,6 +169,7 @@ def sidecar(
         record_roles=None,
         sub_type_columns=None,
         presentation_keys_raw=None,
+        row_census=None,
     )
 
 

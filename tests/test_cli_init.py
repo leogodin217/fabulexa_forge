@@ -182,6 +182,7 @@ def _base_sidecar(
     enum_domains: dict[str, dict[str, list[str]]] | None = None,
     sub_type_columns: dict[str, dict[str, list[str]]] | None = None,
     presentation_keys: dict[str, object] | None = None,
+    row_census: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """Build a minimal sidecar dict with optional record_roles/enum_domains/partition."""
     result: dict[str, object] = {
@@ -196,6 +197,8 @@ def _base_sidecar(
         result["sub_type_columns"] = sub_type_columns
     if presentation_keys is not None:
         result["presentation_keys"] = presentation_keys
+    if row_census is not None:
+        result["row_census"] = row_census
     return result
 
 
@@ -232,12 +235,14 @@ def build_bare_dim_scd2_emit(
     tmp_path: Path,
     columns: list[dict[str, object]] | None = None,
     extra_row_values: list[object] | None = None,
+    row_census: dict[str, object] | None = None,
 ) -> Path:
     """Build an emit with a bare-string dimension kind with history_tracked.
 
     `columns` overrides `_SENSOR_COLUMNS` (e.g. to add a non-exempt slice_only
     payload column); `extra_row_values` supplies the row value(s) for any
-    columns appended past the base eight.
+    columns appended past the base eight; `row_census` adds the optional census
+    block, absent by default so the no-census path stays the default fixture.
     """
     sensor_columns = columns if columns is not None else _SENSOR_COLUMNS
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -273,6 +278,7 @@ def build_bare_dim_scd2_emit(
                 ),
             ],
             record_roles={"sensor": "dimension"},
+            row_census=row_census,
         ),
     )
     return tmp_path
@@ -723,6 +729,69 @@ def test_bare_dim_with_history_tracked_proposes_type2(tmp_path: Path) -> None:
     assert "last_mutation_sim_time" not in content
     assert "from: active" not in content
     assert "from: deactivated_at" not in content
+
+
+# ---------------------------------------------------------------------------
+# Tests: versions-per-record evidence beside each SCD-2 column proposal
+# ---------------------------------------------------------------------------
+
+
+def test_scd2_column_carries_versions_per_record_from_census(tmp_path: Path) -> None:
+    """A census-carrying emit states the ratio, so a timeline outs itself as one.
+
+    412 rows over 4 records is 103.0 versions per record — the signal that the
+    column is operational state rather than a slowly-changing attribute.
+    """
+    census: dict[str, object] = {
+        "trunk": {
+            "table_rows": {"records__sensor": 4},
+            "history_series": {"sensor": {"status": {"rows": 412, "records": 4}}},
+            "sub_type_rows": {},
+        }
+    }
+    emit_dir = build_bare_dim_scd2_emit(tmp_path / "emit", row_census=census)
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert (
+        "{name: status, from: prop__status}"
+        "  # tracked -> per-version; 103.0 versions/record" in content
+    )
+
+
+def test_scd2_column_says_unknown_when_emit_carries_no_census(tmp_path: Path) -> None:
+    """Without a census the proposal says so, never stays silent.
+
+    Silence would read as 'measured, and fine' on exactly the emits where nothing
+    was measured — the trap the evidence comment exists to remove.
+    """
+    emit_dir = build_bare_dim_scd2_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert (
+        "{name: status, from: prop__status}"
+        "  # tracked -> per-version; versions/record unknown (no row_census in this emit)"
+        in content
+    )
+
+
+def test_scd2_column_says_unknown_when_series_absent_from_census(
+    tmp_path: Path,
+) -> None:
+    """A census that enumerates no rows for the series reports unknown, not 0.0."""
+    census: dict[str, object] = {
+        "trunk": {
+            "table_rows": {"records__sensor": 4},
+            "history_series": {},
+            "sub_type_rows": {},
+        }
+    }
+    emit_dir = build_bare_dim_scd2_emit(tmp_path / "emit", row_census=census)
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "versions/record unknown (no rows in this series)" in content
 
 
 # ---------------------------------------------------------------------------

@@ -630,6 +630,20 @@ combined stub over a polymorphic bare-role kind would union unrelated sub-type s
 into a mostly-NULL table — exactly the shape the nhs/retail example configs' `SPLIT`
 header notes hand-correct today.
 
+**Every SCD-2 column proposal carries its versions-per-record evidence.** A tracked
+column with many versions per record is operational state wearing an attribute's
+name, and proposing it as an SCD-2 column materializes a dimension that many times
+its entity count — the nhs example's `resource.allocated` is 838.9 versions per
+record over 30 consultants. `init` states the ratio in the column's comment,
+sourced from the sidecar's advisory `row_census` ([`reader.md`](reader.md)). It
+remains a comment: the proposal is unchanged, and moving the column to its own fact
+grain is the author's call, made against evidence instead of against a measurement
+they would otherwise take only after exporting and profiling.
+
+When the emit carries no census, or the census enumerates no rows for that series,
+the comment says so explicitly. Silence would read as *measured, and fine* on
+exactly the emits where nothing was measured.
+
 `init` trusts a C1–C14-conformant emit exactly as the engine does — it does not
 re-validate — and relies on these guarantees:
 
