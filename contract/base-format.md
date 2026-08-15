@@ -66,6 +66,8 @@ Six required columns, in this order:
 
 **Long-form SCD-2.** `history` is the *long-form* rendering of SCD-2 property history: one row per change event, ordered by `sim_time` within each `(fork_path, kind, record_id, property)` series. The validity interval is **implicit** — a row's value holds over `[sim_time, next row's sim_time)` for the same series, and the final row of a series holds from its `sim_time` through the slice boundary. There are deliberately **no `valid_from` / `valid_to` columns**: a consumer asking what a value was at time T never needs to materialize an interval — see § Consumer derivations → *Point-in-time value reconstruction* (one record) and → *Bulk as-of join* (set-valued). `sim_time` is strictly increasing within a series, so the implicit interval is well-formed. Consecutive rows in a series always differ in `value`: the producer treats a value-unchanged write as a no-op, so rows are change events, never write echoes.
 
+**End-of-instant collapse is lossy for series reads.** Rows record the *net* change per instant: a property that changes and returns to its prior value within one instant emits no row, and a value held for zero duration (entered and left at the same instant) never appears in the series at all. A `history` series can therefore go silent while activity continues — a contended resource's `allocated` series may end hours before the record's last real transition, because each later release immediately re-granted the freed slot at the same instant. Point-in-time reads stay exact; reading a series as "one row per underlying transition" undercounts silently. For occupancy-over-time and event counting, membership tables are the faithful source — see § Consumer derivations → *Occupancy and event counting over time*.
+
 **Creation-seed guarantee (unconditional).** Every type-2 (`history_tracked: true`) property of every record is seeded with a `history` row at the record's `created_sim_time` carrying its creation value — **including properties absent at creation, which seed with a NULL `value`**. Creation is the genesis change event (undefined → initial value), so the *one row per change event* model covers it with no exception.
 
 The seed is unconditional: there is no carve-out. A type-2 property with **zero** `history` rows for a record that exists is a **contract violation** (flag-without-rows is forbidden), not a signal that the creation value was NULL. Consequently:
@@ -104,6 +106,10 @@ Where P is the count of *scalar* declared properties for kind *K* and R is the c
 **Per-property column type.** Determined by the property's declared Python type per the *Recommended type mapping* table below. Producers MAY use a different mapping if they adhere to the round-trip rules in *Conformance*; the sidecar always reflects the actual type written.
 
 **References-annotated properties.** When a property declares a record-to-record `references` annotation, the renderer emits `prop__<name>` as a single `VARCHAR` column carrying the id portion of the referenced record id (the id only, not the kind). The kind component is redundant with the schema annotation and is exposed via the sidecar's `references` field on the column entry. Producers MUST use this id-only form so downstream tools can equality-join against `records__<references>.record_id` without parsing tuple reprs. The property additionally carries a `ref_index__<name>` `BIGINT` column resolving the same target through `record_index` rather than `record_id` — see § Dense record index.
+
+**`active` is record existence, never domain in-effect state.** `active` is the lifecycle tombstone: FALSE iff the producer deactivated the record before the slice boundary, with `deactivated_at` carrying the instant. It says nothing about whether the thing the record models is currently "on". Kinds modeling episodic phenomena make the difference sharp — the `event` machinery kind's records live for the whole run and are never deactivated, so a scheduled event reads `active = TRUE` at every slice, including slices where no activation window is open. "Which events were in effect at T?" is a derivation over the event's window data, not a column read — see § Consumer derivations → *Events in effect at T*.
+
+**On drained supply, `deactivated_at` is the drain end, not the configured retirement instant.** A supply record (a `resource` server, a booking `diary`) retired while holders were in service drains passively: the retirement cuts capacity to zero, in-service holders keep their slots, and the tombstone lands when the last holder releases. `deactivated_at` therefore reads the drain *completion* — the configured decommission instant may precede it by the whole notice period. The configured instant is still in the emit: it is the `sim_time` of the retirement's capacity → 0 `history` row. Entity kinds deactivate at their configured instant exactly; only drained supply carries this offset. See § Consumer derivations → *Supply drain and utilisation*.
 
 ### Dense record index
 
@@ -209,6 +215,8 @@ LIMIT 1
 
 `history.value` is VARCHAR; cast on read per § Recommended type mapping.
 
+**The `kind` predicate is load-bearing, not decorative.** `record_id` is unique only within a kind: the same id string routinely recurs across kinds, because different kinds mint ids from independent counters — cross-kind collisions are pervasive in an ordinary run, not theoretical. Dropping `kind` from this query, or from any join against `history`, silently mixes series from unrelated records into one result.
+
 ### Bulk as-of join
 
 The recipe above answers *one record at one T*. The common question is set-valued — the value of a property for **every** probe row, each at its **own** T (e.g. the status of each patient at the instant each of its decisions fired). The same `temporal_class` dispatch governs: a `constant` column is an ordinary equi-join to `records__<kind>`, a `slice_only` column is refused, and a `tracked` column uses an as-of join:
@@ -236,6 +244,60 @@ ASOF LEFT JOIN (
 ### Firing-time recovery for write-once records
 
 For record kinds whose rows are written exactly once (e.g. `tick_decision`), `last_mutation_sim_time` equals the firing time. Use it as the T argument in the point-in-time lookup above. This recovers the owner that was holding the member at the exact moment the decision fired — for example, the consultant a patient was assigned to when a clinical decision event occurred.
+
+### Occupancy and event counting over time
+
+`history` is exact for point-in-time reads but is **not** a faithful source for series questions, because of the end-of-instant collapse (§ `history`). Two consumer questions hit this:
+
+**Occupancy / utilisation over time.** A scalar occupancy counter (a resource's `allocated`, say) emits no row when a release and a grant land at the same instant — the value nets to unchanged — so its `history` series can end long before occupancy last changed hands. Derive occupancy from the membership table instead: intervals are reconstructed from the collection's element *set*, so a same-instant swap that leaves the count unchanged still produces its two interval rows. Occupancy at any T is the containment count, and the full series steps only at interval edges:
+
+```sql
+-- Occupancy of one owner over time: value changes only at interval edges
+WITH edges AS (
+  SELECT "joined_sim_time" AS t FROM "membership__<K>__<p>"
+  WHERE "fork_path" = '<fork_path>' AND "record_id" = '<record_id>'
+  UNION
+  SELECT "left_sim_time" FROM "membership__<K>__<p>"
+  WHERE "fork_path" = '<fork_path>' AND "record_id" = '<record_id>'
+    AND "left_sim_time" IS NOT NULL
+)
+SELECT e.t AS sim_time,
+       (SELECT count(*) FROM "membership__<K>__<p>" m
+        WHERE m."fork_path" = '<fork_path>' AND m."record_id" = '<record_id>'
+          AND m."joined_sim_time" <= e.t
+          AND e.t < COALESCE(m."left_sim_time", 9223372036854775807)) AS occupancy
+FROM edges e
+ORDER BY e.t
+```
+
+**Event counting.** Count membership intervals — one row per interval — never `history` rows. Counting `history` rows undercounts twice over: a change that reverts within one instant emits no row, and a state entered and left at the same instant leaves no scalar-series row at all (a journey created in a queueing state and promoted at the same instant shows the *next* state as its genesis value). Where a membership table models the phenomenon (holders for service events, waiters for queueing), `count(*)` over its rows counts events exactly, and probing for a member answers "did this record ever X":
+
+```sql
+-- Did member <member_id> ever wait? Probe the membership table, not history.
+SELECT EXISTS (
+  SELECT 1 FROM "membership__<K>__<p>"
+  WHERE "fork_path" = '<fork_path>'
+    AND "member__<f>__kind" = '<member_kind>'
+    AND "member__<f>__id"   = '<member_id>'
+)
+```
+
+### Supply drain and utilisation
+
+**Over-allocation is legal.** `capacity` and `allocated` are independent properties, and no capacity movement preempts in-service holders. A capacity cut below current allocation — including a retirement's cut to zero — leaves holders draining passively, so `allocated > capacity`, and `capacity = 0` with `allocated > 0`, are intended states, not integrity violations. Consequently:
+
+- **Guard the utilisation divide.** `allocated / capacity` divides by zero during a drain or a windowed zero-capacity cut, and legitimately exceeds 1.0 while over-allocated. Compute `allocated / NULLIF(capacity, 0)` and read NULL as "closed to new work", not as missing data.
+- **The drain interval is derivable.** Drain start = the `sim_time` of the retirement's capacity → 0 `history` row; drain end = the record's `deactivated_at` (§ Records-category tables — on drained supply it is the drain end, not the configured instant). A capacity → 0 row *without* a later deactivation is a temporary closure (a windowed capacity cut), not a retirement.
+- **The `retiring` flag is slice-only.** It answers "was this record draining at this emit's `slice_at`", never "was it draining at T" — per the temporal-class dispatch above, refuse the as-of read and use the drain interval instead.
+
+### Events in effect at T
+
+`active` cannot answer this (§ Records-category tables): `event` records are never deactivated. An event's activation windows are carried on the record itself — `prop__pair_list` decodes (tuple codec, § Recommended type mapping) to a sequence of `(activation_sim_time, deactivation_sim_time)` pairs, and the event is in effect at T iff some pair satisfies `activation <= T < deactivation`.
+
+Two caveats:
+
+- `pair_list` is NULL on events not driven by a schedule envelope (feedback-spawned and fork-overlay events). For those, derive in-effect intervals as the union of their `event_modifier` records' `[prop__start_time, prop__end_time)` spans (`end_time` NULL = open at the slice); modifiers for curve-shaped effects are per-intensity-step, so union before reading them as windows.
+- Absence of a `records__event_modifier` table does not mean no event was in effect: edge-triggered effects mint no modifiers. `pair_list` is the general route; modifiers exist only for continuous, modifier-based effects.
 
 ---
 
@@ -273,7 +335,14 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
       "columns": [...],
       "rows": 100
     }
-  ]
+  ],
+  "row_census": {
+    "trunk": {
+      "table_rows": {"history": 5678, "records__patient": 100},
+      "history_series": {"patient": {"status": {"rows": 412, "records": 50}}},
+      "sub_type_rows": {"patient": {"inpatient": 31, "outpatient": 19}}
+    }
+  }
 }
 ```
 
@@ -306,6 +375,13 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `tables[].columns[].references` | string | optional | Record kind this column points at, when the source schema declared a record-to-record reference. Present iff the column is a foreign-key column (one `VARCHAR` carrying the id portion of a record id); equality-joinable against `records__<references>.record_id`. Omitted for all other columns. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
 | `tables[].columns[].history_tracked` | boolean | optional | SCD class of a value-carrying column: `true` = type-2 (priors recoverable from the `history` table), `false` = type-1 (current value only). Present on records-category `prop__<name>` columns and presentation-property columns; omitted on structural, fixed-table, membership, and `presentation_id` columns. See § Column temporal semantics. Backward-compatible under the rule that unknown fields MAY warn but MUST NOT fail. |
 | `tables[].columns[].temporal_class` | enum | optional | Point-in-time semantics of a value-carrying column: `"constant"`, `"tracked"`, or `"slice_only"`. Answers *"can I ask what this column's value was at time T?"*. Carried on **exactly** the columns that carry `history_tracked` — a column carries one iff it carries the other. See § Column temporal semantics. |
+| `tables[].columns[].min` | number | optional | Lower bound of the declared value domain, enforced on every write by the producer. Present only when the property declares that bound; `min` and `max` are independently omitted. See § Column value declarations. |
+| `tables[].columns[].max` | number | optional | Upper bound of the declared value domain, enforced on every write by the producer. Present only when the property declares that bound. See § Column value declarations. |
+| `tables[].columns[].immutable` | boolean | optional | `true` when nothing may write the property after record creation. Absent on a value column means the property is mutable. See § Column value declarations. |
+| `tables[].columns[].required` | boolean | optional | `true` when every record of the kind carries a value at creation. Absent means that kind-wide guarantee does not hold. See § Column value declarations. |
+| `tables[].columns[].description` | string | optional | Author-declared business meaning of the property the column renders. Present only when the producing scenario declared one; omitted entirely otherwise. See § Author-declared column documentation. |
+| `tables[].columns[].unit` | string | optional | Author-declared unit of measure of the value (`"rides"`, `"GBP"`, `"minutes"`). Present only when the producing scenario declared one; omitted entirely otherwise. See § Author-declared column documentation. |
+| `row_census` | object | optional | Row counts describing the rows of the file this sidecar sits in, keyed by `fork_path` — one key, matching the single `branches[]` entry. Keys sorted lexicographically at every nesting level. Advisory: no conformance check ranges over its contents. See § The `row_census` block. |
 | `tables[].rows` | integer | yes | Row count of the table. |
 
 The fields above are the *required* shape at `base_format_version: 7`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 7` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
@@ -610,6 +686,80 @@ Read both from the sidecar: neither is recoverable from raw scenario YAML,
 because the bits are partly synthesized at schema assembly and recovering them
 would require re-running that assembly.
 
+### Column value declarations (`min`, `max`, `immutable`, `required`)
+
+Four per-column attributes rendered from the property schema the producer holds.
+None is author prose: each is a declaration the producer enforces at every write,
+so the sidecar cannot disagree with the rows beside it.
+
+| Attribute | Meaning | Present when |
+|---|---|---|
+| `min` / `max` | The declared value domain, checked on every write | The property declares that bound; each is independently omitted when unbounded |
+| `immutable` | Nothing may write the property after record creation — the write is rejected, not merely unobserved | `true`; absence on a value column means mutable |
+| `required` | Every record of the kind carries a value at creation | `true`; absence means the kind-wide guarantee does not hold |
+
+**`immutable` is not `temporal_class` restated.** A `constant` temporal class means
+the value never changes in *this* emit's run — which a property earns either by
+being declared immutable or by the accident that nothing in this scenario happens
+to write it. `immutable: true` is the stronger claim: the write is forbidden, in
+this run and in anything derived from it. A consumer building a Type-1 attribute
+wants the guarantee, not the coincidence.
+
+**`min` / `max` are intent, not observation** — the numeric counterpart of
+`enum_domains`, and they take the same posture. A declared bound the live rows
+never approach is still the domain. Nothing here is computed from values.
+
+**Single-valuedness under sub-type flattening.** The four render from the flattened
+union schema the producer holds. Structural disagreement across a kind's sub-types
+is rejected upstream, which makes three of them single-valued: `min` / `max` and
+`immutable` may not diverge across a kind's sub-types. `required` alone may
+diverge, and flattening resolves it to the conjunction — `true` only when every
+sub-type declares the property and marks it required. A property required by some
+sub-types but not all therefore renders with the attribute absent; absence means
+the kind-wide creation guarantee does not hold, not that the declaring sub-types
+treat it as optional.
+
+**Which columns carry them.**
+
+| Column class | Carries |
+|---|---|
+| Value column of a records-category table | Whichever of the four its property declares |
+| Identity column (`record_id`, `fork_path`, `record_index`, `ref_index__<name>`) or lifecycle column | None — these are format structures, not properties, and are already outside the value-column population |
+| Membership-table `elem__` / `member__` column | None. An author never declares a collection-struct property's element fields, so every element field belongs to a producer-injected kind rather than an authored one |
+| Synthesized discriminator `prop__<K>_type` | `required: true` and `immutable: true`, from its synthesized schema — a record's sub-type is fixed at creation. It has no declared domain, so `min` / `max` never appear |
+
+### Author-declared column documentation (`description`, `unit`)
+
+Two optional per-column strings carrying what the producing scenario's author said
+a property means. Neither is derivable: business meaning and unit of measure are
+the author's knowledge, and neither is recoverable from the schema or the rows.
+
+| Attribute | Meaning | Declarable on |
+|---|---|---|
+| `description` | What the property means in the scenario's business domain | Every property |
+| `unit` | Unit of measure of the value (`"rides"`, `"GBP"`, `"minutes"`) | Value-typed properties only; a record reference has no unit |
+
+`unit` is the soft complement to `min` / `max`: the bounds say the value runs 0–10,
+the unit says they are rides rather than pounds. Neither substitutes for the other.
+
+**One meaning per column.** A sub-typed kind's table materializes the union of its
+sub-types' columns, and the same property name may be declared by more than one
+sub-type — one column, potentially several declarations. Divergent documentation
+for one name is rejected upstream, so the producer holds exactly one `description`
+and one `unit` per `(kind, property)` and the rendered column carries the author's
+single intended meaning. Silence is compatible with any declaration; only two
+differing non-empty values conflict.
+
+**Absence is silence, never a default.** A column whose property carries no
+declaration omits the field entirely; a column belonging to a producer-injected
+kind carries neither, because only author declarations travel this path.
+
+**Meaning is run-level.** Documentation and the value declarations above are fixed
+at run initialization, so every emit derived from the same run carries the same
+values for a given column — the same run-level posture as `enum_domains` and
+`pinned_ids`. That is why both sit on the `columns[]` axis while the row census
+describes one emit's rows.
+
 ### The `presentation_keys` block
 
 Optional top-level registry declaring the key properties of every
@@ -731,9 +881,58 @@ semantic non-conformance as breaking C6/C7 — which is precisely what makes
 the block a useful validation target. A consumer MAY validate the claims
 against data; the contract does not oblige it to.
 
+### The `row_census` block
+
+An optional top-level field carrying the volume evidence that decides grain. It is
+**keyed by `fork_path`** — one key, matching the single `branches[]` entry — whose
+value holds three sub-blocks of integer counts derived from the emit's rows. Never
+ratios, never floats, never author-asserted.
+
+| Sub-block | Shape | Derivation | Answers |
+|---|---|---|---|
+| `table_rows` | `{<table>: rows}` | Row count per table, over every table in the emit | The denominator; equals the table's `tables[].rows` |
+| `history_series` | `{<kind>: {<property>: {rows, records}}}` | `history` rows and distinct `record_id`s per `(kind, property)` series | Versions-per-record — the grain evidence (400k rows / 31k records ⇒ not a dimension) |
+| `sub_type_rows` | `{<kind>: {<sub_type>: rows}}` | Row count per discriminator value, for kinds carrying a synthesized discriminator column | Sub-type population — split and conform decisions |
+
+| Condition | Result |
+|---|---|
+| Block present | Exactly one key, equal to the `branches[]` entry's `fork_path` |
+| Kind has no history-tracked properties, or a property has zero history rows | No entry for that series — `history_series` enumerates observed series; absence means zero |
+| Collection-struct property | No `history_series` entry (such properties emit no history rows); its volume is its membership table's `table_rows` entry |
+| `sub_type_rows` coverage | Every sub-type declared for the kind, zero-filled — matching `sub_type_columns`, which lists all declared sub-types rather than only those surviving a slice. A declared sub-type with no rows is information, not absence |
+| Kind with a single declared sub-type | Entry present with one key, equal to that table's `table_rows` — the discriminator is synthesized for every kind that admits author sub-type declarations, so the fold needs no carve-out |
+| Table with zero rows | `table_rows` entry present with `0`. An emit with no rows anywhere is legal and yields zeros throughout, never an error |
+| Object keys | Sorted lexicographically at every nesting level, the `fork_path` key included, matching the sidecar's other registry conventions |
+| Determinism | A pure function of the deterministic row multiset, so the sidecar is byte-deterministic with the block present |
+
+**A census of emitted rows, not analytics.** The block describes the artifact — how
+many rows landed where — the same class of fact as `tables[].rows`, not a derived
+domain measure. The line it never crosses is aggregation over *values*: means,
+rates, and distributions of the emitted facts belong to consumers. Counts of rows
+and of distinct record identities are metadata about the rendering.
+
+**What the block deliberately omits.** Non-NULL counts per column, distinct
+referenced-id counts, and membership fan-out pairs are each a single obvious
+aggregate over a DuckDB file the consumer already has open. The counts that do ship
+are the ones a consumer needs *before* choosing how to model a table — the grain
+evidence that decides whether a kind reads as a dimension or a fact.
+
+**`row_census` describes the rows of the file it sits in.** This definition binds
+every producer, an in-place rewriter included, without reaching into what any of
+them does internally. A producer that emits the block computed it from its own
+rows; a producer unwilling to compute it omits it, which the optional posture makes
+legal. It is why a tool that rewrites the rows recomputes the census rather than
+inheriting its input's.
+
+**Conformance posture.** C1 validates the sidecar against the schema, which admits
+`row_census` as optional. No conformance check validates its contents against data;
+the block is advisory, so carrying it creates no checking obligation for a consumer.
+
 ### What the sidecar does *not* carry
 
 - **Schema fingerprint of the producing scenario.** Lives upstream in the producer's run metadata, not the sidecar.
+- **Suggested consumer-facing names.** The sidecar names the emitted structures, never the warehouse columns a consumer should produce. A shipped suggestion invites transcription of producer nouns into consumer output; `description` supplies the domain vocabulary to name *from* instead.
+- **Linkage guidance.** The reference structure (`references`, `ref_index__` columns, membership member pairs) is complete on its own; how a consumer wires those joins is consumer-side.
 - **Emit discovery.** A separate index is the surface for *discovering* which emits a distribution contains; `base.json` is self-sufficient for *interpreting* a known emit.
 - **Any source-of-truth data.** The sidecar describes what the DuckDB contains; it does not duplicate values that live in the DuckDB itself.
 
@@ -1023,6 +1222,8 @@ Adding a *new optional* column group is **not** a version bump as long as prior-
 The same rule applies to **new optional top-level sidecar fields** (the `record_roles` registry, a pin-identity surface, a future cross-emit linkage block). Their presence is self-describing — a reader gating on `base_format_version` ignores unknown top-level fields per § Field semantics ("MAY warn but MUST NOT fail"). Adding such a field is a version-compatible extension, not a bump. A bump is required only when a prior-version reader could mis-interpret the sidecar. The schema makes this path real: its top level permits unknown fields (`additionalProperties: true`), so the new field ships as a schema *revision* within the same version — the revised schema defines the field, and a reader holding a prior revision still validates the sidecar (C1 checks required shape, not closed shape).
 
 It applies equally to a **new optional attribute on a column object** (`references`, `history_tracked`): presence is self-describing, the column object's `required` set (`["name", "type"]`) is unaffected, and a prior-version reader ignores the attribute. Adding one is a version-compatible extension, not a bump. The column object is likewise open in the schema (`additionalProperties: true`).
+
+The emit self-description surface rides both paths at v7: `min`, `max`, `immutable`, `required`, `description`, and `unit` as optional column attributes, and `row_census` as an optional top-level field. No conformance check ranges over their contents, so a reader that ignores them loses nothing it had.
 
 The `4 → 5` bump is therefore **not** forced by the `temporal_class` column attribute — under the rule above that attribute alone would have been version-compatible. It is forced by the **strengthened normative guarantee** that ships with it: the creation seed became unconditional, so a consumer must be able to distinguish
 

@@ -50,6 +50,10 @@
     "presentation_keys": {
       "$ref": "#/$defs/presentation_keys",
       "description": "Per-kind key claims and key-space identity for presentation_id columns, derived from the kind's declared minting strategies (never author-asserted). Present only when at least one kind's presentation_id column mints; omitted entirely otherwise. Keys sorted lexicographically."
+    },
+    "row_census": {
+      "$ref": "#/$defs/row_census",
+      "description": "Per-branch row counts describing the rows of the file this base.json sits in. Keys (fork_path included) sorted lexicographically at every nesting level. Advisory: no conformance check ranges over its contents."
     }
   },
   "$defs": {
@@ -265,6 +269,34 @@
           "type": "string",
           "enum": ["constant", "tracked", "slice_only"],
           "description": "Point-in-time semantics for records-category prop__<name> columns, derived by the producer from the property's declared schema (never author-declared). 'constant' = value never changes after creation; 'tracked' = value may change and every change is captured in the history table; 'slice_only' = value may change but changes are not captured in history (only the value as of the export slice is knowable). Present on exactly the same columns as history_tracked ('tracked' implies history_tracked: true, 'slice_only' implies history_tracked: false); a column carries history_tracked iff it carries temporal_class. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Author-declared business meaning of the property, from the manifest's property_docs block. Present on a records-category prop__<name> column iff its property is documented with a non-empty description. Omitted on every other column."
+        },
+        "unit": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Author-declared unit of measure of the property's value, from the manifest's property_docs block. Present on a records-category prop__<name> column iff its property is documented with a non-empty unit. Omitted on every other column."
+        },
+        "min": {
+          "type": "number",
+          "description": "Inclusive numeric floor declared on the property at the schema surface. Present on a records-category prop__<name> column iff the source schema declares a floor. Omitted when unbounded on this side or for any non-numeric / non-prop__<name> column."
+        },
+        "max": {
+          "type": "number",
+          "description": "Inclusive numeric ceiling declared on the property at the schema surface. Present on a records-category prop__<name> column iff the source schema declares a ceiling. Omitted when unbounded on this side or for any non-numeric / non-prop__<name> column."
+        },
+        "immutable": {
+          "type": "boolean",
+          "const": true,
+          "description": "Present, and always true, on a records-category prop__<name> column iff the source schema declares the property immutable (the producer rejects every post-creation write). Omitted (never rendered false) otherwise."
+        },
+        "required": {
+          "type": "boolean",
+          "const": true,
+          "description": "Present, and always true, on a records-category prop__<name> column iff the property is required (for a partitioned kind, required by every declaring sub-type). Omitted (never rendered false) otherwise."
         }
       }
     },
@@ -375,6 +407,64 @@
         "slice_stable": {
           "type": "boolean",
           "description": "Whole-column rollup: equals branch_stable."
+        }
+      }
+    },
+    "row_census": {
+      "type": "object",
+      "description": "Nested {<fork_path>: <branch_census>}. Advisory: no conformance check ranges over its contents, so an empty object is schema-valid even though a real emit carries exactly one branch and therefore one key.",
+      "additionalProperties": {
+        "$ref": "#/$defs/branch_census"
+      }
+    },
+    "branch_census": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["table_rows", "history_series", "sub_type_rows"],
+      "description": "Row counts for one branch. Every sub-block is present; each may be an empty object.",
+      "properties": {
+        "table_rows": {
+          "type": "object",
+          "description": "Nested {<table_name>: <row_count>}. One entry per table present in the emit, zero-filled for a rowless table. Keys sorted lexicographically.",
+          "additionalProperties": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "history_series": {
+          "type": "object",
+          "description": "Nested {<kind>: {<property>: {rows, records}}}. One entry per (kind, property) history series observed in this branch; a series with zero rows in this branch is absent (never zero-filled). Keys sorted lexicographically at both levels.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["rows", "records"],
+              "properties": {
+                "rows": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "History rows in this (kind, property) series within this branch."
+                },
+                "records": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Distinct record_id count contributing to this series within this branch."
+                }
+              }
+            }
+          }
+        },
+        "sub_type_rows": {
+          "type": "object",
+          "description": "Nested {<kind>: {<sub_type>: <row_count>}}. One entry per declared sub-type of every partitioned kind present in the emit, zero-filled when rowless in this branch. Keys sorted lexicographically at both levels.",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
         }
       }
     }
