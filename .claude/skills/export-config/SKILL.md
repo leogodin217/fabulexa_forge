@@ -49,9 +49,16 @@ guessing is a Principle #7 violation. Three sources, in order:
    (`actor.customer`, `entity.infrastructure`), plus each journey's states. This is the
    semantic key. Read it before anything else.
 2. **`base.json`** — `record_roles` (warehouse role per kind/sub-type),
-   `sub_type_columns` (**which columns are real for which sub-type**), and each
-   column's `temporal_class` / `history_tracked` / `references`.
-3. **`run.duckdb`** — the counts that settle grain and sparsity questions.
+   `sub_type_columns` (**which columns are real for which sub-type**), each column's
+   `temporal_class` / `history_tracked` / `references`, and, on columns whose author
+   declared them, `description` (what the property means in the scenario's business
+   domain) and `unit` (what its value is measured in — `rides`, `GBP`, `minutes`).
+   `description` is the second semantic source after the atlas, and the only one
+   that speaks at column granularity.
+3. **`base.json`'s `row_census`, else `run.duckdb`** — the counts that settle grain and
+   sparsity questions. The census carries them precomputed, per table, per
+   `(kind, property)` history series, and per sub-type. It is optional: when it is
+   absent, count against the DuckDB instead.
 
 ## Source of truth (never hand-author field shapes)
 
@@ -64,7 +71,7 @@ copying a recipe and, when you change a type, reading that model class via cclsp
 |---|---|---|
 | `docs/recipes/README.md` | **Capability index — the primary copy-adapt source.** One narrow recipe per capability (dimensional: SCD-2 / Type-1 dims, sub-type split, facts from history / history-interval / membership, FK via reference/membership plus the `path` hint, `lookup`, the four derived columns, `exclude`, `rebase`, table/column rename; source: state tables, sub-type split, junction, event log, log-only, `columns`/`rename`; streaming: state-changes CDC, membership-events join/leave, identity tombstones, routing — sub-type topics, `types`, `groups`, `topic_template`, `table_identity` — debezium for both contents, realtime pacing, stream `rebase`). | `tools/mdnav` the index, pick the recipe whose capability matches, copy its `config.yaml`. |
 | `src/fabulexa_forge/config/models.py` | **Every config type: its fields, types, required/optional, and the cross-field rules.** The authoritative field shapes (Code Is Truth). | cclsp ONLY — `find_definition` / `get_hover` on the type name (`FkClause`, `SourceDecl`, `StreamKindSelection`, `RoutingConfig`…). The class docstring + attribute docstrings + `@model_validator` docstrings carry the field meaning and the rules. **Never read the whole file — 2,300+ lines — to find one field.** |
-| `fabulexa-forge init <emit_dir> [<out>] [--mode dimensional\|source]` | A commented **candidate config** inferred from the sidecar — `--mode dimensional` (the default: roles, SCD, sub-type splits, FK candidates) or `--mode source` (the source proposal engine: state/junction tables + event log). A starting point to edit, not a finished config. | Use when authoring a dimensional or source config from scratch against a real emit. Classification stays author-authoritative — edit the candidate. |
+| `fabulexa-forge init <emit_dir> [<out>] [--mode dimensional\|source\|streaming]` | A commented **candidate config** inferred from the sidecar — `--mode dimensional` (the default: roles, SCD, sub-type splits, FK candidates), `--mode source` (the source proposal engine: state/junction tables + event log), or `--mode streaming` (the stream proposal engine: declared streams per population). A starting point to edit, not a finished config. | Use when authoring a dimensional, source, or streaming config from scratch against a real emit. Classification stays author-authoritative — edit the candidate. |
 | `fabulexa-forge export` / `fabulexa-forge stream` | The **mechanical** gate (Pydantic load + the full reshape against an emit). Necessary, not sufficient — it judges grammar, never meaning. | Run until exit 0, then profile the output (§ Workflow step 5). This repo has **no config-only `validate` verb**; running against an emit is the gate. |
 | `docs/examples/<domain>/` | **Worked full-domain configs** — a whole bundle (`bundle/`) with its atlas, and curated `dimensional.yaml` / `source.yaml` / `base.yaml` / `stream.yaml` beside it. Where recipes teach one knob against a domain-agnostic fixture, these show a complete star built from real domain reasoning. `nhs/dimensional.yaml` is the exemplar: read its header decision log. | Read as a model of *reasoning*, never copy its claims — see the warning under § Decision rules. |
 
@@ -154,11 +161,48 @@ names.
            continue
        print("--", t["name"])
        for c in t["columns"]:
-           if c["name"].startswith("prop__"):
-               print("   ", c["name"], c.get("type"), c.get("temporal_class"),
-                     "-> " + c["references"] if c.get("references") else "")
+           if not c["name"].startswith("prop__"):
+               continue
+           flags = [k for k in ("required", "immutable") if c.get(k)]
+           if "min" in c or "max" in c:
+               flags.append(f"[{c.get('min', '')}..{c.get('max', '')}]")
+           if c.get("unit"):
+               flags.append(c["unit"])
+           if c.get("references"):
+               flags.append("-> " + c["references"])
+           print(f"   {c['name']:34} {c.get('type', ''):9}"
+                 f" {c.get('temporal_class', ''):11}", " ".join(flags))
+           if c.get("description"):
+               print("       ", c["description"])
    EOF
    ```
+   ```bash
+   uv run python - <<'EOF'
+   import json; s = json.load(open("<emit_dir>/base.json"))
+   census = s.get("row_census")
+   if not census:
+       print("no row_census — count against run.duckdb instead (next script)")
+   else:
+       (branch,) = census                      # exactly one branch per emit
+       b = census[branch]
+       print("rows per table:")
+       for t, n in sorted(b["table_rows"].items(), key=lambda kv: -kv[1]):
+           print(f"  {t:44} {n:>9}")
+       print("\nsub-type split:")
+       for kind, split in sorted(b["sub_type_rows"].items()):
+           print(" ", kind, dict(sorted(split.items(), key=lambda kv: -kv[1])))
+       print("\nversions per record (history rows / distinct records):")
+       rows = [(k, p, v["rows"], v["records"])
+               for k, props in b["history_series"].items() for p, v in props.items()]
+       for k, p, n, r in sorted(rows, key=lambda x: -x[2])[:15]:
+           ratio = f"{n / r:.1f}x" if r else "-"
+           print(f"  {k + '.' + p:38} {n:>8} rows / {r:>7} records = {ratio}")
+   EOF
+   ```
+
+   `row_census` is optional. Only when it is absent, derive the same three reports by
+   counting against the DuckDB:
+
    ```bash
    uv run python - <emit_dir> <<'EOF'
    import json, sys, duckdb
@@ -181,12 +225,14 @@ names.
    EOF
    ```
 
-   That last report is the one that decides grain. A kind whose tracked property has
-   *many times* its record count is carrying a timeline, not an attribute — retail's
-   31,519 shopping sessions against 399,872 `current_state` rows is a fact wearing a
-   dimension's name.
+   Versions-per-record is the number that decides grain, whichever report you read it
+   from. A kind whose tracked property has *many times* its record count is carrying a
+   timeline, not an attribute — retail's 31,519 shopping sessions against 399,872
+   `current_state` rows is a fact wearing a dimension's name. The census states both
+   halves of that ratio directly (`history_series[kind][property]` carries `rows` and
+   `records`), so it needs no query to compute.
 
-   Three sidecar blocks beyond `record_roles` / `sub_type_columns` carry decisions.
+   Four sidecar surfaces beyond `record_roles` / `sub_type_columns` carry decisions.
    `enum_domains` is the *declared* value set for every closed-domain property,
    including the `prop__<kind>_type` discriminator — intent, not observation, so
    split/route against it, never against `SELECT DISTINCT` (a declared sub-type with
@@ -194,18 +240,28 @@ names.
    `presentation_id` and what key claims it carries — the surface `declare_keys` and
    the `keys:` election resolve through. And a column whose `temporal_class` is
    `slice_only` is presentation-only: dimensional refuses it, source and base omit it
-   with a notice — never plan a column or split around one.
+   with a notice — never plan a column or split around one. And the per-column value
+   declarations say what the producer *enforces* on every write: `required` (every
+   record carries a value at creation, so the output column needs no null handling),
+   `min` / `max` (the declared numeric domain — intent, so a bound the live rows never
+   approach is still the domain), and `immutable`, which is the guarantee that no write
+   is permitted and is **not** `temporal_class: constant` restated. A `constant` column
+   merely happens not to have changed in this run; only `immutable` makes a Type-1
+   attribute safe by contract rather than by coincidence.
 
    Write down the kind → domain mapping (kind/sub-type, what it is, output name, row
    count) **before** any YAML. Naming, the split/conform call, and the grain call all
-   fall out of that table. If the atlas leaves a kind genuinely ambiguous, ask the
-   author — do not name it from the engine noun.
+   fall out of that table. Name columns from the atlas and from each column's
+   `description`; the sidecar deliberately ships no suggested consumer-facing names, so
+   a name is yours to choose from the domain vocabulary it does ship. If the atlas
+   leaves a kind genuinely ambiguous, ask the author — do not name it from the engine
+   noun.
 
 2. **Pick the shape and the nearest recipe.**
    - Decide dimensional vs source vs base vs streaming (table above). For a
      from-scratch dimensional or source config against a real emit,
-     `fabulexa-forge init <emit_dir> [--mode source]` gives a candidate to edit (base
-     and streaming have no `init` candidate — author from a recipe).
+     `fabulexa-forge init <emit_dir> [--mode source|streaming]` gives a candidate to
+     edit (`mode: base` has no `init` candidate — author from a recipe).
    - `tools/mdnav docs/recipes/README.md`, pick the recipe matching your capability,
      copy its `config.yaml`. Edit it — add/remove tables, columns, kinds, properties,
      routing — rather than authoring from a blank file.

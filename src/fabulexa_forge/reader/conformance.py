@@ -179,7 +179,9 @@ def _check_c1(emit: "Emit") -> CheckResult:
     """C1: base.json validates against the vendored JSON Schema.
 
     Unknown top-level fields are recorded in skips, not failures.
-    Unknown nested fields (inside branch/table/column/runtime) fail C1.
+    Unknown nested fields inside branch / table / runtime fail C1. The column object
+    is open in the schema, so an unknown column attribute passes — that openness is
+    what makes a new optional column attribute a version-compatible extension.
 
     Args:
         emit: An open emit.

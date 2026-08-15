@@ -66,6 +66,19 @@ refuses if `out_dir` already holds a `run.duckdb` or `base.json`.
    change the target, amount, placement, or operation-specific fields — rather than
    authoring from a blank file.
 
+   Then size the edit against the emit *before* running it. `base.json` carries an
+   optional `row_census` block — rows per table, per `(kind, property)` history series,
+   and per sub-type — which is the population your `target` will draw from, so an
+   `amount.rate` or `count` can be chosen against a real denominator instead of
+   discovered empty at step 3. Two per-column declarations bound the edit as well:
+   `min` / `max` are the value domain the producer enforces on every write, so a
+   `mutate_cells` magnitude either stays inside it (a plausible wrong value) or
+   deliberately breaks out of it (an out-of-domain defect) — decide which you mean. And
+   a column carrying `required` or `immutable` is one the producer could never have
+   left NULL or rewritten, so `null_cells` or `schema_drift` there injects a defect no
+   real run could produce. That is often exactly the point; make it a choice, not an
+   accident.
+
 2. **Look up only the types you change.** For any field whose value is a config block
    (`target:`, `amount:`, `placement:`, `shift:`, `rename_to:`...):
    - cclsp `find_definition` / `get_hover` on the corresponding model class.
@@ -112,7 +125,7 @@ refuses if `out_dir` already holds a `run.duckdb` or `base.json`.
   things that actually exist in the target emit's sidecar. If unknown, ASK the author;
   a loader/validator erroring on an unresolvable target is correct behavior.
 - **Structural conformance survives; semantic conformance is the point.** Output is
-  still a structurally-conformant v4 base emit (C1–C5, C8 hold) — any exporter can run
+  still a structurally-conformant v7 base emit (C1–C5, C8 hold) — any exporter can run
   on it downstream. Only C6/C7/C9–C12 break, and only by the operations you declared.
   If a config accidentally breaks C1–C5/C8, that is a bug, not a feature.
 - **`defects.json` is generated, never hand-edited.** It is the engine's own
