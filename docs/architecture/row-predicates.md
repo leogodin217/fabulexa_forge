@@ -1,15 +1,18 @@
 # Config Row Predicates
 
-Five surfaces of the dimensional export grammar select rows with a predicate:
-`source.filter` (records-grain rows), `source.where` (membership-grain rows),
-`source.value` (history-point rows), `fk.where` (the membership interval a
-foreign key resolves through), and `derived.elapsed.other_where` (the counterpart
-row of an elapsed correlation). All five share one grammar — **a predicate value
-is either a scalar or a non-empty list; a scalar compiles to `=`, a list compiles
-to `IN`; predicates over distinct columns are AND-joined** — and one rendering
-authority. This doc owns that grammar: its well-formedness rule, its literal
-typing, the single compile path every surface routes through, and the operator
-set it deliberately stops at.
+Seven surfaces across two export modes select rows with a predicate. Five belong
+to the dimensional grammar: `source.filter` (records-grain rows), `source.where`
+(membership-grain rows), `source.value` (history-point rows), `fk.where` (the
+membership interval a foreign key resolves through), and
+`derived.elapsed.other_where` (the counterpart row of an elapsed correlation).
+Two belong to the source grammar: `tables[].where` and `events.sources[].where`,
+each gated to the declaring unit's `constant`-class payload properties
+([`source.md`](source.md) § Row selection). All seven share one grammar — **a
+predicate value is either a scalar or a non-empty list; a scalar compiles to `=`,
+a list compiles to `IN`; predicates over distinct columns are AND-joined** — and
+one rendering authority. This doc owns that grammar: its well-formedness rule,
+its literal typing, the single compile path every surface routes through, and the
+operator set it deliberately stops at.
 
 **Source:** [`render_predicate_condition`](../../src/fabulexa_forge/_sql.py) (the
 rendering authority) and
@@ -18,7 +21,8 @@ carrying the well-formedness rule). Tests:
 [`tests/test_sql.py`](../../tests/test_sql.py) for rendering,
 [`tests/config/test_models.py`](../../tests/config/test_models.py) for the parse
 rule, and the per-surface suites under
-[`tests/exporters/dimensional/`](../../tests/exporters/dimensional/).
+[`tests/exporters/dimensional/`](../../tests/exporters/dimensional/) and
+[`tests/exporters/source/test_where_plan.py`](../../tests/exporters/source/test_where_plan.py).
 
 ## Boundary
 
@@ -72,6 +76,13 @@ which is the untyped comparison that surface needs. Raw-literal behavior is a
 *caller's* type choice, not a mode of the authority: there is no bypass, no `raw`
 flag, and no second function.
 
+Typing is a render-time concern for the dimensional surfaces and additionally a
+plan-time one for source's: source constant-evaluates each element's cast at plan
+time on every `where`-bearing unit, so a literal the declared type cannot cast is
+refused before any write rather than raising from the rendered `CAST` mid-export
+([`source.md`](source.md) § Row selection). It is the same cast, evaluated
+early — not a second typing rule.
+
 An unrecognized type is refused, naming the type, rather than falling back to a
 `VARCHAR` literal — a comparison that would quietly match nothing. So a predicate
 on a `BLOB` column, or on a producer-custom array or struct column, is an
@@ -83,10 +94,10 @@ sidecar-supplied type string cannot close the `CAST` and append SQL.
 
 Every condition compiled from a config predicate value is rendered by
 `render_predicate_condition`, in the reader's faithful-read builders, the
-derivations layer's membership edge, and the dimensional exporter's foreign-key
-and elapsed compilation alike. No surface renders `=` or `IN` over a config
-predicate itself, and there is no second implementation of the scalar/list rule to
-drift.
+derivations layer's membership edge, the dimensional exporter's foreign-key and
+elapsed compilation, and the source exporter's state, junction, and event-log
+narrowing alike. No surface renders `=` or `IN` over a config predicate itself,
+and there is no second implementation of the scalar/list rule to drift.
 
 The invariant is scoped to *config* predicates. Engine-internal scoping conditions
 (`fork_path`, `kind`, `property`) keep their own raw-literal rendering; sub-type
@@ -96,12 +107,20 @@ predicates and are outside it.
 ### The unknowable-past gate
 
 The `slice_only` refusal ([`slice-only.md`](slice-only.md)) is evaluated per
-predicate **column**. Of the five surfaces, the records `filter` keys and the
+predicate **column**. Of the seven surfaces, the records `filter` keys and the
 derived-elapsed `other_where` keys fall inside its population; membership element
 predicates and the history-point `value` are outside it by construction, because
 `elem__` and `history` columns carry no `temporal_class`. Since the check reads a
 column's class and never its value, the predicate value's form is irrelevant to
 it, and the sub-typed discriminator's carve-out applies in both forms.
+
+Source's two surfaces are inside the population and are refused by a stricter
+rule that subsumes it: a `where` key must name a `constant`-class property, so
+`slice_only` and `tracked` keys alike are `SourceWhereNotConstant` with a message
+naming the class ([`source.md`](source.md) § Row selection). The stricter gate is
+what makes row membership horizon-invariant under a mode that reconstructs state
+at a horizon; the dimensional records grain, current state by construction, needs
+only the `slice_only` refusal.
 
 ### Fan-out
 
@@ -115,7 +134,8 @@ deduplicates nor refuses (§ Rationale).
 ## Invariants
 
 1. **One rendering authority.** Every condition compiled from a config predicate
-   value — `filter`, `where`, `value`, `fk.where`, `other_where` — is rendered by
+   value — dimensional's `filter`, `where`, `value`, `fk.where`, `other_where`
+   and source's `tables[].where` / `events.sources[].where` — is rendered by
    `render_predicate_condition`. No other module renders `=` or `IN` over a config
    predicate.
 2. **One well-formedness rule, carried by the type.** The non-empty and
@@ -156,21 +176,27 @@ fields are forbidden on a reference foreign key
 ([`dimensional.md`](dimensional.md) § Validation Rules). The value's form plays no
 part in it.
 
-The business rules that read predicates — the `slice_only` refusal, the
-unobserved-discriminator notice, the dim source population set's declared-domain
-refusal — are the dimensional exporter's and are stated there. Two of them
-evaluate per element; the rules that validate predicate *columns*
-(`ProjectionColumnExists`, `MembershipEdgeResolvable`, the elapsed-column check)
-are indifferent to the value's form.
+The business rules that read predicates belong to the modes and are stated there:
+dimensional's `slice_only` refusal, unobserved-discriminator notice, and dim
+source population set's declared-domain refusal
+([`dimensional.md`](dimensional.md)); source's constant-class, discriminator,
+castability, and selection-aware disjointness gates plus its reuse of the
+per-element unobserved-value notice ([`source.md`](source.md) § Validation
+Rules). The rules that evaluate per element are the notices and source's
+castability check; the rules that validate predicate *columns*
+(`ProjectionColumnExists`, `MembershipEdgeResolvable`, the elapsed-column check,
+source's key resolution) are indifferent to the value's form.
 
 ## Rationale
 
-- **One grammar across all five surfaces, not one widened surface.** The five are
-  one concept — a conjunction of equality predicates — over one literal-typing
+- **One grammar across every surface, not one widened surface.** They are one
+  concept — a conjunction of equality predicates — over one literal-typing
   helper. "Predicates take a value or a list" has no exception an author must look
   up, where "`filter` takes a list but `where` does not" must be consulted every
   time. Uniformity also concentrates the scalar/list decision in one contract
-  instead of leaving four sites able to drift.
+  instead of leaving each site able to drift, and it is why a mode adding a
+  predicate surface adds a *gate* on which columns are addressable, never a
+  second value grammar.
 - **Sub-type selection is a separate surface with a separate guarantee.** Source's
   `sub_types` and streaming's `types` are multi-valued fields of their own, and
   they sit outside this grammar. The sub-typed discriminator is exempt from the
@@ -207,15 +233,14 @@ are indifferent to the value's form.
 - **Composition is a conjunction over distinct columns.** No disjunction across
   columns, no nesting, no repeated entry for one column — a mapping key appears
   once, and its value carries the alternatives.
-- **The base and source modes carry no row predicate.** Both reconstruct state at
-  a point-in-time horizon and compose the state-at derivations, whose signatures
-  carry a property selection and a horizon and no predicate at all. A predicate
-  there is not an unimplemented parameter but an undecided one: under a horizon
-  reconstruction, a predicate on a history-tracked property could mean the value
-  as-of the horizon or the current records value, and those select different rows.
-  The dimensional records grain — current state by construction — never poses the
-  question. Whoever designs that field inherits this grammar, the rendering
-  authority, and the two reader builders those modes already compose with an empty
+- **The base mode carries no row predicate.** Its contract is "every records
+  kind, one flat table", and row filtering there is a separate, undecided
+  feature. The horizon question a predicate poses under a state-at
+  reconstruction — as-of-the-horizon value or current records value, which select
+  different row sets — is answered in source by the constant-column gate, which
+  makes the question unposable rather than picking a side. Whoever designs base's
+  field inherits this grammar, the rendering authority, that gate as the
+  precedent, and the two reader builders base already composes with an empty
   predicate.
 - **The corrupter's row selector is a separate grammar.** It names rows to
   *damage*, and an operation's declared impact is computed from what it matched, so
@@ -228,8 +253,12 @@ are indifferent to the value's form.
   parse time and points the author at `source.where` — the surface that narrows a
   membership grain's rows. The point-in-time form (`as_of`) correlates its own
   membership subquery and keeps `where`.
-- **`init` proposes scalars.** It proposes sub-type splits, which are genuine
-  one-value splits.
+- **`init` proposes scalars, and no predicate at all in source.** Sub-type splits
+  are genuine one-value splits, deterministic from a declared discriminator
+  domain. A de facto discriminator is not mechanically distinguishable from any
+  other constant enum property, so proposing a `where` from observed values would
+  be invention ([`source.md`](source.md) § `init --mode source` inference
+  contract).
 - **Streaming, the writers, and the mixer read none of these fields.** Tier-2
   shaped playback compiles a declared `ExportConfig` through the dimensional
   compile surface, so a predicate transits it verbatim — a consumer of this
@@ -239,7 +268,8 @@ are indifferent to the value's form.
 
 | Document | Why |
 |---|---|
-| [`dimensional.md`](dimensional.md) | The five surfaces' grain semantics, the business rules that read predicates, and the dim source population set |
+| [`dimensional.md`](dimensional.md) | The five dimensional surfaces' grain semantics, the business rules that read predicates, and the dim source population set |
+| [`source.md`](source.md) | The two source surfaces — the constant-column gate, the parent lookup, and the selection-aware event-source disjointness rule |
 | [`reader.md`](reader.md) | The faithful-read builders that resolve each predicate column's type and compose the authority |
 | [`derivations.md`](derivations.md) | The membership edge and versioned-intervals relations on the predicate's path |
 | [`slice-only.md`](slice-only.md) | The per-column unknowable-past refusal over predicate keys |

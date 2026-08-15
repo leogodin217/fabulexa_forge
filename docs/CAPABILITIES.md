@@ -146,7 +146,7 @@ Each mode reads the same emit and writes a different target shape.
   table: *things get tables; events get the log.* A source config declares every
   output table through the declared-table grammar — author-verbatim name, source
   populations (`kind`, optional `sub_types` subset, or a `membership` reference),
-  optional per-table `columns` / `rename`. A records declaration renders as a
+  optional per-table `columns` / `rename`, and optional row selection. A records declaration renders as a
   `state` thing-table (one current row per record, soft-delete lifecycle:
   `created_at` / `updated_at` / `active` / `deactivated_at`); a membership
   declaration as a `junction` association table (`joined_at` / `left_at`, NULL
@@ -156,7 +156,20 @@ Each mode reads the same emit and writes a different target shape.
   row-state-events and membership-events folds, keyed by a dense tape-anchored
   `id` that publishes the log's total order and is its primary key under
   `declare_keys`), with `only` / `ignore`
-  audited-property filters per source. An author-declared domain vocabulary
+  audited-property filters per source. Row selection narrows a declared unit on
+  two axes: `sub_types` picks populations, and `where` — a scalar-or-list
+  predicate gated to `temporal_class: constant` payload properties, so its row
+  set is identical at every horizon — picks rows. Both are legal on state
+  tables, junction tables, and event-log sources; on a membership unit they read
+  the *owner* through a fan-out-free identity join, so a sub-typed kind's
+  junctions and join/leave streams split alongside its state tables, and a kind
+  partitioned by an undeclared-but-constant property (a de facto discriminator)
+  splits into separate tables with separate audit streams. Predicate literals
+  are cast against the sidecar's declared type at plan time, and two event
+  sources auditing one item space are legal only where their owner `sub_types`
+  or a common predicated column's typed value sets are disjoint. `init` proposes
+  per-sub-type junction and membership-event stubs for a sub-typed owner, and
+  never proposes a `where`. An author-declared domain vocabulary
   resolves kind names and `changes` keys that would otherwise render engine
   vocabulary as data: `source.kind_labels` (engine kind → domain label,
   applied wherever a kind name renders as a value — item-type defaults,
@@ -237,16 +250,18 @@ Each mode reads the same emit and writes a different target shape.
   alternative fully commented, name-collision losers and topic-illegal names commented
   out, and the self-gated `keys` block; the emitted config always parses and streams
   clean, and a recordless emit is refused rather than proposed.
-- ✓ **List-valued row predicates** *(dimensional)* — every predicate value in the
-  dimensional grammar (`source.filter`, `source.where`, `source.value`, a membership
-  `fk.where`, `derived.elapsed.other_where`) is a scalar or a non-empty list of
+- ✓ **List-valued row predicates** *(dimensional, source)* — every predicate value in
+  the dimensional grammar (`source.filter`, `source.where`, `source.value`, a membership
+  `fk.where`, `derived.elapsed.other_where`) and in source's two selection surfaces
+  (`tables[].where`, `events.sources[].where`) is a scalar or a non-empty list of
   alternatives, compiling to `=` or `IN` through one rendering authority. A list is
   what groups several discriminator values into one named table — the domain's own
   shape (an NHS "Emergency Care" dataset spanning several decision types) instead of
   one table per value or one undifferentiated table. Equality and set membership
   only; entries over distinct columns are AND-joined. On a sub-typed dim's
   discriminator the value set also selects the dim's source population set, keeping
-  FK output closed over its target. See
+  FK output closed over its target. Each mode adds its own gate on which columns are
+  addressable — never a second value grammar. See
   [`architecture/row-predicates.md`](architecture/row-predicates.md).
   *Teaches: authoring warehouse subject areas that don't line up 1:1 with source
   event types.*
