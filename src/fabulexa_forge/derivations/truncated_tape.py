@@ -488,4 +488,6 @@ def build_truncated_sidecar(sidecar: Sidecar) -> Sidecar:
         presentation_keys_raw=(
             presentation_keys_raw if isinstance(presentation_keys_raw, dict) else None
         ),
+        # Truncation projects columns, never rows — the physical row counts still hold.
+        row_census=sidecar.row_census,
     )

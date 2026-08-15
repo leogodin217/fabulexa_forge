@@ -327,6 +327,32 @@ contract-normative behavior tests must exercise directly. The method signatures
 and their `KeyError`/`ValueError` contract are the definitions in
 [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py).
 
+### The row census is advisory evidence, never a guarantee
+
+`Sidecar.row_census` exposes the optional `row_census` block as a `BranchCensus`,
+or `None` when the emit carries none. It answers volume questions — rows per
+table, rows and distinct records per `(kind, property)` history series, rows per
+sub-type — and nothing else: the block counts emitted rows and record identities,
+never aggregates values. Aggregation over values is a consumer's own work.
+
+The block is keyed by `fork_path`, and the accessor resolves the emit's single
+branch (a sanitised emit carries exactly one; C8 asserts it), so no caller passes
+a branch it cannot vary. A census keyed by some other branch reads `None` rather
+than being reinterpreted as this emit's.
+
+Two properties govern how a consumer may use it. It is **optional**, so every
+consumer needs a defined path for `None` — one that says so rather than falling
+silent, because silence on an unmeasured emit is indistinguishable from a
+measurement that came back fine. And it is **advisory**: no conformance check
+ranges over its contents, so a census claim is evidence to present to an author,
+never a fact to plan against. That is why the parse is tolerant — a malformed
+entry drops that one series and leaves the rest readable, since a block carrying
+no checking obligation should not be able to refuse an emit.
+
+The record types are the definitions in
+[`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py); its one consumer today
+is dimensional `init`'s versions-per-record evidence ([`dimensional.md`](dimensional.md)).
+
 ### Typed `prop__` columns and DuckDB read-back
 
 `records__<kind>.prop__<name>` columns are read directly — there is no JSON blob to

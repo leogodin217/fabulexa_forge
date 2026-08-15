@@ -670,6 +670,7 @@ def _conflict_sidecar(
         record_roles=record_roles,
         sub_type_columns=None,
         presentation_keys_raw=None,
+        row_census=None,
     )
 
 

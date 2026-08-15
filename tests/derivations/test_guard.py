@@ -62,6 +62,7 @@ def test_zero_branch_sidecar_raises_export_error() -> None:
         record_roles=None,
         sub_type_columns=None,
         presentation_keys_raw=None,
+        row_census=None,
     )
     with pytest.raises(ExportError, match="emit has 0 branches"):
         require_single_branch(sidecar)

@@ -304,6 +304,114 @@ def _parse_enum_domains(
 
 
 @dataclass(frozen=True)
+class SeriesCensus:
+    """Row and distinct-record counts for one (kind, property) history series."""
+
+    rows: int
+    records: int
+
+
+@dataclass(frozen=True)
+class BranchCensus:
+    """One branch's row counts, from the sidecar's optional `row_census` block.
+
+    Counts of emitted rows and of distinct record identities — never an aggregate
+    over values. Advisory: no conformance check ranges over the block, so every
+    consumer reads it as evidence and must carry a path for its absence.
+    """
+
+    table_rows: Mapping[str, int]
+    history_series: Mapping[str, Mapping[str, SeriesCensus]]
+    sub_type_rows: Mapping[str, Mapping[str, int]]
+
+
+def _parse_count_map(raw: object) -> dict[str, int]:
+    """Parse a {name: row_count} census object, dropping non-count entries.
+
+    Args:
+        raw: The raw count-map value from the sidecar.
+
+    Returns:
+        A {name: count} mapping, empty when absent or malformed.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    return {
+        name: count
+        for name, count in raw.items()
+        if isinstance(count, int) and not isinstance(count, bool) and count >= 0
+    }
+
+
+def _parse_history_series(raw: object) -> dict[str, dict[str, SeriesCensus]]:
+    """Parse the census's history_series sub-block.
+
+    Args:
+        raw: The raw history_series value from the sidecar.
+
+    Returns:
+        A nested {kind: {property: SeriesCensus}} mapping, empty when absent. A
+        series is enumerated only when observed, so absence means zero rows.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    result: dict[str, dict[str, SeriesCensus]] = {}
+    for kind, props in raw.items():
+        if not isinstance(props, dict):
+            continue
+        inner: dict[str, SeriesCensus] = {}
+        for prop, counts in props.items():
+            if not isinstance(counts, dict):
+                continue
+            rows = counts.get("rows")
+            records = counts.get("records")
+            if (
+                isinstance(rows, int)
+                and not isinstance(rows, bool)
+                and isinstance(records, int)
+                and not isinstance(records, bool)
+            ):
+                inner[prop] = SeriesCensus(rows=rows, records=records)
+        result[kind] = inner
+    return result
+
+
+def _parse_row_census(raw: object, fork_path: str) -> BranchCensus | None:
+    """Parse the optional row_census block for one branch.
+
+    Args:
+        raw: The raw row_census value from the sidecar.
+        fork_path: The branch whose census to read — the emit's single branch
+            (a sanitised emit carries exactly one; C8 asserts it).
+
+    Returns:
+        The BranchCensus for fork_path, or None when the block is absent or
+        carries no entry for this branch. Absence is the block's declared
+        optional posture, never an error.
+    """
+    if not isinstance(raw, dict):
+        return None
+    branch = raw.get(fork_path)
+    if not isinstance(branch, dict):
+        return None
+    sub_type_raw = branch.get("sub_type_rows")
+    sub_type_rows = (
+        {
+            kind: _parse_count_map(split)
+            for kind, split in sub_type_raw.items()
+            if isinstance(split, dict)
+        }
+        if isinstance(sub_type_raw, dict)
+        else {}
+    )
+    return BranchCensus(
+        table_rows=_parse_count_map(branch.get("table_rows")),
+        history_series=_parse_history_series(branch.get("history_series")),
+        sub_type_rows=sub_type_rows,
+    )
+
+
+@dataclass(frozen=True)
 class RecordRoles:
     """Typed view of the sidecar `record_roles` registry.
 
@@ -1136,6 +1244,7 @@ class Sidecar:
         record_roles: RecordRoles | None,
         sub_type_columns: SubTypeColumns | None,
         presentation_keys_raw: Mapping[str, object] | None,
+        row_census: BranchCensus | None,
     ) -> None:
         self._raw = raw
         self._base_format_version = base_format_version
@@ -1147,6 +1256,7 @@ class Sidecar:
         self._record_roles = record_roles
         self._sub_type_columns = sub_type_columns
         self._presentation_keys_raw = presentation_keys_raw
+        self._row_census = row_census
 
     @classmethod
     def from_raw(cls, raw: Mapping[str, object]) -> "Sidecar":
@@ -1244,12 +1354,22 @@ class Sidecar:
             record_roles=record_roles,
             sub_type_columns=sub_type_columns,
             presentation_keys_raw=presentation_keys_raw,
+            row_census=_parse_row_census(raw.get("row_census"), branches[0].fork_path),
         )
 
     @property
     def base_format_version(self) -> int:
         """The gated format version (always SUPPORTED_BASE_FORMAT_VERSION once open)."""
         return self._base_format_version
+
+    @property
+    def row_census(self) -> BranchCensus | None:
+        """Row counts for the emit's single branch, or None when the emit carries none.
+
+        The block is optional and advisory — no conformance check ranges over it —
+        so a consumer reads it as evidence and must have a defined path for None.
+        """
+        return self._row_census
 
     @property
     def raw(self) -> Mapping[str, object]:

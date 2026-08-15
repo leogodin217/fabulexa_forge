@@ -100,12 +100,23 @@ each *is*.
 | `membership__<kind>__<prop>` | membership | Interval / session data — membership intervals of a collection-valued property |
 | `records__<kind>` | records | Reference state (dimension-like) — record values at the emit's slice time |
 
-**`history`** — long-form: one row per property change; SCD-2 intervals are
+**`history`** — long-form: one row per change event; SCD-2 intervals are
 implicit (derive `valid_to` with `LEAD` over `(kind, record_id, property)`).
 Sufficient to reconstruct any history-tracked property at any `sim_time`;
 conformance C6 ties `records__*` and `history` together. Genre-wise this is a
 change log: the natural source for CDC-shaped exports and the raw material for
 "build the SCD-2 yourself" teaching shapes.
+
+**A `history` row is the net change per instant, not a transition.**
+Point-in-time reads are exact, but the series is lossy for counting: a value that
+changes and returns within one instant emits no row, and a value entered and left
+at the same instant never appears at all — so a series can fall silent while the
+underlying activity continues (contract § `history`). Counting `history` rows
+therefore undercounts transitions, and undercounts them silently. Occupancy over
+time and event counts come from the membership tables instead, whose intervals
+are reconstructed from the collection's element set and so survive a same-instant
+swap (contract § Consumer derivations → *Occupancy and event counting over
+time*).
 
 **`membership__<kind>__<prop>`** — one row per membership interval of a
 collection-valued property: queue waiters, holder sets, or any time-varying
@@ -124,6 +135,17 @@ pinned individuals), `enum_domains` (closed `category`/`status` vocabularies —
 ready-made lookup/dimension domains), per-column `history_tracked` (which
 properties have change rows in `history`), and the `record_roles` registry
 (warehouse role per kind). All normative semantics: contract § The sidecar.
+
+Two further surfaces describe the emit for a consumer choosing a target shape.
+Both are optional, and the reader exposes neither today. Per column, `min` /
+`max`, `immutable`, and `required` are declarations the producer enforces on
+every write — `immutable` is the guarantee that no post-creation write is
+permitted, which `temporal_class: constant` (a value that merely never changed in
+this run) is not — while `description` and `unit` carry what the producing
+scenario's author said the property means and is measured in. Top-level,
+`row_census` counts rows per table, per `(kind, property)` history series, and
+per sub-type: the volume evidence that decides grain. It is advisory — no
+conformance check ranges over its contents.
 
 ---
 
@@ -311,7 +333,7 @@ the most common way an otherwise-faithful export becomes untrue.
 | Column | Table | The instant it names | Nullable |
 |---|---|---|---|
 | `created_sim_time` | `records__<kind>` | the record came into existence; set once, unchanged by any later property write or deactivation | no |
-| `deactivated_at` | `records__<kind>` | the record closed; NULL iff `active` (C7) | yes |
+| `deactivated_at` | `records__<kind>` | the record closed; NULL iff `active` (C7). On drained supply, the drain's end — see below | yes |
 | `last_mutation_sim_time` | `records__<kind>` | the record's most recent content change of any kind — creation, a property write, or the deactivation flip | no |
 | `sim_time` | `history` | a property changed | no |
 | `joined_sim_time` / `left_sim_time` | `membership__<K>__<p>` | a member joined / left; `left_sim_time` NULL while still present at the slice | no / yes |
@@ -341,6 +363,20 @@ them:
 
 This mapping is the *meaning*, not a mandated vocabulary: each mode owns its own
 presentation names, and an author may override them.
+
+**`deactivated_at` is when the closing finished, not when it was ordered.** A
+supply record retired while holders are still in service drains passively: the
+retirement cuts capacity to zero, in-service holders keep their slots, and the
+tombstone lands only when the last one releases. `deactivated_at` therefore reads
+the drain's *completion*, which the configured decommission instant may precede
+by the whole notice period (contract § Records-category tables). That configured
+instant is still in the emit — it is the `sim_time` of the `history` row cutting
+capacity to zero — and the two together bound the drain interval (contract
+§ Consumer derivations → *Supply drain and utilisation*). Only drained supply
+carries the offset; entity kinds deactivate at their configured instant exactly.
+An export naming this column `closed_at` or `retired_at` promises the decision
+and delivers the drain's end, so where the difference matters the author elects
+between them rather than inheriting one.
 
 **A realistic name obliges a realistic value.** Naming an output column
 `occurred_at` while it carries a raw nanosecond offset is worse than leaving it
