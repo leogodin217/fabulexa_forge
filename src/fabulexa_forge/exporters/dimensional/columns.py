@@ -17,8 +17,13 @@ if TYPE_CHECKING:
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import render_predicate_condition, render_typed_literal
+from fabulexa_forge._sql import (
+    render_date_parse_expr,
+    render_predicate_condition,
+    render_typed_literal,
+)
 from fabulexa_forge.anchor import render_anchor_temporal_expr
+from fabulexa_forge.config.models import scd_window_bound, scd_window_render
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.reader.errors import TableNotFoundError
@@ -112,8 +117,12 @@ def _find_raw_ns_source_for_ordinal(
     """Return the raw-ns source column for an ordinal order_by, or None.
 
     The ordinal amendment: when order_by names a rendered-time sibling column
-    (derived: timestamp, or scd_window: valid_from), compile ORDER BY to the
-    column's raw ns source instead of the rendered column.
+    (derived: timestamp, or scd_window: valid_from) whose election is
+    monotone in its raw-ns source (timestamp / date / timestamptz, or the
+    default rendering), compile ORDER BY to the column's raw ns source
+    instead of the rendered column. A `time`-elected sibling is excluded —
+    time-of-day is not monotone in the instant, so the rendered value orders
+    correctly and raw-ns substitution would not.
 
     - For a derived: timestamp sibling: the source is timestamp.source.
     - For an scd_window: valid_from sibling: the source is 'version_start'
@@ -135,8 +144,13 @@ def _find_raw_ns_source_for_ordinal(
         if col.derived is None:
             return None
         if col.derived.timestamp is not None:
+            if (col.derived.timestamp.as_ or "timestamp") == "time":
+                return None
             return col.derived.timestamp.source
-        if col.derived.scd_window == "valid_from":
+        if scd_window_bound(col.derived.scd_window) == "valid_from":
+            assert col.derived.scd_window is not None
+            if scd_window_render(col.derived.scd_window) == "time":
+                return None
             return "version_start"
     return None
 
@@ -235,9 +249,11 @@ def build_timestamp_expr(
 ) -> str:
     """Build a SQL expression for a `derived: timestamp` column.
 
-    When an anchor is present, renders a wallclock TIMESTAMP via the pinned
-    timezone/origin SQL via render_anchor_temporal_expr. When absent, returns
-    the raw sim_time integer column.
+    When an anchor is present, renders the elected wallclock type (absent
+    `as` = the mode-definitional default `timestamp` rendering) via
+    `render_anchor_temporal_expr`. When absent, returns the raw sim_time
+    integer column (the caller enforces `TemporalRenderRequiresAnchor` for
+    any explicit election before this runs).
 
     Args:
         col_decl: A ColumnDecl with derived.timestamp set.
@@ -252,7 +268,7 @@ def build_timestamp_expr(
     src = ts.source
     qualified_source = f'"{grain_alias}"."{src}"'
     return render_anchor_temporal_expr(
-        anchor, qualified_source, col_decl.name, "timestamp"
+        anchor, qualified_source, col_decl.name, ts.as_ or "timestamp"
     )
 
 
@@ -276,6 +292,11 @@ def build_elapsed_expr(
     correlate_on group filtered by other_where, so duplicates are handled
     deterministically (earliest row wins) and there is no fan-out.
 
+    Renders one of two exclusive forms per ElapsedSpec.exactly_one_rendering:
+    a numeric DOUBLE at the declared `unit` (today's rendering), or a
+    µs-precision INTERVAL (`as: interval`) — sign-preserving, equal to the
+    numeric rendering at µs.
+
     Args:
         col_decl: A ColumnDecl with derived.elapsed set.
         source_table_name: The resolved DuckDB source table name.
@@ -292,8 +313,6 @@ def build_elapsed_expr(
     el = col_decl.derived.elapsed
     col_name = col_decl.name
     subquery_alias = f"_el_{col_name}"
-    assert el.unit is not None
-    div = _ELAPSED_DIVISORS[el.unit]
 
     # Resolve column types for other_where literals
     try:
@@ -331,13 +350,47 @@ def build_elapsed_expr(
         f' ON "{subquery_alias}".corr = "{grain_alias}"."{el.correlate_on}"'
     )
 
-    select_expr = (
+    delta_ns = (
         f'(CAST("{grain_alias}"."{el.end_source}" AS BIGINT)'
-        f' - "{subquery_alias}".start_ns) / {div}'
-        f' AS "{col_name}"'
+        f' - "{subquery_alias}".start_ns)'
     )
+    if el.as_ == "interval":
+        select_expr = f'to_microseconds({delta_ns} // 1000) AS "{col_name}"'
+    else:
+        assert el.unit is not None
+        div = _ELAPSED_DIVISORS[el.unit]
+        select_expr = f'{delta_ns} / {div} AS "{col_name}"'
 
     return select_expr, [join_clause]
+
+
+def build_date_parse_expr(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    grain_alias: str = "_grain",
+) -> str:
+    """Build a SQL expression for a `derived: date_parse` column.
+
+    Delegates to `render_date_parse_expr` — the one VARCHAR->DATE parse
+    renderer every mode shares. Type and existence gates run at plan time
+    (DateParseSourceColumn, ProjectionColumnExists); this builder assumes
+    both already passed.
+
+    Args:
+        col_decl: A ColumnDecl with derived.date_parse set.
+        table_decl: The enclosing table declaration (supplies the guard's
+            table label).
+        grain_alias: SQL alias for the grain table (qualifies the source column).
+
+    Returns:
+        A SQL expression fragment.
+    """
+    assert col_decl.derived is not None and col_decl.derived.date_parse is not None
+    dp = col_decl.derived.date_parse
+    qualified_source = f'"{grain_alias}"."{dp.from_}"'
+    return render_date_parse_expr(
+        qualified_source, dp.format, col_decl.name, table_decl.name
+    )
 
 
 def build_column_expr(
@@ -458,6 +511,9 @@ def build_column_expr(
                 "source_table_name required for elapsed column"
             )
             return build_elapsed_expr(col_decl, source_table_name, sidecar, grain_alias)
+        if derived.date_parse is not None:
+            assert table_decl is not None, "table_decl required for date_parse column"
+            return build_date_parse_expr(col_decl, table_decl, grain_alias), []
         # scd_window columns are assembled by the SCD-2 builder in scd.py;
         # if reached here the caller passed an scd_window column outside that path
         raise AssertionError(f"unsupported derived spec on column '{col_decl.name}'")

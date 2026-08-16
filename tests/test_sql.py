@@ -9,18 +9,23 @@ this module owns their contract as exposed through it. Also covers
 `render_typed_literal` compiles (source-row-selection sprint § The
 constant-column gate) — including the '5'/'05' typed-value-identity case its
 docstring names, which the event-source disjointness gate (a later phase)
-relies on.
+relies on. Also covers `render_date_parse_expr` — the one VARCHAR->DATE parse
+renderer every mode (dimensional, source, base) shares (temporal-elections
+sprint Phase 4).
 """
 
 from __future__ import annotations
 
+from datetime import date
 from decimal import Decimal
 
+import duckdb
 import pytest
 
 from fabulexa_forge._sql import (
     cast_predicate_element,
     quote_identifier,
+    render_date_parse_expr,
     render_predicate_condition,
 )
 from fabulexa_forge.errors import ExportError
@@ -277,3 +282,102 @@ def test_cast_predicate_element_returns_hashable_value() -> None:
     hash(cast_predicate_element("7", "BIGINT"))
     hash(cast_predicate_element("true", "BOOLEAN"))
     hash(cast_predicate_element("9.99", "DECIMAL(10,2)"))
+
+
+# ---------------------------------------------------------------------------
+# render_date_parse_expr — the one VARCHAR->DATE parse renderer
+# ---------------------------------------------------------------------------
+
+
+def _run_date_parse(
+    value: str | None,
+    date_format: str,
+    *,
+    table_label: str = "visits",
+    from_table: str = "visits",
+    column_name: str = "dob",
+) -> object:
+    """Execute render_date_parse_expr's SQL fragment against a one-row table.
+
+    `from_table` is the physical table the SELECT reads from; `table_label`
+    is the (independently-controlled) name spliced into the guard's error
+    message — separate parameters so a test can prove attribution uses
+    `table_label`, not the physical FROM table.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute(f'CREATE TABLE "{from_table}" ("{column_name}" VARCHAR)')
+    conn.execute(f'INSERT INTO "{from_table}" VALUES (?)', [value])
+    expr = render_date_parse_expr(
+        f'"{from_table}"."{column_name}"', date_format, "parsed", table_label
+    )
+    try:
+        row = conn.execute(f'SELECT {expr} FROM "{from_table}"').fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    return row[0]
+
+
+def test_render_date_parse_expr_match_yields_date() -> None:
+    """A value matching the format parses to the correct DATE."""
+    assert _run_date_parse("2024-01-15", "%Y-%m-%d") == date(2024, 1, 15)
+
+
+def test_render_date_parse_expr_null_source_yields_null() -> None:
+    """A NULL source value yields NULL, not a parse failure."""
+    assert _run_date_parse(None, "%Y-%m-%d") is None
+
+
+def test_render_date_parse_expr_mismatch_names_table_column_value() -> None:
+    """A non-matching non-NULL value fails loudly, naming table_label, the
+    source column, and the offending value — never a silent NULL."""
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("dob" VARCHAR)')
+    conn.execute('INSERT INTO "_grain" VALUES (?)', ["not-a-date"])
+    expr = render_date_parse_expr('"_grain"."dob"', "%Y-%m-%d", "birth_date", "visits")
+    try:
+        with pytest.raises(duckdb.Error) as excinfo:
+            conn.execute(f'SELECT {expr} FROM "_grain"').fetchall()
+    finally:
+        conn.close()
+    message = str(excinfo.value)
+    assert "visits" in message
+    assert "dob" in message
+    assert "not-a-date" in message
+    assert "%Y-%m-%d" in message
+
+
+def test_render_date_parse_expr_table_label_independent_of_from_table() -> None:
+    """The guard names table_label, not the physical FROM table it reads."""
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("dob" VARCHAR)')
+    conn.execute('INSERT INTO "_grain" VALUES (?)', ["nope"])
+    expr = render_date_parse_expr(
+        '"_grain"."dob"', "%Y-%m-%d", "birth_date", "output_table"
+    )
+    try:
+        with pytest.raises(duckdb.Error) as excinfo:
+            conn.execute(f'SELECT {expr} FROM "_grain"').fetchall()
+    finally:
+        conn.close()
+    assert "output_table" in str(excinfo.value)
+
+
+def test_render_date_parse_expr_quotes_splice_safely() -> None:
+    """A table_label containing a single quote splices safely (no SQL
+    breakout) and its unescaped text survives into the raised error."""
+    value = _run_date_parse(
+        "2024-01-15", "%Y-%m-%d", table_label="vi'sits", column_name="dob"
+    )
+    assert value == date(2024, 1, 15)
+
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("dob" VARCHAR)')
+    conn.execute('INSERT INTO "_grain" VALUES (?)', ["bad-value"])
+    expr = render_date_parse_expr('"_grain"."dob"', "%Y-%m-%d", "parsed", "vi'sits")
+    try:
+        with pytest.raises(duckdb.Error) as excinfo:
+            conn.execute(f'SELECT {expr} FROM "_grain"').fetchall()
+    finally:
+        conn.close()
+    assert "vi'sits" in str(excinfo.value)

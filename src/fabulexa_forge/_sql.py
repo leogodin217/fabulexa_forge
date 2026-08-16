@@ -236,3 +236,53 @@ def cast_predicate_element(element: str, sql_type: str) -> object:
         return Decimal(element)
     except InvalidOperation as exc:
         raise ValueError(f"{element!r} does not cast to {sql_type}") from exc
+
+
+def render_date_parse_expr(
+    qualified_source: str,
+    date_format: str,
+    out_name: str,
+    table_label: str,
+) -> str:
+    """Render the SQL SELECT fragment reinterpreting a VARCHAR column as DATE
+    under an author-declared format.
+
+    Lives in the shared SQL utilities — all three modes (dimensional, source,
+    base) render a declared date parse through this one function. NULL source
+    values yield NULL. A non-NULL value not matching the format fails the
+    export loudly at query time via DuckDB's `error()` function, never a
+    silent NULL. The fragment embeds an in-SQL guard that raises, naming
+    `table_label`, the source column (read off `qualified_source`), and the
+    offending runtime value, so the failure names its site no matter how many
+    parses one table declares. The format string is validated at config load
+    (`format_denotes_a_date`); this renderer assumes a valid format.
+
+    Args:
+        qualified_source: The fully table-qualified VARCHAR source column SQL
+            (e.g. `"_grain"."prop__dob"`).
+        date_format: The author-declared strptime-style format.
+        out_name: The output column name (the `AS "<out_name>"` alias).
+        table_label: The output table name interpolated into the guard's
+            error message.
+
+    Returns:
+        A SQL SELECT-list expression fragment ending in `AS "<out_name>"`.
+    """
+    column_label = qualified_source.rsplit(".", 1)[-1].strip('"')
+    format_literal = _sql_literal(date_format)
+    message_prefix = _sql_literal(
+        f"date_parse on '{table_label}.{column_label}': value '"
+    )
+    message_suffix = _sql_literal(f"' does not match format '{date_format}'")
+    error_expr = (
+        f"error({message_prefix}"
+        f" || CAST({qualified_source} AS VARCHAR) || {message_suffix})"
+    )
+    return (
+        "CASE"
+        f" WHEN {qualified_source} IS NULL THEN CAST(NULL AS DATE)"
+        f" WHEN TRY_STRPTIME({qualified_source}, {format_literal}) IS NOT NULL"
+        f" THEN CAST(STRPTIME({qualified_source}, {format_literal}) AS DATE)"
+        f" ELSE CAST({error_expr} AS DATE)"
+        f' END AS "{out_name}"'
+    )

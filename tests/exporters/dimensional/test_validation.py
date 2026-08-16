@@ -17,16 +17,23 @@ from exporters._emit_fixtures import build_test_emit
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
+    DateParseSpec,
     DerivedSpec,
     DimensionalConfig,
     ElapsedSpec,
     OrdinalSpec,
+    ScdWindowSpec,
     SourceDecl,
     TableDecl,
     TimestampSpec,
 )
-from fabulexa_forge.errors import ExportError
+from fabulexa_forge.errors import (
+    DateParseSourceColumn,
+    ExportError,
+    TemporalRenderRequiresAnchor,
+)
 from fabulexa_forge.exporters.dimensional.validation import (
+    check_date_parse_source_column,
     check_discriminator_value_observed,
     check_excluded_kind_not_sourced,
     check_excluded_table_not_sourced,
@@ -37,6 +44,7 @@ from fabulexa_forge.exporters.dimensional.validation import (
     check_slice_only_column_reads,
     check_slice_only_filter_keys,
     check_source_table_exists,
+    check_temporal_render_requires_anchor,
     check_timestamp_source_available,
     validate_table,
 )
@@ -384,6 +392,148 @@ def test_record_index_on_records_raises(tmp_path: Path) -> None:
             match="timestamp source 'record_index' is not available on grain 'records'",
         ):
             check_timestamp_source_available(col, tbl, tbl.source, surface)
+
+
+# ---------------------------------------------------------------------------
+# TemporalRenderRequiresAnchor
+# ---------------------------------------------------------------------------
+
+
+def test_temporal_render_requires_anchor_explicit_timestamp_no_anchor_raises() -> None:
+    """Explicit `as: timestamp` with no resolved anchor is refused at plan
+    time, naming the column."""
+    col = ColumnDecl(
+        name="admitted_at",
+        derived=DerivedSpec(
+            timestamp=TimestampSpec(source="created_sim_time", **{"as": "timestamp"})
+        ),
+    )
+    with pytest.raises(TemporalRenderRequiresAnchor, match="admitted_at"):
+        check_temporal_render_requires_anchor(col, None)
+
+
+def test_temporal_render_requires_anchor_unelected_timestamp_no_anchor_passes() -> None:
+    """An unelected derived: timestamp (no `as`) with no anchor keeps today's
+    raw-ns rendering — absence detection, not an election, so no raise."""
+    col = ColumnDecl(
+        name="raw_ts",
+        derived=DerivedSpec(timestamp=TimestampSpec(source="created_sim_time")),
+    )
+    check_temporal_render_requires_anchor(col, None)  # must not raise
+
+
+def test_temporal_render_requires_anchor_scd_window_object_form_no_anchor_raises() -> (
+    None
+):
+    """The scd_window object form is always an explicit election — no anchor
+    is refused, naming the column."""
+    col = ColumnDecl(
+        name="valid_from",
+        derived=DerivedSpec(
+            scd_window=ScdWindowSpec(bound="valid_from", **{"as": "date"})
+        ),
+    )
+    with pytest.raises(TemporalRenderRequiresAnchor, match="valid_from"):
+        check_temporal_render_requires_anchor(col, None)
+
+
+def test_temporal_render_requires_anchor_scd_window_bare_literal_no_anchor_passes() -> (
+    None
+):
+    """The scd_window bare-literal shorthand carries no election — no anchor
+    does not raise."""
+    col = ColumnDecl(name="valid_from", derived=DerivedSpec(scd_window="valid_from"))
+    check_temporal_render_requires_anchor(col, None)  # must not raise
+
+
+def test_temporal_render_requires_anchor_with_anchor_never_raises() -> None:
+    """Any explicit election, with a resolved anchor present, never raises."""
+    col = ColumnDecl(
+        name="admission_date",
+        derived=DerivedSpec(
+            timestamp=TimestampSpec(source="created_sim_time", **{"as": "date"})
+        ),
+    )
+    check_temporal_render_requires_anchor(col, MagicMock())  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# DateParseSourceColumn
+# ---------------------------------------------------------------------------
+
+
+def _date_parse_sidecar(columns: list[dict[str, object]]) -> Sidecar:
+    """A bare records__actor sidecar carrying the given column list — the
+    DateParseSourceColumn unit tests' fixture."""
+    return _bare_sidecar(
+        [
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": columns,
+                "rows": 0,
+            }
+        ]
+    )
+
+
+def test_date_parse_source_column_declared_varchar_passes() -> None:
+    """A declared VARCHAR date_parse source passes."""
+    sidecar = _date_parse_sidecar(
+        [
+            identity_column("record_id", "VARCHAR"),
+            {"name": "prop__dob", "type": "VARCHAR"},
+        ]
+    )
+    col = ColumnDecl(
+        name="birth_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(**{"from": "prop__dob", "format": "%Y-%m-%d"})
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["birth_date"])
+    check_date_parse_source_column(
+        col, tbl, "records__actor", sidecar
+    )  # must not raise
+
+
+def test_date_parse_source_column_non_varchar_raises() -> None:
+    """A declared non-VARCHAR date_parse source raises DateParseSourceColumn,
+    naming the column and the actual type."""
+    sidecar = _date_parse_sidecar(
+        [
+            identity_column("record_id", "VARCHAR"),
+            {"name": "prop__dob", "type": "BIGINT"},
+        ]
+    )
+    col = ColumnDecl(
+        name="birth_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(**{"from": "prop__dob", "format": "%Y-%m-%d"})
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["birth_date"])
+    with pytest.raises(DateParseSourceColumn, match="birth_date") as exc_info:
+        check_date_parse_source_column(col, tbl, "records__actor", sidecar)
+    assert "BIGINT" in str(exc_info.value)
+
+
+def test_date_parse_source_column_structural_source_raises() -> None:
+    """A structural source with no declared prop__ type behind it (no
+    matching sidecar column) raises, naming 'no declared type'."""
+    sidecar = _date_parse_sidecar([identity_column("record_id", "VARCHAR")])
+    col = ColumnDecl(
+        name="parsed",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(
+                **{"from": "created_sim_time", "format": "%Y-%m-%d"}
+            )
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["parsed"])
+    with pytest.raises(DateParseSourceColumn, match="no declared type"):
+        check_date_parse_source_column(col, tbl, "records__actor", sidecar)
 
 
 # ---------------------------------------------------------------------------
@@ -781,6 +931,28 @@ def test_derived_elapsed_refuses_slice_only(kwargs: dict[str, object]) -> None:
     sidecar = _slice_only_actor_sidecar()
     col = _elapsed_col(**kwargs)  # type: ignore[arg-type]
     tbl = _make_table_decl(kind="actor", columns=[col], key=["wait"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused — derived: date_parse
+# ---------------------------------------------------------------------------
+
+
+def test_derived_date_parse_from_refuses_slice_only() -> None:
+    """derived.date_parse.from: reading a non-exempt slice_only column
+    raises — a date parse source joins the value-read surface list exactly
+    as from/correlation/value_map.from do."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(
+        name="tier_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(**{"from": "prop__tier", "format": "%Y-%m-%d"})
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier_date"])
     with pytest.raises(ExportError) as exc_info:
         check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
     _assert_slice_only_message(str(exc_info.value))

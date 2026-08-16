@@ -398,3 +398,17 @@ class ElectedKeyDuplicate(ExportError):
     COUNT(DISTINCT record_id), and COUNT(DISTINCT elected value) are not
     all equal, or an elected value is NULL; names the table or edge and
     the surface."""
+
+
+class TemporalRenderRequiresAnchor(ExportError):
+    """An explicitly-elected instant rendering (dimensional `as`, the
+    `scd_window` object form, or a source/base `render` entry) has no
+    resolved effective anchor. An elected rendering never falls back to raw
+    integers — without a declared calendar the offset is uninterpretable."""
+
+
+class DateParseSourceColumn(ExportError):
+    """A `date_parse` source does not carry a declared VARCHAR type behind
+    it (the sidecar type for `prop__` columns, or the `history` table's
+    `value` column type on the history_interval grain) — a structural,
+    virtual, or grain-constant source, or a non-VARCHAR declared column."""

@@ -3,7 +3,10 @@
 Verifies: N-version reconstruction, valid_from/valid_to windowing, tracked vs
 static column split (flag-authoritative), single-version for tracked-but-unchanged
 columns, projection-only columns never tracked, Scd2NeedsHistory validation rule,
-flag-absent emits refused, and total ORDER BY.
+flag-absent emits refused, and total ORDER BY. Also the `scd_window` object
+form's instant-rendering election: a date-grained window, same-day version
+collapse, and the open interval's `valid_to` staying NULL under every
+election (temporal-elections sprint Phase 4).
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from fabulexa_forge.config.models import (
     DerivedSpec,
     DimensionalConfig,
     OrdinalSpec,
+    ScdWindowSpec,
     SourceDecl,
     TableDecl,
 )
@@ -101,6 +105,38 @@ def _make_scd2_table_decl(name: str = "dim_patient") -> TableDecl:
 
 def _make_config(table_decl: TableDecl) -> DimensionalConfig:
     return DimensionalConfig(tables=[table_decl])
+
+
+def _make_scd2_table_decl_elected(
+    as_value: str, name: str = "dim_patient"
+) -> TableDecl:
+    """Return a scd: type2 dim_patient TableDecl whose valid_from/valid_to
+    columns carry the object-form scd_window election `as_value`."""
+    return TableDecl(
+        name=name,
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["id", "valid_from"],
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="name", **{"from": "prop__name"}),
+            ColumnDecl(name="status", **{"from": "prop__status"}),
+            ColumnDecl(name="admission_count", **{"from": "prop__admission_count"}),
+            ColumnDecl(
+                name="valid_from",
+                derived=DerivedSpec(
+                    scd_window=ScdWindowSpec(bound="valid_from", **{"as": as_value})
+                ),
+            ),
+            ColumnDecl(
+                name="valid_to",
+                derived=DerivedSpec(
+                    scd_window=ScdWindowSpec(bound="valid_to", **{"as": as_value})
+                ),
+            ),
+        ],
+    )
 
 
 def _build_scd2_emit(
@@ -598,6 +634,141 @@ def test_multiple_records_multiple_versions(tmp_path: Path) -> None:
     assert rows["id"][0] == "a001"
     assert rows["id"][1] == "a001"
     assert rows["id"][2] == "a002"
+
+
+# ---------------------------------------------------------------------------
+# scd_window object form — instant-rendering election
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("as_value", ["date", "time", "timestamptz"])
+def test_scd_window_open_interval_valid_to_null_under_every_election(
+    tmp_path: Path, as_value: str
+) -> None:
+    """The last (open) version's valid_to renders NULL under every election —
+    date, time, and timestamptz alike."""
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_FLAGS,
+        actor_rows=[("trunk", "a001", 0, True, None, 10, 0, "Alice", "admitted", 1)],
+        history_rows=[("trunk", "actor", "a001", "status", 10, "admitted")],
+    )
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-06-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    with open_emit(emit_dir) as emit:
+        config = _make_config(_make_scd2_table_decl_elected(as_value))
+        specs = build_query_specs(
+            emit,
+            config,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    assert rows["valid_to"] == [None]
+
+
+def test_scd_window_date_grained_same_day_versions_collapse(tmp_path: Path) -> None:
+    """A date-grained window: same-day version boundaries collapse
+    valid_from == valid_to for the earlier version, while raw version order
+    is preserved — 3 distinct rows, not deduplicated."""
+    t1 = 3_600_000_000_000  # +1h -> 2024-06-01 01:00 UTC
+    t2 = 18_000_000_000_000  # +5h -> 2024-06-01 05:00 UTC (same day as t1)
+    t3 = 108_000_000_000_000  # +30h -> 2024-06-02 06:00 UTC (next day)
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_FLAGS,
+        actor_rows=[("trunk", "a001", 0, True, None, t3, 0, "Alice", "discharged", 3)],
+        history_rows=[
+            ("trunk", "actor", "a001", "status", t1, "admitted"),
+            ("trunk", "actor", "a001", "status", t2, "under_treatment"),
+            ("trunk", "actor", "a001", "status", t3, "discharged"),
+        ],
+    )
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-06-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    with open_emit(emit_dir) as emit:
+        config = _make_config(_make_scd2_table_decl_elected("date"))
+        specs = build_query_specs(
+            emit,
+            config,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    # Raw version order preserved: 3 distinct rows, not deduplicated by date.
+    assert result.num_rows == 3
+    assert rows["status"] == ["admitted", "under_treatment", "discharged"]
+    # Version 1 (t1 -> t2, same calendar day) collapses valid_from == valid_to.
+    assert rows["valid_from"][0] == rows["valid_to"][0]
+    # Version 2 (t2 -> t3, crosses midnight) does not collapse.
+    assert rows["valid_from"][1] != rows["valid_to"][1]
+    # Version 3 is open (last) -> valid_to is None.
+    assert rows["valid_to"][2] is None
+
+
+def test_build_scd2_column_expr_flag_scd_window_object_form_date() -> None:
+    """The ScdWindowSpec object form with as: date renders a
+    CAST(... AS DATE) window off the raw version_start column."""
+    col = ColumnDecl(
+        name="valid_from",
+        derived=DerivedSpec(
+            scd_window=ScdWindowSpec(bound="valid_from", **{"as": "date"})
+        ),
+    )
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-01-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    expr = build_scd2_column_expr_flag(col, "_versions", "_records", False, anchor)
+    assert "CAST(" in expr
+    assert "AS DATE)" in expr
+    assert "version_start" in expr
+    assert 'AS "valid_from"' in expr
+
+
+def test_scd_window_bare_literal_unchanged_by_election_grammar(tmp_path: Path) -> None:
+    """The bare-literal shorthand (no election) reconstructs identically
+    against the same fixture the object-form tests use — the default
+    `timestamp` rendering, unaffected by the new election grammar."""
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_FLAGS,
+        actor_rows=[
+            ("trunk", "a001", 0, True, None, 30, 0, "Alice", "discharged", 3),
+        ],
+        history_rows=[
+            ("trunk", "actor", "a001", "status", 10, "admitted"),
+            ("trunk", "actor", "a001", "status", 20, "under_treatment"),
+            ("trunk", "actor", "a001", "status", 30, "discharged"),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        config = _make_config(_make_scd2_table_decl())
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    assert rows["valid_from"] == [10, 20, 30]
+    assert rows["valid_to"] == [20, 30, None]
 
 
 # ---------------------------------------------------------------------------

@@ -437,6 +437,7 @@ def _compile_state_specs(
 def _open_dimensional(
     config: "DimensionalConfig",
     sidecar: "Sidecar",
+    anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
     election: "Election",
 ) -> tuple[ShapedTableDecl, ...]:
@@ -452,6 +453,8 @@ def _open_dimensional(
     Args:
         config: The dimensional-mode section.
         sidecar: The open emit's sidecar.
+        anchor: The resolved effective anchor, or None — threaded to
+            TemporalRenderRequiresAnchor.
         notice_sink: Receiver for plan notices.
         election: The resolved election (`resolve_election(sidecar,
             config.keys)`, resolved once by `open_shaped_playback`).
@@ -467,7 +470,13 @@ def _open_dimensional(
     decls: list[ShapedTableDecl] = []
     for table_decl in config.tables:
         validate_table(
-            table_decl, config, sidecar, None, notice_sink, election=election
+            table_decl,
+            config,
+            sidecar,
+            None,
+            notice_sink,
+            anchor=anchor,
+            election=election,
         )
         decls.append(
             ShapedTableDecl(
@@ -740,7 +749,7 @@ def open_shaped_playback(
     else:
         assert config.dimensional is not None
         table_decls = _open_dimensional(
-            config.dimensional, emit.sidecar, notice_sink, election
+            config.dimensional, emit.sidecar, anchor, notice_sink, election
         )
 
     return ShapedPlayback(emit, config, anchor, notice_sink, table_decls, election)

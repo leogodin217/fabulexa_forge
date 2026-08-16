@@ -323,7 +323,13 @@ def build_query_specs(
 
     for table_decl in config.tables:
         source_table_name = validate_table(
-            table_decl, config, sidecar, window, notice_sink, election=resolved_election
+            table_decl,
+            config,
+            sidecar,
+            window,
+            notice_sink,
+            anchor=anchor,
+            election=resolved_election,
         )
         sql, write_mode, view_name, view_sql = build_grain_sql(
             table_decl,

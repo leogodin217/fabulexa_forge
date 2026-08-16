@@ -397,6 +397,47 @@ class ScdWindowSpec(StrictBaseModel):
     semantics as an explicit TimestampSpec election."""
 
 
+def scd_window_bound(
+    scd_window: "Literal['valid_from', 'valid_to'] | ScdWindowSpec | None",
+) -> "Literal['valid_from', 'valid_to'] | None":
+    """The validity bound of a `DerivedSpec.scd_window` field value.
+
+    The bare-literal shorthand and the object form carry the bound
+    differently; every reader of the field's bound goes through this one
+    function rather than re-deriving it.
+
+    Args:
+        scd_window: A `DerivedSpec.scd_window` field value.
+
+    Returns:
+        The bound, or None when `scd_window` is None.
+    """
+    if scd_window is None:
+        return None
+    if isinstance(scd_window, ScdWindowSpec):
+        return scd_window.bound
+    return scd_window
+
+
+def scd_window_render(
+    scd_window: "Literal['valid_from', 'valid_to'] | ScdWindowSpec",
+) -> TemporalRender:
+    """The instant-rendering election of a set `DerivedSpec.scd_window` value.
+
+    The bare-literal shorthand carries no election — the mode-definitional
+    default `timestamp` rendering (absence detection, not an invented value).
+
+    Args:
+        scd_window: A set (non-None) `DerivedSpec.scd_window` field value.
+
+    Returns:
+        The object form's `as_`, or `timestamp` for the bare literal.
+    """
+    if isinstance(scd_window, ScdWindowSpec):
+        return scd_window.as_
+    return "timestamp"
+
+
 class DateParseSpec(StrictBaseModel):
     """A declared reinterpretation of a VARCHAR source column as DATE."""
 

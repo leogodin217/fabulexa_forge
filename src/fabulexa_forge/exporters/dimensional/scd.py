@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from fabulexa_forge.anchor import render_anchor_temporal_expr
+from fabulexa_forge.config.models import scd_window_bound, scd_window_render
 from fabulexa_forge.derivations.versioned_intervals import (
     build_versioned_intervals_sql,
 )
@@ -60,11 +61,12 @@ def build_scd2_column_expr_flag(
         A SQL expression fragment: `<expr> AS "<col_name>"`.
     """
     if col_decl.derived is not None and col_decl.derived.scd_window is not None:
-        bound = col_decl.derived.scd_window  # "valid_from" or "valid_to"
+        bound = scd_window_bound(col_decl.derived.scd_window)
+        render = scd_window_render(col_decl.derived.scd_window)
         col_name = "version_start" if bound == "valid_from" else "version_end"
         qualified_source = f'"{version_alias}"."{col_name}"'
         return render_anchor_temporal_expr(
-            anchor, qualified_source, col_decl.name, "timestamp"
+            anchor, qualified_source, col_decl.name, render
         )
 
     if col_decl.null is not None:
@@ -279,7 +281,10 @@ def build_scd2_rows_sql(
     col_exprs: list[str] = []
     for col_decl in table_decl.columns:
         # Skip valid_to slots — not materialized in the rows table.
-        if col_decl.derived is not None and col_decl.derived.scd_window == "valid_to":
+        if (
+            col_decl.derived is not None
+            and scd_window_bound(col_decl.derived.scd_window) == "valid_to"
+        ):
             continue
 
         if col_decl.from_ is not None and col_decl.from_.startswith("prop__"):
@@ -350,7 +355,7 @@ def build_scd2_view_sql(
     for col_decl in table_decl.columns:
         if col_decl.derived is not None and col_decl.derived.scd_window is not None:
             scd_window_col_names.add(col_decl.name)
-            if col_decl.derived.scd_window == "valid_from":
+            if scd_window_bound(col_decl.derived.scd_window) == "valid_from":
                 valid_from_col = col_decl.name
 
     # Identity = key minus scd_window columns
@@ -361,7 +366,10 @@ def build_scd2_view_sql(
 
     view_exprs: list[str] = []
     for col_decl in table_decl.columns:
-        if col_decl.derived is not None and col_decl.derived.scd_window == "valid_to":
+        if (
+            col_decl.derived is not None
+            and scd_window_bound(col_decl.derived.scd_window) == "valid_to"
+        ):
             # Compute valid_to as LEAD(valid_from) over identity ordered by raw ns
             assert valid_from_col is not None
             expr = (

@@ -1,22 +1,30 @@
 """Tests for dimensional exporter column SQL builders.
 
 Verifies each column mode produces correct SQL and that the value_map type
-inference is correct.
+inference is correct. Also covers the `as`-elected `derived: timestamp`
+render types, the ordinal amendment (raw-ns substitution for a monotone
+sibling, election-aware exclusion of `time`), and `derived: date_parse`
+end-to-end (temporal-elections sprint Phase 4).
 """
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from zoneinfo import ZoneInfo
 
+import duckdb
 import pytest
 
 from fabulexa_forge._sql import render_typed_literal
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
+    DateParseSpec,
     DerivedSpec,
     OrdinalSpec,
+    ScdWindowSpec,
+    SourceDecl,
+    TableDecl,
     TimestampSpec,
     ValueMapSpec,
 )
@@ -25,6 +33,7 @@ from fabulexa_forge.exporters.dimensional.columns import (
     _value_map_duckdb_type,
     build_column_expr,
     build_correlation_expr,
+    build_date_parse_expr,
     build_from_expr,
     build_null_expr,
     build_ordinal_expr,
@@ -39,6 +48,30 @@ def _anchor() -> EffectiveAnchor:
         start_instant=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
         timezone=ZoneInfo("UTC"),
     )
+
+
+def _table_with_columns(columns: list[ColumnDecl]) -> TableDecl:
+    """Build a minimal 'visits' fact TableDecl carrying the given columns —
+    the ordinal-amendment and date_parse tests' enclosing table_decl."""
+    return TableDecl(
+        name="visits",
+        role="fact",
+        source=SourceDecl(grain="records", kind="step"),
+        key=["id"],
+        columns=columns,
+    )
+
+
+def _describe_expr_type(expr: str, grain_alias: str = "_grain") -> str:
+    """Execute a SELECT-list expression against a one-row BIGINT source
+    table and return the resulting column's DuckDB type name."""
+    conn = duckdb.connect(":memory:")
+    conn.execute(f'CREATE TABLE "{grain_alias}" ("created_sim_time" BIGINT)')
+    conn.execute(f'INSERT INTO "{grain_alias}" VALUES (0)')
+    relation = conn.sql(f'SELECT {expr} FROM "{grain_alias}"')
+    duck_type = str(relation.types[0])
+    conn.close()
+    return duck_type
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +245,241 @@ def test_plain_from_always_raw_integer() -> None:
     expr = build_from_expr(col)
     assert "TIMESTAMPTZ" not in expr
     assert expr == '"last_mutation_sim_time" AS "raw_ts"'
+
+
+# ---------------------------------------------------------------------------
+# derived: timestamp — `as` election renders the correct DuckDB output type
+# ---------------------------------------------------------------------------
+
+
+def _timestamp_col(as_value: str | None) -> ColumnDecl:
+    """Build a derived: timestamp ColumnDecl, with or without an `as` election."""
+    spec = (
+        TimestampSpec(source="created_sim_time", **{"as": as_value})
+        if as_value is not None
+        else TimestampSpec(source="created_sim_time")
+    )
+    return ColumnDecl(name="admission", derived=DerivedSpec(timestamp=spec))
+
+
+@pytest.mark.parametrize(
+    "as_value,expected_duck_type",
+    [
+        ("date", "DATE"),
+        ("time", "TIME"),
+        ("timestamptz", "TIMESTAMP WITH TIME ZONE"),
+        (None, "TIMESTAMP"),
+    ],
+)
+def test_build_timestamp_expr_as_election_output_type(
+    as_value: str | None, expected_duck_type: str
+) -> None:
+    """Each `as` election (and the absent-`as` default) renders the correct
+    DuckDB output type when executed."""
+    expr = build_timestamp_expr(_timestamp_col(as_value), _anchor())
+    assert _describe_expr_type(expr) == expected_duck_type
+
+
+def test_build_timestamp_expr_no_as_byte_identical_to_default() -> None:
+    """No `as` renders byte-identical SQL to the mode-definitional default
+    `timestamp` rendering — absence detection, not an invented value."""
+    col_absent = ColumnDecl(
+        name="admission",
+        derived=DerivedSpec(timestamp=TimestampSpec(source="created_sim_time")),
+    )
+    col_explicit = ColumnDecl(
+        name="admission",
+        derived=DerivedSpec(
+            timestamp=TimestampSpec(source="created_sim_time", **{"as": "timestamp"})
+        ),
+    )
+    assert build_timestamp_expr(col_absent, _anchor()) == build_timestamp_expr(
+        col_explicit, _anchor()
+    )
+
+
+# ---------------------------------------------------------------------------
+# Ordinal amendment — raw-ns substitution for a monotone rendered-time sibling
+# ---------------------------------------------------------------------------
+
+
+def test_ordinal_amendment_date_elected_sibling_orders_by_raw_ns() -> None:
+    """order_by naming a date-elected derived: timestamp sibling compiles to
+    that column's raw-ns source, then record_id."""
+    id_col = ColumnDecl(name="id", **{"from": "record_id"})
+    ts_col = ColumnDecl(
+        name="admission_date",
+        derived=DerivedSpec(
+            timestamp=TimestampSpec(source="created_sim_time", **{"as": "date"})
+        ),
+    )
+    ordinal_col = ColumnDecl(
+        name="rank",
+        derived=DerivedSpec(
+            ordinal=OrdinalSpec(partition_by="id", order_by="admission_date")
+        ),
+    )
+    tbl = _table_with_columns([id_col, ts_col, ordinal_col])
+    expr = build_ordinal_expr(ordinal_col, table_decl=tbl)
+    assert 'ORDER BY "_grain"."created_sim_time", "_grain"."record_id"' in expr
+
+
+def test_ordinal_amendment_timestamptz_elected_sibling_orders_by_raw_ns() -> None:
+    """order_by naming a timestamptz-elected sibling also compiles to the
+    raw-ns source — timestamptz is monotone in the instant too."""
+    id_col = ColumnDecl(name="id", **{"from": "record_id"})
+    ts_col = ColumnDecl(
+        name="admitted_at",
+        derived=DerivedSpec(
+            timestamp=TimestampSpec(source="created_sim_time", **{"as": "timestamptz"})
+        ),
+    )
+    ordinal_col = ColumnDecl(
+        name="rank",
+        derived=DerivedSpec(
+            ordinal=OrdinalSpec(partition_by="id", order_by="admitted_at")
+        ),
+    )
+    tbl = _table_with_columns([id_col, ts_col, ordinal_col])
+    expr = build_ordinal_expr(ordinal_col, table_decl=tbl)
+    assert 'ORDER BY "_grain"."created_sim_time", "_grain"."record_id"' in expr
+
+
+def test_ordinal_amendment_time_elected_sibling_excluded() -> None:
+    """order_by naming a time-elected sibling orders by the rendered TIME
+    column itself, then record_id — time-of-day is not monotone in the
+    instant, so raw-ns substitution is excluded."""
+    id_col = ColumnDecl(name="id", **{"from": "record_id"})
+    ts_col = ColumnDecl(
+        name="admitted_time",
+        derived=DerivedSpec(
+            timestamp=TimestampSpec(source="created_sim_time", **{"as": "time"})
+        ),
+    )
+    ordinal_col = ColumnDecl(
+        name="rank",
+        derived=DerivedSpec(
+            ordinal=OrdinalSpec(partition_by="id", order_by="admitted_time")
+        ),
+    )
+    tbl = _table_with_columns([id_col, ts_col, ordinal_col])
+    expr = build_ordinal_expr(ordinal_col, table_decl=tbl)
+    assert 'ORDER BY "admitted_time", "_grain"."record_id"' in expr
+
+
+def test_ordinal_amendment_scd_window_valid_from_date_elected_orders_by_raw_ns() -> (
+    None
+):
+    """order_by naming an scd_window: valid_from object-form sibling (date
+    elected) joins the amendment population, ordering by 'version_start'."""
+    id_col = ColumnDecl(name="id", **{"from": "record_id"})
+    vf_col = ColumnDecl(
+        name="valid_from",
+        derived=DerivedSpec(
+            scd_window=ScdWindowSpec(bound="valid_from", **{"as": "date"})
+        ),
+    )
+    ordinal_col = ColumnDecl(
+        name="rank",
+        derived=DerivedSpec(
+            ordinal=OrdinalSpec(partition_by="id", order_by="valid_from")
+        ),
+    )
+    tbl = _table_with_columns([id_col, vf_col, ordinal_col])
+    expr = build_ordinal_expr(ordinal_col, table_decl=tbl)
+    assert 'ORDER BY "_grain"."version_start", "_grain"."record_id"' in expr
+
+
+def test_ordinal_amendment_scd_window_valid_from_time_elected_excluded() -> None:
+    """A time-elected scd_window: valid_from sibling is excluded from the
+    amendment, exactly as a time-elected derived: timestamp sibling is."""
+    id_col = ColumnDecl(name="id", **{"from": "record_id"})
+    vf_col = ColumnDecl(
+        name="valid_from",
+        derived=DerivedSpec(
+            scd_window=ScdWindowSpec(bound="valid_from", **{"as": "time"})
+        ),
+    )
+    ordinal_col = ColumnDecl(
+        name="rank",
+        derived=DerivedSpec(
+            ordinal=OrdinalSpec(partition_by="id", order_by="valid_from")
+        ),
+    )
+    tbl = _table_with_columns([id_col, vf_col, ordinal_col])
+    expr = build_ordinal_expr(ordinal_col, table_decl=tbl)
+    assert 'ORDER BY "valid_from", "_grain"."record_id"' in expr
+
+
+def test_ordinal_amendment_scd_window_valid_to_bound_stays_outside() -> None:
+    """order_by naming an scd_window: valid_to sibling never joins the
+    amendment population — the amendment applies to valid_from only."""
+    id_col = ColumnDecl(name="id", **{"from": "record_id"})
+    vt_col = ColumnDecl(
+        name="valid_to",
+        derived=DerivedSpec(
+            scd_window=ScdWindowSpec(bound="valid_to", **{"as": "date"})
+        ),
+    )
+    ordinal_col = ColumnDecl(
+        name="rank",
+        derived=DerivedSpec(
+            ordinal=OrdinalSpec(partition_by="id", order_by="valid_to")
+        ),
+    )
+    tbl = _table_with_columns([id_col, vt_col, ordinal_col])
+    expr = build_ordinal_expr(ordinal_col, table_decl=tbl)
+    assert 'ORDER BY "valid_to", "_grain"."record_id"' in expr
+
+
+# ---------------------------------------------------------------------------
+# derived: date_parse — end-to-end
+# ---------------------------------------------------------------------------
+
+
+def test_build_date_parse_expr_end_to_end_prop_varchar() -> None:
+    """date_parse over a records grain's prop__ VARCHAR source parses to DATE."""
+    col = ColumnDecl(
+        name="birth_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(**{"from": "prop__dob", "format": "%Y-%m-%d"})
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr = build_date_parse_expr(col, tbl)
+
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("prop__dob" VARCHAR)')
+    conn.execute('INSERT INTO "_grain" VALUES (?)', ["1990-05-14"])
+    row = conn.execute(f'SELECT {expr} FROM "_grain"').fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row[0] == date(1990, 5, 14)
+
+
+def test_build_date_parse_expr_end_to_end_membership_elem_field() -> None:
+    """date_parse over a membership grain's elem__ VARCHAR source parses to
+    DATE — the builder is agnostic to the grain's source-column prefix."""
+    col = ColumnDecl(
+        name="joined_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(
+                **{"from": "elem__joined_date_str", "format": "%Y-%m-%d"}
+            )
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr = build_date_parse_expr(col, tbl)
+
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("elem__joined_date_str" VARCHAR)')
+    conn.execute('INSERT INTO "_grain" VALUES (?)', ["2023-11-02"])
+    row = conn.execute(f'SELECT {expr} FROM "_grain"').fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row[0] == date(2023, 11, 2)
 
 
 # ---------------------------------------------------------------------------

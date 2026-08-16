@@ -2,7 +2,7 @@ sprint: temporal-elections
 parent_branch: docs/fold-source-row-selection
 baseline_sha: d19cafc294b3bd83529c3976a3d42a4006190112
 started: 2026-08-16
-current_phase: 4
+current_phase: 5
 capabilities:
   - temporal-rendering-elections:
       [
@@ -39,7 +39,7 @@ phases:
           - "tests/config/test_base_config.py"
           - "tests/exporters/dimensional/test_elapsed.py"
   4:
-    status: pending
+    status: complete
     name: "Dimensional attach points"
     demo: "docs/sprints/temporal-elections/demos/phase_4_dimensional_elections.py"
     steps:
