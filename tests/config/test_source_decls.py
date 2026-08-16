@@ -227,6 +227,70 @@ def test_table_decl_extra_field_forbidden() -> None:
 
 
 # ---------------------------------------------------------------------------
+# SourceTableDecl.render / date_parse — structural-instant elections and
+# declared date parses (doc § Config Models; render_maps_valid)
+# ---------------------------------------------------------------------------
+
+
+def test_table_decl_render_parses() -> None:
+    """A well-formed `render` map parses."""
+    decl = SourceTableDecl(
+        name="trips", kind="trip", render={"created_sim_time": "date"}
+    )
+    assert decl.render == {"created_sim_time": "date"}
+
+
+def test_table_decl_render_empty_map_rejected() -> None:
+    """`render: {}` (present but empty) -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceTableDecl(name="trips", kind="trip", render={})
+
+
+def test_table_decl_render_empty_key_rejected() -> None:
+    """A `render` entry with an empty key -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceTableDecl(name="trips", kind="trip", render={"": "date"})
+
+
+def test_table_decl_date_parse_parses() -> None:
+    """A well-formed `date_parse` map parses."""
+    decl = SourceTableDecl(
+        name="trips", kind="trip", date_parse={"prop__dob": "%Y-%m-%d"}
+    )
+    assert decl.date_parse == {"prop__dob": "%Y-%m-%d"}
+
+
+def test_table_decl_date_parse_empty_map_rejected() -> None:
+    """`date_parse: {}` (present but empty) -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceTableDecl(name="trips", kind="trip", date_parse={})
+
+
+def test_table_decl_date_parse_empty_key_rejected() -> None:
+    """A `date_parse` entry with an empty key -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceTableDecl(name="trips", kind="trip", date_parse={"": "%Y-%m-%d"})
+
+
+def test_table_decl_date_parse_invalid_format_rejected() -> None:
+    """A `date_parse` format missing a required directive -> rejected."""
+    with pytest.raises(ValidationError, match="year"):
+        SourceTableDecl(name="trips", kind="trip", date_parse={"prop__dob": "%m-%d"})
+
+
+def test_table_decl_render_and_date_parse_column_overlap_rejected() -> None:
+    """A column named in both `render` and `date_parse` -> rejected (a
+    column names at most one)."""
+    with pytest.raises(ValidationError, match="both"):
+        SourceTableDecl(
+            name="trips",
+            kind="trip",
+            render={"prop__dob": "date"},
+            date_parse={"prop__dob": "%Y-%m-%d"},
+        )
+
+
+# ---------------------------------------------------------------------------
 # SourceEventSourceDecl
 # ---------------------------------------------------------------------------
 
@@ -427,4 +491,37 @@ def test_events_decl_extra_field_forbidden() -> None:
     with pytest.raises(ValidationError):
         SourceEventsDecl.model_validate(
             {"name": "versions", "sources": [{"kind": "trip"}], "bogus": 1}
+        )
+
+
+# ---------------------------------------------------------------------------
+# SourceEventsDecl.render — the log's instant-column rendering election
+# ---------------------------------------------------------------------------
+
+
+def test_events_decl_render_parses() -> None:
+    """A well-formed `render` map parses."""
+    decl = SourceEventsDecl(
+        name="versions",
+        sources=(SourceEventSourceDecl(kind="trip"),),
+        render={"event_sim_time": "timestamptz"},
+    )
+    assert decl.render == {"event_sim_time": "timestamptz"}
+
+
+def test_events_decl_render_empty_map_rejected() -> None:
+    """`render: {}` (present but empty) -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceEventsDecl(
+            name="versions", sources=(SourceEventSourceDecl(kind="trip"),), render={}
+        )
+
+
+def test_events_decl_render_empty_key_rejected() -> None:
+    """A `render` entry with an empty key -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceEventsDecl(
+            name="versions",
+            sources=(SourceEventSourceDecl(kind="trip"),),
+            render={"": "date"},
         )

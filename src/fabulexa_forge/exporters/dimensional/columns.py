@@ -292,6 +292,7 @@ def build_elapsed_expr(
     el = col_decl.derived.elapsed
     col_name = col_decl.name
     subquery_alias = f"_el_{col_name}"
+    assert el.unit is not None
     div = _ELAPSED_DIVISORS[el.unit]
 
     # Resolve column types for other_where literals

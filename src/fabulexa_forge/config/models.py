@@ -90,6 +90,130 @@ def _require_sql_identifier(value: str, context: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Temporal rendering elections: shared vocabulary + validators
+# ---------------------------------------------------------------------------
+
+TemporalRender = Literal["timestamp", "date", "time", "timestamptz"]
+"""The instant-rendering election vocabulary, shared by every attach point."""
+
+_DATE_FORMAT_DIRECTIVE_RE = re.compile(r"%.")
+_DATE_FORMAT_ALLOWED_DIRECTIVES = frozenset({"%Y", "%y", "%m", "%d", "%b", "%B", "%%"})
+_DATE_FORMAT_YEAR_DIRECTIVES = frozenset({"%Y", "%y"})
+_DATE_FORMAT_MONTH_DIRECTIVES = frozenset({"%m", "%b", "%B"})
+
+
+def _validate_date_parse_format(fmt: str, field_name: str) -> None:
+    """A `date_parse` format string denotes a complete calendar date.
+
+    Closed strptime-directive set — `%Y`/`%y` (year), `%m`/`%b`/`%B`
+    (month), `%d` (day), `%%` (literal `%`), plus arbitrary literal text —
+    and must carry at least one year, one month, and `%d`.
+
+    Args:
+        fmt: The author-declared format string.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `fmt` is empty, contains a malformed or unsupported `%`
+            directive, or omits a year, month, or day directive.
+    """
+    if not fmt:
+        raise ValueError(f"{field_name} must be non-empty")
+    directives = _DATE_FORMAT_DIRECTIVE_RE.findall(fmt)
+    accounted_percents = sum(2 if d == "%%" else 1 for d in directives)
+    if fmt.count("%") != accounted_percents:
+        raise ValueError(f"{field_name} {fmt!r} contains a malformed '%' directive")
+    unknown = sorted(
+        {d for d in directives if d not in _DATE_FORMAT_ALLOWED_DIRECTIVES}
+    )
+    if unknown:
+        raise ValueError(
+            f"{field_name} {fmt!r} uses unsupported directive(s) {unknown};"
+            " date_parse format must denote a complete calendar date using only"
+            " %Y/%y (year), %m/%b/%B (month), %d (day), %% (literal), and text"
+        )
+    if not any(d in _DATE_FORMAT_YEAR_DIRECTIVES for d in directives):
+        raise ValueError(
+            f"{field_name} {fmt!r} must include a year directive (%Y or %y)"
+        )
+    if not any(d in _DATE_FORMAT_MONTH_DIRECTIVES for d in directives):
+        raise ValueError(
+            f"{field_name} {fmt!r} must include a month directive (%m, %b, or %B)"
+        )
+    if "%d" not in directives:
+        raise ValueError(f"{field_name} {fmt!r} must include a day directive (%d)")
+
+
+def _require_render_map_valid(
+    value: "dict[str, TemporalRender] | None", field_name: str
+) -> None:
+    """A `render` map: when present, non-empty, with non-empty keys.
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty dict, or contains an empty key.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    for key in value:
+        if not key:
+            raise ValueError(f"{field_name} keys must be non-empty")
+
+
+def _require_date_parse_map_valid(
+    value: dict[str, str] | None, field_name: str
+) -> None:
+    """A `date_parse` map: when present, non-empty, non-empty keys, valid formats.
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty dict, contains an empty key, or a
+            format does not denote a complete calendar date.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    for key, fmt in value.items():
+        if not key:
+            raise ValueError(f"{field_name} keys must be non-empty")
+        _validate_date_parse_format(fmt, f"{field_name}[{key!r}]")
+
+
+def _require_render_date_parse_disjoint(
+    render: "dict[str, TemporalRender] | None",
+    date_parse: dict[str, str] | None,
+    label: str,
+) -> None:
+    """A column names at most one of `render` / `date_parse`.
+
+    Args:
+        render: The declaration's `render` map, or None.
+        date_parse: The declaration's `date_parse` map, or None.
+        label: The declaring unit's message label.
+
+    Raises:
+        ValueError: A column key appears in both maps.
+    """
+    if render is None or date_parse is None:
+        return
+    overlap = sorted(set(render) & set(date_parse))
+    if overlap:
+        raise ValueError(
+            f"{label}: column(s) {overlap} appear in both 'render' and"
+            " 'date_parse' (a column names at most one)"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Kafka connection config (streaming sink)
 # ---------------------------------------------------------------------------
 
@@ -250,10 +374,51 @@ class ValueMapSpec(StrictBaseModel):
 
 
 class TimestampSpec(StrictBaseModel):
-    """A sim_time source column rendered as a wallclock TIMESTAMP via the anchor."""
+    """A sim_time source column rendered as an elected wallclock type via the anchor."""
 
     source: str
-    """The base-layer sim_time column to convert to a wallclock TIMESTAMP."""
+    """The base-layer sim_time column to convert."""
+    as_: TemporalRender | None = Field(None, alias="as")
+    """The instant rendering election. Absent (`None`) means the
+    mode-definitional default `timestamp` rendering — absence detection, not
+    an invented value. Any set value, `timestamp` included, is an explicit
+    election and makes the column anchor-required (business rule)."""
+
+
+class ScdWindowSpec(StrictBaseModel):
+    """An SCD-2 validity bound with an instant-rendering election."""
+
+    bound: Literal["valid_from", "valid_to"]
+    """Which validity bound this column carries."""
+    as_: TemporalRender = Field(alias="as")
+    """The instant rendering election — required. The object form exists to
+    elect (a bound-only object would duplicate the bare-literal shorthand),
+    so every object form is an explicit election with the same anchor
+    semantics as an explicit TimestampSpec election."""
+
+
+class DateParseSpec(StrictBaseModel):
+    """A declared reinterpretation of a VARCHAR source column as DATE."""
+
+    from_: str = Field(alias="from")
+    """The VARCHAR source column holding date strings (sidecar-validated)."""
+    format: str
+    """The author-declared parse format (closed strptime-directive set; see
+    format_denotes_a_date). Must denote a complete calendar date; validated
+    at load time, never defaulted."""
+
+    @model_validator(mode="after")
+    def format_denotes_a_date(self) -> Self:
+        """`from_` is non-empty; `format` denotes a complete calendar date.
+
+        Raises:
+            ValueError: `from_` is empty, or `format` is empty, uses a
+                directive outside the closed set, or omits a year, month,
+                or day directive.
+        """
+        _require_nonempty_str(self.from_, "date_parse.from")
+        _validate_date_parse_format(self.format, "date_parse.format")
+        return self
 
 
 class ElapsedSpec(StrictBaseModel):
@@ -268,8 +433,11 @@ class ElapsedSpec(StrictBaseModel):
     """The sim_time column on the counterpart row marking the interval start."""
     end_source: str
     """The sim_time column on this row marking the interval end."""
-    unit: Literal["minutes", "seconds", "hours"]
-    """The time unit for the computed delta output."""
+    unit: Literal["minutes", "seconds", "hours"] | None = None
+    """Numeric rendering: the delta divided to this unit (DOUBLE). Exclusive
+    with `as_`; exactly one of the two is required (exactly_one_rendering)."""
+    as_: Literal["interval"] | None = Field(None, alias="as")
+    """Typed rendering: the delta as an INTERVAL. Exclusive with `unit`."""
 
     @model_validator(mode="after")
     def other_where_non_empty(self) -> Self:
@@ -290,26 +458,47 @@ class ElapsedSpec(StrictBaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def exactly_one_rendering(self) -> Self:
+        """Exactly one of `unit` / `as_` is set.
+
+        Omitting both is an error (no default rendering is invented);
+        setting both is an error (the elections contradict).
+
+        Raises:
+            ValueError: Neither or both of `unit` / `as_` is set.
+        """
+        if (self.unit is None) == (self.as_ is None):
+            raise ValueError(
+                "elapsed must set exactly one of 'unit' / 'as'"
+                f" (got unit={self.unit!r}, as={self.as_!r})"
+            )
+        return self
+
 
 class DerivedSpec(StrictBaseModel):
-    """A computed column; exactly one of the five derivation kinds is set."""
+    """A computed column; exactly one of the six derivation kinds is set."""
 
     ordinal: OrdinalSpec | None = None
     """Assigns a ROW_NUMBER within a partition ordered by a named column."""
     value_map: ValueMapSpec | None = None
     """Substitutes source values via a lookup table; unmapped values become NULL."""
     timestamp: TimestampSpec | None = None
-    """Converts a sim_time source column to a wallclock TIMESTAMP via the anchor."""
-    scd_window: Literal["valid_from", "valid_to"] | None = None
-    """Fills the SCD-2 validity bound — valid_from or valid_to — for this column."""
+    """Converts a sim_time source column to an elected wallclock type via the anchor."""
+    scd_window: Literal["valid_from", "valid_to"] | ScdWindowSpec | None = None
+    """Bare literal (shorthand, default rendering) or the object form
+    carrying an instant-rendering election."""
     elapsed: ElapsedSpec | None = None
     """Computes a cross-row time delta between two correlated events."""
+    date_parse: DateParseSpec | None = None
+    """Declared VARCHAR->DATE reinterpretation of a source column."""
 
     @model_validator(mode="after")
     def exactly_one_derived(self) -> Self:
         """A DerivedSpec sets exactly one derived kind.
 
-        Exactly one of ordinal/value_map/timestamp/scd_window/elapsed must be set.
+        Exactly one of ordinal/value_map/timestamp/scd_window/elapsed/date_parse
+        must be set.
         """
         set_fields = [
             f
@@ -319,13 +508,14 @@ class DerivedSpec(StrictBaseModel):
                 ("timestamp", self.timestamp),
                 ("scd_window", self.scd_window),
                 ("elapsed", self.elapsed),
+                ("date_parse", self.date_parse),
             ]
             if v is not None
         ]
         if len(set_fields) != 1:
             raise ValueError(
                 "DerivedSpec must set exactly one of"
-                " ordinal/value_map/timestamp/scd_window/elapsed; "
+                " ordinal/value_map/timestamp/scd_window/elapsed/date_parse; "
                 f"got {len(set_fields)}: {set_fields}"
             )
         return self
@@ -834,6 +1024,13 @@ class SourceTableDecl(StrictBaseModel):
     properties of the subject kind (gated at plan time): source column names
     (`prop__<p>`) with `kind`, bare owner-property names with `membership`.
     Absent = every row of the selected populations."""
+    render: dict[str, TemporalRender] | None = None
+    """Structural-instant rendering elections, keyed by source identity
+    (e.g. `created_sim_time`). Keys validated against the table category's
+    instant-carrying structural columns at plan time
+    (RenderKeyIsInstantColumn). Absent = default rendering."""
+    date_parse: dict[str, str] | None = None
+    """Declared date parses: payload source column -> parse format."""
 
     @model_validator(mode="after")
     def table_shape(self) -> Self:
@@ -844,8 +1041,10 @@ class SourceTableDecl(StrictBaseModel):
                 `membership` is set; `sub_types` / `columns` is
                 present-but-empty or carries a duplicate entry; `rename` is
                 present-but-empty or two keys share a target value; `where` is
-                present-but-empty or has an empty key. (Value emptiness /
-                duplication is carried by `PredicateValue` per entry.)
+                present-but-empty or has an empty key; `render` / `date_parse`
+                is present-but-empty, has an empty key, an invalid format, or
+                a column named in both. (Value emptiness / duplication is
+                carried by `PredicateValue` per entry.)
         """
         _require_nonempty_str(self.name, "SourceTableDecl.name")
         label = f"table {self.name!r}"
@@ -854,6 +1053,9 @@ class SourceTableDecl(StrictBaseModel):
         _require_distinct_nonempty_tuple(self.columns, "SourceTableDecl.columns")
         _require_rename_map_valid(self.rename, "SourceTableDecl.rename")
         _require_where_map_valid(self.where, "SourceTableDecl.where")
+        _require_render_map_valid(self.render, "SourceTableDecl.render")
+        _require_date_parse_map_valid(self.date_parse, "SourceTableDecl.date_parse")
+        _require_render_date_parse_disjoint(self.render, self.date_parse, label)
         return self
 
 
@@ -929,17 +1131,22 @@ class SourceEventsDecl(StrictBaseModel):
     sources: tuple[SourceEventSourceDecl, ...]
     """Audited populations, >= 1 entry, pairwise-disjoint (gated at plan
     time — `SourceEventSourceOverlap`)."""
+    render: dict[str, TemporalRender] | None = None
+    """Rendering election for the log's instant column, keyed by source
+    identity (`event_sim_time`, the log's one legal key)."""
 
     @model_validator(mode="after")
     def events_shape(self) -> Self:
         """The declaration's structural shape (design doc § Config Models).
 
         Raises:
-            ValueError: `name` is empty, or `sources` is empty.
+            ValueError: `name` is empty, `sources` is empty, or `render` is
+                present-but-empty or has an empty key.
         """
         _require_nonempty_str(self.name, "SourceEventsDecl.name")
         if not self.sources:
             raise ValueError("SourceEventsDecl.sources must be non-empty (>= 1 entry)")
+        _require_render_map_valid(self.render, "SourceEventsDecl.render")
         return self
 
 
@@ -1022,6 +1229,56 @@ class SourceConfig(StrictBaseModel):
         return self
 
 
+def _duplicate_tables(entries: "list[RenameEntry] | list[BaseRenderDecl]") -> list[str]:
+    """Return `table` values appearing more than once across `entries`, in order.
+
+    Args:
+        entries: A list of entries each carrying a `table` attribute.
+
+    Returns:
+        The `table` value of each repeat occurrence past the first.
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for entry in entries:
+        if entry.table in seen:
+            duplicates.append(entry.table)
+        seen.add(entry.table)
+    return duplicates
+
+
+class BaseRenderDecl(StrictBaseModel):
+    """Per-table temporal elections for the base mode."""
+
+    table: str
+    """The sidecar `records__<kind>` table this entry targets (the same
+    keying as the mode's rename entries; targets disjoint across entries)."""
+    columns: dict[str, TemporalRender] | None = None
+    """Lifecycle-instant elections keyed on pre-default column identities
+    (e.g. `created_sim_time`, `deactivated_at`'s source identity).
+    `last_mutation_sim_time` is outside the key domain — the mode never
+    emits it (business rule)."""
+    date_parse: dict[str, str] | None = None
+    """Declared date parses: `prop__<p>` -> parse format."""
+
+    @model_validator(mode="after")
+    def entry_well_formed(self) -> Self:
+        """`table` is non-empty; `columns` / `date_parse` maps are
+        well-formed and disjoint per column.
+
+        Raises:
+            ValueError: `table` is empty; `columns` / `date_parse` is
+                present-but-empty, has an empty key, an invalid format, or
+                a column named in both.
+        """
+        _require_nonempty_str(self.table, "BaseRenderDecl.table")
+        label = f"base.render table {self.table!r}"
+        _require_render_map_valid(self.columns, "BaseRenderDecl.columns")
+        _require_date_parse_map_valid(self.date_parse, "BaseRenderDecl.date_parse")
+        _require_render_date_parse_disjoint(self.columns, self.date_parse, label)
+        return self
+
+
 class BaseConfig(StrictBaseModel):
     """The base-mode section: presentation escape hatches plus an optional point-in-time slice."""  # noqa: E501
 
@@ -1033,6 +1290,8 @@ class BaseConfig(StrictBaseModel):
     `records__<kind>` name. `columns` keys are state-at column identities
     (`record_id`, `presentation_id`, `created_sim_time`, `active`,
     `deactivated_at`, `prop__<p>`). `sub_type` rejected; `table` targets disjoint."""
+    render: list[BaseRenderDecl] | None = None
+    """Per-table temporal elections; entries' `table` targets disjoint."""
     slice_at: int | None = None
     """Inclusive point-in-time horizon (sim-time ns). Absent -> tape's end.
     Mutually exclusive with `incremental` (enforced on ExportConfig)."""
@@ -1046,7 +1305,7 @@ class BaseConfig(StrictBaseModel):
     @model_validator(mode="after")
     def at_least_one_field(self) -> Self:
         """A present `base` section sets at least one of
-        exclude/rename/slice_at/declare_keys.
+        exclude/rename/render/slice_at/declare_keys.
 
         Raises:
             ValueError: An empty `base: {}` block; omit the section instead.
@@ -1054,8 +1313,8 @@ class BaseConfig(StrictBaseModel):
         if not self.model_fields_set:
             raise ValueError(
                 "base section must set at least one of exclude / rename /"
-                " slice_at / declare_keys (an empty base: {} block is not"
-                " meaningful; omit the section for a bare current-state dump)"
+                " render / slice_at / declare_keys (an empty base: {} block is"
+                " not meaningful; omit the section for a bare current-state dump)"
             )
         return self
 
@@ -1090,22 +1349,25 @@ class BaseConfig(StrictBaseModel):
 
     @model_validator(mode="after")
     def entries_disjoint(self) -> Self:
-        """No two rename entries share a `table` target.
+        """No two rename entries, and no two render entries, share a `table` target.
 
         Raises:
-            ValueError: Two rename entries target the same table.
+            ValueError: Two rename entries, or two render entries, target the
+                same table.
         """
         if self.rename is not None:
-            seen: set[str] = set()
-            duplicates: list[str] = []
-            for entry in self.rename:
-                if entry.table in seen:
-                    duplicates.append(entry.table)
-                seen.add(entry.table)
-            if duplicates:
+            rename_duplicates = _duplicate_tables(self.rename)
+            if rename_duplicates:
                 raise ValueError(
                     "base.rename contains more than one entry for the same"
-                    f" table: {duplicates}"
+                    f" table: {rename_duplicates}"
+                )
+        if self.render is not None:
+            render_duplicates = _duplicate_tables(self.render)
+            if render_duplicates:
+                raise ValueError(
+                    "base.render contains more than one entry for the same"
+                    f" table: {render_duplicates}"
                 )
         return self
 

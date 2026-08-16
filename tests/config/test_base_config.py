@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from fabulexa_forge.config.models import BaseConfig, ExportConfig
+from fabulexa_forge.config.models import BaseConfig, BaseRenderDecl, ExportConfig
 
 # ---------------------------------------------------------------------------
 # Bare mode: base parses
@@ -129,6 +129,109 @@ def test_two_rename_entries_different_tables_valid() -> None:
     )
     assert cfg.rename is not None
     assert len(cfg.rename) == 2
+
+
+# ---------------------------------------------------------------------------
+# BaseRenderDecl — per-table temporal elections for the base mode
+# ---------------------------------------------------------------------------
+
+
+def test_base_render_decl_table_empty_rejected() -> None:
+    """An empty `table` is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        BaseRenderDecl.model_validate({"table": ""})
+
+
+def test_base_render_decl_columns_parses() -> None:
+    """A well-formed `columns` map parses."""
+    decl = BaseRenderDecl.model_validate(
+        {"table": "records__actor", "columns": {"created_sim_time": "date"}}
+    )
+    assert decl.columns == {"created_sim_time": "date"}
+
+
+def test_base_render_decl_columns_empty_map_rejected() -> None:
+    """`columns: {}` (present but empty) -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        BaseRenderDecl.model_validate({"table": "records__actor", "columns": {}})
+
+
+def test_base_render_decl_date_parse_parses() -> None:
+    """A well-formed `date_parse` map parses."""
+    decl = BaseRenderDecl.model_validate(
+        {"table": "records__actor", "date_parse": {"prop__dob": "%Y-%m-%d"}}
+    )
+    assert decl.date_parse == {"prop__dob": "%Y-%m-%d"}
+
+
+def test_base_render_decl_date_parse_empty_map_rejected() -> None:
+    """`date_parse: {}` (present but empty) -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        BaseRenderDecl.model_validate({"table": "records__actor", "date_parse": {}})
+
+
+def test_base_render_decl_columns_and_date_parse_overlap_rejected() -> None:
+    """A column named in both `columns` and `date_parse` -> rejected (a
+    column names at most one)."""
+    with pytest.raises(ValidationError, match="both"):
+        BaseRenderDecl.model_validate(
+            {
+                "table": "records__actor",
+                "columns": {"prop__dob": "date"},
+                "date_parse": {"prop__dob": "%Y-%m-%d"},
+            }
+        )
+
+
+# ---------------------------------------------------------------------------
+# BaseConfig.render — entries-disjoint extension + at_least_one_field
+# ---------------------------------------------------------------------------
+
+
+def test_base_render_alone_satisfies_at_least_one_field() -> None:
+    """`render` alone (no other field) satisfies at_least_one_field."""
+    cfg = BaseConfig.model_validate(
+        {
+            "render": [
+                {"table": "records__actor", "columns": {"created_sim_time": "date"}}
+            ]
+        }
+    )
+    assert cfg.render is not None
+    assert cfg.render[0].table == "records__actor"
+
+
+def test_two_render_entries_same_table_rejected() -> None:
+    """Two base.render entries with the same table are rejected by entries_disjoint."""
+    with pytest.raises(ValidationError, match="same"):
+        BaseConfig.model_validate(
+            {
+                "render": [
+                    {
+                        "table": "records__actor",
+                        "columns": {"created_sim_time": "date"},
+                    },
+                    {
+                        "table": "records__actor",
+                        "date_parse": {"prop__dob": "%Y-%m-%d"},
+                    },
+                ]
+            }
+        )
+
+
+def test_two_render_entries_different_tables_valid() -> None:
+    """Two base.render entries with different tables are valid."""
+    cfg = BaseConfig.model_validate(
+        {
+            "render": [
+                {"table": "records__actor", "columns": {"created_sim_time": "date"}},
+                {"table": "records__patient", "columns": {"created_sim_time": "time"}},
+            ]
+        }
+    )
+    assert cfg.render is not None
+    assert len(cfg.render) == 2
 
 
 # ---------------------------------------------------------------------------

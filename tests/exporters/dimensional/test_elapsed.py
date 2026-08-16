@@ -17,6 +17,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.sidecar_builder import identity_column
+from pydantic import ValidationError
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
@@ -466,18 +467,18 @@ def test_elapsed_absent_end_source_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_elapsed_spec_all_fields_required_missing_unit() -> None:
-    """ElapsedSpec missing unit raises ValidationError at parse time."""
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
+def test_elapsed_spec_neither_unit_nor_as_raises() -> None:
+    """ElapsedSpec with neither `unit` nor `as` set raises ValidationError at
+    parse time — missing rendering is still an error (exactly_one_rendering),
+    even though `unit` alone is no longer unconditionally required."""
+    with pytest.raises(ValidationError, match="exactly one"):
         ElapsedSpec(
             correlate_on="prop__journey_instance",
             other_where={"prop__decision_type": "ed_arrival"},
             start_source="last_mutation_sim_time",
             end_source="last_mutation_sim_time",
-            # unit missing
-        )  # type: ignore[call-arg]
+            # neither unit nor as set
+        )
 
 
 def test_derived_spec_elapsed_exactly_one_validates() -> None:
