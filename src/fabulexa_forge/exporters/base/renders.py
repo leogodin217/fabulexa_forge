@@ -30,8 +30,11 @@ surface at runtime; `Sidecar` TYPE_CHECKING only), the derivations layer (the
 state-at derivation), the mode-neutral election module (the record-index /
 presentation-key horizon-dispatch helpers `_record_index_sql` /
 `_presentation_key_sql`, shared with source's renders — doc § module
-placement), fabulexa_forge.anchor, fabulexa_forge._sql, the sibling base.plan
-module (`_self_identity` at runtime; `BaseTableSpec` / `ReferenceKey`
+placement), fabulexa_forge.anchor (`render_anchor_temporal_expr` — every
+lifecycle instant renders through it, in the spec's resolved `render`
+election), fabulexa_forge._sql (`render_date_parse_expr` — the one renderer
+every mode's declared date parse shares), the sibling base.plan module
+(`_self_identity` at runtime; `BaseTableSpec` / `ReferenceKey`
 TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.*,
 exporters.source.*, or exporters.streaming.*.
 """
@@ -42,11 +45,11 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import KeySurface
+    from fabulexa_forge.config.models import KeySurface, TemporalRender
     from fabulexa_forge.exporters.base.plan import BaseTableSpec, ReferenceKey
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import _sql_literal
+from fabulexa_forge._sql import _sql_literal, render_date_parse_expr
 from fabulexa_forge.anchor import render_anchor_temporal_expr
 from fabulexa_forge.derivations.state_at import (
     STATE_AT_COLUMNS,
@@ -381,13 +384,20 @@ def build_base_render_sql(
     fork_path, spec.kind, spec.properties, horizon_ns)` otherwise — then wraps
     the raw relation with base's own presentation: the lifecycle timestamps
     `created_sim_time` and `deactivated_at` render through
-    `render_anchor_temporal_expr`, which already yields the raw sim-time
-    column aliased when `anchor` is None (so base needs no conditional of its
-    own); `prop__<p>` and `presentation_id` cast back from the state-at codec
-    VARCHAR to their sidecar types (as source's snapshot render does), except
-    a `prop__<p>` reference column whose admitted target populations elect a
-    non-uniform-record_id surface, which reads its elected-surface join
-    instead (§ `_render_reference_value`). Composes the record-index resident
+    `render_anchor_temporal_expr`, in `spec.render`'s elected rendering for
+    that column (the mode-definitional default `timestamp` absent an entry),
+    which already yields the raw sim-time column aliased when `anchor` is
+    None (so base needs no conditional of its own — a None anchor with an
+    explicit election is a caller bug, already refused at plan time by
+    `TemporalRenderRequiresAnchor`); `prop__<p>` and `presentation_id` cast
+    back from the state-at codec VARCHAR to their sidecar types (as source's
+    snapshot render does), except a `prop__<p>` column named in
+    `spec.date_parse`, which reads the declared date parse
+    (`render_date_parse_expr`) instead, and a `prop__<p>` reference column
+    whose admitted target populations elect a non-uniform-record_id surface,
+    which reads its elected-surface join instead (§ `_render_reference_value`
+    — takes priority over a `date_parse` entry, mirroring source's precedent).
+    Composes the record-index resident
     at the same horizon selection (invariant 3) and `LEFT JOIN`s it in: once
     for the kind's own self key (always), once per `spec.reference_keys`
     entry for its always-on `<p>_key`; under a non-`record_id` election it
@@ -427,6 +437,8 @@ def build_base_render_sql(
     col_types = _column_types(sidecar, f"{_RECORDS_PREFIX}{spec.kind}")
     identities = _state_at_column_order(sidecar, spec)
     reference_keys_by_property = _reference_keys_by_property(spec)
+    render_map: dict[str, "TemporalRender"] = dict(spec.render)
+    date_parse_map: dict[str, str] = dict(spec.date_parse)
 
     self_key_out = spec.column_renames.get("record_index", "record_index")
     select_parts: list[str] = [
@@ -447,8 +459,9 @@ def build_base_render_sql(
         elif identity in _VERBATIM_COLUMNS:
             select_parts.append(f'{qualified} AS "{out}"')
         elif identity in _WALLCLOCK_COLUMNS:
+            render = render_map.get(identity, "timestamp")
             select_parts.append(
-                render_anchor_temporal_expr(anchor, qualified, out, "timestamp")
+                render_anchor_temporal_expr(anchor, qualified, out, render)
             )
         elif rk is not None:
             # A dropped value column (uniform record_index target election)
@@ -458,10 +471,17 @@ def build_base_render_sql(
                 select_parts.append(
                     _render_reference_value(rk, out, col_types, identity)
                 )
+        elif identity in date_parse_map:
+            select_parts.append(
+                render_date_parse_expr(
+                    qualified, date_parse_map[identity], out, spec.table_name
+                )
+            )
         else:
             # presentation_id (standalone, non-elected) or a non-reference
-            # prop__<p> payload column: the state-at derivation's value is
-            # codec VARCHAR; CAST back to the sidecar type.
+            # prop__<p> payload column with no declared date parse: the
+            # state-at derivation's value is codec VARCHAR; CAST back to the
+            # sidecar type.
             select_parts.append(
                 f'CAST({qualified} AS {col_types[identity]}) AS "{out}"'
             )

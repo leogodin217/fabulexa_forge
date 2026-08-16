@@ -252,15 +252,23 @@ def build_base_query_specs(
             pairwise-unsafe key-space pair.
         ExportError: A base business rule fails (rename resolution or
             collision).
+        DateParseSourceColumn: A `date_parse` key does not resolve to a
+            declared VARCHAR column.
         PresentationKeysInvalidError: `declare_keys` is true, or some
             population elects presentation_id, and the sidecar's
             `presentation_keys` block is present and incoherent.
+        RenderKeyIsInstantColumn: A `render` key does not name an
+            instant-carrying structural column of the records category.
         TableNotFoundError: A declared `records__<kind>` table is absent.
+        TemporalRenderRequiresAnchor: A `render` entry elects a rendering and
+            no anchor resolved.
     """
     sidecar = emit.sidecar
     fork_path = require_single_branch(sidecar)
     election = resolve_election(sidecar, config.keys)
-    plan = build_base_plan(sidecar, config.base, notice_sink, election=election)
+    plan = build_base_plan(
+        sidecar, config.base, notice_sink, election=election, anchor=anchor
+    )
 
     horizon_ns = _resolve_horizon_ns(config, window)
     write_mode: Literal["create", "replace"] = (

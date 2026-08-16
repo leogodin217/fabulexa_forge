@@ -1,30 +1,36 @@
 """Base-mode planning: kind enumeration, presentation, election, and
-exclude/rename resolution.
+exclude/rename/render resolution.
 
-`build_base_plan` is a pure function of `(sidecar, config, election)` — no
-SQL, no emit read beyond the sidecar. It applies, in order: (1) enumeration
-of every records-category kind in the sidecar (base classifies nothing — no
-genre trichotomy, no sub-type split); (2) `exclude`; (3) per-kind identity
-election resolution (`check_identity_election` over every sub-typed
+`build_base_plan` is a pure function of `(sidecar, config, election, anchor)`
+— no SQL, no emit read beyond the sidecar. It applies, in order: (1)
+enumeration of every records-category kind in the sidecar (base classifies
+nothing — no genre trichotomy, no sub-type split); (2) `exclude`; (3) per-kind
+identity election resolution (`check_identity_election` over every sub-typed
 surviving kind's full domain — base never splits, so a mixed election
 refuses) and per reference edge target election resolution
 (`check_edge_union_safety` over the target kind's full domain); (4)
 operational presentation defaults (prefix-stripped table name, the elected
 self identity's contract column name `-> id`, `record_index -> <kind>_key`,
 and per surviving reference edge `ref_index__<p> -> <p>_key`); (5) `rename`;
-(6) the collision and reserved-name checks. See `docs/architecture/base.md`
-for the semantics this module implements (no horizon here — render.py's
-concern) and `docs/architecture/pending/key-election.md` § Rendering per mode
-(Base) for the election semantics.
+(6) `render` — per-table lifecycle-instant elections and declared date
+parses, keyed on the same pre-default column identities `rename` shares
+(`TemporalRenderRequiresAnchor`, `RenderKeyIsInstantColumn`,
+`DateParseSourceColumn`); (7) the collision and reserved-name checks. See
+`docs/architecture/base.md` for the semantics this module implements (no
+horizon here — render.py's concern) and
+`docs/architecture/pending/key-election.md` § Rendering per mode (Base) for
+the election semantics.
 
-Layer-direction invariant: imports only the reader, the derivations layer
-(the state-at derivation's column order / presentation-id helpers),
+Layer-direction invariant: imports only the reader (including the
+structural-temporal surface `structural_instant_columns`), the derivations
+layer (the state-at derivation's column order / presentation-id helpers),
 fabulexa_forge.errors, the mode-neutral reserved_names, notices (for
 `Notice`, and `NoticeSink` TYPE_CHECKING-only), the mode-neutral query_spec
 and election modules (`TableKeys`; `Election`, `check_identity_election`,
 `check_edge_union_safety`, `resolve_election`), and slice_only modules,
-config.models (TYPE_CHECKING only except `KeySurface`), and stdlib. Never
-imports exporters.dimensional.*, exporters.source.*, or exporters.streaming.*.
+config.models (TYPE_CHECKING only except `KeySurface`), fabulexa_forge.anchor
+(TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.*,
+exporters.source.*, or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -35,11 +41,14 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import (
         BaseConfig,
+        BaseRenderDecl,
         ExcludeDecl,
         KeySurface,
         RenameEntry,
+        TemporalRender,
     )
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
@@ -52,7 +61,10 @@ from fabulexa_forge.errors import (
     BaseNameCollision,
     BaseRenameSliceOnly,
     BaseRenameUnresolved,
+    DateParseSourceColumn,
     ExportError,
+    RenderKeyIsInstantColumn,
+    TemporalRenderRequiresAnchor,
 )
 from fabulexa_forge.exporters.election import (
     check_edge_union_safety,
@@ -67,6 +79,7 @@ from fabulexa_forge.exporters.reserved_names import (
     is_reserved_table_name,
 )
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
+from fabulexa_forge.reader.records_columns import structural_instant_columns
 
 #: Prefix marking a records-category column as a reconstructable property.
 _PROP_PREFIX = "prop__"
@@ -145,6 +158,22 @@ class BaseTableSpec:
     under `record_index`), `record_index -> <kind>_key`, and one
     `ref_index__<p> -> <p>_key` per `reference_keys` entry defaults, each
     overridable by a `rename` entry."""
+    render: "tuple[tuple[str, TemporalRender], ...]" = ()
+    """Resolved lifecycle-instant rendering elections, (pre-default column
+    identity, elected rendering) pairs, the matching `BaseRenderDecl.columns`
+    iteration order; keys gated at plan time against the domain `rename`
+    shares (`last_mutation_sim_time` is outside it — the mode never emits
+    it) and against `RenderKeyIsInstantColumn`. Empty when no `render` entry
+    matches this kind — every lifecycle instant renders the
+    mode-definitional default `timestamp`. Defaults to empty so existing
+    construction call sites need no change; `_resolve_specs` always passes
+    it explicitly."""
+    date_parse: tuple[tuple[str, str], ...] = ()
+    """Resolved declared date parses, (`prop__<p>` column identity, format)
+    pairs, the matching `BaseRenderDecl.date_parse` iteration order — gated
+    the same two-stage way as `render`, plus `DateParseSourceColumn`. Empty
+    when no `date_parse` entry matches this kind. Defaults to empty for the
+    same reason as `render`."""
 
 
 @dataclass(frozen=True)
@@ -626,6 +655,41 @@ def _default_column_renames(
     return renames
 
 
+def _check_column_domain(
+    key: str,
+    valid_identities: frozenset[str],
+    omitted: frozenset[str],
+    table_name: str,
+) -> None:
+    """Verify `key` names a state-at or key column identity a kind's table
+    emits — the domain `rename.columns`, `render`, and `date_parse` keys
+    share.
+
+    Args:
+        key: The candidate column identity.
+        valid_identities: The kind's full state-at + key column identity set
+            (§ `_state_at_identities`, § `_key_identities`).
+        omitted: The kind's `slice_only`-omitted identities — `prop__` column
+            names and their `ref_index__` shadow identities.
+        table_name: The kind's `records__<kind>` table, for the error.
+
+    Raises:
+        BaseRenameSliceOnly: `key` names a column the slice_only policy omits.
+        BaseRenameUnresolved: `key` is not a state-at or key column identity
+            this emit produces (including one an election absorbed or
+            dropped).
+    """
+    if key in omitted:
+        raise BaseRenameSliceOnly(
+            f"table {table_name!r}: column {key!r} is omitted by the slice_only policy"
+        )
+    if key not in valid_identities:
+        raise BaseRenameUnresolved(
+            f"table {table_name!r}: column {key!r} is not a state-at or key"
+            " column identity this emit produces"
+        )
+
+
 def _resolve_naming(
     kind: str,
     identity_surface: "KeySurface",
@@ -669,20 +733,168 @@ def _resolve_naming(
     name = matched_entry.name if matched_entry.name is not None else kind
     if matched_entry.columns is not None:
         for src_key, out_val in matched_entry.columns.items():
-            if src_key in omitted:
-                raise BaseRenameSliceOnly(
-                    f"rename targets column {src_key!r} on table"
-                    f" {matched_entry.table!r}, which is omitted by the"
-                    " slice_only policy"
-                )
-            if src_key not in valid_identities:
-                raise BaseRenameUnresolved(
-                    f"rename targets column {src_key!r} on table"
-                    f" {matched_entry.table!r}, which is not a state-at column"
-                    " of this kind"
-                )
+            _check_column_domain(
+                src_key, valid_identities, omitted, matched_entry.table
+            )
             column_renames[src_key] = out_val
     return name, column_renames
+
+
+# ---------------------------------------------------------------------------
+# `render` / `date_parse`: temporal rendering elections
+# ---------------------------------------------------------------------------
+
+
+def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:
+    """Map every column of `table_name` to its declared sidecar DuckDB type.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        table_name: A sidecar table name.
+
+    Returns:
+        {column name -> DuckDB type}, in no particular order.
+    """
+    return {col.name: col.type for col in sidecar.columns(table_name)}
+
+
+def _verify_render_key_is_instant(key: str, table_name: str) -> None:
+    """Enforce RenderKeyIsInstantColumn: a `render` key names an
+    instant-carrying structural column of the records category.
+
+    Args:
+        key: The `render` key, already confirmed a state-at or key column
+            identity this kind's table emits.
+        table_name: The kind's `records__<kind>` table, for the error.
+
+    Raises:
+        RenderKeyIsInstantColumn: `key` is not among the records category's
+            instant-carrying structural columns.
+    """
+    if key not in structural_instant_columns("records"):
+        raise RenderKeyIsInstantColumn(
+            f"table '{table_name}': render key '{key}' is not an"
+            " instant-carrying structural column of category 'records'"
+        )
+
+
+def _verify_date_parse_source_varchar(
+    key: str, col_types: dict[str, str], table_name: str
+) -> None:
+    """Enforce DateParseSourceColumn: a `date_parse` key resolves to a
+    declared VARCHAR column.
+
+    Args:
+        key: The `date_parse` key, already confirmed a state-at or key
+            column identity this kind's table emits.
+        col_types: Every declared column of the kind's `records__<kind>`
+            table, name -> declared DuckDB type (§ `_column_types`).
+        table_name: The kind's `records__<kind>` table, for the error.
+
+    Raises:
+        DateParseSourceColumn: `key`'s declared type is not VARCHAR.
+    """
+    sql_type = col_types.get(key)
+    if sql_type is None or sql_type.upper() != "VARCHAR":
+        got = sql_type if sql_type is not None else "no declared type"
+        raise DateParseSourceColumn(
+            f"date_parse column '{key}' on '{table_name}': source must be an"
+            f" existing VARCHAR column (got {got})"
+        )
+
+
+def _resolve_table_render(
+    decl: "BaseRenderDecl | None",
+    valid_identities: frozenset[str],
+    omitted: frozenset[str],
+    table_name: str,
+    anchor: "EffectiveAnchor | None",
+) -> "tuple[tuple[str, TemporalRender], ...]":
+    """Resolve one kind's declared `render` map (§ `BaseTableSpec.render`).
+
+    Gates each key through the domain `rename` shares
+    (`_check_column_domain` — `last_mutation_sim_time` is outside it, the
+    mode never emits it), then `RenderKeyIsInstantColumn`, then
+    `TemporalRenderRequiresAnchor`: every explicitly-elected rendering
+    (whatever the elected type — `timestamp` included) requires a resolved
+    anchor, since base's anchor is optional and a None anchor has no wallclock
+    calendar to interpolate against.
+
+    Args:
+        decl: The `BaseRenderDecl` matching this kind's table, or None.
+        valid_identities: The kind's full state-at + key column identity set.
+        omitted: The kind's `slice_only`-omitted identities.
+        table_name: The kind's `records__<kind>` table.
+        anchor: The resolved effective anchor, or None.
+
+    Returns:
+        The resolved (column identity, elected rendering) pairs,
+        `decl.columns` iteration order; empty when `decl` is None or carries
+        no `columns` map.
+
+    Raises:
+        BaseRenameSliceOnly, BaseRenameUnresolved: Propagated from
+            `_check_column_domain`.
+        RenderKeyIsInstantColumn: Propagated from `_verify_render_key_is_instant`.
+        TemporalRenderRequiresAnchor: An explicit election is set and no
+            anchor resolved.
+    """
+    if decl is None or decl.columns is None:
+        return ()
+    resolved: list[tuple[str, "TemporalRender"]] = []
+    for key, render in decl.columns.items():
+        _check_column_domain(key, valid_identities, omitted, table_name)
+        _verify_render_key_is_instant(key, table_name)
+        if anchor is None:
+            raise TemporalRenderRequiresAnchor(
+                f"column '{key}': temporal rendering '{render}' requires a"
+                " resolved anchor; this emit declares no runtime calendar"
+                " and none was supplied"
+            )
+        resolved.append((key, render))
+    return tuple(resolved)
+
+
+def _resolve_table_date_parse(
+    decl: "BaseRenderDecl | None",
+    valid_identities: frozenset[str],
+    omitted: frozenset[str],
+    table_name: str,
+    col_types: dict[str, str],
+) -> tuple[tuple[str, str], ...]:
+    """Resolve one kind's declared `date_parse` map (§ `BaseTableSpec.date_parse`).
+
+    Gates each key through the domain `rename` shares (`_check_column_domain`),
+    then `DateParseSourceColumn` — a parse reads no sim_time, so it carries no
+    anchor requirement.
+
+    Args:
+        decl: The `BaseRenderDecl` matching this kind's table, or None.
+        valid_identities: The kind's full state-at + key column identity set.
+        omitted: The kind's `slice_only`-omitted identities.
+        table_name: The kind's `records__<kind>` table.
+        col_types: Every declared column of the kind's table, name ->
+            declared DuckDB type (§ `_column_types`).
+
+    Returns:
+        The resolved (column identity, format) pairs, `decl.date_parse`
+        iteration order; empty when `decl` is None or carries no
+        `date_parse` map.
+
+    Raises:
+        BaseRenameSliceOnly, BaseRenameUnresolved: Propagated from
+            `_check_column_domain`.
+        DateParseSourceColumn: Propagated from
+            `_verify_date_parse_source_varchar`.
+    """
+    if decl is None or decl.date_parse is None:
+        return ()
+    resolved: list[tuple[str, str]] = []
+    for key, fmt in decl.date_parse.items():
+        _check_column_domain(key, valid_identities, omitted, table_name)
+        _verify_date_parse_source_varchar(key, col_types, table_name)
+        resolved.append((key, fmt))
+    return tuple(resolved)
 
 
 def _resolve_identity_surface(
@@ -723,21 +935,25 @@ def _resolve_specs(
     election: "Election",
     kinds: tuple[str, ...],
     rename: "list[RenameEntry] | None",
+    render: "list[BaseRenderDecl] | None",
+    anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
 ) -> tuple[BaseTableSpec, ...]:
     """Resolve every surviving kind's election, default naming, then apply
-    matching rename entries.
+    matching rename and render entries.
 
     The emission point for `slice-only-column-omitted` and
     `reference-key-target-absent`: per kind, computes the omitted set and the
     resolved reference keys and emits their notices, kind order then sidecar
-    column order, before rename resolution and spec assembly.
+    column order, before rename/render resolution and spec assembly.
 
     Args:
         sidecar: The open emit's sidecar.
         election: The resolved election.
         kinds: The classified, exclude-filtered kinds.
         rename: The base.rename entries, or None.
+        render: The base.render entries, or None.
+        anchor: The resolved effective anchor, or None.
         notice_sink: Receiver for slice-only-column-omitted and
             reference-key-target-absent notices.
 
@@ -745,26 +961,40 @@ def _resolve_specs(
         One BaseTableSpec per kind, in kind order.
 
     Raises:
-        BaseRenameSliceOnly: A rename entry's columns key names a
-            policy-omitted slice_only column or its ref_index__ shadow.
+        BaseRenameSliceOnly: A rename, render, or date_parse entry's key
+            names a policy-omitted slice_only column or its ref_index__
+            shadow.
         BaseRenameUnresolved: A rename entry's table does not match any
-            surviving kind, or one of its columns keys is unresolved
+            surviving kind, a render entry's table does not match any
+            surviving kind, or a rename/render/date_parse key is unresolved
             (including one an election absorbed or dropped).
+        DateParseSourceColumn: A `date_parse` key does not resolve to a
+            declared VARCHAR column.
         ElectionMixedIdentity: A sub-typed kind's populations elect differing
             surfaces.
         ElectionUnionUnsafe: A uniform presentation_id election, or a
             reference edge's admitted target populations, contain a
             pairwise-unsafe key-space pair.
+        RenderKeyIsInstantColumn: A `render` key does not name an
+            instant-carrying structural column of the records category.
         TemporalClassUnavailableError: Propagated from the omitted-column scan.
+        TemporalRenderRequiresAnchor: A `render` entry elects a rendering and
+            no anchor resolved.
     """
     rename_by_table: dict[str, RenameEntry] = {}
     if rename is not None:
         for entry in rename:
             rename_by_table[entry.table] = entry
 
+    render_by_table: dict[str, BaseRenderDecl] = {}
+    if render is not None:
+        for render_entry_decl in render:
+            render_by_table[render_entry_decl.table] = render_entry_decl
+
     known_records_tables = _known_records_tables(sidecar)
 
     matched_tables: set[str] = set()
+    matched_render_tables: set[str] = set()
     specs: list[BaseTableSpec] = []
     for kind in kinds:
         table = f"{_RECORDS_PREFIX}{kind}"
@@ -775,6 +1005,7 @@ def _resolve_specs(
         omitted_ref_index_shadow = frozenset(
             f"ref_index__{name[len(_PROP_PREFIX) :]}" for name in omitted
         )
+        omitted_domain = omitted | omitted_ref_index_shadow
 
         properties = _surviving_properties(sidecar, kind)
         has_pid = has_presentation_id(sidecar, kind)
@@ -794,8 +1025,22 @@ def _resolve_specs(
             identity_surface,
             matched_entry,
             valid_identities,
-            omitted | omitted_ref_index_shadow,
+            omitted_domain,
             reference_keys,
+        )
+
+        matched_render_entry = render_by_table.get(table)
+        if matched_render_entry is not None:
+            matched_render_tables.add(table)
+        render_pairs = _resolve_table_render(
+            matched_render_entry, valid_identities, omitted_domain, table, anchor
+        )
+        date_parse_pairs = _resolve_table_date_parse(
+            matched_render_entry,
+            valid_identities,
+            omitted_domain,
+            table,
+            _column_types(sidecar, table),
         )
 
         specs.append(
@@ -807,6 +1052,8 @@ def _resolve_specs(
                 identity_surface=identity_surface,
                 reference_keys=reference_keys,
                 column_renames=column_renames,
+                render=render_pairs,
+                date_parse=date_parse_pairs,
             )
         )
 
@@ -816,6 +1063,14 @@ def _resolve_specs(
                 raise BaseRenameUnresolved(
                     f"rename targets table {entry.table!r}, which is not a"
                     " records kind base emits"
+                )
+
+    if render is not None:
+        for render_entry_decl in render:
+            if render_entry_decl.table not in matched_render_tables:
+                raise BaseRenameUnresolved(
+                    f"render targets table {render_entry_decl.table!r}, which"
+                    " is not a records kind base emits"
                 )
 
     return tuple(specs)
@@ -992,6 +1247,7 @@ def build_base_plan(
     notice_sink: "NoticeSink",
     *,
     election: "Election | None" = None,
+    anchor: "EffectiveAnchor | None" = None,
 ) -> BasePlan:
     """
     Resolve the time-agnostic plan for a base export: one flat table per surviving
@@ -1030,27 +1286,36 @@ def build_base_plan(
             election internally (every population elects record_id — the
             caller has no `keys` block to thread, or is an election-free
             internal/test caller).
+        anchor: The resolved effective anchor, or None to render lifecycle
+            timestamps as raw sim-time ns. Base does not require one — unlike
+            source, a None anchor is not itself an error; it only refuses an
+            explicit `render` election (`TemporalRenderRequiresAnchor`).
 
     Returns:
         A `BasePlan`: one `BaseTableSpec` per surviving kind (output name, bare
         property set, presentation_id flag, identity surface, reference keys,
-        column-rename map), ready for `build_base_render_sql` to render at a
-        caller-chosen horizon. Column emission order is fixed (self identity,
-        STATE_AT_COLUMNS[1:], presentation_id, then `prop__<p>` in sidecar
-        declaration order, key columns interleaved at render), so it is
-        derived, not stored.
+        column-rename map, resolved render/date_parse elections), ready for
+        `build_base_render_sql` to render at a caller-chosen horizon. Column
+        emission order is fixed (self identity, STATE_AT_COLUMNS[1:],
+        presentation_id, then `prop__<p>` in sidecar declaration order, key
+        columns interleaved at render), so it is derived, not stored.
 
     Raises:
-        BaseRenameSliceOnly: A `rename` entry names an omitted `slice_only`
-            column or its `ref_index__` shadow identity.
-        BaseRenameUnresolved: A `rename` entry's `table` is not a surviving
-            `records__<kind>`, or a `columns` key is not a state-at or key
-            column identity this emit actually produces (including one an
-            election absorbed or dropped).
+        BaseRenameSliceOnly: A `rename`, `render`, or `date_parse` entry
+            names an omitted `slice_only` column or its `ref_index__` shadow
+            identity.
+        BaseRenameUnresolved: A `rename` or `render` entry's `table` is not
+            a surviving `records__<kind>`, or a `columns`/`render`/
+            `date_parse` key is not a state-at or key column identity this
+            emit actually produces (including one an election absorbed or
+            dropped, or `last_mutation_sim_time` — outside the base key
+            domain, the mode never emits it).
         BaseExcludeUnresolved: An `exclude.kinds`/`exclude.tables` entry matches
             nothing base emits.
         BaseNameCollision: Two output tables, or two columns of one output table,
             share a name after presentation defaults and `rename`.
+        DateParseSourceColumn: A `date_parse` key does not resolve to a
+            declared VARCHAR column.
         ElectionMixedIdentity: A sub-typed kind's surviving populations elect
             differing identity surfaces.
         ElectionUnionUnsafe: A uniform presentation_id identity election, or a
@@ -1061,7 +1326,11 @@ def build_base_plan(
             `last_mutation_sim_time`) — checked always-on via
             `exporters.reserved_names`, as source's `_check_reserved_names` does,
             so a full export and a later incremental drip on the same target agree.
+        RenderKeyIsInstantColumn: A `render` key does not name an
+            instant-carrying structural column of the records category.
         TableNotFoundError: A declared `records__<kind>` table is absent.
+        TemporalRenderRequiresAnchor: A `render` entry elects a rendering and
+            no anchor resolved.
     """
     resolved_election = (
         election if election is not None else resolve_election(sidecar, None)
@@ -1073,7 +1342,10 @@ def build_base_plan(
     kinds = _apply_exclude(kinds, exclude)
 
     rename = config.rename if config is not None else None
-    specs = _resolve_specs(sidecar, resolved_election, kinds, rename, notice_sink)
+    render = config.render if config is not None else None
+    specs = _resolve_specs(
+        sidecar, resolved_election, kinds, rename, render, anchor, notice_sink
+    )
 
     _check_collisions(specs)
     _check_reserved_names(specs)

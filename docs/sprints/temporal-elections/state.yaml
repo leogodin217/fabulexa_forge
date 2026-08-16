@@ -68,6 +68,6 @@ phases:
           - "tests/exporters/source/test_renders.py"
           - "tests/exporters/source/test_events_render.py"
   6:
-    status: pending
+    status: complete
     name: "Base attach points"
     demo: "docs/sprints/temporal-elections/demos/phase_6_base_elections.py"

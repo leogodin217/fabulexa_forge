@@ -14,11 +14,14 @@ import csv
 from pathlib import Path
 
 import duckdb
+import pytest
 from _support.duckdb_introspect import constraint_types
 from _support.notices import RecordingNoticeSink, discard_notice_sink
 
-from fabulexa_forge.config.models import BaseConfig, ExportConfig
+from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.config.models import BaseConfig, BaseRenderDecl, ExportConfig
 from fabulexa_forge.derivations.guard import require_single_branch
+from fabulexa_forge.errors import TemporalRenderRequiresAnchor
 from fabulexa_forge.exporters.base.engine import build_base_query_specs, export_base
 from fabulexa_forge.exporters.base.plan import build_base_plan
 from fabulexa_forge.exporters.base.renders import build_base_render_sql
@@ -32,6 +35,7 @@ from fabulexa_forge.reader.emit import open_emit
 from ._base_fixtures import (
     DAY_NS,
     build_base_keys_emit,
+    build_base_render_election_emit,
     build_base_test_emit,
     build_multi_kind_base_emit,
 )
@@ -380,3 +384,67 @@ def test_export_base_duckdb_declare_keys_carries_constraints(tmp_path: Path) -> 
 
     assert "PRIMARY KEY" in constraint_types(out_path, "doctor")
     assert ["presentation_id"] not in _unique_constraint_columns(out_path, "doctor")
+
+
+# ---------------------------------------------------------------------------
+# render: temporal rendering elections thread through the engine
+# ---------------------------------------------------------------------------
+
+
+def test_build_base_query_specs_render_election_threads_anchor_into_plan(
+    tmp_path: Path,
+) -> None:
+    """A render config resolves through build_base_query_specs when an
+    anchor is supplied, composing the same SQL build_base_plan(anchor=...)
+    would."""
+    emit_dir = build_base_render_election_emit(tmp_path)
+    config = ExportConfig(
+        mode="base",
+        base=BaseConfig(
+            render=[
+                BaseRenderDecl(
+                    table="records__patient", columns={"created_sim_time": "date"}
+                )
+            ]
+        ),
+    )
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        specs = build_base_query_specs(
+            emit, config, anchor, None, notice_sink=discard_notice_sink
+        )
+
+        fork_path = require_single_branch(emit.sidecar)
+        plan = build_base_plan(
+            emit.sidecar, config.base, notice_sink=discard_notice_sink, anchor=anchor
+        )
+        spec = next(t for t in plan.tables if t.kind == "patient")
+        expected_sql = build_base_render_sql(
+            emit.sidecar, fork_path, spec, anchor, None
+        )
+
+    assert specs[0].sql == expected_sql
+    assert 'AS DATE) AS "created_sim_time"' in specs[0].sql
+
+
+def test_build_base_query_specs_render_election_no_anchor_raises(
+    tmp_path: Path,
+) -> None:
+    """A render election with no resolved anchor is refused at compile time,
+    propagated from build_base_plan."""
+    emit_dir = build_base_render_election_emit(tmp_path)
+    config = ExportConfig(
+        mode="base",
+        base=BaseConfig(
+            render=[
+                BaseRenderDecl(
+                    table="records__patient", columns={"created_sim_time": "date"}
+                )
+            ]
+        ),
+    )
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(TemporalRenderRequiresAnchor):
+            build_base_query_specs(
+                emit, config, None, None, notice_sink=discard_notice_sink
+            )

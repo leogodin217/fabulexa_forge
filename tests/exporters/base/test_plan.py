@@ -7,17 +7,29 @@ building reads only the sidecar), keeping each fixture minimal and focused.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
-from fabulexa_forge.config.models import BaseConfig, ExcludeDecl, RenameEntry
+from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.config.models import (
+    BaseConfig,
+    BaseRenderDecl,
+    ExcludeDecl,
+    RenameEntry,
+)
 from fabulexa_forge.errors import (
     BaseExcludeUnresolved,
     BaseNameCollision,
     BaseRenameSliceOnly,
     BaseRenameUnresolved,
+    DateParseSourceColumn,
     ExportError,
+    RenderKeyIsInstantColumn,
+    TemporalRenderRequiresAnchor,
 )
 from fabulexa_forge.exporters.base.plan import (
     NOTICE_REFERENCE_KEY_TARGET_ABSENT,
@@ -28,6 +40,12 @@ from fabulexa_forge.exporters.base.plan import (
 from fabulexa_forge.exporters.query_spec import TableKeys
 from fabulexa_forge.reader.errors import PresentationKeysInvalidError
 from fabulexa_forge.reader.sidecar import Sidecar
+
+#: A fixed effective anchor for render-election tests — the same shape
+#: `resolve_effective_anchor` would produce for a UTC sidecar runtime.
+_ANCHOR = EffectiveAnchor(
+    start_instant=datetime(2024, 1, 1, tzinfo=timezone.utc), timezone=ZoneInfo("UTC")
+)
 
 # ---------------------------------------------------------------------------
 # Sidecar-building helpers
@@ -297,6 +315,27 @@ def _slice_only_reference_sidecar() -> Sidecar:
         ],
     )
     return _sidecar(tables=[actor_table, _target_records_table()])
+
+
+def _render_election_sidecar() -> Sidecar:
+    """A `patient` kind carrying a VARCHAR `prop__signup_date` payload (a
+    date_parse candidate) and a non-VARCHAR `prop__age` payload (a
+    DateParseSourceColumn negative case)."""
+    patient_table = _records_table(
+        "patient",
+        [
+            _col(
+                "prop__signup_date",
+                "VARCHAR",
+                history_tracked=False,
+                temporal_class="constant",
+            ),
+            _col(
+                "prop__age", "BIGINT", history_tracked=False, temporal_class="constant"
+            ),
+        ],
+    )
+    return _sidecar(tables=[patient_table])
 
 
 def _notice_order_sidecar() -> Sidecar:
@@ -906,3 +945,163 @@ def test_resolve_base_table_keys_incoherent_block_raises() -> None:
     spec = _spec_for(sidecar)
     with pytest.raises(PresentationKeysInvalidError):
         resolve_base_table_keys(sidecar, spec)
+
+
+# ---------------------------------------------------------------------------
+# `render` / `date_parse`: temporal rendering elections
+# ---------------------------------------------------------------------------
+
+
+def test_render_election_on_lifecycle_instant_resolves_with_anchor() -> None:
+    """A render election on created_sim_time resolves into spec.render with
+    an anchor present."""
+    config = BaseConfig(
+        render=[
+            BaseRenderDecl(
+                table="records__patient", columns={"created_sim_time": "date"}
+            )
+        ]
+    )
+    plan = build_base_plan(
+        _render_election_sidecar(), config, discard_notice_sink, anchor=_ANCHOR
+    )
+    spec = next(t for t in plan.tables if t.kind == "patient")
+    assert spec.render == (("created_sim_time", "date"),)
+
+
+def test_render_election_composes_with_rename_keys_stay_pre_default() -> None:
+    """render and rename both target one table; render's key stays the
+    pre-default column identity regardless of rename's output renaming."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__patient", columns={"created_sim_time": "joined_at"}
+            )
+        ],
+        render=[
+            BaseRenderDecl(
+                table="records__patient", columns={"created_sim_time": "timestamptz"}
+            )
+        ],
+    )
+    plan = build_base_plan(
+        _render_election_sidecar(), config, discard_notice_sink, anchor=_ANCHOR
+    )
+    spec = next(t for t in plan.tables if t.kind == "patient")
+    assert spec.render == (("created_sim_time", "timestamptz"),)
+    assert spec.column_renames["created_sim_time"] == "joined_at"
+
+
+def test_render_key_last_mutation_sim_time_refused() -> None:
+    """A render key of last_mutation_sim_time is refused — outside the base
+    key domain, the mode never emits it."""
+    config = BaseConfig(
+        render=[
+            BaseRenderDecl(
+                table="records__patient", columns={"last_mutation_sim_time": "date"}
+            )
+        ]
+    )
+    with pytest.raises(BaseRenameUnresolved):
+        build_base_plan(
+            _render_election_sidecar(), config, discard_notice_sink, anchor=_ANCHOR
+        )
+
+
+def test_render_key_not_instant_column_refused() -> None:
+    """A render key naming a non-instant column (a prop__ payload) raises
+    RenderKeyIsInstantColumn."""
+    config = BaseConfig(
+        render=[BaseRenderDecl(table="records__patient", columns={"prop__age": "date"})]
+    )
+    with pytest.raises(RenderKeyIsInstantColumn):
+        build_base_plan(
+            _render_election_sidecar(), config, discard_notice_sink, anchor=_ANCHOR
+        )
+
+
+def test_render_key_unresolved_column_refused() -> None:
+    """A render key naming no column of the kind's table at all raises
+    BaseRenameUnresolved."""
+    config = BaseConfig(
+        render=[
+            BaseRenderDecl(
+                table="records__patient", columns={"prop__nonexistent": "date"}
+            )
+        ]
+    )
+    with pytest.raises(BaseRenameUnresolved):
+        build_base_plan(
+            _render_election_sidecar(), config, discard_notice_sink, anchor=_ANCHOR
+        )
+
+
+def test_render_election_with_no_anchor_refused() -> None:
+    """An election with no resolved anchor is refused —
+    TemporalRenderRequiresAnchor, base's anchor is optional."""
+    config = BaseConfig(
+        render=[
+            BaseRenderDecl(table="records__patient", columns={"deactivated_at": "date"})
+        ]
+    )
+    with pytest.raises(TemporalRenderRequiresAnchor, match="deactivated_at"):
+        build_base_plan(_render_election_sidecar(), config, discard_notice_sink)
+
+
+def test_render_table_not_surviving_raises() -> None:
+    """A render entry whose table is not a surviving records__<kind> raises
+    BaseRenameUnresolved."""
+    config = BaseConfig(
+        render=[
+            BaseRenderDecl(
+                table="records__nonexistent", columns={"created_sim_time": "date"}
+            )
+        ]
+    )
+    with pytest.raises(BaseRenameUnresolved):
+        build_base_plan(
+            _render_election_sidecar(), config, discard_notice_sink, anchor=_ANCHOR
+        )
+
+
+def test_date_parse_on_varchar_prop_resolves_without_anchor() -> None:
+    """date_parse on a VARCHAR prop__ column resolves — a parse reads no
+    sim_time, so it carries no anchor requirement."""
+    config = BaseConfig(
+        render=[
+            BaseRenderDecl(
+                table="records__patient", date_parse={"prop__signup_date": "%Y-%m-%d"}
+            )
+        ]
+    )
+    plan = build_base_plan(_render_election_sidecar(), config, discard_notice_sink)
+    spec = next(t for t in plan.tables if t.kind == "patient")
+    assert spec.date_parse == (("prop__signup_date", "%Y-%m-%d"),)
+
+
+def test_date_parse_on_non_varchar_prop_refused() -> None:
+    """date_parse on a non-VARCHAR prop__ column raises DateParseSourceColumn."""
+    config = BaseConfig(
+        render=[
+            BaseRenderDecl(
+                table="records__patient", date_parse={"prop__age": "%Y-%m-%d"}
+            )
+        ]
+    )
+    with pytest.raises(DateParseSourceColumn):
+        build_base_plan(_render_election_sidecar(), config, discard_notice_sink)
+
+
+def test_date_parse_on_slice_only_column_refused() -> None:
+    """A date_parse source that is slice_only is refused — the mode's
+    omission posture composes with the parse's refusal."""
+    sidecar = _slice_only_sidecar()
+    config = BaseConfig(
+        render=[
+            BaseRenderDecl(
+                table="records__patient", date_parse={"prop__loyalty_tier": "%Y-%m-%d"}
+            )
+        ]
+    )
+    with pytest.raises(BaseRenameSliceOnly):
+        build_base_plan(sidecar, config, discard_notice_sink)
