@@ -18,12 +18,12 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import render_predicate_condition, render_typed_literal
-from fabulexa_forge.anchor import render_anchor_timestamp_expr
+from fabulexa_forge.anchor import render_anchor_temporal_expr
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.reader.errors import TableNotFoundError
 
-__all__ = ["render_anchor_timestamp_expr", "render_typed_literal"]
+__all__ = ["render_anchor_temporal_expr", "render_typed_literal"]
 
 
 def _value_map_duckdb_type(map_values: dict[str, int | float | str]) -> str:
@@ -236,7 +236,7 @@ def build_timestamp_expr(
     """Build a SQL expression for a `derived: timestamp` column.
 
     When an anchor is present, renders a wallclock TIMESTAMP via the pinned
-    timezone/origin SQL via render_anchor_timestamp_expr. When absent, returns
+    timezone/origin SQL via render_anchor_temporal_expr. When absent, returns
     the raw sim_time integer column.
 
     Args:
@@ -251,7 +251,9 @@ def build_timestamp_expr(
     ts = col_decl.derived.timestamp
     src = ts.source
     qualified_source = f'"{grain_alias}"."{src}"'
-    return render_anchor_timestamp_expr(anchor, qualified_source, col_decl.name)
+    return render_anchor_temporal_expr(
+        anchor, qualified_source, col_decl.name, "timestamp"
+    )
 
 
 _ELAPSED_DIVISORS: dict[str, int] = {

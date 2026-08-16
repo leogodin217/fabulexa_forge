@@ -14,7 +14,7 @@ Both renders wrap a faithful reader relation (`build_records_relation_sql`,
 `build_membership_relation_sql`) at full export, or a reconstruction
 (`build_state_at_sql`, `state` only) when windowed; every structural sim-time
 column renders wallclock through the shared anchor renderer
-(`render_anchor_timestamp_expr`); every render carries its own total
+(`render_anchor_temporal_expr`); every render carries its own total
 `ORDER BY` over raw sim-time keys and identity — never a rendered timestamp
 (§ Ordering and determinism). `build_selection_spine_sql` is the one row-
 selection seam (source-row-selection sprint § The parent lookup): a
@@ -73,7 +73,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import _sql_literal, render_predicate_condition
-from fabulexa_forge.anchor import render_anchor_timestamp_expr
+from fabulexa_forge.anchor import render_anchor_temporal_expr
 from fabulexa_forge.derivations.state_at import build_state_at_sql
 from fabulexa_forge.exporters.election import (
     _presentation_key_sql,
@@ -148,7 +148,7 @@ def _render_wallclock_column(
     """
     qualified = f'"{alias}"."{src}"'
     if src in wallclock_columns:
-        return render_anchor_timestamp_expr(anchor, qualified, out)
+        return render_anchor_temporal_expr(anchor, qualified, out, "timestamp")
     return f'{qualified} AS "{out}"'
 
 
@@ -200,7 +200,7 @@ def _junction_masked_left_at_expr(
         f"CASE WHEN {qualified} IS NULL OR {qualified} >= {window.end_ns}"
         f" THEN NULL ELSE {qualified} END"
     )
-    return render_anchor_timestamp_expr(anchor, masked_source, out)
+    return render_anchor_temporal_expr(anchor, masked_source, out, "timestamp")
 
 
 # ---------------------------------------------------------------------------

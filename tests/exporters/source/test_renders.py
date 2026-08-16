@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Iterator
 import duckdb
 from _support.notices import discard_notice_sink
 
-from fabulexa_forge.anchor import render_anchor_timestamp_expr, resolve_effective_anchor
+from fabulexa_forge.anchor import render_anchor_temporal_expr, resolve_effective_anchor
 from fabulexa_forge.config.models import (
     ExportConfig,
     MembershipRef,
@@ -164,8 +164,8 @@ def test_state_render_wallclock_created_at_and_raw_ordering(tmp_path: Path) -> N
         sql = build_state_render_sql(
             plan.sidecar, plan.fork_path, table, plan.anchor, None
         )
-    expected = render_anchor_timestamp_expr(
-        plan.anchor, '"_rec"."created_sim_time"', "created_at"
+    expected = render_anchor_temporal_expr(
+        plan.anchor, '"_rec"."created_sim_time"', "created_at", "timestamp"
     )
     assert expected in sql
     order_clause = sql.split("ORDER BY", 1)[1]
@@ -301,8 +301,8 @@ def test_junction_render_wallclock_joined_at_and_raw_ordering(tmp_path: Path) ->
         sql = build_junction_render_sql(
             plan.sidecar, plan.fork_path, table, plan.anchor, None
         )
-    expected = render_anchor_timestamp_expr(
-        plan.anchor, '"_mem"."joined_sim_time"', "joined_at"
+    expected = render_anchor_temporal_expr(
+        plan.anchor, '"_mem"."joined_sim_time"', "joined_at", "timestamp"
     )
     assert expected in sql
     order_clause = sql.split("ORDER BY", 1)[1]

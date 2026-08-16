@@ -7,7 +7,7 @@ joins, and record-index key joins.
 `build_state_at_sql` at an exclusive horizon otherwise — then wraps the raw
 state-at relation with base's own presentation: `created_sim_time` /
 `deactivated_at` render wallclock through the shared anchor renderer (raw
-sim-time ns when `anchor` is None, since `render_anchor_timestamp_expr`
+sim-time ns when `anchor` is None, since `render_anchor_temporal_expr`
 already handles that case); `presentation_id` and `prop__<p>` columns CAST
 back from the state-at codec VARCHAR to their sidecar-declared type;
 `record_id` / `active` pass through verbatim (the state-at derivation's own
@@ -47,7 +47,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import _sql_literal
-from fabulexa_forge.anchor import render_anchor_timestamp_expr
+from fabulexa_forge.anchor import render_anchor_temporal_expr
 from fabulexa_forge.derivations.state_at import (
     STATE_AT_COLUMNS,
     build_state_at_end_sql,
@@ -381,7 +381,7 @@ def build_base_render_sql(
     fork_path, spec.kind, spec.properties, horizon_ns)` otherwise — then wraps
     the raw relation with base's own presentation: the lifecycle timestamps
     `created_sim_time` and `deactivated_at` render through
-    `render_anchor_timestamp_expr`, which already yields the raw sim-time
+    `render_anchor_temporal_expr`, which already yields the raw sim-time
     column aliased when `anchor` is None (so base needs no conditional of its
     own); `prop__<p>` and `presentation_id` cast back from the state-at codec
     VARCHAR to their sidecar types (as source's snapshot render does), except
@@ -447,7 +447,9 @@ def build_base_render_sql(
         elif identity in _VERBATIM_COLUMNS:
             select_parts.append(f'{qualified} AS "{out}"')
         elif identity in _WALLCLOCK_COLUMNS:
-            select_parts.append(render_anchor_timestamp_expr(anchor, qualified, out))
+            select_parts.append(
+                render_anchor_temporal_expr(anchor, qualified, out, "timestamp")
+            )
         elif rk is not None:
             # A dropped value column (uniform record_index target election)
             # emits no SELECT part at all — the always-on `<p>_key` below is

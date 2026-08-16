@@ -46,7 +46,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import _sql_literal
-from fabulexa_forge.anchor import render_anchor_timestamp_expr
+from fabulexa_forge.anchor import render_anchor_temporal_expr
 from fabulexa_forge.derivations.membership_events import build_membership_events_sql
 from fabulexa_forge.derivations.row_state_events import build_row_state_events_sql
 from fabulexa_forge.exporters.election import build_identity_translation_sql
@@ -506,8 +506,8 @@ def _build_records_arm_sql(
     )
     events_sql = f'SELECT {events_select} FROM ({lagged_sql}) AS "_lagged"'
 
-    occurred_at_expr = render_anchor_timestamp_expr(
-        anchor, '"_events"."event_sim_time"', "occurred_at"
+    occurred_at_expr = render_anchor_temporal_expr(
+        anchor, '"_events"."event_sim_time"', "occurred_at", "timestamp"
     )
     final_select = ", ".join(
         [
@@ -697,8 +697,8 @@ def _build_membership_arm_sql(
         "CASE \"_fold\".\"op\" WHEN 'join' THEN 'create'"
         " WHEN 'leave' THEN 'destroy' END"
     )
-    occurred_at_expr = render_anchor_timestamp_expr(
-        anchor, '"_fold"."event_sim_time"', "occurred_at"
+    occurred_at_expr = render_anchor_temporal_expr(
+        anchor, '"_fold"."event_sim_time"', "occurred_at", "timestamp"
     )
     order_fields_expr = _membership_sort_key_expr(sidecar, table_name, bare_fields)
 

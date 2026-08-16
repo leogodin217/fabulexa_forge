@@ -428,7 +428,7 @@ def test_rezone_same_instant_different_wall_clock(tmp_path: Path) -> None:
 def test_scd_window_rebases_same_as_timestamp(tmp_path: Path) -> None:
     """scd_window valid_from / valid_to rebase identically to derived: timestamp.
 
-    Both use render_anchor_timestamp_expr under the hood, so the same anchor
+    Both use render_anchor_temporal_expr under the hood, so the same anchor
     applied to version_start/version_end must shift by the same delta.
     """
     runtime_block = {"timezone": "UTC", "start_datetime": "2024-01-01T00:00:00+00:00"}

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fabulexa_forge.anchor import render_anchor_timestamp_expr
+from fabulexa_forge.anchor import render_anchor_temporal_expr
 from fabulexa_forge.derivations.versioned_intervals import (
     build_versioned_intervals_sql,
 )
@@ -63,7 +63,9 @@ def build_scd2_column_expr_flag(
         bound = col_decl.derived.scd_window  # "valid_from" or "valid_to"
         col_name = "version_start" if bound == "valid_from" else "version_end"
         qualified_source = f'"{version_alias}"."{col_name}"'
-        return render_anchor_timestamp_expr(anchor, qualified_source, col_decl.name)
+        return render_anchor_temporal_expr(
+            anchor, qualified_source, col_decl.name, "timestamp"
+        )
 
     if col_decl.null is not None:
         return f'CAST(NULL AS VARCHAR) AS "{col_decl.name}"'
