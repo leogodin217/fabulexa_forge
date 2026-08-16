@@ -20,8 +20,9 @@ module (`build_identity_translation_sql`), `fabulexa_forge.anchor`,
 / `SourceWhereEntry`, TYPE_CHECKING only), the sibling `source.columns`
 module (`build_kind_label_expr` — the one labeling authority, also the
 junction render's call site), `exporters.populations` (`Population`,
-TYPE_CHECKING only), config.models (`KeySurface`, TYPE_CHECKING only), and
-stdlib. Never imports `exporters.dimensional.*` or `exporters.streaming.*`.
+TYPE_CHECKING only), config.models (`KeySurface`, `TemporalRender`,
+TYPE_CHECKING only), and stdlib. Never imports `exporters.dimensional.*` or
+`exporters.streaming.*`.
 One exception to "imports at module top": `_narrow_fold_by_spine_sql` imports
 the sibling `source.renders` module's `build_selection_spine_sql` locally, at
 call time — `renders.py` imports runtime constants from `plan.py`, which
@@ -38,7 +39,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import KeySurface
+    from fabulexa_forge.config.models import KeySurface, TemporalRender
     from fabulexa_forge.exporters.populations import Population
     from fabulexa_forge.exporters.query_spec import TableKeys
     from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceWhereEntry
@@ -136,6 +137,12 @@ class SourceEventLogPlan:
     """The log's declared keys: `PRIMARY KEY (id)` under `declare_keys`,
     None when it is off. A constant of the mode — `id` is true by
     construction, so there is nothing to resolve from the emit."""
+    render: "TemporalRender" = "timestamp"
+    """The elected rendering for the log's one instant column
+    (`event_sim_time` -> `occurred_at`), resolved from `SourceEventsDecl.render`
+    at plan time (`RenderKeyIsInstantColumn` — the log's one legal key is
+    `event_sim_time`, mode-definitional). The mode-definitional default
+    `'timestamp'` when `render` is absent."""
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +405,7 @@ def _build_records_arm_sql(
     anchor: "EffectiveAnchor",
     source: "SourceEventSourcePlan",
     item_id_type: str,
+    render: "TemporalRender",
 ) -> str:
     """One records source's UNION-ALL arm of the event-log render.
 
@@ -426,6 +434,7 @@ def _build_records_arm_sql(
         anchor: The resolved wallclock anchor.
         source: The resolved records-source unit.
         item_id_type: The log's resolved `item_id` column type.
+        render: The log's resolved instant rendering (`log.render`).
 
     Returns:
         A SELECT producing the arm's row shape (§ `build_event_log_sql`).
@@ -507,7 +516,7 @@ def _build_records_arm_sql(
     events_sql = f'SELECT {events_select} FROM ({lagged_sql}) AS "_lagged"'
 
     occurred_at_expr = render_anchor_temporal_expr(
-        anchor, '"_events"."event_sim_time"', "occurred_at", "timestamp"
+        anchor, '"_events"."event_sim_time"', "occurred_at", render
     )
     final_select = ", ".join(
         [
@@ -616,6 +625,7 @@ def _build_membership_arm_sql(
     anchor: "EffectiveAnchor",
     source: "SourceEventSourcePlan",
     item_id_type: str,
+    render: "TemporalRender",
 ) -> str:
     """One membership source's UNION-ALL arm of the event-log render.
 
@@ -640,6 +650,7 @@ def _build_membership_arm_sql(
         anchor: The resolved wallclock anchor.
         source: The resolved membership-source unit.
         item_id_type: The log's resolved `item_id` column type.
+        render: The log's resolved instant rendering (`log.render`).
 
     Returns:
         A SELECT producing the arm's row shape (§ `build_event_log_sql`).
@@ -698,7 +709,7 @@ def _build_membership_arm_sql(
         " WHEN 'leave' THEN 'destroy' END"
     )
     occurred_at_expr = render_anchor_temporal_expr(
-        anchor, '"_fold"."event_sim_time"', "occurred_at", "timestamp"
+        anchor, '"_fold"."event_sim_time"', "occurred_at", render
     )
     order_fields_expr = _membership_sort_key_expr(sidecar, table_name, bare_fields)
 
@@ -755,8 +766,9 @@ def build_event_log_sql(
     (identity fall-through). `item_id` joins the source's `item_surface`
     translation relation (destroy rows included — never the nulled
     after-image; the owner's identity for a membership source), CAST to
-    `log.item_id_type` when non-VARCHAR. `occurred_at` renders wallclock
-    through the anchor renderer. Sources UNION ALL in declaration order
+    `log.item_id_type` when non-VARCHAR. `occurred_at` renders `log.render`'s
+    elected instant type through the anchor renderer (the mode-definitional
+    default `timestamp` absent an election). Sources UNION ALL in declaration order
     under the total ORDER BY `(event_sim_time, item_type, event_class,
     record_id, membership fields in element-schema declaration order,
     VARCHAR-compared, NULLS FIRST)` — `item_type` the plan's resolved
@@ -792,10 +804,12 @@ def build_event_log_sql(
         The render SELECT.
     """
     arms = [
-        _build_membership_arm_sql(sidecar, fork_path, anchor, source, log.item_id_type)
+        _build_membership_arm_sql(
+            sidecar, fork_path, anchor, source, log.item_id_type, log.render
+        )
         if source.property is not None
         else _build_records_arm_sql(
-            sidecar, fork_path, anchor, source, log.item_id_type
+            sidecar, fork_path, anchor, source, log.item_id_type, log.render
         )
         for source in log.sources
     ]

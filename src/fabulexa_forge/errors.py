@@ -412,3 +412,11 @@ class DateParseSourceColumn(ExportError):
     it (the sidecar type for `prop__` columns, or the `history` table's
     `value` column type on the history_interval grain) — a structural,
     virtual, or grain-constant source, or a non-VARCHAR declared column."""
+
+
+class RenderKeyIsInstantColumn(ExportError):
+    """A source declared-table or base-entry `render` key does not name an
+    instant-carrying structural column of the table's category (per the
+    reader's `structural_instant_columns`) — a payload or mechanism column
+    key. The event log's one legal key is `event_sim_time`
+    (mode-definitional); any other key is refused the same way."""

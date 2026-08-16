@@ -2,7 +2,7 @@ sprint: temporal-elections
 parent_branch: docs/fold-source-row-selection
 baseline_sha: d19cafc294b3bd83529c3976a3d42a4006190112
 started: 2026-08-16
-current_phase: 5
+current_phase: 6
 capabilities:
   - temporal-rendering-elections:
       [
@@ -55,7 +55,7 @@ phases:
           - "tests/exporters/dimensional/test_validation.py"
           - "tests/exporters/dimensional/test_windowed_failfast.py"
   5:
-    status: pending
+    status: complete
     name: "Source attach points"
     demo: "docs/sprints/temporal-elections/demos/phase_5_source_elections.py"
     steps:

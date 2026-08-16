@@ -30,7 +30,9 @@ from fabulexa_forge.config.models import (
     SourceTableDecl,
 )
 from fabulexa_forge.errors import (
+    DateParseSourceColumn,
     ExportError,
+    RenderKeyIsInstantColumn,
     SourceColumnNotAddressable,
     SourceColumnUnresolved,
     SourceEventSourceOverlap,
@@ -1405,3 +1407,312 @@ def test_kind_labels_absent_resolves_empty_on_every_event_source_plan(
     plan = _events_plan(tmp_path, (SourceEventSourceDecl(kind="visit"),))
     assert plan.events is not None
     assert plan.events.sources[0].kind_labels == ()
+
+
+# ---------------------------------------------------------------------------
+# `render`: structural-instant rendering elections (state + junction)
+# ---------------------------------------------------------------------------
+
+
+def test_render_state_table_elects_types_on_every_instant_column(
+    tmp_path: Path,
+) -> None:
+    """A `render` map covering every one of a records table's instant-carrying
+    structural columns (`structural_instant_columns('records')`) resolves
+    onto `table.render`, declaration order."""
+    plan = _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            tables=(
+                SourceTableDecl(
+                    name="visits",
+                    kind="visit",
+                    render={
+                        "created_sim_time": "date",
+                        "deactivated_at": "timestamptz",
+                        "last_mutation_sim_time": "time",
+                    },
+                ),
+            ),
+        ),
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceStateTablePlan)
+    assert table.render == (
+        ("created_sim_time", "date"),
+        ("deactivated_at", "timestamptz"),
+        ("last_mutation_sim_time", "time"),
+    )
+
+
+def test_render_junction_table_elects_types_on_interval_columns(
+    tmp_path: Path,
+) -> None:
+    """A `render` map on a junction unit's interval columns
+    (`joined_sim_time` / `left_sim_time`, `structural_instant_columns
+    ('membership')`) resolves the same way — the state render's twin."""
+    plan = _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            tables=(
+                SourceTableDecl(
+                    name="visit_team",
+                    membership=MembershipRef(kind="visit", property="team"),
+                    render={"joined_sim_time": "date", "left_sim_time": "date"},
+                ),
+            ),
+        ),
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceJunctionTablePlan)
+    assert table.render == (("joined_sim_time", "date"), ("left_sim_time", "date"))
+
+
+def test_render_key_on_state_payload_column_refused(tmp_path: Path) -> None:
+    """A `render` key naming a payload (non-instant) column on a `state`
+    table raises RenderKeyIsInstantColumn."""
+    with pytest.raises(RenderKeyIsInstantColumn):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                tables=(
+                    SourceTableDecl(
+                        name="visits", kind="visit", render={"prop__status": "date"}
+                    ),
+                ),
+            ),
+        )
+
+
+def test_render_key_on_junction_non_interval_column_refused(tmp_path: Path) -> None:
+    """A `render` key naming a non-interval column on a `junction` table
+    raises RenderKeyIsInstantColumn — the membership category's own instant
+    set."""
+    with pytest.raises(RenderKeyIsInstantColumn):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                tables=(
+                    SourceTableDecl(
+                        name="visit_team",
+                        membership=MembershipRef(kind="visit", property="team"),
+                        render={"elem__role_name": "date"},
+                    ),
+                ),
+            ),
+        )
+
+
+def test_render_key_on_columns_omitted_column_refused(tmp_path: Path) -> None:
+    """A `render` key naming a column the table's `columns` selection omits
+    is refused — the existing omitted-declaration posture `rename` already
+    carries."""
+    with pytest.raises(SourceColumnUnresolved):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                tables=(
+                    SourceTableDecl(
+                        name="visits",
+                        kind="visit",
+                        columns=("prop__status",),
+                        render={"created_sim_time": "date"},
+                    ),
+                ),
+            ),
+        )
+
+
+def test_render_key_on_windowed_omitted_column_refused(tmp_path: Path) -> None:
+    """Under a windowed plan the state render omits `updated_at`
+    (`last_mutation_sim_time`), so a `render` key naming it is unsatisfiable —
+    the windowed omitted-column posture composes for free through the shared
+    two-stage gate."""
+    with pytest.raises(SourceColumnUnresolved):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                tables=(
+                    SourceTableDecl(
+                        name="visits",
+                        kind="visit",
+                        render={"last_mutation_sim_time": "date"},
+                    ),
+                ),
+            ),
+            windowed=True,
+        )
+
+
+def test_render_key_composes_with_rename(tmp_path: Path) -> None:
+    """`render` keys are source identities: a renamed column stays
+    addressable by its source name in `render`, and the renamed output name
+    still lands in `table.columns`."""
+    plan = _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            tables=(
+                SourceTableDecl(
+                    name="visits",
+                    kind="visit",
+                    rename={"created_sim_time": "made_at"},
+                    render={"created_sim_time": "date"},
+                ),
+            ),
+        ),
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceStateTablePlan)
+    assert ("created_sim_time", "made_at") in table.columns
+    assert table.render == (("created_sim_time", "date"),)
+
+
+# ---------------------------------------------------------------------------
+# `date_parse`: declared date parses (state + junction)
+# ---------------------------------------------------------------------------
+
+
+def test_date_parse_resolves_on_state_table_payload_varchar(tmp_path: Path) -> None:
+    """`date_parse` on a `state` table's payload VARCHAR resolves onto
+    `table.date_parse`."""
+    plan = _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            tables=(
+                SourceTableDecl(
+                    name="locs", kind="location", date_parse={"prop__name": "%Y-%m-%d"}
+                ),
+            ),
+        ),
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceStateTablePlan)
+    assert table.date_parse == (("prop__name", "%Y-%m-%d"),)
+
+
+def test_date_parse_resolves_on_junction_elem_field(tmp_path: Path) -> None:
+    """`date_parse` on a junction table's `elem__<f>` scalar payload column
+    resolves onto `table.date_parse`."""
+    plan = _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            tables=(
+                SourceTableDecl(
+                    name="visit_team",
+                    membership=MembershipRef(kind="visit", property="team"),
+                    date_parse={"elem__role_name": "%Y-%m-%d"},
+                ),
+            ),
+        ),
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceJunctionTablePlan)
+    assert table.date_parse == (("elem__role_name", "%Y-%m-%d"),)
+
+
+def test_date_parse_non_varchar_source_refused(tmp_path: Path) -> None:
+    """`date_parse` on a non-VARCHAR declared column raises
+    DateParseSourceColumn."""
+    with pytest.raises(DateParseSourceColumn):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                tables=(
+                    SourceTableDecl(
+                        name="ords",
+                        kind="order",
+                        date_parse={"prop__amount": "%Y-%m-%d"},
+                    ),
+                ),
+            ),
+        )
+
+
+def test_date_parse_on_slice_only_source_refused(tmp_path: Path) -> None:
+    """`date_parse` naming a non-exempt slice_only column raises
+    SourceSliceOnlyRead — the mode's omission posture composing with the
+    parse's own refusal (surface-list growth)."""
+    with pytest.raises(SourceSliceOnlyRead):
+        _open_plan(
+            build_slice_only_source_emit(tmp_path),
+            _config(
+                tables=(
+                    SourceTableDecl(
+                        name="patients",
+                        kind="patient",
+                        date_parse={"prop__loyalty_tier": "%Y-%m-%d"},
+                    ),
+                ),
+            ),
+        )
+
+
+def test_date_parse_key_composes_with_rename(tmp_path: Path) -> None:
+    """`date_parse` keys are source identities, composing with `rename` the
+    same way `render` keys do."""
+    plan = _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            tables=(
+                SourceTableDecl(
+                    name="locs",
+                    kind="location",
+                    rename={"prop__name": "site_name"},
+                    date_parse={"prop__name": "%Y-%m-%d"},
+                ),
+            ),
+        ),
+    )
+    table = plan.tables[0]
+    assert isinstance(table, SourceStateTablePlan)
+    assert ("prop__name", "site_name") in table.columns
+    assert table.date_parse == (("prop__name", "%Y-%m-%d"),)
+
+
+# ---------------------------------------------------------------------------
+# events: `render` on the log's one legal key (`event_sim_time`,
+# mode-definitional)
+# ---------------------------------------------------------------------------
+
+
+def test_events_render_absent_defaults_to_timestamp(tmp_path: Path) -> None:
+    """Absent `events.render`, `plan.events.render` is the mode-definitional
+    default `timestamp`."""
+    plan = _events_plan(tmp_path, (SourceEventSourceDecl(kind="visit"),))
+    assert plan.events is not None
+    assert plan.events.render == "timestamp"
+
+
+def test_events_render_elects_event_sim_time_rendering(tmp_path: Path) -> None:
+    """`events.render` keyed on `event_sim_time` resolves onto
+    `plan.events.render`."""
+    plan = _open_plan(
+        build_source_test_emit(tmp_path),
+        _config(
+            events=SourceEventsDecl(
+                name="versions",
+                sources=(SourceEventSourceDecl(kind="visit"),),
+                render={"event_sim_time": "date"},
+            ),
+        ),
+    )
+    assert plan.events is not None
+    assert plan.events.render == "date"
+
+
+def test_events_render_key_other_than_event_sim_time_refused(tmp_path: Path) -> None:
+    """An `events.render` key other than `event_sim_time` raises
+    RenderKeyIsInstantColumn, naming the log's one legal key."""
+    with pytest.raises(
+        RenderKeyIsInstantColumn, match="the log's one legal key is 'event_sim_time'"
+    ):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                events=SourceEventsDecl(
+                    name="versions",
+                    sources=(SourceEventSourceDecl(kind="visit"),),
+                    render={"occurred_at": "date"},
+                ),
+            ),
+        )

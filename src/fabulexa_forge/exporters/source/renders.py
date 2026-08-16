@@ -43,7 +43,9 @@ election module (`build_identity_translation_sql`, and the record-index /
 presentation-key horizon dispatchers `_record_index_sql` / `_presentation_key_sql`
 the self-identity join composes, shared with base's renders — doc § module
 placement), fabulexa_forge.anchor, fabulexa_forge._sql (`render_predicate_condition`
-composes a `where` entry's condition), the sibling source.columns
+composes a `where` entry's condition; `render_date_parse_expr` renders a
+`date_parse`-keyed column — the one renderer every mode shares), the
+sibling source.columns
 (`_PROP_PREFIX`, and the one labeling authority `build_kind_label_expr` the
 junction render's `member__<f>__kind` column renders through) and source.plan
 modules (`_column_types` and the latter's `_MEMBER_PREFIX` /
@@ -60,8 +62,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import KeySurface
+    from fabulexa_forge.config.models import KeySurface, TemporalRender
     from fabulexa_forge.exporters.populations import Population
     from fabulexa_forge.exporters.source.plan import (
         SourceEdgeSurface,
@@ -72,7 +76,11 @@ if TYPE_CHECKING:
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import _sql_literal, render_predicate_condition
+from fabulexa_forge._sql import (
+    _sql_literal,
+    render_date_parse_expr,
+    render_predicate_condition,
+)
 from fabulexa_forge.anchor import render_anchor_temporal_expr
 from fabulexa_forge.derivations.state_at import build_state_at_sql
 from fabulexa_forge.exporters.election import (
@@ -129,12 +137,15 @@ def _render_wallclock_column(
     alias: str,
     anchor: "EffectiveAnchor",
     wallclock_columns: "frozenset[str]",
+    render_map: "Mapping[str, TemporalRender]",
 ) -> str:
     """Render one faithful-read column expression.
 
     A structural sim-time column (a member of `wallclock_columns`) renders
-    wallclock through the shared anchor renderer; every other column is a
-    verbatim, aliased passthrough of the source relation's value.
+    wallclock through the shared anchor renderer, in `render_map`'s elected
+    rendering for that source identity (the mode-definitional default
+    `timestamp` absent an entry); every other column is a verbatim, aliased
+    passthrough of the source relation's value.
 
     Args:
         src: The source column name (on the wrapped relation aliased `alias`).
@@ -142,13 +153,17 @@ def _render_wallclock_column(
         alias: The SQL alias of the wrapped source relation.
         anchor: The resolved effective anchor.
         wallclock_columns: The structural sim-time column names for this render.
+        render_map: The table's resolved `render` map (source identity ->
+            elected rendering; § `SourceStateTablePlan.render` /
+            `SourceJunctionTablePlan.render`), as a dict.
 
     Returns:
         A SQL SELECT-list expression fragment ending in `AS "<out>"`.
     """
     qualified = f'"{alias}"."{src}"'
     if src in wallclock_columns:
-        return render_anchor_temporal_expr(anchor, qualified, out, "timestamp")
+        elect = render_map.get(src, "timestamp")
+        return render_anchor_temporal_expr(anchor, qualified, out, elect)
     return f'{qualified} AS "{out}"'
 
 
@@ -176,6 +191,7 @@ def _junction_masked_left_at_expr(
     alias: str,
     anchor: "EffectiveAnchor",
     window: "Window",
+    render: "TemporalRender",
 ) -> str:
     """Render `left_at` horizon-masked to the window's exclusive end.
 
@@ -191,6 +207,8 @@ def _junction_masked_left_at_expr(
         alias: The SQL alias of the wrapped source relation.
         anchor: The resolved effective anchor.
         window: The window whose end_ns is the masking horizon.
+        render: The column's elected rendering (`table.render`'s entry for
+            `left_sim_time`, or the mode-definitional default `timestamp`).
 
     Returns:
         A SQL SELECT-list expression fragment ending in `AS "<out>"`.
@@ -200,7 +218,7 @@ def _junction_masked_left_at_expr(
         f"CASE WHEN {qualified} IS NULL OR {qualified} >= {window.end_ns}"
         f" THEN NULL ELSE {qualified} END"
     )
-    return render_anchor_temporal_expr(anchor, masked_source, out, "timestamp")
+    return render_anchor_temporal_expr(anchor, masked_source, out, render)
 
 
 # ---------------------------------------------------------------------------
@@ -460,6 +478,12 @@ def build_state_render_sql(
     row membership is window-invariant. Total ORDER BY
     `(created_sim_time, record_id)` — raw keys, never rendered timestamps.
     A table with every surface at its default composes join-free SQL.
+    `table.render` elects each structural instant's rendering (the
+    mode-definitional default `timestamp` for an unelected one);
+    `table.date_parse` renders each keyed payload column through
+    `render_date_parse_expr` in place — the same raw VARCHAR source in both
+    shapes, since the state-at fold's codec after-image of a VARCHAR column
+    is itself VARCHAR.
 
     Args:
         sidecar: The plan's sidecar.
@@ -521,6 +545,8 @@ def build_state_render_sql(
             edge_exprs[edge.source_column] = value_expr
     joins_sql = "".join(joins)
 
+    render_map = dict(table.render)
+    date_parse_map = dict(table.date_parse)
     select_parts: list[str] = []
     for src, out in table.columns:
         if src == table.identity_surface and table.identity_surface != "record_id":
@@ -529,6 +555,12 @@ def build_state_render_sql(
             )
         elif src in edge_exprs:
             select_parts.append(f'{edge_exprs[src]} AS "{out}"')
+        elif src in date_parse_map:
+            select_parts.append(
+                render_date_parse_expr(
+                    f'"{base_alias}"."{src}"', date_parse_map[src], out, table.name
+                )
+            )
         elif (
             window is not None
             and src not in _STATE_AT_VERBATIM_COLUMNS
@@ -542,7 +574,7 @@ def build_state_render_sql(
         else:
             select_parts.append(
                 _render_wallclock_column(
-                    src, out, base_alias, anchor, _RECORDS_WALLCLOCK_COLUMNS
+                    src, out, base_alias, anchor, _RECORDS_WALLCLOCK_COLUMNS, render_map
                 )
             )
     select_list = ", ".join(select_parts)
@@ -602,7 +634,10 @@ def build_junction_render_sql(
     `window.end_ns`; owner selection is window-invariant (constant-gated), so
     it applies identically at every horizon. Total ORDER BY `(record_id,
     joined_sim_time, element fields in element-schema declaration order,
-    VARCHAR-compared, NULLS FIRST)`.
+    VARCHAR-compared, NULLS FIRST)`. `table.render` elects each interval
+    column's rendering (the masked `left_at` included); `table.date_parse`
+    renders each keyed `elem__<f>` payload column through
+    `render_date_parse_expr` in place.
 
     Args:
         sidecar: The plan's sidecar.
@@ -635,13 +670,23 @@ def build_junction_render_sql(
             edge_exprs[edge.source_column] = value_expr
     joins_sql = "".join(joins)
 
+    render_map = dict(table.render)
+    date_parse_map = dict(table.date_parse)
     select_parts: list[str] = []
     for src, out in table.columns:
         if src in edge_exprs:
             select_parts.append(f'{edge_exprs[src]} AS "{out}"')
         elif src == "left_sim_time" and window is not None:
             select_parts.append(
-                _junction_masked_left_at_expr(src, out, "_mem", anchor, window)
+                _junction_masked_left_at_expr(
+                    src, out, "_mem", anchor, window, render_map.get(src, "timestamp")
+                )
+            )
+        elif src in date_parse_map:
+            select_parts.append(
+                render_date_parse_expr(
+                    f'"_mem"."{src}"', date_parse_map[src], out, table.name
+                )
             )
         elif src.startswith(_MEMBER_PREFIX) and src.endswith(_MEMBER_KIND_SUFFIX):
             labeled_expr = build_kind_label_expr(f'"_mem"."{src}"', table.kind_labels)
@@ -649,7 +694,7 @@ def build_junction_render_sql(
         else:
             select_parts.append(
                 _render_wallclock_column(
-                    src, out, "_mem", anchor, _JUNCTION_WALLCLOCK_COLUMNS
+                    src, out, "_mem", anchor, _JUNCTION_WALLCLOCK_COLUMNS, render_map
                 )
             )
     select_list = ", ".join(select_parts)

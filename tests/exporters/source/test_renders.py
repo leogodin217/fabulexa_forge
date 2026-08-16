@@ -20,11 +20,14 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import date
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
 import duckdb
+import pytest
 from _support.notices import discard_notice_sink
+from _support.sidecar_builder import write_emit
 
 from fabulexa_forge.anchor import render_anchor_temporal_expr, resolve_effective_anchor
 from fabulexa_forge.config.models import (
@@ -46,6 +49,7 @@ from fabulexa_forge.exporters.source.renders import (
 )
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.errors import RunDatabaseError
 
 from ._source_fixtures import (
     build_degenerate_slice_only_source_emit,
@@ -975,3 +979,232 @@ def test_state_render_degenerate_unit_still_renders_identity_and_lifecycle(
     assert len(rows) == 1
     assert rows[0]["id"] == "mem001"
     assert rows[0]["active"] is True
+
+
+# ---------------------------------------------------------------------------
+# `render`: structural-instant rendering elections
+# ---------------------------------------------------------------------------
+
+
+def test_state_render_elects_date_on_created_sim_time(tmp_path: Path) -> None:
+    """A `date`-elected `created_sim_time` renders a `datetime.date` value in
+    place of the mode-definitional default timestamp."""
+    tables = (
+        SourceTableDecl(
+            name="visit", kind="visit", render={"created_sim_time": "date"}
+        ),
+    )
+    with _plan(build_source_test_emit(tmp_path), tables) as (emit, plan):
+        table = _state(plan, "visit")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = {r["id"]: r for r in _mapped_rows(emit, table, sql)}
+    assert rows["v001"]["created_at"] == date(2024, 1, 1)
+
+
+def test_state_render_elects_date_on_deactivated_at(tmp_path: Path) -> None:
+    """A `date`-elected `deactivated_at` renders a `datetime.date` for a
+    deactivated record and stays NULL for an active one."""
+    tables = (
+        SourceTableDecl(
+            name="location", kind="location", render={"deactivated_at": "date"}
+        ),
+    )
+    with _plan(build_source_test_emit(tmp_path), tables) as (emit, plan):
+        table = _state(plan, "location")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = {r["id"]: r for r in _mapped_rows(emit, table, sql)}
+    assert rows["loc001"]["deactivated_at"] is None
+    assert rows["loc002"]["deactivated_at"] == date(2024, 1, 1)
+
+
+def test_state_render_elects_timestamptz_composes_absolute_instant_expr(
+    tmp_path: Path,
+) -> None:
+    """A `timestamptz`-elected instant column composes the absolute-instant
+    expression through the shared anchor renderer — checked as rendered SQL
+    (never executed via the row-tuple path, which needs an optional pytz
+    dependency this package never requires)."""
+    tables = (
+        SourceTableDecl(
+            name="visit", kind="visit", render={"created_sim_time": "timestamptz"}
+        ),
+    )
+    with _plan(build_source_test_emit(tmp_path), tables) as (emit, plan):
+        table = _state(plan, "visit")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+    expected = render_anchor_temporal_expr(
+        plan.anchor, '"_rec"."created_sim_time"', "created_at", "timestamptz"
+    )
+    assert expected in sql
+
+
+def test_junction_render_elects_date_on_joined_and_left_at(tmp_path: Path) -> None:
+    """A junction table's twin: `date`-elected `joined_sim_time` /
+    `left_sim_time` render `datetime.date` values, NULL preserved for the
+    still-open interval."""
+    tables = (
+        SourceTableDecl(
+            name="visit_team",
+            membership=MembershipRef(kind="visit", property="team"),
+            render={"joined_sim_time": "date", "left_sim_time": "date"},
+        ),
+    )
+    with _plan(build_source_test_emit(tmp_path), tables) as (emit, plan):
+        table = _junction(plan, "visit_team")
+        sql = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    closed = next(r for r in rows if r["role_name"] == "lead")
+    still_open = next(r for r in rows if r["role_name"] == "support")
+    assert closed["joined_at"] == date(2024, 1, 1)
+    assert closed["left_at"] == date(2024, 1, 1)
+    assert still_open["left_at"] is None
+
+
+def test_junction_render_windowed_left_at_masking_honors_render_election(
+    tmp_path: Path,
+) -> None:
+    """The windowed masked `left_at` expression renders through the elected
+    type, not always the mode-definitional default timestamp: NULL while
+    masked (w0, m_A still open), a `datetime.date` once the leave lands in
+    window (w1, m_A leaves)."""
+    w0, w1, _ = windowed_test_windows()
+    tables = (
+        SourceTableDecl(
+            name="visit_team",
+            membership=MembershipRef(kind="visit", property="team"),
+            render={"left_sim_time": "date"},
+        ),
+    )
+    with _plan(build_windowed_source_test_emit(tmp_path), tables, windowed=True) as (
+        emit,
+        plan,
+    ):
+        table = _junction(plan, "visit_team")
+        sql_w0 = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, w0
+        )
+        rows_w0 = {r["visit_id"]: r for r in _mapped_rows(emit, table, sql_w0)}
+        sql_w1 = build_junction_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, w1
+        )
+        rows_w1 = {r["visit_id"]: r for r in _mapped_rows(emit, table, sql_w1)}
+    assert rows_w0["v001"]["left_at"] is None
+    assert rows_w1["v001"]["left_at"] == date(2024, 1, 1)
+
+
+# ---------------------------------------------------------------------------
+# `date_parse`: declared date parses
+# ---------------------------------------------------------------------------
+
+_DATE_PARSE_PATIENT_COLUMNS: list[dict[str, object]] = [
+    {"name": "fork_path", "type": "VARCHAR"},
+    {"name": "record_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    {"name": "record_index", "type": "BIGINT"},
+    {
+        "name": "prop__dob",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+]
+
+
+def _build_date_parse_patient_emit(tmp_path: Path, dob_value: str) -> Path:
+    """A single flat untracked kind (`patient`) with one row whose
+    `prop__dob` payload column carries `dob_value` — the `date_parse`
+    render's happy-path and mismatch-attribution fixtures."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        'CREATE TABLE "records__patient" ('
+        '"fork_path" VARCHAR, "record_id" VARCHAR, "created_sim_time" BIGINT,'
+        ' "active" BOOLEAN, "deactivated_at" BIGINT,'
+        ' "last_mutation_sim_time" BIGINT, "record_index" BIGINT,'
+        ' "prop__dob" VARCHAR)'
+    )
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "p001", 0, True, 0, 0, dob_value],
+    )
+    conn.close()
+    write_emit(
+        tmp_path,
+        tables=[
+            {
+                "name": "records__patient",
+                "category": "records",
+                "record_kind": "patient",
+                "columns": _DATE_PARSE_PATIENT_COLUMNS,
+                "rows": 1,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra={
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
+def test_state_render_date_parse_renders_date_in_place(tmp_path: Path) -> None:
+    """`date_parse` on a payload VARCHAR renders DATE in place, output name
+    still governed by defaults + `rename`."""
+    tables = (
+        SourceTableDecl(
+            name="patients",
+            kind="patient",
+            rename={"prop__dob": "birth_date"},
+            date_parse={"prop__dob": "%Y-%m-%d"},
+        ),
+    )
+    with _plan(_build_date_parse_patient_emit(tmp_path, "2024-06-01"), tables) as (
+        emit,
+        plan,
+    ):
+        table = _state(plan, "patients")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    assert rows[0]["birth_date"] == date(2024, 6, 1)
+
+
+def test_state_render_date_parse_mismatch_fails_loudly_with_attribution(
+    tmp_path: Path,
+) -> None:
+    """A non-matching value fails the export loudly at query time, naming
+    the table, the column, and the offending value — never a silent NULL."""
+    tables = (
+        SourceTableDecl(
+            name="patients", kind="patient", date_parse={"prop__dob": "%Y-%m-%d"}
+        ),
+    )
+    with _plan(_build_date_parse_patient_emit(tmp_path, "not-a-date"), tables) as (
+        emit,
+        plan,
+    ):
+        table = _state(plan, "patients")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        with pytest.raises(RunDatabaseError) as exc_info:
+            _mapped_rows(emit, table, sql)
+    message = str(exc_info.value)
+    assert "patients.prop__dob" in message
+    assert "not-a-date" in message
+    assert "%Y-%m-%d" in message

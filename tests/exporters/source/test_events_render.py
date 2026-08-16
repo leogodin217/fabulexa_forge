@@ -11,13 +11,14 @@ test).
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import duckdb
 
 from fabulexa_forge.anchor import resolve_effective_anchor
-from fabulexa_forge.config.models import KeySurface
+from fabulexa_forge.config.models import KeySurface, TemporalRender
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.exporters.populations import Population
 from fabulexa_forge.exporters.source.events import (
@@ -1121,3 +1122,53 @@ class TestResolvedItemTypeOrdering:
         # Flipped from the natural-name case (TestTotalOrderTieFree): 'ticket'
         # < 'ticket.watchers' but 'zzz_ticket' > 'ticket.watchers'.
         assert fyi_create_idx < t002_destroy_idx
+
+
+# ---------------------------------------------------------------------------
+# `render`: the log's one instant column (`event_sim_time` -> `occurred_at`)
+# ---------------------------------------------------------------------------
+
+
+class TestEventLogRender:
+    def _log(self, render: TemporalRender = "timestamp") -> SourceEventLogPlan:
+        source = _ticket_source(("status",))
+        return SourceEventLogPlan(
+            name="versions",
+            sources=(source,),
+            item_id_type="VARCHAR",
+            keys=None,
+            render=render,
+        )
+
+    def test_default_render_is_naive_local_timestamp(self, tmp_path: Path) -> None:
+        """Absent an election, `occurred_at` renders the mode-definitional
+        default: a naive local `datetime.datetime`, not a `datetime.date`."""
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(
+                emit.sidecar, fork_path, self._log(), anchor, None
+            )
+            rows = _rows(emit, sql)
+        t001_create = _row_for(rows, "t001", "create")
+        assert type(t001_create["occurred_at"]) is datetime
+
+    def test_render_date_elects_a_date_value_on_occurred_at(
+        self, tmp_path: Path
+    ) -> None:
+        """`log.render == 'date'` renders `occurred_at` as a `datetime.date`
+        through the shared anchor renderer — the same election every mode
+        shares."""
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(
+                emit.sidecar, fork_path, self._log("date"), anchor, None
+            )
+            rows = _rows(emit, sql)
+        t001_create = _row_for(rows, "t001", "create")
+        assert isinstance(t001_create["occurred_at"], date)
