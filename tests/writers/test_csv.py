@@ -13,7 +13,7 @@ import pytest
 
 from exporters._emit_fixtures import build_test_emit
 from fabulexa_forge.errors import ExportRuntimeError
-from fabulexa_forge.reader.emit import open_emit
+from fabulexa_forge.reader.emit import open_emit, pin_session_timezone
 from fabulexa_forge.writers.csv import write_csv
 
 
@@ -124,3 +124,134 @@ def test_write_csv_query_failure_raises_export_runtime_error(tmp_path: Path) -> 
         sql = 'SELECT nonexistent_column FROM "records__entity"'
         with pytest.raises(ExportRuntimeError):
             write_csv(emit, "t", sql, out_dir)
+
+
+# ---------------------------------------------------------------------------
+# Pinned temporal text forms — DATE / TIME / TIMESTAMPTZ / INTERVAL
+# ---------------------------------------------------------------------------
+
+
+def _rows(csv_path: Path) -> list[list[str]]:
+    return list(csv.reader(csv_path.read_text(encoding="utf-8").splitlines()))
+
+
+def test_write_csv_date_form(tmp_path: Path) -> None:
+    """A DATE column serializes as YYYY-MM-DD."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        write_csv(emit, "t", "SELECT DATE '2024-01-15' AS d", out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["d"], ["2024-01-15"]]
+
+
+def test_write_csv_time_form(tmp_path: Path) -> None:
+    """A TIME column serializes as HH:MM:SS.ffffff, fixed six-digit µs."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        write_csv(emit, "t", "SELECT TIME '13:45:30.123456' AS t", out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["t"], ["13:45:30.123456"]]
+
+
+def test_write_csv_timestamptz_form(tmp_path: Path) -> None:
+    """A TIMESTAMPTZ column serializes as local wall clock + offset in the
+    pinned (anchor) zone, regardless of what zone the value was authored in."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    from fabulexa_forge.anchor import EffectiveAnchor
+
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    anchor = EffectiveAnchor(
+        start_instant=datetime(2024, 1, 15, 12, 0, 0, tzinfo=timezone.utc),
+        timezone=ZoneInfo("America/New_York"),
+    )
+    with open_emit(emit_dir) as emit:
+        pin_session_timezone(emit, anchor)
+        write_csv(
+            emit,
+            "t",
+            "SELECT TIMESTAMPTZ '2024-01-15 13:45:30.123456-05:00' AS tz",
+            out_dir,
+        )
+
+    assert _rows(out_dir / "t.csv") == [["tz"], ["2024-01-15 13:45:30.123456-05:00"]]
+
+
+def test_write_csv_interval_form_positive_over_24h(tmp_path: Path) -> None:
+    """A positive INTERVAL serializes as H:MM:SS.ffffff with an unbounded
+    (>24) hours field and no day component."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = "SELECT INTERVAL '90000123456 microseconds' AS iv"
+        write_csv(emit, "t", sql, out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["iv"], ["25:00:00.123456"]]
+
+
+def test_write_csv_interval_form_negative(tmp_path: Path) -> None:
+    """A negative INTERVAL keeps its sign in the rendered text form."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = "SELECT -INTERVAL '90000123456 microseconds' AS iv"
+        write_csv(emit, "t", sql, out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["iv"], ["-25:00:00.123456"]]
+
+
+def test_write_csv_new_types_null_renders_empty_field(tmp_path: Path) -> None:
+    """NULL DATE / TIME / TIMESTAMPTZ / INTERVAL render as today's empty
+    NULL field, exactly like every other type's NULL."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = (
+            "SELECT CAST(NULL AS DATE) AS d, CAST(NULL AS TIME) AS t,"
+            " CAST(NULL AS TIMESTAMPTZ) AS tz, CAST(NULL AS INTERVAL) AS iv"
+        )
+        write_csv(emit, "t", sql, out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["d", "t", "tz", "iv"], ["", "", "", ""]]
+
+
+def test_write_csv_timestamp_form_unchanged(tmp_path: Path) -> None:
+    """The existing (non-tz) TIMESTAMP form stays byte-identical."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = "SELECT TIMESTAMP '2024-01-15 13:45:30.123456' AS ts"
+        write_csv(emit, "t", sql, out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["ts"], ["2024-01-15 13:45:30.123456"]]
+
+
+def test_write_csv_double_form_unchanged(tmp_path: Path) -> None:
+    """The existing DOUBLE form stays byte-identical."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = "SELECT CAST(3.14 AS DOUBLE) AS d"
+        write_csv(emit, "t", sql, out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["d"], ["3.14"]]

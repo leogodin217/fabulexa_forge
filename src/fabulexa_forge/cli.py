@@ -32,7 +32,7 @@ from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.errors import ExporterError
-from fabulexa_forge.reader import open_emit, validate
+from fabulexa_forge.reader import open_emit, pin_session_timezone, validate
 from fabulexa_forge.reader.errors import ReaderError
 
 if TYPE_CHECKING:
@@ -270,6 +270,8 @@ def cmd_export(
             anchor = resolve_effective_anchor(
                 sidecar_runtime, config.rebase, cli_base_date, cli_timezone
             )
+            if anchor is not None:
+                pin_session_timezone(emit, anchor)
             fmt_lit = cast(Literal["csv", "duckdb"], fmt)
 
             exit_code = _dispatch_export(

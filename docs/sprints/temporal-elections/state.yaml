@@ -2,7 +2,7 @@ sprint: temporal-elections
 parent_branch: docs/fold-source-row-selection
 baseline_sha: d19cafc294b3bd83529c3976a3d42a4006190112
 started: 2026-08-16
-current_phase: 2
+current_phase: 3
 capabilities:
   - temporal-rendering-elections:
       [
@@ -21,7 +21,7 @@ phases:
     name: "Temporal renderer generalization"
     demo: "docs/sprints/temporal-elections/demos/phase_1_temporal_renderer.py"
   2:
-    status: pending
+    status: complete
     name: "Session-zone pin + CSV temporal text forms"
     demo: "docs/sprints/temporal-elections/demos/phase_2_session_pin_csv.py"
   3:

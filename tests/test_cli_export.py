@@ -31,6 +31,7 @@ import yaml
 from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
+import fabulexa_forge.cli
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from exporters.base._base_fixtures import build_base_test_emit
 from exporters.source._source_fixtures import build_day_scale_source_emit
@@ -204,6 +205,59 @@ def test_cmd_export_duckdb_success(
     exit_code = cmd_export(emit_dir, config_path, out_db, "duckdb")
     assert exit_code == 0
     assert out_db.exists()
+
+
+# ---------------------------------------------------------------------------
+# Tests — session-zone pin
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_export_pins_session_when_anchor_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cmd_export pins the session zone when a sidecar runtime anchor resolves."""
+    calls: list[object] = []
+    real_pin = fabulexa_forge.cli.pin_session_timezone
+
+    def _recording_pin(emit: object, anchor: object) -> None:
+        calls.append(anchor)
+        real_pin(emit, anchor)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(fabulexa_forge.cli, "pin_session_timezone", _recording_pin)
+
+    emit_dir = build_runtime_emit(
+        tmp_path / "emit", "2024-01-15T12:00:00+00:00", "America/New_York"
+    )
+    config_path = tmp_path / "config.yaml"
+    write_minimal_config(config_path)
+    out_dir = tmp_path / "out_csv"
+    out_dir.mkdir()
+
+    exit_code = cmd_export(emit_dir, config_path, out_dir, "csv")
+    assert exit_code == 0
+    assert len(calls) == 1
+
+
+def test_cmd_export_does_not_pin_when_anchor_is_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cmd_export never touches session state when no anchor resolves."""
+    calls: list[object] = []
+    monkeypatch.setattr(
+        fabulexa_forge.cli,
+        "pin_session_timezone",
+        lambda emit, anchor: calls.append(anchor),
+    )
+
+    emit_dir = build_single_branch_emit(tmp_path / "emit")
+    config_path = tmp_path / "config.yaml"
+    write_minimal_config(config_path)
+    out_dir = tmp_path / "out_csv"
+    out_dir.mkdir()
+
+    exit_code = cmd_export(emit_dir, config_path, out_dir, "csv")
+    assert exit_code == 0
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------

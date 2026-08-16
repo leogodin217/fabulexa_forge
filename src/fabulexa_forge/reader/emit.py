@@ -14,6 +14,8 @@ if TYPE_CHECKING:
     import duckdb as _duckdb
     import pyarrow as _pyarrow
 
+    from fabulexa_forge.anchor import EffectiveAnchor
+
 from fabulexa_forge.reader.errors import (
     EmitNotFoundError,
     RunDatabaseError,
@@ -196,6 +198,26 @@ class Emit:
     def __exit__(self, *exc: object) -> None:
         """Close the connection on context exit."""
         self.close()
+
+
+def pin_session_timezone(emit: Emit, anchor: "EffectiveAnchor") -> None:
+    """Pin the materialization session's time zone to the anchor zone for
+    this invocation.
+
+    Called once by the anchor-resolving driver (the export driver in
+    cli.py; tier-2 shaped playback's open) after anchor resolution, before
+    any relation materializes. Connection-scoped: covers both reader query
+    surfaces (`query` and `query_arrow`). A pure function of the resolved
+    anchor — same anchor -> same session state -> byte-identical
+    zone-bearing text forms on any machine. Never called by a mode or a
+    writer. With no resolved anchor there is no call.
+
+    Args:
+        emit: The open emit whose materialization session is pinned.
+        anchor: The resolved effective anchor supplying the IANA zone.
+    """
+    zone = str(anchor.timezone)
+    emit._conn.execute(f"SET TimeZone = '{zone}'")
 
 
 def open_emit(emit_dir: Path) -> Emit:

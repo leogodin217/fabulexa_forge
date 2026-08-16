@@ -61,7 +61,7 @@ from fabulexa_forge.exporters.source.engine import (
 from fabulexa_forge.exporters.source.plan import SourceStateTablePlan, build_source_plan
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.playback.errors import PlaybackError
-from fabulexa_forge.reader.emit import Emit
+from fabulexa_forge.reader.emit import Emit, pin_session_timezone
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -676,6 +676,12 @@ def open_shaped_playback(
 ) -> ShapedPlayback:
     """Bind a shaped head to an open emit and a declared target shape.
 
+    When an anchor resolves, pins the emit's materialization session to the
+    anchor zone (`pin_session_timezone`) before any relation materializes —
+    the same session-zone pin the export driver applies — so every
+    zone-bearing value this head's window()/state() compiles serializes in
+    the anchor zone regardless of the host machine's zone.
+
     Runs the mode's full config validation at open (sidecar-only, no data
     reads) — a shape whose plan projects or value-reads a slice_only column
     is refused here by the mode's own always-on rules (the export-wide
@@ -721,6 +727,9 @@ def open_shaped_playback(
     """
     if config.mode == "source" and anchor is None:
         raise PlaybackError(_SOURCE_ANCHOR_REQUIRED_MSG)
+
+    if anchor is not None:
+        pin_session_timezone(emit, anchor)
 
     require_single_branch(emit.sidecar)
 
