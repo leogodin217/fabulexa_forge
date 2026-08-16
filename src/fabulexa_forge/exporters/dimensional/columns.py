@@ -23,7 +23,11 @@ from fabulexa_forge._sql import (
     render_typed_literal,
 )
 from fabulexa_forge.anchor import render_anchor_temporal_expr
-from fabulexa_forge.config.models import scd_window_bound, scd_window_render
+from fabulexa_forge.config.models import (
+    scd_window_bound,
+    scd_window_render,
+    timestamp_render,
+)
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.reader.errors import TableNotFoundError
@@ -144,7 +148,7 @@ def _find_raw_ns_source_for_ordinal(
         if col.derived is None:
             return None
         if col.derived.timestamp is not None:
-            if (col.derived.timestamp.as_ or "timestamp") == "time":
+            if timestamp_render(col.derived.timestamp) == "time":
                 return None
             return col.derived.timestamp.source
         if scd_window_bound(col.derived.scd_window) == "valid_from":
@@ -268,7 +272,7 @@ def build_timestamp_expr(
     src = ts.source
     qualified_source = f'"{grain_alias}"."{src}"'
     return render_anchor_temporal_expr(
-        anchor, qualified_source, col_decl.name, ts.as_ or "timestamp"
+        anchor, qualified_source, col_decl.name, timestamp_render(ts)
     )
 
 

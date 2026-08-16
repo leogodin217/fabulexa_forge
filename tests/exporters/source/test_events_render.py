@@ -17,8 +17,8 @@ from typing import TYPE_CHECKING, cast
 
 import duckdb
 
-from fabulexa_forge.anchor import resolve_effective_anchor
-from fabulexa_forge.config.models import KeySurface, TemporalRender
+from fabulexa_forge.anchor import TemporalRender, resolve_effective_anchor
+from fabulexa_forge.config.models import KeySurface
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.exporters.populations import Population
 from fabulexa_forge.exporters.source.events import (

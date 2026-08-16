@@ -64,8 +64,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-    from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import KeySurface, TemporalRender
+    from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
+    from fabulexa_forge.config.models import KeySurface
     from fabulexa_forge.exporters.populations import Population
     from fabulexa_forge.exporters.source.plan import (
         SourceEdgeSurface,

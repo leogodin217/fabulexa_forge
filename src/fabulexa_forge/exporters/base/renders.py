@@ -44,8 +44,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import KeySurface, TemporalRender
+    from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
+    from fabulexa_forge.config.models import KeySurface
     from fabulexa_forge.exporters.base.plan import BaseTableSpec, ReferenceKey
     from fabulexa_forge.reader.sidecar import Sidecar
 

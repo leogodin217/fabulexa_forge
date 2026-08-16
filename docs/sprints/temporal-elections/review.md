@@ -36,4 +36,11 @@ Severity mapping: 2 gates carry observations (Gate 2, Gate 7); no blockers. → 
 
 **APPROVED-WITH-NOTES**
 
+**Resolution (post-review, user-directed FIX):** all three observations were
+addressed in the review-cleanup commit — `TemporalRender` now has a single
+canonical definition in `anchor.py` (imported by `config/models.py`), and the
+`.as_ or "timestamp"` idiom is factored into a shared
+`timestamp_render(spec)` helper used at all three sites. Full suite green and
+pre-commit clean after the fix.
+
 No blockers: all ten gates are clean or observation-only. Zero of the 138 new/changed tests are weak or duplicated; all 4594 tests pass; coverage, pre-commit, dead-code, and demo-determinism gates are all clean. The two observations (a duplicate `TemporalRender` alias and a duplicated `.as_ or "timestamp"` idiom, both traceable to a spec-process gap rather than an implementation defect) are surfaced for the user's own accept-or-fix call; neither breaks a config-boundary guarantee, a contract, or a test.

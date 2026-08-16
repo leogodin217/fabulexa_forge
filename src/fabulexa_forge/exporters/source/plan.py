@@ -43,7 +43,7 @@ from typing import TYPE_CHECKING, Literal, TypeVar
 if TYPE_CHECKING:
     from collections.abc import Callable
 
-    from fabulexa_forge.anchor import EffectiveAnchor
+    from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
     from fabulexa_forge.config.models import (
         ExportConfig,
         KeySurface,
@@ -51,7 +51,6 @@ if TYPE_CHECKING:
         SourceEventsDecl,
         SourceEventSourceDecl,
         SourceTableDecl,
-        TemporalRender,
     )
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit

@@ -24,6 +24,7 @@ from pydantic import (
 from typing_extensions import Self
 
 from fabulexa_forge._sql import is_recognized_sql_type
+from fabulexa_forge.anchor import TemporalRender
 
 # ---------------------------------------------------------------------------
 # Identifier validation (author-supplied names spliced into SQL / filenames)
@@ -92,9 +93,6 @@ def _require_sql_identifier(value: str, context: str) -> None:
 # ---------------------------------------------------------------------------
 # Temporal rendering elections: shared vocabulary + validators
 # ---------------------------------------------------------------------------
-
-TemporalRender = Literal["timestamp", "date", "time", "timestamptz"]
-"""The instant-rendering election vocabulary, shared by every attach point."""
 
 _DATE_FORMAT_DIRECTIVE_RE = re.compile(r"%.")
 _DATE_FORMAT_ALLOWED_DIRECTIVES = frozenset({"%Y", "%y", "%m", "%d", "%b", "%B", "%%"})
@@ -436,6 +434,21 @@ def scd_window_render(
     if isinstance(scd_window, ScdWindowSpec):
         return scd_window.as_
     return "timestamp"
+
+
+def timestamp_render(spec: TimestampSpec) -> TemporalRender:
+    """The instant-rendering election of a `TimestampSpec`.
+
+    Absence (`as_ is None`) means the mode-definitional default `timestamp`
+    rendering — absence detection, not an invented value.
+
+    Args:
+        spec: A `TimestampSpec` field value.
+
+    Returns:
+        `spec.as_`, or `timestamp` when unset.
+    """
+    return spec.as_ if spec.as_ is not None else "timestamp"
 
 
 class DateParseSpec(StrictBaseModel):

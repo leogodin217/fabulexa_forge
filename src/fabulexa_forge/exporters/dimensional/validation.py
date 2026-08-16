@@ -46,6 +46,7 @@ from fabulexa_forge.config.models import (
     ScdWindowSpec,
     scd_window_bound,
     scd_window_render,
+    timestamp_render,
 )
 from fabulexa_forge.derivations.reference_resolution import (
     _collect_reference_columns,
@@ -1183,7 +1184,7 @@ def _get_window_key_cols(table_decl: "TableDecl") -> frozenset[str]:
             col_decl.derived is not None
             and col_decl.derived.timestamp is not None
             and col_decl.derived.timestamp.source == raw_key
-            and (col_decl.derived.timestamp.as_ or "timestamp") != "time"
+            and timestamp_render(col_decl.derived.timestamp) != "time"
         ):
             window_key_cols.add(col_decl.name)
 
