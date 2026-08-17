@@ -2,7 +2,7 @@ sprint: dataset-equivalence
 parent_branch: prepare_for_classroom_env
 baseline_sha: 1b6f3441471007d8cc5b6459aa305c7f79d922d3
 started: 2026-08-17
-current_phase: 1
+current_phase: 2
 capabilities:
   - compare-subsystem: [canonical-form, comparison-engine, report-types]
   - cli: [compare-verb]
@@ -11,7 +11,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Canonical form and report types"
     demo: "docs/sprints/dataset-equivalence/demos/phase_1_canonical_form.py"
   2:
