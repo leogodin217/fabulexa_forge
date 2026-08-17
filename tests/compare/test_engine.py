@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING
 
 from fabulexa_forge.compare import compare_datasets
 
-from ._helpers import build_duckdb
+from ._helpers import build_duckdb, write_csv_dir
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -307,6 +307,26 @@ def test_every_column_incompatible_degenerates_row_pass_to_count_check(
     assert not result.equal
     table_comparison = result.tables[0]
     assert table_comparison.schema[0].kind == "column-incompatible"
+    assert table_comparison.rows is not None
+    assert table_comparison.rows.columns == ()
+    assert table_comparison.rows.missing_total == 0
+    assert table_comparison.rows.extra_total == 0
+
+
+def test_no_matching_columns_csv_actual_degenerates_row_pass_to_count_check(
+    tmp_path: "Path",
+) -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        ["CREATE TABLE t (id BIGINT)", "INSERT INTO t VALUES (1), (2)"],
+    )
+    csv_dir = tmp_path / "actual"
+    write_csv_dir(csv_dir, {"t.csv": "other_id\n1\n2\n"})
+    result = compare_datasets(expected, csv_dir)
+    assert not result.equal
+    table_comparison = result.tables[0]
+    kinds = {d.kind for d in table_comparison.schema}
+    assert kinds == {"column-missing", "column-extra"}
     assert table_comparison.rows is not None
     assert table_comparison.rows.columns == ()
     assert table_comparison.rows.missing_total == 0

@@ -7,13 +7,28 @@ Module-level, non-test (`_`-prefixed) so pytest never collects it.
 
 from __future__ import annotations
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 import duckdb
+import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Mapping, Sequence
     from pathlib import Path
+
+
+def assert_frozen(instance: object, field: str, value: object) -> None:
+    """Assert that setting `field` on a frozen dataclass `instance` raises
+    `dataclasses.FrozenInstanceError`.
+
+    Centralizes the report dataclasses' frozen-mutation assertion (used by
+    `test_canonical.py`'s four smoke tests) behind `setattr`, so the
+    attribute-assignment `# type: ignore[misc]` mypy needs for a direct
+    `instance.field = value` on a frozen dataclass collapses to this one site.
+    """
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        setattr(instance, field, value)
 
 
 def build_duckdb(path: "Path", statements: "Sequence[str]") -> "Path":

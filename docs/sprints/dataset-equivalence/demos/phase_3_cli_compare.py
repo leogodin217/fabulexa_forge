@@ -105,7 +105,8 @@ def main() -> int:
         print("(d) Bad input (missing expected file):")
         missing_path = root / "does-not-exist.duckdb"
         exit_d, out_d, err_d = _run_cli(["compare", str(missing_path), str(equal_path)])
-        print(f"  stderr: {err_d.strip()}")
+        stable_err_d = err_d.strip().replace(str(root), "<tmp>")
+        print(f"  stderr: {stable_err_d}")
         if exit_d != 2:
             raise _fail(f"expected exit 2 for a bad input, got {exit_d}")
         if out_d:

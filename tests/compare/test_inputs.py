@@ -434,3 +434,68 @@ def test_csv_timestamptz_offset_carrying_text_compares_as_same_instant(
     write_csv_dir(csv_dir, {"t.csv": "id,dt\n1,2024-06-01 08:00:00-04\n"})
     result = compare_datasets(expected, csv_dir)
     assert result.equal
+
+
+# ---------------------------------------------------------------------------
+# RFC4180 tokenizer edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_csv_doubled_quote_escapes_embedded_quote(tmp_path: "Path") -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, note VARCHAR)",
+            """INSERT INTO t VALUES (1, 'She said "hi"')""",
+        ],
+    )
+    csv_dir = tmp_path / "actual"
+    write_csv_dir(csv_dir, {"t.csv": 'id,note\n1,"She said ""hi"""\n'})
+    result = compare_datasets(expected, csv_dir)
+    assert result.equal
+
+
+def test_csv_crlf_line_endings_parse_same_as_lf(tmp_path: "Path") -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        ["CREATE TABLE t (id BIGINT)", "INSERT INTO t VALUES (1), (2)"],
+    )
+    csv_dir = tmp_path / "actual"
+    write_csv_dir(csv_dir, {"t.csv": "id\r\n1\r\n2\r\n"})
+    result = compare_datasets(expected, csv_dir)
+    assert result.equal
+
+
+def test_csv_no_trailing_newline_still_reads_last_row(tmp_path: "Path") -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        ["CREATE TABLE t (id BIGINT)", "INSERT INTO t VALUES (1), (2)"],
+    )
+    csv_dir = tmp_path / "actual"
+    write_csv_dir(csv_dir, {"t.csv": "id\n1\n2"})
+    result = compare_datasets(expected, csv_dir)
+    assert result.equal
+
+
+# ---------------------------------------------------------------------------
+# CSV interval TRY_CAST failure
+# ---------------------------------------------------------------------------
+
+
+def test_csv_interval_uncastable_text_is_row_discrepancy_not_error(
+    tmp_path: "Path",
+) -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, dur INTERVAL)",
+            "INSERT INTO t VALUES (1, INTERVAL 26 HOUR)",
+        ],
+    )
+    csv_dir = tmp_path / "actual"
+    write_csv_dir(csv_dir, {"t.csv": "id,dur\n1,not-an-interval\n"})
+    result = compare_datasets(expected, csv_dir)
+    assert not result.equal
+    table_comparison = result.tables[0]
+    assert table_comparison.rows is not None
+    assert table_comparison.rows.extra == (("1", "not-an-interval"),)

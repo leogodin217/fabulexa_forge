@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     import duckdb as _duckdb
     import pyarrow as _pyarrow
 
+from fabulexa_forge._sql import _sql_literal, quote_identifier
 from fabulexa_forge.compare.canonical import CanonicalFamily, encode_value
 from fabulexa_forge.compare.errors import CompareInputError
 
@@ -75,23 +76,6 @@ class CsvSide:
 ActualSide = DuckDbSide | CsvSide
 
 
-def quote_identifier(name: str) -> str:
-    """Quote a SQL identifier, doubling any embedded double quote.
-
-    Args:
-        name: A table or column name as the catalog or a CSV header reports it.
-
-    Returns:
-        A double-quoted SQL identifier safe to splice into a query.
-    """
-    return '"' + name.replace('"', '""') + '"'
-
-
-def _sql_string_literal(text: str) -> str:
-    """Quote a SQL string literal, doubling any embedded single quote."""
-    return "'" + text.replace("'", "''") + "'"
-
-
 def open_compare_session() -> "_duckdb.DuckDBPyConnection":
     """Open the compare surface's own in-memory DuckDB session.
 
@@ -122,9 +106,7 @@ def attach_expected(conn: "_duckdb.DuckDBPyConnection", path: "Path") -> None:
         CompareInputError: `path` does not open as a DuckDB database file.
     """
     try:
-        conn.execute(
-            f"ATTACH {_sql_string_literal(str(path))} AS expected_db (READ_ONLY)"
-        )
+        conn.execute(f"ATTACH {_sql_literal(str(path))} AS expected_db (READ_ONLY)")
     except Exception as exc:
         raise CompareInputError(f"expected side must be a DuckDB file: {path}") from exc
 
@@ -153,9 +135,7 @@ def resolve_actual(conn: "_duckdb.DuckDBPyConnection", path: "Path") -> ActualSi
             )
         return CsvSide(tables={f.stem: _register_csv_table(conn, f) for f in csv_files})
     try:
-        conn.execute(
-            f"ATTACH {_sql_string_literal(str(path))} AS actual_db (READ_ONLY)"
-        )
+        conn.execute(f"ATTACH {_sql_literal(str(path))} AS actual_db (READ_ONLY)")
     except Exception as exc:
         raise CompareInputError(
             f"actual side is neither a DuckDB file nor a CSV directory: {path}"

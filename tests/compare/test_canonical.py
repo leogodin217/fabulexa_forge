@@ -9,7 +9,6 @@ frozen-ness / constructibility (Phase 1 smoke; semantics land in Phase 2).
 
 from __future__ import annotations
 
-import dataclasses
 import datetime
 
 import pyarrow as pa
@@ -23,6 +22,8 @@ from fabulexa_forge.compare.report import (
     TableComparison,
 )
 from fabulexa_forge.reader.conformance import to_csv_text
+
+from ._helpers import assert_frozen
 
 # ---------------------------------------------------------------------------
 # family_of
@@ -246,8 +247,7 @@ def test_schema_discrepancy_is_frozen() -> None:
         expected_type="VARCHAR",
         actual_type=None,
     )
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        discrepancy.table = "other"  # type: ignore[misc]
+    assert_frozen(discrepancy, "table", "other")
 
 
 def test_row_discrepancies_is_frozen() -> None:
@@ -258,8 +258,7 @@ def test_row_discrepancies_is_frozen() -> None:
         missing_total=0,
         extra_total=0,
     )
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        rows.missing_total = 1  # type: ignore[misc]
+    assert_frozen(rows, "missing_total", 1)
 
 
 def test_table_comparison_is_frozen() -> None:
@@ -272,14 +271,12 @@ def test_table_comparison_is_frozen() -> None:
             columns=("id",), missing=(), extra=(), missing_total=0, extra_total=0
         ),
     )
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        table.expected_rows = 4  # type: ignore[misc]
+    assert_frozen(table, "expected_rows", 4)
 
 
 def test_comparison_result_is_frozen() -> None:
     result = ComparisonResult(equal=True, tables=())
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        result.equal = False  # type: ignore[misc]
+    assert_frozen(result, "equal", False)
 
 
 def test_comparison_result_constructible_with_nested_tuples() -> None:

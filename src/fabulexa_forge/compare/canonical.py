@@ -21,6 +21,8 @@ from __future__ import annotations
 import datetime
 from typing import TYPE_CHECKING, Literal
 
+from fabulexa_forge._sql import _INTEGER_TYPES
+
 if TYPE_CHECKING:
     import pyarrow as pa
 
@@ -37,20 +39,6 @@ CanonicalFamily = Literal[
     "blob",
 ]
 
-_INTEGER_TYPES = frozenset(
-    {
-        "TINYINT",
-        "SMALLINT",
-        "INTEGER",
-        "BIGINT",
-        "HUGEINT",
-        "UTINYINT",
-        "USMALLINT",
-        "UINTEGER",
-        "UBIGINT",
-        "UHUGEINT",
-    }
-)
 _FLOAT_TYPES = frozenset({"DOUBLE", "FLOAT"})
 
 

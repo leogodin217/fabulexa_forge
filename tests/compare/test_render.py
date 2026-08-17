@@ -121,6 +121,31 @@ def test_json_render_parses_back_and_mirrors_shape() -> None:
     assert orders["rows"]["extra"] == [["1", "11.0"]]
 
 
+def test_text_render_shows_expected_type_for_column_missing() -> None:
+    """A `column-missing` discrepancy carries `expected_type` — the render
+    fragment must surface it in the schema-discrepancy line."""
+    result = ComparisonResult(
+        equal=False,
+        tables=(
+            TableComparison(
+                table="people",
+                schema=(
+                    SchemaDiscrepancy(
+                        "column-missing", "people", "name", "VARCHAR", None
+                    ),
+                ),
+                expected_rows=2,
+                actual_rows=2,
+                rows=RowDiscrepancies(
+                    columns=(), missing=(), extra=(), missing_total=0, extra_total=0
+                ),
+            ),
+        ),
+    )
+    text = render_comparison_text(result)
+    assert "column-missing column=name expected_type=VARCHAR" in text
+
+
 def test_json_render_is_byte_stable() -> None:
     """Sorted keys, fixed separators; two renders of the same result match."""
     first = render_comparison_json(_UNEQUAL_RESULT)

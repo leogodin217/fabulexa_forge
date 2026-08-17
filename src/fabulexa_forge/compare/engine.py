@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
     import duckdb as _duckdb
 
+from fabulexa_forge._sql import quote_identifier
 from fabulexa_forge.compare.canonical import CanonicalFamily, encode_value, family_of
 from fabulexa_forge.compare.errors import CompareInputError
 from fabulexa_forge.compare.inputs import (
@@ -32,7 +33,6 @@ from fabulexa_forge.compare.inputs import (
     list_columns,
     list_tables,
     open_compare_session,
-    quote_identifier,
     resolve_actual,
 )
 from fabulexa_forge.compare.report import (
