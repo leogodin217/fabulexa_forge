@@ -40,6 +40,7 @@ from fabulexa_forge.compare.report import (
     RowDiscrepancies,
     SchemaDiscrepancy,
     TableComparison,
+    table_is_equal,
 )
 
 _SCHEMA_KIND_ORDER = (
@@ -110,17 +111,8 @@ def compare_datasets(
         )
         for name in universe
     )
-    equal = all(_table_is_equal(tc) for tc in table_comparisons)
+    equal = all(table_is_equal(tc) for tc in table_comparisons)
     return ComparisonResult(equal=equal, tables=table_comparisons)
-
-
-def _table_is_equal(table_comparison: TableComparison) -> bool:
-    """A single table carries zero schema discrepancies and (if row
-    comparison ran) zero row discrepancies of either direction."""
-    if table_comparison.schema:
-        return False
-    rows = table_comparison.rows
-    return rows is None or (rows.missing_total == 0 and rows.extra_total == 0)
 
 
 def _resolve_universe(

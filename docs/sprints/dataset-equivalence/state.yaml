@@ -27,6 +27,6 @@ phases:
           - "tests/compare/test_inputs.py"
           - "tests/compare/test_engine.py"
   3:
-    status: pending
+    status: complete
     name: "Renderers and the CLI verb"
     demo: "docs/sprints/dataset-equivalence/demos/phase_3_cli_compare.py"

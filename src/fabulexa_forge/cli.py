@@ -1,7 +1,7 @@
 """CLI entry point for fabulexa_forge.
 
 Provides the `fabulexa-forge` command with the `validate`, `export`, `init`,
-`stream`, `mixer`, and `corrupt` verbs.
+`stream`, `mixer`, `corrupt`, and `compare` verbs.
 
 Usage:
     fabulexa-forge validate <emit_dir>
@@ -14,11 +14,16 @@ Usage:
         [--speed <n>] [--play|--paused] [--tick <s>]
         [--host <h>] [--port <p>]
     fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>
+    fabulexa-forge compare <expected> <actual> [--tables NAME [NAME ...]]
+        [--max-row-diffs <n>] [--format text|json]
 
 Exit codes:
     0  — success
     1  — error (usage, reader, config, or export failure)
     3  — drained (--next found no more windows to emit)
+
+`compare` is a self-contained verdict surface with its own exit-code
+contract (0 equal · 1 not equal · 2 input error) — see `_cmd_compare`.
 """
 
 from __future__ import annotations
@@ -1028,6 +1033,84 @@ def _cmd_corrupt(args: list[str]) -> int:
     return cmd_corrupt(parsed.emit_dir, parsed.config_path, parsed.out_dir)
 
 
+def cmd_compare(
+    expected: Path,
+    actual: Path,
+    tables: list[str] | None,
+    max_row_diffs: int,
+    fmt: str,
+) -> int:
+    """`fabulexa-forge compare` — verdict + discrepancy report on two datasets.
+
+    Runs `compare_datasets` and prints the rendered report to stdout. Its
+    exit-code contract is its own (0/1/2), distinct from every other verb's
+    0/1/3 — the compare surface's own boolean-verdict design.
+
+    Args:
+        expected: Path to the authoritative DuckDB render.
+        actual: Path to a DuckDB file or a CSV directory claiming equivalence.
+        tables: `--tables` selection, or None for the full expected-side universe.
+        max_row_diffs: Per-table, per-direction listing cap.
+        fmt: 'text' or 'json'.
+
+    Returns:
+        0 when the two sides compare equal; 1 when they differ (report still
+        printed); 2 on a CompareInputError (message on stderr, no report).
+    """
+    from fabulexa_forge.compare import (
+        CompareInputError,
+        compare_datasets,
+        render_comparison_json,
+        render_comparison_text,
+    )
+
+    try:
+        result = compare_datasets(
+            expected, actual, tables=tables, max_row_diffs=max_row_diffs
+        )
+    except CompareInputError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    if fmt == "json":
+        print(render_comparison_json(result))
+    else:
+        print(render_comparison_text(result))
+    return 0 if result.equal else 1
+
+
+def _cmd_compare(args: list[str]) -> int:
+    """Dispatch the compare subcommand.
+
+    Args:
+        args: Remaining arguments after the 'compare' verb.
+
+    Returns:
+        Exit code.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="fabulexa-forge compare",
+        description="Compare two materialized datasets for exact equality.",
+    )
+    parser.add_argument("expected", type=Path)
+    parser.add_argument("actual", type=Path)
+    parser.add_argument("--tables", nargs="+", default=None)
+    parser.add_argument("--max-row-diffs", dest="max_row_diffs", type=int, default=10)
+    parser.add_argument("--format", choices=("text", "json"), default="text")
+
+    parsed = parser.parse_args(args)
+
+    return cmd_compare(
+        parsed.expected,
+        parsed.actual,
+        parsed.tables,
+        parsed.max_row_diffs,
+        parsed.format,
+    )
+
+
 @dataclass(frozen=True)
 class Verb:
     """A dispatchable fabulexa-forge verb.
@@ -1059,6 +1142,11 @@ VERBS: Final[tuple[Verb, ...]] = (
         _cmd_mixer,
     ),
     Verb("corrupt", "Apply a corrupter config to an emit.", _cmd_corrupt),
+    Verb(
+        "compare",
+        "Compare two materialized datasets for exact equality.",
+        _cmd_compare,
+    ),
 )
 """The verb registry. The sole source of the verb list -- never a literal."""
 

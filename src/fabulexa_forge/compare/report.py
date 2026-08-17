@@ -71,3 +71,16 @@ class ComparisonResult:
 
     equal: bool
     tables: tuple[TableComparison, ...]  # ordered by table name
+
+
+def table_is_equal(table_comparison: TableComparison) -> bool:
+    """A single table carries zero schema discrepancies and (if row
+    comparison ran) zero row discrepancies of either direction.
+
+    Shared by the engine (to assemble `ComparisonResult.equal`) and the
+    renderers (to decide a one-line table vs. a discrepancy block).
+    """
+    if table_comparison.schema:
+        return False
+    rows = table_comparison.rows
+    return rows is None or (rows.missing_total == 0 and rows.extra_total == 0)
