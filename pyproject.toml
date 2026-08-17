@@ -63,6 +63,7 @@ dev = [
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "httpx>=0.24",
+    "pytz>=2026.3.post1",
 ]
 
 # Standalone uv project with its own lock and venv, so anything outside the vendored

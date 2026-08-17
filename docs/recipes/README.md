@@ -309,6 +309,7 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | Recipe | What it teaches |
 |---|---|
 | [`dim-scd2-from-records`](../../examples/recipes/dim-scd2-from-records/config.yaml) | SCD-2 dimension from a history-tracked `records__<kind>` source; `valid_to: null` identifies the open current version |
+| [`dim-scd2-date-window`](../../examples/recipes/dim-scd2-date-window/config.yaml) | `scd_window`'s object form electing a date-grained validity window (`{bound, as: date}`) instead of the default TIMESTAMP bounds; the open version's `valid_to: null` still holds under the election |
 | [`dim-type1-from-records`](../../examples/recipes/dim-type1-from-records/config.yaml) | Type-1 (current-snapshot) dimension from a records source with no history tracking; one row per record, no version history |
 | [`dim-type1-subtype-split`](../../examples/recipes/dim-type1-subtype-split/config.yaml) | Split one polymorphic kind into per-sub-type Type-1 dimensions via a records-grain `filter` on a discriminator column |
 
@@ -336,7 +337,10 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | [`derived-value-map`](../../examples/recipes/derived-value-map/config.yaml) | `value_map` derived column: substitute raw status codes with author-supplied display labels; unmapped values become NULL |
 | [`derived-ordinal`](../../examples/recipes/derived-ordinal/config.yaml) | `ordinal` derived column: a `ROW_NUMBER()` sequence within a `partition_by`, ordered by a sibling `order_by` (deterministic tie-break) |
 | [`derived-timestamp`](../../examples/recipes/derived-timestamp/config.yaml) | `timestamp` derived column: render a raw `sim_time` offset as a wallclock TIMESTAMP via the emit's `runtime` anchor |
+| [`derived-timestamp-election`](../../examples/recipes/derived-timestamp-election/config.yaml) | `timestamp`'s `as` election: render the same instant as `date` or `timestamptz` alongside the default TIMESTAMP — the family identity (all three agree on the same wall clock) |
 | [`derived-elapsed`](../../examples/recipes/derived-elapsed/config.yaml) | `elapsed` derived column: a cross-row time delta between two correlated events (admission → discharge length of stay) |
+| [`derived-elapsed-interval`](../../examples/recipes/derived-elapsed-interval/config.yaml) | `elapsed`'s `as: interval` election: the same cross-row delta rendered as a typed INTERVAL instead of the default unit-divided DOUBLE — exactly one of `unit` / `as` is set |
+| [`derived-date-parse`](../../examples/recipes/derived-date-parse/config.yaml) | `date_parse` derived column: declare a VARCHAR source property (an upstream-minted date string, never sniffed) a date in an author-given format, reinterpreted as a real DATE |
 
 **Cross-cutting**
 
@@ -356,6 +360,21 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | [`source/source-event-log`](../../examples/recipes/source/source-event-log/config.yaml) | The `events` block declares the single polymorphic audit log: `id`/`item_type`/`item_id`/`event`/`occurred_at`/`changes`, one `create`/`update`/`destroy` row per audited change with a JSON `[old, new]` changeset; `id` is the log's own order, dense and `ORDER BY`-able (an update and a destroy at one instant order update first, which `occurred_at` alone cannot express); `item_id` never NULL, even on `destroy` |
 | [`source/source-log-only`](../../examples/recipes/source/source-log-only/config.yaml) | A `source:` section declaring only `events` (no `tables`) is a legal, complete config — the audit-stream-only extract; a membership events source audits a junction's fields (`item_type` = `<K>.<property>`, `item_id` = the owner), member references expanding to `<f>_kind`/`<f>_id` entry pairs |
 | [`source/source-columns-rename`](../../examples/recipes/source/source-columns-rename/config.yaml) | Per-table `columns` / `rename` narrow and relabel a table's projection — both keyed on source column names (`prop__<p>`, `created_sim_time`), never derived output names; the identity column always projects and is renamed by its elected surface's contract name |
+| [`source/source-render-election`](../../examples/recipes/source/source-render-election/config.yaml) | A declared table's `render` map elects a structural instant's rendering (`created_sim_time: date`), and its `date_parse` map declares a payload VARCHAR column a date string — both re-render the projected column in place, keyed on source identity |
+
+### Base
+
+`mode: base` has no declared-table grammar — every records kind exports as one
+flat table by default. These recipes exercise `base:`'s escape hatches
+(`exclude` / `rename` / `slice_at` / `render`).
+
+| Recipe | What it teaches |
+|---|---|
+| [`base/base-current-state`](../../examples/recipes/base/base-current-state/config.yaml) | A bare `mode: base` (no `base:` section) is a legal full current-state dump — one flat table per records kind, tape's-end values, no declared-table grammar and no event log |
+| [`base/base-exclude-kind`](../../examples/recipes/base/base-exclude-kind/config.yaml) | `base: {exclude: {kinds: [...]}}` drops a kind's table before export — a guard, not a filter; the declared remaining table set proves it |
+| [`base/base-rename-table`](../../examples/recipes/base/base-rename-table/config.yaml) | `base: {rename: [...]}` overrides a table's derived default output name; `table` is sidecar identity (`records__<kind>`), never the derived output name |
+| [`base/base-slice-at`](../../examples/recipes/base/base-slice-at/config.yaml) | `base: {slice_at: T}` reconstructs every table as of an inclusive point-in-time horizon instead of the tape's end — a tracked property's value as-of T, not its final value |
+| [`base/base-render-election`](../../examples/recipes/base/base-render-election/config.yaml) | `base: {render: [...]}` elects a lifecycle-instant's rendering and declares a payload VARCHAR column a date string, per table — the mode's mirror of `rename`'s per-table structure, keyed on the same pre-default column identities |
 
 ### Streaming
 

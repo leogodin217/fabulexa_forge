@@ -1,12 +1,13 @@
 tables:
   patient:
-    columns: [id, created_at, active, deactivated_at, updated_at, status, name, doctor_id, primary_staff_id, backup_staff_id]
+    columns: [id, created_at, active, deactivated_at, updated_at, status, name, dob, doctor_id, primary_staff_id, backup_staff_id]
     row_count: 2
     contains_rows:
       # p001 — the CURRENT (latest history) status, not the change log.
       - id: p001
         status: discharged
         name: Alice
+        dob: "1990-05-14"
         active: true
         deactivated_at: null
       - id: p002

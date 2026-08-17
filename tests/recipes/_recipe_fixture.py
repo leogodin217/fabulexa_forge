@@ -7,6 +7,9 @@ never invoked. All values are fixed; no randomness, no clock calls.
 The fixture world:
   - records__patient   : history-tracked ``prop__status`` (type-2 capable)
                          + non-tracked ``prop__name`` (type-1)
+                         + non-tracked ``prop__dob`` (type-1, an ISO date
+                           string minted upstream -- the declared-date-parse
+                           source: p001 "1990-05-14", p002 "1985-11-02")
                          + ``prop__doctor_id`` (references doctor)
                          + ``prop__primary_staff_id`` / ``prop__backup_staff_id``
                            (both reference staff — two edges to one kind, so a
@@ -83,6 +86,11 @@ _PATIENT_COLUMNS: list[dict[str, object]] = [
     # non-tracked property — type-1 source
     prop_column(
         "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    # non-tracked ISO date string — a declared-date-parse source (an
+    # upstream-minted date, e.g. a date of birth; never sniffed).
+    prop_column(
+        "prop__dob", "VARCHAR", history_tracked=False, temporal_class="constant"
     ),
     # FK to doctor kind
     prop_column(
@@ -273,7 +281,7 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     # together with the NULL reference cell (p002's backup_staff_id).
     conn.execute(
         'INSERT INTO "records__patient" VALUES '
-        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "p001",
@@ -283,6 +291,7 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
             0,
             "discharged",
             "Alice",
+            "1990-05-14",
             "d001",
             0,
             "s001",
@@ -293,7 +302,7 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     )
     conn.execute(
         'INSERT INTO "records__patient" VALUES '
-        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "p002",
@@ -303,6 +312,7 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
             1,
             "pending",
             "Bob",
+            "1985-11-02",
             "d001",
             0,
             "s002",

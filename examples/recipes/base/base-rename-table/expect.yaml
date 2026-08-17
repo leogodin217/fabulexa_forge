@@ -9,6 +9,7 @@ tables:
         deactivated_at,
         prop__status,
         prop__name,
+        prop__dob,
         prop__doctor_id,
         doctor_id_key,
         prop__primary_staff_id,

@@ -1,0 +1,49 @@
+# Recipe: derived-date-parse
+# ============================================================
+# Demonstrates the date_parse derived column: declare that a VARCHAR
+# source property carries date strings in a given format, and reinterpret
+# it as a real DATE.
+#
+# Domain dates arrive in emits as plain VARCHAR prop__ columns (the
+# producer's presentation layer mints them upstream, e.g. a date of
+# birth) — never sniffed from the string's shape. Both the source column
+# and the format are the author's to declare.
+#
+# The date_parse derived column:
+#   from:   the VARCHAR source property holding date strings (prop__<p>)
+#   format: the author-declared strptime-style format — must denote a
+#           complete calendar date (year + month + day directives)
+#
+# A source value that matches the format parses to the DATE it denotes;
+# NULL stays NULL; a non-matching non-NULL value fails the export loudly,
+# naming the table/column/value — never a silent NULL.
+#
+# Fixture world (recipe emit):
+#   records__patient — prop__dob (non-tracked ISO date string, minted
+#                      upstream): p001 "1990-05-14", p002 "1985-11-02"
+#
+# Output:
+#   dim_patient — 2 rows (p001, p002), birth_date the parsed DATE
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: dim_patient
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [patient_id]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: name
+          from: prop__name
+        # date_parse: reinterpret the VARCHAR prop__dob as a DATE.
+        - name: birth_date
+          derived:
+            date_parse:
+              from: prop__dob
+              format: "%Y-%m-%d"

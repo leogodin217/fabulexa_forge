@@ -1,0 +1,61 @@
+# Recipe: dim-scd2-date-window
+# ============================================================
+# Demonstrates the temporal-rendering election on scd_window: elect a
+# date-grained SCD-2 validity window via the object form, instead of the
+# default wallclock TIMESTAMP bounds.
+#
+# scd_window accepts two forms:
+#   scd_window: valid_from            # bare-literal shorthand, default
+#                                      # rendering (TIMESTAMP)
+#   scd_window: {bound, as}           # object form, carries an election
+#
+# The object form exists to elect — a bound-only object would duplicate
+# the bare-literal shorthand, so every object form is an explicit
+# election. Electing `as: date` renders a date-grained validity window: a
+# standard warehouse shape. Same-day versions would collapse to
+# valid_from = valid_to at date grain (the underlying raw-ns bounds and
+# version ordering are unaffected); the open interval's null valid_to
+# stays null under every election.
+#
+# Contrast with dim-scd2-from-records, whose valid_from/valid_to are the
+# default TIMESTAMP rendering.
+#
+# Fixture world (recipe emit):
+#   records__patient — 2 patients; prop__status is history_tracked=True
+#   history          — 4 rows of status changes for p001 and p002
+#
+# Output:
+#   dim_patient — one row per (patient, status version); valid_from /
+#                 valid_to are DATE, not TIMESTAMP
+#                 p001 has 3 status versions (pending→active→discharged)
+#                 p002 has 1 status version  (pending, open)
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: dim_patient
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: patient
+      key: [patient_id, valid_from]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: name
+          from: prop__name
+        - name: status
+          from: prop__status
+        # Elected rendering: DATE, via the scd_window object form.
+        - name: valid_from
+          derived:
+            scd_window:
+              bound: valid_from
+              as: date
+        - name: valid_to
+          derived:
+            scd_window:
+              bound: valid_to
+              as: date

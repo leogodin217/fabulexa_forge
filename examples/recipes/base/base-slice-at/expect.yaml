@@ -9,6 +9,7 @@ tables:
         deactivated_at,
         prop__status,
         prop__name,
+        prop__dob,
         prop__doctor_id,
         doctor_id_key,
         prop__primary_staff_id,
@@ -26,6 +27,7 @@ tables:
         deactivated_at: null
         prop__status: active
         prop__name: Alice
+        prop__dob: "1990-05-14"
       - id: p002
         prop__status: pending
   doctor:

@@ -1,0 +1,13 @@
+tables:
+  dim_patient:
+    columns: [patient_id, name, birth_date]
+    row_count: 2
+    contains_rows:
+      # prop__dob's ISO date string parsed under the declared "%Y-%m-%d"
+      # format, reinterpreted as a real DATE.
+      - patient_id: p001
+        name: Alice
+        birth_date: 1990-05-14
+      - patient_id: p002
+        name: Bob
+        birth_date: 1985-11-02

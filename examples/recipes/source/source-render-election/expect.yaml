@@ -1,0 +1,15 @@
+tables:
+  patient:
+    columns: [id, created_at, name, dob]
+    row_count: 2
+    contains_rows:
+      # created_at is DATE (elected via render), not the default TIMESTAMP;
+      # dob is DATE (parsed via date_parse), not plain VARCHAR text.
+      - id: p001
+        created_at: 2024-01-02
+        name: Alice
+        dob: 1990-05-14
+      - id: p002
+        created_at: 2024-01-03
+        name: Bob
+        dob: 1985-11-02

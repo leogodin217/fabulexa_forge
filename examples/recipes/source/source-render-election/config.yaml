@@ -1,0 +1,40 @@
+# Recipe: source-render-election
+# ============================================================
+# Demonstrates the temporal-rendering election on a declared source table:
+# a per-table `render` map elects the rendering of a structural instant
+# column, and a `date_parse` map declares a payload VARCHAR column a date
+# string in an author format — both re-render the projected column IN
+# PLACE (no column is added; the output name stays governed by the
+# mode's defaults and `rename`).
+#
+# `render` keys are source identities (e.g. `created_sim_time`), never
+# output names — a key must name an instant-carrying structural column of
+# the table's category (reader-sourced, never a hardcoded list).
+# `date_parse` keys are payload source columns (`prop__<p>`).
+#
+# Contrast with source-state-tables, whose created_at is the default
+# TIMESTAMP and whose dob (if selected) would pass through as plain
+# VARCHAR text.
+#
+# Fixture world (recipe emit):
+#   records__patient — created_sim_time (1*DAY for p001, 2*DAY for p002);
+#                      prop__dob (non-tracked ISO date string, minted
+#                      upstream): p001 "1990-05-14", p002 "1985-11-02"
+#
+# Output:
+#   patient — 2 rows; created_at is DATE (not TIMESTAMP), dob is DATE
+#             (not VARCHAR text)
+
+mode: source
+
+source:
+  tables:
+    - name: patient
+      kind: patient
+      columns: [created_sim_time, prop__name, prop__dob]
+      # Elect DATE for the structural created_sim_time instant.
+      render:
+        created_sim_time: date
+      # Declare prop__dob a date string in this format, parsed to DATE.
+      date_parse:
+        prop__dob: "%Y-%m-%d"
