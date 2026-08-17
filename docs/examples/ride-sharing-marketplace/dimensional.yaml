@@ -98,6 +98,13 @@
 #   JOIN fact_loyalty_band b ON b.actor_id = f.rider_id
 #                           AND f.matched_at >= b.entered_at
 #                           AND (b.exited_at IS NULL OR f.matched_at < b.exited_at)
+#
+# ELECTED: dim_rider.date_of_birth / dim_driver.date_of_birth are plain VARCHAR
+# properties, not derived timestamps — minted upstream as date strings, never
+# touching sim_time or the anchor. Verified clean `%Y-%m-%d` values for both
+# populations, so each is declared via `date_parse` and reinterpreted as a real
+# DATE. Both dims are Type-1, so — unlike retail's dim_customer — nothing here
+# hits the SCD-2 type2 column-mode restriction.
 
 mode: dimensional
 
@@ -142,7 +149,8 @@ dimensional:
         - {name: last_name, from: prop__last_name}
         - {name: email, from: prop__email}
         - {name: phone, from: prop__phone}
-        - {name: date_of_birth, from: prop__date_of_birth}
+        - name: date_of_birth
+          derived: {date_parse: {from: prop__date_of_birth, format: "%Y-%m-%d"}}
         - {name: home_street, from: prop__home_street}
         - {name: home_state, from: prop__home_state}
         - {name: home_city, from: prop__home_place_city}
@@ -176,7 +184,8 @@ dimensional:
         - {name: first_name, from: prop__first_name}
         - {name: last_name, from: prop__last_name}
         - {name: phone, from: prop__phone}
-        - {name: date_of_birth, from: prop__date_of_birth}
+        - name: date_of_birth
+          derived: {date_parse: {from: prop__date_of_birth, format: "%Y-%m-%d"}}
         - {name: vehicle_make, from: prop__vehicle_make}
         - {name: vehicle_model, from: prop__vehicle_model}
         - {name: vehicle_year, from: prop__vehicle_year}

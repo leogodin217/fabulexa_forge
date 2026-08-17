@@ -42,6 +42,10 @@
 # wallclock TIMESTAMP. Domain `prop__` columns are never anchored — the
 # sim-time-valued ones (booking.requested_at / opening_at) stay raw BIGINT ns.
 # Add a `rebase:` block (see source.yaml) only to override that origin/zone.
+#
+#   ELECTED  patient.prop__birth_date is a plain upstream-minted date string
+#            (verified %Y-%m-%d, 15,060/15,060, no exceptions) — declared via
+#            `date_parse` and reinterpreted as a real DATE.
 
 mode: base
 
@@ -53,3 +57,7 @@ base:
     - {table: records__resource, name: consultant}
     - {table: records__journey_instance, name: pathway_episode}
     - {table: records__tick_decision, name: clinical_event}
+  render:
+    - table: records__actor
+      date_parse:
+        prop__birth_date: "%Y-%m-%d"

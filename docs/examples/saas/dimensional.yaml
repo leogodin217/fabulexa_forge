@@ -80,6 +80,17 @@
 #            constraint drops `created_at` from dim_company/dim_account
 #            (their `valid_from` already carries the wallclock version
 #            start).
+#   ELECTED  dim_company and dim_user_status's valid_from/valid_to elect a
+#            date-grained `scd_window` (`{bound, as: date}`) instead of the
+#            default TIMESTAMP window. Both track coarse CRM/seat-lifecycle
+#            milestones (onboarding -> active -> churned; provisioned ->
+#            active -> using -> offboarded) — status-change dates a
+#            warehouse reports on, not intraday-sensitive moments.
+#            dim_account's own valid_from/valid_to stay the default
+#            TIMESTAMP: its versions mix a daily engagement-score batch
+#            recompute with genuine same-day pricing changes (544 collision
+#            days measured), so collapsing to date grain would blend a
+#            cosmetic update with a real billing change.
 
 mode: dimensional
 
@@ -105,10 +116,10 @@ dimensional:
           from: prop__status
         - name: valid_from
           derived:
-            scd_window: valid_from
+            scd_window: {bound: valid_from, as: date}
         - name: valid_to
           derived:
-            scd_window: valid_to
+            scd_window: {bound: valid_to, as: date}
 
     # --- dim_account: billing/workspace tenant (entity.company_hub) ---
     - name: dim_account
@@ -214,10 +225,10 @@ dimensional:
           from: prop__status
         - name: valid_from
           derived:
-            scd_window: valid_from
+            scd_window: {bound: valid_from, as: date}
         - name: valid_to
           derived:
-            scd_window: valid_to
+            scd_window: {bound: valid_to, as: date}
 
     # --- fact_usage_event: one row per product usage event (tick_decision) ---
     - name: fact_usage_event

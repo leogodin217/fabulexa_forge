@@ -126,6 +126,14 @@
 #   JOIN dim_customer d ON f.customer_id = d.customer_id
 #                      AND f.occurred_at >= d.valid_from
 #                      AND (f.occurred_at < d.valid_to OR d.valid_to IS NULL)
+#
+# NOT ELECTED: dim_customer.birth_date is a clean upstream-minted date string
+# (verified all 11,468 values match `%Y-%m-%d`, no NULLs) and would be a
+# textbook `date_parse` candidate elsewhere — but dim_customer is `scd: type2`,
+# and the type2 builder implements only from / null / scd_window column modes
+# (Scd2ColumnModeSupported), so `derived: date_parse` is refused here. See
+# source.yaml / base.yaml, whose customer/patient tables carry no such
+# restriction, for the same election on the same column.
 
 mode: dimensional
 

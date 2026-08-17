@@ -133,6 +133,10 @@ source:
                 prop__income, prop__store, prop__total_purchases]
       rename:
         prop__store: storefront_id
+      # prop__birth_date is a plain upstream-minted date string (verified
+      # %Y-%m-%d, 11,468/11,468, no NULLs) — declared, not sniffed.
+      date_parse:
+        prop__birth_date: "%Y-%m-%d"
     - name: ops_agent
       kind: actor
       sub_types: [ops]

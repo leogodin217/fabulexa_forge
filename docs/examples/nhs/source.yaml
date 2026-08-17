@@ -171,6 +171,10 @@ source:
                 prop__gender_code, prop__ethnic_category, prop__imd_decile,
                 prop__gp_practice_code, prop__primary_condition, prop__comorbidity_count,
                 prop__frailty_band]
+      # prop__birth_date is a plain upstream-minted date string (verified
+      # %Y-%m-%d, 15,060/15,060, no exceptions) — declared, not sniffed.
+      date_parse:
+        prop__birth_date: "%Y-%m-%d"
     - name: consultant
       kind: resource
       columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,

@@ -172,6 +172,13 @@
 # fact_pathway_state.entered_ns is not microsecond-aligned, so the rendered
 # timestamp truncates real precision. Two of them (entered_ns, allocated_ns) are
 # also declared grain keys.
+#   ELECTED  dim_patient.birth_date is a plain VARCHAR property, not a
+#            derived timestamp — the producer mints it upstream as a date
+#            string, never involving sim_time or the anchor. Verified all
+#            15,060 values match `%Y-%m-%d` with no exceptions
+#            (1922-07-05..2007-06-19), so it is declared via `date_parse`
+#            and reinterpreted as a real DATE rather than passed through as
+#            text.
 
 mode: dimensional
 
@@ -195,7 +202,8 @@ dimensional:
         - {name: patient_id, from: record_id}
         - {name: patient_number, from: presentation_id}
         - {name: full_name, from: prop__full_name}
-        - {name: birth_date, from: prop__birth_date}
+        - name: birth_date
+          derived: {date_parse: {from: prop__birth_date, format: "%Y-%m-%d"}}
         - {name: gender_code, from: prop__gender_code}
         - {name: ethnic_category, from: prop__ethnic_category}
         - {name: imd_decile, from: prop__imd_decile}

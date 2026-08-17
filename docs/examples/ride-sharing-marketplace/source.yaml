@@ -102,6 +102,10 @@ source:
       rename:
         prop__zone: zone_id
         prop__dest_zone: dest_zone_id
+      # prop__date_of_birth is a plain upstream-minted date string (verified
+      # %Y-%m-%d, no exceptions) — declared, not sniffed.
+      date_parse:
+        prop__date_of_birth: "%Y-%m-%d"
     - name: driver
       kind: actor
       sub_types: [driver]
@@ -110,10 +114,12 @@ source:
                 prop__phone, prop__date_of_birth, prop__vehicle_make, prop__vehicle_model,
                 prop__vehicle_year, prop__vehicle_color, prop__license_plate,
                 prop__strategy, prop__status, prop__zone, prop__base_zone,
-                prop__session_earnings, prop__loyalty_band]
+                prop__session_rides, prop__loyalty_band]
       rename:
         prop__zone: zone_id
         prop__base_zone: base_zone_id
+      date_parse:
+        prop__date_of_birth: "%Y-%m-%d"
     - name: zone
       kind: entity
     - name: user_session
