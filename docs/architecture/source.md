@@ -188,6 +188,15 @@ key is the elected surface's contract column name (`record_id` / `record_index`
 election leaves unrendered (`record_id` under a `presentation_id` election) is
 unsatisfiable and errors (`SourceColumnUnresolved`).
 
+**Temporal elections.** A per-table `render` map elects the rendering of a
+structural instant column — `created_sim_time` → `date`, say — in place of
+the default `created_at` wallclock `TIMESTAMP`; a `date_parse` map declares a
+payload VARCHAR column (`prop__<p>`) a date string in an author format,
+rendered as `DATE`. Both are keyed on source identity, re-render the
+projected column in place, and require the column to be one the render
+already emits ([`temporal-elections.md`](temporal-elections.md) § Per-mode
+attach points).
+
 ### The `junction` render
 
 One association row per membership interval — every interval of the table, or
@@ -209,6 +218,10 @@ independently by their own source names — keeping `<f>_id` while omitting
 `<f>_kind` is a legal restricted extract (per-row election resolution consults
 the kind internally regardless); the pair is atomic only inside the event log's
 `changes` expansion.
+
+The same `render` / `date_parse` maps apply to a junction table: `render`
+elects `joined_sim_time` / `left_sim_time`'s rendering; `date_parse` declares
+a payload `elem__<f>` VARCHAR field a date string.
 
 ### Row selection
 
@@ -322,7 +335,7 @@ idiom. Fixed columns; the author names the table, not the columns:
 | `item_type` | The population's **resolved** item-type: an events source's declared `item_type` override, else its kind's `source.kind_labels` label (the owner kind's label for a membership source, forming `<label>.<property>`), else the kind name verbatim (`<K>.<property>` for membership) — sidecar-derived by default, independent of which thing-tables are declared, unless an author declares it otherwise (§ Domain vocabulary). The contract identity everywhere item-type governs: this stamped column, the `item_id` dereference key, the union-safety gate's granularity, and the order-key component |
 | `item_id` | For a records source: the record's identity in its own population's elected surface (`record_id` verbatim absent an election); on destroy rows the value comes from the identity join relation, not the fold's nulled after-image, so it is never NULL. For a membership source: the **owner** record's identity in the owner kind's election — the junction-owner-column render, per-row resolved for a sub-typed owner. Column type per the junction-member-column rule over the union of every source's resolved surfaces: the common declared type when all agree, else `VARCHAR` with `record_index` digit-rendered |
 | `event` | `create` / `update` / `destroy` — deterministic recode of the folds' ops (`c`/`u`/`d`; `join` → `create`, `leave` → `destroy` of a membership in the named collection, recorded against the owner — `item_type` is what separates collection changes from the owner's own lifecycle rows) |
-| `occurred_at` | Wallclock `TIMESTAMP` through the anchor renderer |
+| `occurred_at` | Wallclock `TIMESTAMP` through the anchor renderer, or the events block's `render:` election — the log's one legal `render` key is its own instant column `event_sim_time`, a constant of the log's published contract rather than a reader question |
 | `changes` | Serialized JSON text (codec `VARCHAR`): an object mapping each audited property's **output key** — its bare name, or its source's declared `rename` target (§ Domain vocabulary) — to `[old, new]` pairs — a membership reference field expands in place to its `<f>_kind` / `<f>_id` entry pair (the junction render's names, kind then id, each renamed in place by a `rename` targeting the bare field name; `only` / `ignore` still address the bare field name). Keys in sidecar column-declaration order of the *source* properties — rename relabels, never reorders; values are the folds' `CAST(… AS VARCHAR)` after-image strings verbatim or `null` — the row-state-events / membership-events rendering, the same strings streaming's payloads carry, never the conformance codec — reference-valued entries in the target's elected surface (below), and `<f>_kind` entry values rendered through `source.kind_labels` (§ Domain vocabulary). The JSON assembly (object construction, string escaping) is mode-owned SQL, rendered deterministically in the SELECT |
 
 **The audited property set** per source: every `tracked` and `constant`-class
@@ -651,15 +664,28 @@ reserved-output-name check on its author-named columns.
 ### Wallclock timestamps: the anchor is required
 
 Every structural sim-time column renders through the effective anchor via the
-shared renderer (`render_anchor_timestamp_expr`) — byte-identical rendering
+shared renderer (`render_anchor_temporal_expr`) — byte-identical rendering
 semantics to every other wallclock mode, same precedence (CLI → config `rebase`
 → sidecar `runtime`), same DST and ambiguity failure rules
-(see [`anchor.md`](anchor.md)). Source **requires** a resolved anchor:
+(see [`anchor.md`](anchor.md)). Source **requires** a resolved anchor — a
+requirement independent of, and stricter than, the general anchor-required-
+for-an-explicit-election rule ([`temporal-elections.md`](temporal-elections.md)
+§ Anchor requirement): source has no default-rendering fallback path at all:
 
 | Anchor resolution outcome | Result |
 |---|---|
 | `EffectiveAnchor` resolves (sidecar runtime, possibly overridden) | Export proceeds; all structural sim-time columns are wallclock `TIMESTAMP` |
 | No anchor resolves (`None`) | Error `SourceAnchorRequired` — an operational dump never shows ns offsets; silently emitting raw integers would be a fallback |
+
+A `render` key on a declared table (`state` / `junction`) must name an
+instant-carrying structural column of the table's category, resolved
+through the reader's structural-temporal surface
+([`reader.md`](reader.md) § The structural-temporal surface) — never a
+hardcoded list — and must name a column the render actually emits;
+`last_mutation_sim_time` is outside the key domain under a windowed
+invocation, where the render omits `updated_at`
+(`RenderKeyIsInstantColumn`, [`temporal-elections.md`](temporal-elections.md)
+§ Validation Rules).
 
 ### Ordering and determinism
 
@@ -950,6 +976,8 @@ for a `tables` entry, `events source #<n>` (1-based, declaration order) for an
 | `SourceSliceOnlyRead` | No `columns` / `rename` / `only` / `ignore` entry names a non-exempt `slice_only` column. `where` keys are outside this rule's population — `SourceWhereNotConstant` refuses them, with the message the selection surface needs | Names the entry, the column, and the omission reason |
 | `SourceUnclassifiedColumn` | Every projected records column classifies to a taxonomy role ([`reader.md`](reader.md) § The records-column taxonomy) | Names the table and column |
 | `SourceAnchorRequired` | An `EffectiveAnchor` resolved | `"source export renders wallclock timestamps and requires a resolved anchor: the emit declares no runtime block; supply rebase.base_date/timezone or --base-date/--timezone"` |
+| `RenderKeyIsInstantColumn` | A declared-table `render` key names an instant-carrying structural column of the table's category (reader-sourced); the event log's key domain is mode-definitional (`event_sim_time` only). A key must also name a column the render emits ([`temporal-elections.md`](temporal-elections.md)) | `"render key '{column}' on '{table}': not an instant-carrying structural column of this table"` |
+| `DateParseSourceColumn` | A declared `date_parse` source is a declared VARCHAR payload column, read from the sidecar type directly, and not `slice_only` ([`temporal-elections.md`](temporal-elections.md)) | `"date_parse column '{column}' on '{table}': source must be an existing VARCHAR column (got {type})"` |
 | `SourceNameCollision` | Output table names (the event log's included) and per-table column names unique after defaults + renames; within one events source, resolved `changes` keys are distinct after renames (a membership pair's expanded `_kind` / `_id` names included) | `"output name collision: {names}; resolve via rename"`; the `changes`-key case: `"{owner}: changes key collision: {keys}; resolve via rename"` |
 | Reserved-name check (`exporters/reserved_names.py`, raised as `ExportError`) | No output table name collides with bookkeeping names / suffixes; no output column named `last_mutation_sim_time` (§ Presentation-name posture) — checked at plan build over all output names, so a full export and a later `--next` on the same target agree | — |
 | `ElectionMixedIdentity` / `ElectionUnionUnsafe` | Identity gates per declared table; edge gates per referencing column, per event-log **resolved** item-type (over the union of its sources' addressed populations; the owner kind's for a membership item-type), and per audited reference property; no gate across item-types (polymorphic identity) | Per [`key-election.md`](key-election.md) |
@@ -1199,6 +1227,7 @@ writer semantics, CSV posture, and incremental gating are owned by
 | [`writers.md`](writers.md) | The CSV / DuckDB adapters source shares with every mode |
 | [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — per-render declared primary-key / uniqueness constraints |
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — elected identity and edge rendering, the identity and edge gates source's plan runs |
+| [`temporal-elections.md`](temporal-elections.md) | The cross-mode election vocabulary declared-table and event-log `render` / `date_parse` maps render through |
 | [`slice-only.md`](slice-only.md) | The export-wide `slice_only` policy source's omit-with-notice, `SourceSliceOnlyRead` refusal, and row-selection class gate instantiate |
 | [`row-predicates.md`](row-predicates.md) | The scalar-or-list grammar, `PredicateValue` well-formedness rule, and rendering authority the mode's `where` surfaces share with dimensional's five |
 | [`config-docstrings.md`](config-docstrings.md) | The docstring convention the `SourceConfig` family follows |

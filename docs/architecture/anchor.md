@@ -147,18 +147,26 @@ the producer's stance on author-supplied wallclock instants.
 
 ### Anchored-timestamp rendering
 
-`render_anchor_timestamp_expr(anchor, qualified_source, out_name)` is the one SQL
-renderer every wallclock mode shares. It represents the resolved instant as a naive
-local wall-clock DuckDB `TIMESTAMP` in `anchor.timezone`, or — when `anchor` is
-`None` — emits the raw `sim_time` `BIGINT` column unchanged. The dimensional mode
-calls it for `derived: timestamp` (see [`dimensional.md`](dimensional.md) §
-Timestamp source and the runtime anchor); it is the one renderer every wallclock
-mode shares, so any future mode renders byte-identically by calling the same
-function. The renderer interpolates exactly `str(anchor.timezone)` (the IANA key)
-and `anchor.start_instant.isoformat()` (the origin literal carrying the UTC offset
-at the origin instant only); DuckDB re-derives each event's local wall clock with
-full DST rules, so a single origin offset is sufficient. The expression and its byte
-content are this module's contract.
+`render_anchor_temporal_expr(anchor, qualified_source, out_name, render)` is the
+one SQL renderer every wallclock mode shares. It represents the resolved instant
+in an author-elected temporal type — `timestamp` (the default: a naive local
+wall-clock DuckDB `TIMESTAMP` in `anchor.timezone`), `date`, `time`, or
+`timestamptz` — or, when `anchor` is `None` and `render` is the default
+`timestamp`, emits the raw `sim_time` `BIGINT` column unchanged. `date` and
+`time` are pure projections of the same `timestamp` rendering; `timestamptz`
+renders the absolute instant. Every mode's election renders through this one
+function, so any mode renders byte-identically for the same election; the
+election vocabulary, the anchor-required rule for an explicit election, and the
+per-mode attach points are documented in
+[`temporal-elections.md`](temporal-elections.md). The dimensional mode calls it
+for `derived: timestamp` (see [`dimensional.md`](dimensional.md) § Timestamp
+source and the runtime anchor). The renderer interpolates exactly
+`str(anchor.timezone)` (the IANA key) and `anchor.start_instant.isoformat()`
+(the origin literal carrying the UTC offset at the origin instant only);
+DuckDB re-derives each event's local wall clock with full DST rules, so a
+single origin offset is sufficient. The renderer uses exactly these two
+serializations for every election; the `timestamp` election's expression is
+this same interpolation, byte-identical across every mode.
 
 ## Invariants
 
@@ -266,6 +274,7 @@ them with a non-zero exit — see [`errors.py`](../../src/fabulexa_forge/errors.
 | [`dimensional.md`](dimensional.md) | § Timestamp source and the runtime anchor — the `derived: timestamp` renderer that consumes the resolved anchor and pins the SQL serialization. |
 | [`source.md`](source.md) | § Wallclock timestamps — the anchor's first *mandatory* consumer; every structural sim-time column renders through the same SQL renderer as the dimensional mode. |
 | [`reader.md`](reader.md) | § Surface — `RuntimeAnchor` and the typed sidecar the resolver reads as raw strings. |
+| [`temporal-elections.md`](temporal-elections.md) | The election vocabulary (`date` / `time` / `timestamptz` / `interval`) this renderer serves, and the anchor-required business rule for an explicit election. |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | § Branch enumeration and runtime anchor — the vendored contract for the sidecar `runtime` block. |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `RebaseConfig` and `ExportConfig.rebase` — the config grammar these semantics bind. |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap. |

@@ -229,7 +229,8 @@ Each mode reads the same emit and writes a different target shape.
 - ✓ **Table / column rename** — every output `name` is author-verbatim; `init` proposes
   prefix-stripped names with a structural-column collision check.
 - ◐ **Output transforms** — `derived` columns ship (ordinal, value-map, anchored
-  timestamp, SCD window); arbitrary per-table transforms beyond these are not.
+  timestamp, SCD window, elapsed, declared date parse); arbitrary per-table
+  transforms beyond these are not.
 - ✓ **`init`** — generate a commented candidate config from the sidecar; `--mode`
   selects the target (`dimensional`, the default, `source`, or `streaming`). Dimensional
   reads `record_roles` for warehouse role, kinds, discriminators, membership tables,
@@ -284,6 +285,20 @@ Each mode reads the same emit and writes a different target shape.
   streaming, and base renderers all consume it — source and the `debezium` stream
   format *require* a resolved anchor, dimensional and base fall back to raw
   sim-time ns. See [`architecture/anchor.md`](architecture/anchor.md).
+- ✓ **Temporal rendering elections** — author-electable output types on the render
+  sites that already compute temporal values: an instant renders as `date` / `time`
+  / `timestamptz` in place of the default `timestamp` (dimensional `derived:
+  timestamp` / `scd_window`; source's declared-table and event-log `render` maps;
+  base's per-table render declarations), an elapsed delta renders as `interval` in
+  place of the divided numeric, and a declared VARCHAR source column parses as
+  `DATE` under an author format (`date_parse`, never sniffed). One shared election
+  vocabulary through the one renderer every wallclock mode shares; an explicit
+  election requires a resolved anchor. The reader's session-zone pin and pinned
+  CSV text forms make zone-bearing output machine-independent. See
+  [`architecture/temporal-elections.md`](architecture/temporal-elections.md).
+  *Teaches: realistic warehouse/app-database column typing (admission dates,
+  wait-time intervals, zone-aware timestamps) instead of one universal
+  `TIMESTAMP`.*
 - ✓ **`slice_only` export policy** — export-wide: no output value, row membership,
   linkage, or ordering derives from a `slice_only` column's value. Author-named reads
   refused always-on (dimensional + streaming); auto-projected surfaces omit with a

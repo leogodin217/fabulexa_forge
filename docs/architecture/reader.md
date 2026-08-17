@@ -46,6 +46,11 @@ open_emit(emit_dir)
   `contract/` is the only coupling.
 - **Non-mutation.** `run.duckdb` is opened read-only and `base.json` is never
   written. Reading an emit mutates nothing on disk.
+- **Session-zone pin.** The one piece of mutable connection state the reader
+  owns: an invocation-scoped time-zone pin on the open connection, set by the
+  anchor-resolving caller, never by a mode or writer (§ The session-zone
+  pin). It is in-memory connection state, not a disk write — it does not
+  breach non-mutation.
 
 ## Semantics
 
@@ -521,6 +526,28 @@ pinned by the producer on write (append order, creation order); a consumer that 
 a stable read order specifies `ORDER BY`. The reader adds no nondeterminism and
 imposes no implicit ordering.
 
+### The session-zone pin
+
+`pin_session_timezone(emit, anchor)` pins the materialization session's time
+zone to the resolved anchor's IANA zone for the invocation. The
+anchor-resolving driver — the export driver, and tier-2 shaped playback's
+`open` ([`playback.md`](playback.md)) — calls it once, after anchor
+resolution and before any relation materializes. The pin is
+connection-scoped, so it covers both of the reader's query surfaces
+(row-tuple and columnar) for the rest of the invocation; it is a pure
+function of the resolved anchor (same anchor → same session state →
+byte-identical zone-bearing text forms on any machine); and it is set only
+through the reader — no mode or writer touches session state. With no
+resolved anchor there is no call: no elected temporal rendering exists
+without an anchor ([`temporal-elections.md`](temporal-elections.md) §
+Anchor requirement), so no zone-bearing value arises to pin against.
+
+The pin is the mechanism that makes zone-bearing serialization — the
+`TIMESTAMP WITH TIME ZONE` election's CSV text form
+([`writers.md`](writers.md)) — independent of the executing machine's
+locale and session zone: the anchor zone, never the session zone, governs
+every zone-bearing text form the writers produce.
+
 ## Invariants
 
 1. **Determinism.** The reader is a pure, read-only function of the emit files: the
@@ -569,6 +596,10 @@ imposes no implicit ordering.
     nothing inferred, nothing narrowed to surviving rows — and an incoherent
     present block raises `PresentationKeysInvalidError` at the accessor rather
     than yielding a silently-mended view. Absence is "no claims", never an error.
+11. **The session-zone pin is the reader's alone to set.** Only the
+    anchor-resolving caller pins the connection's time zone, and only through
+    the reader; no mode or writer touches session state. The pin is a pure
+    function of the resolved anchor.
 
 ## Validation Rules
 
@@ -738,6 +769,7 @@ What the reader deliberately does not own:
 | [`dimensional.md`](dimensional.md) | The first reshaping consumer — uses `query_arrow`, the `history_tracked` flag, and the faithful-read builders |
 | [`corrupters.md`](corrupters.md) | The base-emit-writing consumer — materializes every table via `query_arrow`, reads column metadata and reference targets from the `Sidecar`, and reuses the single-branch guard |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability — the consumer the strict `presentation_keys` accessor and the union-safety algebra exist for |
+| [`temporal-elections.md`](temporal-elections.md) | The session-zone pin's consumer — the elected temporal renderings whose zone-bearing serialization the pin makes machine-independent |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored input contract the reader adapts to (sidecar shape, table categories, type mapping) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |

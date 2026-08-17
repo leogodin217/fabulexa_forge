@@ -236,7 +236,12 @@ The tracked `prop__<p>` values come from the versioned-intervals derivation; eac
 **static** column and any `lookup` column comes from the composed reader records
 relation (`build_records_relation_sql`) `LEFT JOIN`-ed on `record_id` and projected
 with its per-source-type `CAST` in the representation step. The `valid_from` /
-`valid_to` output columns are `derived: { scd_window: … }`.
+`valid_to` output columns are `derived: { scd_window: … }`, optionally
+electing a temporal rendering via the object form (§ Derived columns); an
+elected `date` collapses same-day versions to `valid_from = valid_to` at
+date grain (the underlying raw-ns bounds and version ordering are
+unaffected), and the open interval's `NULL` `valid_to` stays `NULL` under
+every election.
 
 ### Foreign keys — the labeled-edge pathfind
 
@@ -420,8 +425,10 @@ does not resolve it.
 |---|---|---|
 | `ordinal: {partition_by, order_by}` | `ROW_NUMBER()` over the partition, ordered by `order_by` | The engine **always** appends `record_id` (the grain's identity column) as the final `ORDER BY` tie-break, so the ordinal is total and reproducible even when `order_by` ties. When `order_by` names a rendered-time column, the `ORDER BY` compiles to that column's **raw ns source** (the ordinal amendment, below) |
 | `value_map: {from, map}` | Each source value replaced by its mapped value (typed per the map — below) | Unmapped source values → `NULL` (faithful: never invent a mapping) |
-| `timestamp: {source}` | The named `sim_time` column rendered as wallclock `TIMESTAMP` via the runtime anchor | Pure function of the anchor; `sim_time = 0` → `start_datetime` |
-| `scd_window: valid_from \| valid_to` | The SCD-2 version-window bound | From the `LEAD` reconstruction |
+| `timestamp: {source, as}` | The named `sim_time` column rendered as wallclock `TIMESTAMP` via the runtime anchor, or — with `as` electing `date` / `time` / `timestamptz` — that projection of the same instant ([`temporal-elections.md`](temporal-elections.md)) | Pure function of the anchor; `sim_time = 0` → `start_datetime`; `as` absent renders the default `timestamp` byte-identically |
+| `scd_window: valid_from \| valid_to \| {bound, as}` | The SCD-2 version-window bound, or — the object form — that bound in an elected temporal type | From the `LEAD` reconstruction; election is a rendering choice over the same raw bounds |
+| `elapsed: {…, unit \| as}` | A cross-row time delta, as a `unit`-divided `DOUBLE` or — `as: interval` — a µs-precision `INTERVAL` | Same ns delta either way; exactly one of `unit` / `as` is set |
+| `date_parse: {from, format}` | A declared VARCHAR source column reinterpreted as `DATE` under the author format | Value-preserving; a non-matching non-`NULL` value fails the export loudly (§ Validation Rules) |
 
 `partition_by` and `order_by` name **sibling output columns** of the same table (e.g.
 `partition_by: patient_id` references the FK-resolved actor id; `order_by: timestamp`
@@ -443,6 +450,22 @@ same-microsecond tie count a row that lands in the next window (see
 [`columns.py`](../../src/fabulexa_forge/exporters/dimensional/columns.py)
 (`_find_raw_ns_source_for_ordinal`).
 
+The amendment is election-aware. `timestamp`, `timestamptz`, and `date`
+elections (and the default) all substitute the raw-ns source, since each is
+monotone in its source — the substitution changes output only on
+rendered-value ties, where raw order is event order. A `time` election is
+excluded: time-of-day is **not** monotone in the instant, so raw-ns
+substitution would contradict the author's evident intent (ordering by time
+of day across days) — a `time`-elected amendment column instead orders by
+its own rendered value, `record_id` tie-broken as any ordinary column.
+`interval`-rendered `elapsed` columns and `date_parse` columns are never
+amendment columns; they order by value, `record_id` tie-broken. An SCD-2
+`valid_to` bound stays outside the amendment under every election — it
+orders by rendered value like any other column. Under incremental export
+the windowed rule (an append-mode table's `ordinal.order_by` must name a
+window-key column) is amended the same way — see
+[`incremental.md`](incremental.md) § Window membership per table class.
+
 A `value_map` column is **typed from its map's values**, and its generated `CASE`
 casts *every* branch — including the unmapped `→ NULL` — to that type, so the column
 reaches the writer typed (the same untyped-NULL Arrow hazard the NULL-pad rule
@@ -451,6 +474,19 @@ avoids): `BIGINT` when every mapped value is an `int`, `DOUBLE` when they are
 without inventing a value (Principle #7). A `value_map`'s `from` reads off the grain's
 projectable surface, so an unresolvable `from` fails `ProjectionColumnExists` with a
 clean `ExportError`, never a raw SQL failure.
+
+A `date_parse`'s `from` resolves off the grain's projectable surface exactly
+as `value_map.from` does, and the resolved column must carry a declared
+VARCHAR type — the sidecar type for `prop__` columns, the element-schema
+type for a membership grain's `elem__` fields; a column with no declared
+type behind it (a structural column, a virtual column, a grain constant) is
+refused as non-VARCHAR (`DateParseSourceColumn`, § Validation Rules). On the
+`history_interval` grain, `value` participates under the same rule with no
+special case: it is an ordinary projectable-surface column whose declared
+type is the sidecar `history` table's `value` column type, the same type
+authority `value_map`'s literal typing already reads. The full election
+vocabulary, the anchor requirement, and the declared-date-parse contract are
+[`temporal-elections.md`](temporal-elections.md)'s.
 
 ### Timestamp source and the runtime anchor
 
@@ -481,17 +517,27 @@ treatment the membership grain gives a `NULL` `left_sim_time`.
 
 `derived: timestamp` renders through the resolved `EffectiveAnchor` — the one
 wallclock anchor `cmd_export` resolves for the invocation (see
-[`anchor.md`](anchor.md)). The anchor reaches the renderer as
-`build_timestamp_expr(col_decl, anchor)`; the column is a SQL SELECT fragment,
-never per-row Python. When the anchor is `None` (no sidecar `runtime` and no
-rebase input), the renderer emits the raw `sim_time` integer column (no
-conversion). A
-plain `from: last_mutation_sim_time` projection always yields the raw integer;
-only `derived: timestamp` applies the anchor. Availability is enforced as
+[`anchor.md`](anchor.md)). The column is a SQL SELECT fragment, never
+per-row Python. When the anchor is `None` and no election is explicitly set
+(no sidecar `runtime` and no rebase input), the renderer emits the raw
+`sim_time` integer column (no conversion). A plain `from:
+last_mutation_sim_time` projection always yields the raw integer; only
+`derived: timestamp` applies the anchor. Availability is enforced as
 `TimestampSourceAvailable` (§ Validation Rules).
 
-When an anchor resolves, the column is a naive local wall-clock `TIMESTAMP` in
-`anchor.timezone`:
+`timestamp`'s `as` field elects the rendering — `date`, `time`, or
+`timestamptz` in place of the default `timestamp` — and the `scd_window`
+object form carries the same election over an SCD-2 bound; both compile
+through `render_anchor_temporal_expr`, the one renderer every wallclock mode
+shares ([`anchor.md`](anchor.md), [`temporal-elections.md`](temporal-elections.md)).
+Any explicit election — `as: timestamp` included — requires a resolved
+anchor: with none, the column is refused at validation
+(`TemporalRenderRequiresAnchor`, § Validation Rules) rather than silently
+falling back to the raw integer, since a raw column under an elected `date`
+name would misrepresent what was rendered.
+
+When an anchor resolves, the `timestamp` election renders a naive local
+wall-clock `TIMESTAMP` in `anchor.timezone`:
 
 ```sql
 timezone('<anchor.timezone>',
@@ -519,7 +565,10 @@ zone. A naive local wall clock is ambiguous across a DST fall-back (two instants
 share one local string) and steps backward at the fold; this is faithful to real
 wall clocks and accepted — row ordering is pinned by `sim_time`, never by the
 rendered timestamp. The dimensional `TIMESTAMP` is microsecond-resolution; a
-sub-microsecond `sim_time` tail is truncated (§ Boundaries).
+sub-microsecond `sim_time` tail is truncated (§ Boundaries). The `date` and
+`time` elections project this same local wall clock; `timestamptz` renders
+the absolute instant instead — the full election vocabulary, DST posture,
+and precision rule are [`temporal-elections.md`](temporal-elections.md)'s.
 
 ### Membership-grain facts (multi-pick)
 
@@ -807,9 +856,11 @@ error message. The remaining business rules run against the sidecar in
 | `MembershipEdgeResolvable` | A `via: membership` FK resolves to exactly one `membership__<kind>__<property>` table (`property` names it when the kind owns several); every `where` column is a real `elem__` column; `member_field` is a reference field (inferred when unique); some rows' `member__<member_field>__kind` equals the dim's source kind |
 | `DiscriminatorValueObserved` | Each element of a records `filter` value is among the kind's observed `enum_domains` values for that property — evaluated per element, one `discriminator-value-unobserved` [`Notice`](notices.md) per unobserved element, in config element order. A notice, never an error: a declared-but-unobserved value is a legitimate way to write a config against a family of emits. The message states the table will be empty for a scalar and for a list no element of which was observed; for a partially-observed list, where the observed elements still contribute rows, it says only that the element contributes no rows. A property absent from `enum_domains` (e.g. a modelling discriminator like `decision_type`) carries no observed-value set, so its filter is not checked |
 | Dim-population domain gate | Every element of a sub-typed dim's discriminator conjunct is a declared sub-type of the kind's domain — per element, naming the offending one (§ Foreign keys). Distinct from `DiscriminatorValueObserved`: the domain is the declared sub-type registry rather than the observed-value set, and an out-of-domain population is an error, not a notice |
-| `SliceOnlyColumnRefused` | No config-referenced value-read resolves to a non-exempt `temporal_class: slice_only` column ([`slice-only.md`](slice-only.md)). The surface list is exhaustive over the grammar: `from`, `correlation`, records `filter` keys, `value_map.from`, `derived: timestamp` `source`, `derived: elapsed` `correlate_on` / `start_source` / `end_source` / `other_where` keys, `fk via: reference` resolved-path hop columns (the check runs over the hops the resolution actually traverses), `fk via: membership` `member_path` hop columns and `as_of`. (`lookup` reads are `LookupColumnSafety`'s. Membership element predicates and history-grain scoping are outside the population — those columns carry no class.) Always-on, full export included |
+| `SliceOnlyColumnRefused` | No config-referenced value-read resolves to a non-exempt `temporal_class: slice_only` column ([`slice-only.md`](slice-only.md)). The surface list is exhaustive over the grammar: `from`, `correlation`, records `filter` keys, `value_map.from`, `derived: timestamp` `source`, `derived: elapsed` `correlate_on` / `start_source` / `end_source` / `other_where` keys, `derived: date_parse` `from`, `fk via: reference` resolved-path hop columns (the check runs over the hops the resolution actually traverses), `fk via: membership` `member_path` hop columns and `as_of`. (`lookup` reads are `LookupColumnSafety`'s. Membership element predicates and history-grain scoping are outside the population — those columns carry no class.) Always-on, full export included |
 | `OrdinalRefsSiblings` | `ordinal.partition_by` / `order_by` name sibling output columns of the same table |
 | `TimestampSourceAvailable` | Each `derived: timestamp`'s `source` is available on the table's grain: an instant-carrying structural column of the grain's table category (resolved through the reader's structural-temporal surface, not a private list), the grain's virtual interval-end column where the grain defines one, or a `prop__<name>` present on the grain's projectable surface (§ Timestamp source) |
+| `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering — `derived: timestamp`'s `as`, or the `scd_window` object form — has a resolved effective anchor; naming the column when it does not ([`temporal-elections.md`](temporal-elections.md)) |
+| `DateParseSourceColumn` | Each `derived: date_parse`'s `from` resolves off the grain's projectable surface and carries a declared VARCHAR type (§ Derived columns); not `slice_only` |
 | `Scd2NeedsHistory` | An `scd: type2` table declares a `valid_from` `scd_window` column in `key`, the emit carries the `history_tracked` flag, and the kind has at least one tracked column (flag-authoritative; a tracked-but-unchanged column qualifies). A flag-absent emit is refused — re-emit with `history_tracked` — never reconstructed by `history`-table inference |
 | `LookupColumnSafety` | A `lookup` column resolves and reads only temporally exact data: the terminal `records__<kind>` table and its `prop__<property>` exist; a unique reference path resolves from the anchor kind to `to` (or the `path` hint validates hop-by-hop); the terminal property plus every traversed hop column are `temporal_class: constant` (the exempt discriminator excepted, any class — § Lookup); a zero-hop self lookup is not on a `records` grain (redundant with `from`); and the table is not `scd: type2` (the SCD-2 wide builder does not project lookup columns) |
 | `ExcludedKindNotSourced` | No declared table sources an `exclude.kinds` kind |
@@ -987,6 +1038,7 @@ What the dimensional exporter deliberately does not own:
 | [`row-predicates.md`](row-predicates.md) | The scalar-or-list grammar and rendering authority the mode's five predicate surfaces share |
 | [`conformance.md`](conformance.md) | The C1–C14 contract the input is trusted to satisfy |
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — FK `target_key` semantics, inheritance, the dim-key agreement check, `init`'s `keys` proposal |
+| [`temporal-elections.md`](temporal-elections.md) | The cross-mode election vocabulary `derived: timestamp` / `scd_window` / `elapsed` / `date_parse` render through — the full election set, anchor-requirement rule, and declared date-parse contract |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The config grammar these semantics bind |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The input contract (table categories, `references`, membership, `history_tracked`) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |
