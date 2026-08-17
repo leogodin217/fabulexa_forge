@@ -1,0 +1,32 @@
+sprint: dataset-equivalence
+parent_branch: prepare_for_classroom_env
+baseline_sha: 1b6f3441471007d8cc5b6459aa305c7f79d922d3
+started: 2026-08-17
+current_phase: 1
+capabilities:
+  - compare-subsystem: [canonical-form, comparison-engine, report-types]
+  - cli: [compare-verb]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "Canonical form and report types"
+    demo: "docs/sprints/dataset-equivalence/demos/phase_1_canonical_form.py"
+  2:
+    status: pending
+    name: "The comparison engine"
+    demo: "docs/sprints/dataset-equivalence/demos/phase_2_compare_datasets.py"
+    steps:
+      - kind: source
+        summary: "Input loading/validation (UTC-pinned session, CSV typing) + the table/column/row comparison engine behind compare_datasets; creates the phase demo"
+      - kind: author
+        summary: "Author the input-surface and engine-semantics test suites against compare_datasets, per the spec's test bullets"
+        files:
+          - "tests/compare/test_inputs.py"
+          - "tests/compare/test_engine.py"
+  3:
+    status: pending
+    name: "Renderers and the CLI verb"
+    demo: "docs/sprints/dataset-equivalence/demos/phase_3_cli_compare.py"
