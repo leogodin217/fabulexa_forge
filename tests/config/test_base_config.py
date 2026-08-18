@@ -170,6 +170,29 @@ def test_base_render_decl_date_parse_empty_map_rejected() -> None:
         BaseRenderDecl.model_validate({"table": "records__actor", "date_parse": {}})
 
 
+def test_base_render_decl_date_parse_datetime_format_parses() -> None:
+    """A `date_parse` format carrying both date and time directives (the
+    widened parse family) parses."""
+    decl = BaseRenderDecl.model_validate(
+        {
+            "table": "records__actor",
+            "date_parse": {"prop__registered_at": "%Y-%m-%d %H:%M:%S"},
+        }
+    )
+    assert decl.date_parse == {"prop__registered_at": "%Y-%m-%d %H:%M:%S"}
+
+
+def test_base_render_decl_date_parse_family_violation_rejected_entry_keyed() -> None:
+    """A `date_parse` entry violating a family pairing rule -> rejected,
+    the error naming the entry-keyed field name."""
+    with pytest.raises(
+        ValidationError, match=r"BaseRenderDecl\.date_parse\['prop__dob'\]"
+    ):
+        BaseRenderDecl.model_validate(
+            {"table": "records__actor", "date_parse": {"prop__dob": "%I:%M"}}
+        )
+
+
 def test_base_render_decl_columns_and_date_parse_overlap_rejected() -> None:
     """A column named in both `columns` and `date_parse` -> rejected (a
     column names at most one)."""

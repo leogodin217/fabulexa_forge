@@ -17,12 +17,14 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import date
+from datetime import date, time
 from pathlib import Path
 from typing import Iterator
 
+import duckdb
 import pytest
 from _support.notices import discard_notice_sink
+from _support.sidecar_builder import write_emit
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.derivations.guard import require_single_branch
@@ -314,6 +316,93 @@ def test_date_parse_on_prop_renders_date_and_nulls_flow_through(
         rows = {r["id"]: r for r in _election_rows(emit, sql)}
     assert rows["p001"]["prop__signup_date"] == date(2024, 1, 15)
     assert rows["p002"]["prop__signup_date"] is None
+
+
+_TIME_PARSE_PATIENT_COLUMNS: list[dict[str, object]] = [
+    {"name": "fork_path", "type": "VARCHAR"},
+    {"name": "record_id", "type": "VARCHAR"},
+    {"name": "presentation_id", "type": "BIGINT"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    {"name": "record_index", "type": "BIGINT"},
+    {
+        "name": "prop__meeting_time",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+]
+
+_TIME_PARSE_COLUMN_ORDER = (
+    "patient_key",
+    "id",
+    "created_sim_time",
+    "active",
+    "deactivated_at",
+    "presentation_id",
+    "prop__meeting_time",
+)
+
+
+@contextmanager
+def _time_parse_patient_emit(
+    tmp_path: Path,
+) -> Iterator[tuple[Emit, BaseTableSpec, str]]:
+    """Build and open a minimal `patient` emit whose `prop__meeting_time`
+    payload column carries a time-of-day string — the widened parse
+    family's TIME-denotation flow-through fixture."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        'CREATE TABLE "records__patient" ('
+        '"fork_path" VARCHAR, "record_id" VARCHAR, "presentation_id" BIGINT,'
+        ' "created_sim_time" BIGINT, "active" BOOLEAN, "deactivated_at" BIGINT,'
+        ' "last_mutation_sim_time" BIGINT, "record_index" BIGINT,'
+        ' "prop__meeting_time" VARCHAR)'
+    )
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "p001", 1001, 0, True, 0, 0, "14:30"],
+    )
+    conn.close()
+    write_emit(
+        tmp_path,
+        tables=[
+            {
+                "name": "records__patient",
+                "category": "records",
+                "record_kind": "patient",
+                "columns": _TIME_PARSE_PATIENT_COLUMNS,
+                "rows": 1,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": DAY_NS}],
+        extra={
+            "record_roles": {"patient": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    with open_emit(tmp_path) as emit:
+        fork_path = require_single_branch(emit.sidecar)
+        plan = build_base_plan(emit.sidecar, None, notice_sink=discard_notice_sink)
+        spec = next(t for t in plan.tables if t.kind == "patient")
+        yield emit, spec, fork_path
+
+
+def test_date_parse_time_only_format_renders_time_end_to_end(tmp_path: Path) -> None:
+    """A date_parse format carrying only time directives (the widened parse
+    family) denotes and renders TIME through the base map form, end-to-end."""
+    with _time_parse_patient_emit(tmp_path) as (emit, spec, fork_path):
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        elected_spec = replace(spec, date_parse=(("prop__meeting_time", "%H:%M"),))
+        sql = build_base_render_sql(emit.sidecar, fork_path, elected_spec, anchor, None)
+        rows = [dict(zip(_TIME_PARSE_COLUMN_ORDER, row)) for row in emit.query(sql, ())]
+    assert rows[0]["prop__meeting_time"] == time(14, 30)
 
 
 def test_date_parse_mismatch_fails_loudly_naming_table_column_value(

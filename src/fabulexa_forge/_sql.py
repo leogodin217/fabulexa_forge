@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import re
 from decimal import Decimal, InvalidOperation
+from typing import Literal
 
 from fabulexa_forge.errors import ExportError
 
@@ -238,38 +239,231 @@ def cast_predicate_element(element: str, sql_type: str) -> object:
         raise ValueError(f"{element!r} does not cast to {sql_type}") from exc
 
 
+# ---------------------------------------------------------------------------
+# date_parse format anatomy: the closed instant-string directive vocabulary
+# ---------------------------------------------------------------------------
+
+_DATE_PARSE_DIRECTIVE_RE = re.compile(r"%.")
+
+# Directives that share one temporal field are mutually exclusive alternative
+# forms of that field — at most one of a class's members may appear.
+_DATE_PARSE_YEAR_DIRECTIVES = frozenset({"%Y", "%y"})
+_DATE_PARSE_MONTH_DIRECTIVES = frozenset({"%m", "%b", "%B"})
+_DATE_PARSE_HOUR_DIRECTIVES = frozenset({"%H", "%I"})
+_DATE_PARSE_FRACTION_DIRECTIVES = frozenset({"%f", "%g"})
+
+_DATE_PARSE_DATE_FIELD_DIRECTIVES = (
+    _DATE_PARSE_YEAR_DIRECTIVES | _DATE_PARSE_MONTH_DIRECTIVES | {"%d"}
+)
+
+_DATE_PARSE_ALLOWED_DIRECTIVES = (
+    _DATE_PARSE_DATE_FIELD_DIRECTIVES
+    | _DATE_PARSE_HOUR_DIRECTIVES
+    | _DATE_PARSE_FRACTION_DIRECTIVES
+    | {"%p", "%M", "%S", "%%"}
+)
+
+# Uniqueness classes: each is one temporal field; a validated format carries
+# at most one directive from each class (named in the error message).
+_DATE_PARSE_UNIQUENESS_CLASSES: dict[str, frozenset[str]] = {
+    "year": _DATE_PARSE_YEAR_DIRECTIVES,
+    "month": _DATE_PARSE_MONTH_DIRECTIVES,
+    "day": frozenset({"%d"}),
+    "hour": _DATE_PARSE_HOUR_DIRECTIVES,
+    "AM/PM marker": frozenset({"%p"}),
+    "minute": frozenset({"%M"}),
+    "second": frozenset({"%S"}),
+    "sub-second fraction": _DATE_PARSE_FRACTION_DIRECTIVES,
+}
+
+
+def _date_parse_directives(fmt: str, field_name: str) -> list[str]:
+    """Extract a date_parse format's `%`-directives, rejecting malformed or
+    out-of-vocabulary ones.
+
+    Well-formedness only (a valid `%`-count, a closed directive set);
+    pairing, uniqueness, and completeness are the caller's concern.
+
+    Args:
+        fmt: The author-declared format string (already known non-empty).
+        field_name: The field's dotted name, for the error message.
+
+    Returns:
+        The format's directives in order, `%%` included.
+
+    Raises:
+        ValueError: A `%` is not part of a well-formed directive, or a
+            directive is outside the closed vocabulary.
+    """
+    directives = _DATE_PARSE_DIRECTIVE_RE.findall(fmt)
+    accounted_percents = sum(2 if d == "%%" else 1 for d in directives)
+    if fmt.count("%") != accounted_percents:
+        raise ValueError(f"{field_name} {fmt!r} contains a malformed '%' directive")
+    unknown = sorted({d for d in directives if d not in _DATE_PARSE_ALLOWED_DIRECTIVES})
+    if unknown:
+        raise ValueError(
+            f"{field_name} {fmt!r} uses unsupported directive(s) {unknown};"
+            " date_parse format must denote a complete date, a complete time,"
+            " or both, using only %Y/%y/%m/%b/%B/%d (date), %H/%I/%p/%M/%S/%f/%g"
+            " (time), %% (literal), and text"
+        )
+    return directives
+
+
+def _date_parse_completeness(directives: list[str]) -> tuple[bool, bool]:
+    """Whether a format's directives are date-complete and/or time-complete.
+
+    Assumes `directives` already passed the closed-vocabulary check
+    (`_date_parse_directives`); does not re-validate pairing or uniqueness.
+
+    Args:
+        directives: The format's extracted directives.
+
+    Returns:
+        `(date_complete, time_complete)` — date-complete iff a year, a
+        month, and `%d` all appear; time-complete iff `%H` appears, or
+        `%I` and `%p` both appear.
+    """
+    has_year = any(d in _DATE_PARSE_YEAR_DIRECTIVES for d in directives)
+    has_month = any(d in _DATE_PARSE_MONTH_DIRECTIVES for d in directives)
+    has_day = "%d" in directives
+    has_hour_24 = "%H" in directives
+    has_hour_12 = "%I" in directives
+    has_ampm = "%p" in directives
+    date_complete = has_year and has_month and has_day
+    time_complete = has_hour_24 or (has_hour_12 and has_ampm)
+    return date_complete, time_complete
+
+
+def validate_date_parse_format(fmt: str, field_name: str) -> None:
+    """A `date_parse` format string denotes a complete temporal value.
+
+    Closed strptime-directive set — date class `%Y`/`%y` (year),
+    `%m`/`%b`/`%B` (month), `%d` (day); time class `%H`/`%I` (hour), `%p`
+    (AM/PM), `%M` (minute), `%S` (second), `%f` (µs), `%g` (ms); `%%`
+    (literal `%`) plus arbitrary literal text. Pairing: `%I` and `%p` each
+    require the other; `%M` requires an hour directive; `%S` requires `%M`;
+    `%f`/`%g` require `%S`. Uniqueness: each temporal field at most once —
+    no repeated directive, no two alternative forms of one field
+    (`%Y`/`%y`, `%m`/`%b`/`%B`, `%H`/`%I`, `%f`/`%g`). Completeness: the
+    format must be date-complete (a year directive + a month directive +
+    `%d`), time-complete (an hour directive — `%H`, or `%I` with `%p`), or
+    both.
+
+    Args:
+        fmt: The author-declared format string.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `fmt` is empty, contains a malformed or unsupported `%`
+            directive, violates a pairing or uniqueness rule, or is neither
+            date-complete nor time-complete. The message names the format
+            and the violated rule.
+    """
+    if not fmt:
+        raise ValueError(f"{field_name} must be non-empty")
+    directives = _date_parse_directives(fmt, field_name)
+
+    for label, class_directives in _DATE_PARSE_UNIQUENESS_CLASSES.items():
+        if sum(1 for d in directives if d in class_directives) > 1:
+            raise ValueError(
+                f"{field_name} {fmt!r} names the {label} field more than once"
+                " (a temporal field takes at most one directive)"
+            )
+
+    has_hour_12 = "%I" in directives
+    has_ampm = "%p" in directives
+    if has_hour_12 != has_ampm:
+        raise ValueError(
+            f"{field_name} {fmt!r}: %I and %p must appear together"
+            " (the 12-hour clock requires its AM/PM marker)"
+        )
+    has_hour = has_hour_12 or "%H" in directives
+    has_minute = "%M" in directives
+    if has_minute and not has_hour:
+        raise ValueError(
+            f"{field_name} {fmt!r}: %M requires an hour directive (%H or %I)"
+        )
+    has_second = "%S" in directives
+    if has_second and not has_minute:
+        raise ValueError(f"{field_name} {fmt!r}: %S requires %M")
+    has_fraction = any(d in _DATE_PARSE_FRACTION_DIRECTIVES for d in directives)
+    if has_fraction and not has_second:
+        raise ValueError(f"{field_name} {fmt!r}: %f/%g require %S")
+
+    date_complete, time_complete = _date_parse_completeness(directives)
+    has_any_date_field = any(d in _DATE_PARSE_DATE_FIELD_DIRECTIVES for d in directives)
+    if has_any_date_field and not date_complete:
+        raise ValueError(
+            f"{field_name} {fmt!r} has a partial calendar date"
+            " (a year, month, and day directive must appear together)"
+        )
+    if not date_complete and not time_complete:
+        raise ValueError(
+            f"{field_name} {fmt!r} must denote a complete date"
+            " (a year, month, and day directive), a complete time"
+            " (%H, or %I with %p), or both"
+        )
+
+
+def date_parse_denoted_type(fmt: str) -> Literal["DATE", "TIME", "TIMESTAMP"]:
+    """The temporal type a validated date_parse format denotes.
+
+    The single derivation authority: complete date only -> DATE; complete
+    date + complete time -> TIMESTAMP; complete time only -> TIME. Every
+    consumer of a parse's output type (the renderer, any plan-time typing
+    read) resolves through this function; none re-inspects the format.
+
+    Args:
+        fmt: A format string that has passed validate_date_parse_format.
+
+    Returns:
+        The denoted DuckDB type name.
+    """
+    directives = _DATE_PARSE_DIRECTIVE_RE.findall(fmt)
+    date_complete, time_complete = _date_parse_completeness(directives)
+    if date_complete and time_complete:
+        return "TIMESTAMP"
+    if time_complete:
+        return "TIME"
+    return "DATE"
+
+
 def render_date_parse_expr(
     qualified_source: str,
     date_format: str,
     out_name: str,
     table_label: str,
 ) -> str:
-    """Render the SQL SELECT fragment reinterpreting a VARCHAR column as DATE
-    under an author-declared format.
+    """Render the SQL SELECT fragment reinterpreting a VARCHAR column as its
+    format-denoted temporal type under an author-declared format.
 
-    Lives in the shared SQL utilities — all three modes (dimensional, source,
-    base) render a declared date parse through this one function. NULL source
-    values yield NULL. A non-NULL value not matching the format fails the
-    export loudly at query time via DuckDB's `error()` function, never a
-    silent NULL. The fragment embeds an in-SQL guard that raises, naming
-    `table_label`, the source column (read off `qualified_source`), and the
-    offending runtime value, so the failure names its site no matter how many
-    parses one table declares. The format string is validated at config load
-    (`format_denotes_a_date`); this renderer assumes a valid format.
+    Lives in the shared SQL utilities — every mode renders a declared parse
+    through this one function. The output type is the format's denoted type
+    (date_parse_denoted_type). NULL source values yield NULL of that type.
+    A non-NULL value not matching the format fails the export loudly at
+    query time, naming table_label, the source column, and the offending
+    value — never a silent NULL. TIMESTAMP and TIME denotations truncate to
+    µs (the family-wide presentation rule; `%g` milliseconds widen exactly
+    to µs — DuckDB's `%f` already zero-pads a shorter fraction on the
+    right, so `%g` is spliced into STRPTIME as `%f`). The format is
+    assumed validated (validate_date_parse_format).
 
     Args:
-        qualified_source: The fully table-qualified VARCHAR source column SQL
-            (e.g. `"_grain"."prop__dob"`).
+        qualified_source: The fully table-qualified VARCHAR source column SQL.
         date_format: The author-declared strptime-style format.
         out_name: The output column name (the `AS "<out_name>"` alias).
         table_label: The output table name interpolated into the guard's
             error message.
 
     Returns:
-        A SQL SELECT-list expression fragment ending in `AS "<out_name>"`.
+        A SQL SELECT-list expression fragment ending in `AS "<out_name>"`,
+        typed as the format's denoted type.
     """
+    denoted_type = date_parse_denoted_type(date_format)
     column_label = qualified_source.rsplit(".", 1)[-1].strip('"')
-    format_literal = _sql_literal(date_format)
+    strptime_format = date_format.replace("%g", "%f")
+    format_literal = _sql_literal(strptime_format)
     message_prefix = _sql_literal(
         f"date_parse on '{table_label}.{column_label}': value '"
     )
@@ -280,9 +474,9 @@ def render_date_parse_expr(
     )
     return (
         "CASE"
-        f" WHEN {qualified_source} IS NULL THEN CAST(NULL AS DATE)"
+        f" WHEN {qualified_source} IS NULL THEN CAST(NULL AS {denoted_type})"
         f" WHEN TRY_STRPTIME({qualified_source}, {format_literal}) IS NOT NULL"
-        f" THEN CAST(STRPTIME({qualified_source}, {format_literal}) AS DATE)"
-        f" ELSE CAST({error_expr} AS DATE)"
+        f" THEN CAST(STRPTIME({qualified_source}, {format_literal}) AS {denoted_type})"
+        f" ELSE CAST({error_expr} AS {denoted_type})"
         f' END AS "{out_name}"'
     )

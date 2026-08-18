@@ -23,7 +23,7 @@ from pydantic import (
 )
 from typing_extensions import Self
 
-from fabulexa_forge._sql import is_recognized_sql_type
+from fabulexa_forge._sql import is_recognized_sql_type, validate_date_parse_format
 from fabulexa_forge.anchor import TemporalRender
 
 # ---------------------------------------------------------------------------
@@ -94,53 +94,6 @@ def _require_sql_identifier(value: str, context: str) -> None:
 # Temporal rendering elections: shared vocabulary + validators
 # ---------------------------------------------------------------------------
 
-_DATE_FORMAT_DIRECTIVE_RE = re.compile(r"%.")
-_DATE_FORMAT_ALLOWED_DIRECTIVES = frozenset({"%Y", "%y", "%m", "%d", "%b", "%B", "%%"})
-_DATE_FORMAT_YEAR_DIRECTIVES = frozenset({"%Y", "%y"})
-_DATE_FORMAT_MONTH_DIRECTIVES = frozenset({"%m", "%b", "%B"})
-
-
-def _validate_date_parse_format(fmt: str, field_name: str) -> None:
-    """A `date_parse` format string denotes a complete calendar date.
-
-    Closed strptime-directive set — `%Y`/`%y` (year), `%m`/`%b`/`%B`
-    (month), `%d` (day), `%%` (literal `%`), plus arbitrary literal text —
-    and must carry at least one year, one month, and `%d`.
-
-    Args:
-        fmt: The author-declared format string.
-        field_name: The field's dotted name, for the error message.
-
-    Raises:
-        ValueError: `fmt` is empty, contains a malformed or unsupported `%`
-            directive, or omits a year, month, or day directive.
-    """
-    if not fmt:
-        raise ValueError(f"{field_name} must be non-empty")
-    directives = _DATE_FORMAT_DIRECTIVE_RE.findall(fmt)
-    accounted_percents = sum(2 if d == "%%" else 1 for d in directives)
-    if fmt.count("%") != accounted_percents:
-        raise ValueError(f"{field_name} {fmt!r} contains a malformed '%' directive")
-    unknown = sorted(
-        {d for d in directives if d not in _DATE_FORMAT_ALLOWED_DIRECTIVES}
-    )
-    if unknown:
-        raise ValueError(
-            f"{field_name} {fmt!r} uses unsupported directive(s) {unknown};"
-            " date_parse format must denote a complete calendar date using only"
-            " %Y/%y (year), %m/%b/%B (month), %d (day), %% (literal), and text"
-        )
-    if not any(d in _DATE_FORMAT_YEAR_DIRECTIVES for d in directives):
-        raise ValueError(
-            f"{field_name} {fmt!r} must include a year directive (%Y or %y)"
-        )
-    if not any(d in _DATE_FORMAT_MONTH_DIRECTIVES for d in directives):
-        raise ValueError(
-            f"{field_name} {fmt!r} must include a month directive (%m, %b, or %B)"
-        )
-    if "%d" not in directives:
-        raise ValueError(f"{field_name} {fmt!r} must include a day directive (%d)")
-
 
 def _require_render_map_valid(
     value: "dict[str, TemporalRender] | None", field_name: str
@@ -174,7 +127,8 @@ def _require_date_parse_map_valid(
 
     Raises:
         ValueError: `value` is an empty dict, contains an empty key, or a
-            format does not denote a complete calendar date.
+            format does not denote a complete date, a complete time, or both
+            (see `validate_date_parse_format`).
     """
     if value is None:
         return
@@ -183,7 +137,7 @@ def _require_date_parse_map_valid(
     for key, fmt in value.items():
         if not key:
             raise ValueError(f"{field_name} keys must be non-empty")
-        _validate_date_parse_format(fmt, f"{field_name}[{key!r}]")
+        validate_date_parse_format(fmt, f"{field_name}[{key!r}]")
 
 
 def _require_render_date_parse_disjoint(
@@ -452,26 +406,31 @@ def timestamp_render(spec: TimestampSpec) -> TemporalRender:
 
 
 class DateParseSpec(StrictBaseModel):
-    """A declared reinterpretation of a VARCHAR source column as DATE."""
+    """A declared reinterpretation of a VARCHAR source column as its format-denoted temporal type (DATE, TIME, or naive TIMESTAMP)."""  # noqa: E501
 
     from_: str = Field(alias="from")
-    """The VARCHAR source column holding date strings (sidecar-validated)."""
+    """The VARCHAR source column holding temporal strings (sidecar-validated)."""
     format: str
     """The author-declared parse format (closed strptime-directive set; see
-    format_denotes_a_date). Must denote a complete calendar date; validated
-    at load time, never defaulted."""
+    validate_date_parse_format). Must denote a complete date, a complete
+    time, or both; validated at load time, never defaulted. The format is
+    the election — the denoted type is derived from it, never declared
+    separately."""
 
     @model_validator(mode="after")
-    def format_denotes_a_date(self) -> Self:
-        """`from_` is non-empty; `format` denotes a complete calendar date.
+    def format_denotes_a_temporal(self) -> Self:
+        """`from_` is non-empty; `format` denotes a complete temporal value.
 
         Raises:
             ValueError: `from_` is empty, or `format` is empty, uses a
-                directive outside the closed set, or omits a year, month,
-                or day directive.
+                directive outside the closed set, violates a pairing rule
+                (%I⇔%p, %M needs an hour, %S needs %M, %f/%g need %S),
+                duplicates a temporal field (a repeated directive, or two
+                alternative forms of one field), or is neither
+                date-complete nor time-complete.
         """
         _require_nonempty_str(self.from_, "date_parse.from")
-        _validate_date_parse_format(self.format, "date_parse.format")
+        validate_date_parse_format(self.format, "date_parse.format")
         return self
 
 

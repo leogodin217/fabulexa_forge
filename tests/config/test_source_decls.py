@@ -278,6 +278,26 @@ def test_table_decl_date_parse_invalid_format_rejected() -> None:
         SourceTableDecl(name="trips", kind="trip", date_parse={"prop__dob": "%m-%d"})
 
 
+def test_table_decl_date_parse_datetime_format_parses() -> None:
+    """A `date_parse` format carrying both date and time directives (the
+    widened parse family) parses."""
+    decl = SourceTableDecl(
+        name="trips",
+        kind="trip",
+        date_parse={"prop__registered_at": "%Y-%m-%d %H:%M:%S"},
+    )
+    assert decl.date_parse == {"prop__registered_at": "%Y-%m-%d %H:%M:%S"}
+
+
+def test_table_decl_date_parse_family_violation_rejected_entry_keyed() -> None:
+    """A `date_parse` entry violating a family pairing rule -> rejected,
+    the error naming the entry-keyed field name."""
+    with pytest.raises(
+        ValidationError, match=r"SourceTableDecl\.date_parse\['prop__dob'\]"
+    ):
+        SourceTableDecl(name="trips", kind="trip", date_parse={"prop__dob": "%I:%M"})
+
+
 def test_table_decl_render_and_date_parse_column_overlap_rejected() -> None:
     """A column named in both `render` and `date_parse` -> rejected (a
     column names at most one)."""

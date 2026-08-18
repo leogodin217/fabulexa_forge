@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
 
@@ -1208,3 +1208,27 @@ def test_state_render_date_parse_mismatch_fails_loudly_with_attribution(
     assert "patients.prop__dob" in message
     assert "not-a-date" in message
     assert "%Y-%m-%d" in message
+
+
+def test_state_render_date_parse_datetime_format_renders_timestamp(
+    tmp_path: Path,
+) -> None:
+    """A `date_parse` format carrying time directives (the widened family)
+    renders naive TIMESTAMP through the declared-table map form, end-to-end."""
+    tables = (
+        SourceTableDecl(
+            name="patients",
+            kind="patient",
+            rename={"prop__dob": "registered_at"},
+            date_parse={"prop__dob": "%Y-%m-%d %H:%M:%S"},
+        ),
+    )
+    with _plan(
+        _build_date_parse_patient_emit(tmp_path, "2024-06-01 14:30:05"), tables
+    ) as (emit, plan):
+        table = _state(plan, "patients")
+        sql = build_state_render_sql(
+            plan.sidecar, plan.fork_path, table, plan.anchor, None
+        )
+        rows = _mapped_rows(emit, table, sql)
+    assert rows[0]["registered_at"] == datetime(2024, 6, 1, 14, 30, 5)

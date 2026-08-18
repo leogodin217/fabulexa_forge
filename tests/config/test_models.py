@@ -24,6 +24,7 @@ from fabulexa_forge.config.models import (
     RebaseConfig,
     ScdWindowSpec,
     SourceDecl,
+    SourceTableDecl,
     StrictBaseModel,
     TableDecl,
     TimestampSpec,
@@ -574,7 +575,7 @@ def test_derived_scd_window_object_form_parses() -> None:
 
 
 # ---------------------------------------------------------------------------
-# DateParseSpec — format_denotes_a_date
+# DateParseSpec — format_denotes_a_temporal
 # ---------------------------------------------------------------------------
 
 
@@ -584,6 +585,25 @@ def test_date_parse_spec_valid_formats_parse(fmt: str) -> None:
 
     Includes a `%%` literal directive, which the closed directive set
     (spec Contracts) explicitly allows."""
+    spec = DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
+    assert spec.format == fmt
+
+
+@pytest.mark.parametrize(
+    "fmt",
+    [
+        "%Y-%m-%d %H:%M:%S",
+        "%H:%M",
+        "%I:%M %p",
+        "%H:%M:%S.%f",
+        "%H:%M:%S.%g",
+    ],
+)
+def test_date_parse_spec_family_formats_parse(fmt: str) -> None:
+    """The instant-string family widening: a date+time format, a 24-hour
+    time-only format, a 12-hour time-only format with its AM/PM marker, and
+    sub-second fraction formats (`%f` microseconds, `%g` milliseconds) all
+    parse."""
     spec = DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
     assert spec.format == fmt
 
@@ -606,14 +626,68 @@ def test_date_parse_spec_missing_day_directive_raises() -> None:
         DateParseSpec.model_validate({"from": "prop__dob", "format": "%Y-%m"})
 
 
-@pytest.mark.parametrize("directive", ["%H", "%M", "%S", "%x", "%A"])
-def test_date_parse_spec_unsupported_directive_raises(directive: str) -> None:
-    """A time-of-day (`%H`) or locale (`%x`, `%A`) directive outside the
-    closed set is refused."""
+@pytest.mark.parametrize("directive", ["%x", "%A", "%z", "%Z"])
+def test_date_parse_spec_locale_zone_directive_still_refused(directive: str) -> None:
+    """A locale (`%x`, `%A`) or zone (`%z`, `%Z`) directive stays outside the
+    closed set and is refused — the family widening adds time-of-day
+    directives only (zone directives and non-VARCHAR sources are doc-pinned
+    non-goals)."""
     with pytest.raises(ValidationError, match="unsupported"):
         DateParseSpec.model_validate(
             {"from": "prop__dob", "format": f"%Y-%m-%d {directive}"}
         )
+
+
+@pytest.mark.parametrize(
+    "fmt,match",
+    [
+        ("%I:%M", "%I and %p"),
+        ("%Y-%m-%d %p", "%I and %p"),
+        ("%Y-%m-%d %M", "hour"),
+        ("%H:%S", r"%S requires %M"),
+        ("%H:%M.%f", r"require %S"),
+    ],
+)
+def test_date_parse_spec_pairing_refusals(fmt: str, match: str) -> None:
+    """Each pairing rule is refused, naming the rule: an orphaned `%I` or
+    `%p`, `%M` with no hour directive, `%S` with no `%M`, `%f`/`%g` with no
+    `%S`. `%H`/`%M`/`%S` are now in the closed directive set — these
+    formerly "unsupported directive" cases are refused by pairing instead."""
+    with pytest.raises(ValidationError, match=match):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
+
+
+@pytest.mark.parametrize(
+    "fmt,match",
+    [
+        ("%Y-%m-%d %Y", "year"),
+        ("%Y %y %m %d", "year"),
+        ("%H %I %p", "hour"),
+        ("%H:%M:%S.%f%g", "sub-second fraction"),
+    ],
+)
+def test_date_parse_spec_uniqueness_refusals(fmt: str, match: str) -> None:
+    """Each uniqueness rule is refused: a repeated directive, or two
+    alternative forms of one temporal field (year, hour, or sub-second
+    fraction)."""
+    with pytest.raises(ValidationError, match=match):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
+
+
+@pytest.mark.parametrize(
+    "fmt,match",
+    [
+        ("%m-%d %H:%M", "year"),
+        ("%M:%S", "hour"),
+    ],
+)
+def test_date_parse_spec_completeness_refusals(fmt: str, match: str) -> None:
+    """A partial calendar date combined with a complete time is still
+    refused (`%Y-%m` alone stays covered by the missing-directive tests
+    above); a minute/second pair with no hour directive is caught by the
+    `%M` pairing rule."""
+    with pytest.raises(ValidationError, match=match):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
 
 
 def test_date_parse_spec_empty_from_raises() -> None:
@@ -626,6 +700,39 @@ def test_date_parse_spec_empty_format_raises() -> None:
     """An empty `format` is refused."""
     with pytest.raises(ValidationError, match="non-empty"):
         DateParseSpec.model_validate({"from": "prop__dob", "format": ""})
+
+
+# ---------------------------------------------------------------------------
+# _require_date_parse_map_valid — map-form attach points (SourceTableDecl)
+# ---------------------------------------------------------------------------
+
+
+def test_source_table_decl_date_parse_map_timestamp_format_accepted() -> None:
+    """A `date_parse` map entry with a TIMESTAMP-denoting format is accepted."""
+    decl = SourceTableDecl.model_validate(
+        {
+            "name": "visits",
+            "kind": "actor",
+            "date_parse": {"prop__dob": "%Y-%m-%d %H:%M:%S"},
+        }
+    )
+    assert decl.date_parse == {"prop__dob": "%Y-%m-%d %H:%M:%S"}
+
+
+def test_source_table_decl_date_parse_map_family_violation_refused() -> None:
+    """A map entry violating a family rule is refused, naming the
+    entry-keyed field name and the violated rule."""
+    with pytest.raises(ValidationError) as excinfo:
+        SourceTableDecl.model_validate(
+            {
+                "name": "visits",
+                "kind": "actor",
+                "date_parse": {"prop__dob": "%H:%S"},
+            }
+        )
+    message = str(excinfo.value)
+    assert "SourceTableDecl.date_parse['prop__dob']" in message
+    assert "%S requires %M" in message
 
 
 # ---------------------------------------------------------------------------

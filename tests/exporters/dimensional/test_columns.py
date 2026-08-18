@@ -458,6 +458,32 @@ def test_build_date_parse_expr_end_to_end_prop_varchar() -> None:
     assert row[0] == date(1990, 5, 14)
 
 
+def test_build_date_parse_expr_end_to_end_datetime_format_denotes_timestamp() -> None:
+    """date_parse with a datetime-directive format (the widened parse
+    family) parses to naive TIMESTAMP through the spec-form builder."""
+    col = ColumnDecl(
+        name="registered_at",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(
+                **{"from": "prop__registered_at", "format": "%Y-%m-%d %H:%M:%S"}
+            )
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr = build_date_parse_expr(col, tbl)
+
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("prop__registered_at" VARCHAR)')
+    conn.execute('INSERT INTO "_grain" VALUES (?)', ["2024-06-01 14:30:05"])
+    row = conn.execute(f'SELECT {expr} FROM "_grain"').fetchone()
+    duck_type = conn.sql(f'SELECT {expr} FROM "_grain"').types[0]
+    conn.close()
+
+    assert row is not None
+    assert row[0] == datetime(2024, 6, 1, 14, 30, 5)
+    assert str(duck_type) == "TIMESTAMP"
+
+
 def test_build_date_parse_expr_end_to_end_membership_elem_field() -> None:
     """date_parse over a membership grain's elem__ VARCHAR source parses to
     DATE — the builder is agnostic to the grain's source-column prefix."""

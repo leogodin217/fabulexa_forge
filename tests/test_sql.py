@@ -9,14 +9,16 @@ this module owns their contract as exposed through it. Also covers
 `render_typed_literal` compiles (source-row-selection sprint § The
 constant-column gate) — including the '5'/'05' typed-value-identity case its
 docstring names, which the event-source disjointness gate (a later phase)
-relies on. Also covers `render_date_parse_expr` — the one VARCHAR->DATE parse
-renderer every mode (dimensional, source, base) shares (temporal-elections
-sprint Phase 4).
+relies on. Also covers `date_parse_denoted_type` — the single DATE/TIME/
+TIMESTAMP denotation authority — and `render_date_parse_expr`, the one
+VARCHAR->{DATE,TIME,TIMESTAMP} parse renderer every mode (dimensional,
+source, base) shares (temporal-elections sprint Phase 4;
+scd2-derived-temporal-parse sprint Phase 1 widens the family beyond DATE).
 """
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, time
 from decimal import Decimal
 
 import duckdb
@@ -24,6 +26,7 @@ import pytest
 
 from fabulexa_forge._sql import (
     cast_predicate_element,
+    date_parse_denoted_type,
     quote_identifier,
     render_date_parse_expr,
     render_predicate_condition,
@@ -285,19 +288,21 @@ def test_cast_predicate_element_returns_hashable_value() -> None:
 
 
 # ---------------------------------------------------------------------------
-# render_date_parse_expr — the one VARCHAR->DATE parse renderer
+# render_date_parse_expr — the one VARCHAR->{DATE,TIME,TIMESTAMP} parse
+# renderer, denoted by the format (date_parse_denoted_type)
 # ---------------------------------------------------------------------------
 
 
-def _run_date_parse(
+def _execute_date_parse(
     value: str | None,
     date_format: str,
     *,
     table_label: str = "visits",
     from_table: str = "visits",
     column_name: str = "dob",
-) -> object:
-    """Execute render_date_parse_expr's SQL fragment against a one-row table.
+) -> tuple[object, str]:
+    """Execute render_date_parse_expr's SQL fragment against a one-row table,
+    returning the parsed value and the fragment's DuckDB type name.
 
     `from_table` is the physical table the SELECT reads from; `table_label`
     is the (independently-controlled) name spliced into the guard's error
@@ -311,11 +316,33 @@ def _run_date_parse(
         f'"{from_table}"."{column_name}"', date_format, "parsed", table_label
     )
     try:
-        row = conn.execute(f'SELECT {expr} FROM "{from_table}"').fetchone()
+        row = conn.execute(
+            f"SELECT parsed, typeof(parsed)"
+            f' FROM (SELECT {expr} FROM "{from_table}") "_typed"'
+        ).fetchone()
     finally:
         conn.close()
     assert row is not None
-    return row[0]
+    return row[0], row[1]
+
+
+def _run_date_parse(
+    value: str | None,
+    date_format: str,
+    *,
+    table_label: str = "visits",
+    from_table: str = "visits",
+    column_name: str = "dob",
+) -> object:
+    """Execute render_date_parse_expr's SQL fragment, returning only the
+    parsed value (see `_execute_date_parse` for the value+type pair)."""
+    return _execute_date_parse(
+        value,
+        date_format,
+        table_label=table_label,
+        from_table=from_table,
+        column_name=column_name,
+    )[0]
 
 
 def test_render_date_parse_expr_match_yields_date() -> None:
@@ -381,3 +408,147 @@ def test_render_date_parse_expr_quotes_splice_safely() -> None:
     finally:
         conn.close()
     assert "vi'sits" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# date_parse_denoted_type — the single denotation authority
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fmt,expected",
+    [
+        ("%Y-%m-%d", "DATE"),
+        ("%d %B %Y", "DATE"),
+        ("%Y/%b/%d", "DATE"),
+        ("%Y-%m-%d %H:%M:%S", "TIMESTAMP"),
+        ("%Y-%m-%d %I:%M %p", "TIMESTAMP"),
+        ("%H:%M", "TIME"),
+        ("%I:%M %p", "TIME"),
+    ],
+)
+def test_date_parse_denoted_type(fmt: str, expected: str) -> None:
+    """A date-only format denotes DATE, a date+time format denotes
+    TIMESTAMP, a time-only format denotes TIME — across directive variants
+    (%I+%p, %b/%B)."""
+    assert date_parse_denoted_type(fmt) == expected
+
+
+# ---------------------------------------------------------------------------
+# The renderer emits the denoted type
+# ---------------------------------------------------------------------------
+
+
+def test_render_date_parse_expr_timestamp_denotation_type() -> None:
+    """A datetime format's fragment is typed TIMESTAMP and parses to the
+    correct value."""
+    value, sql_type = _execute_date_parse("2026-08-17 14:30:05", "%Y-%m-%d %H:%M:%S")
+    assert sql_type == "TIMESTAMP"
+    assert value == datetime(2026, 8, 17, 14, 30, 5)
+
+
+def test_render_date_parse_expr_time_denotation_type() -> None:
+    """A time-only format's fragment is typed TIME and parses to the
+    correct value."""
+    value, sql_type = _execute_date_parse("14:30:05", "%H:%M:%S")
+    assert sql_type == "TIME"
+    assert value == time(14, 30, 5)
+
+
+def test_render_date_parse_expr_date_denotation_type() -> None:
+    """A date-only format's fragment is typed DATE (existing behavior,
+    unchanged)."""
+    value, sql_type = _execute_date_parse("2024-01-15", "%Y-%m-%d")
+    assert sql_type == "DATE"
+    assert value == date(2024, 1, 15)
+
+
+# ---------------------------------------------------------------------------
+# NULL source yields NULL of the denoted type
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("date_format", ["%H:%M:%S", "%Y-%m-%d %H:%M:%S"])
+def test_render_date_parse_expr_null_source_yields_null_of_denoted_type(
+    date_format: str,
+) -> None:
+    """A NULL source value yields NULL of the format's denoted type for the
+    TIME and TIMESTAMP denotations too (DATE is covered by the existing
+    `test_render_date_parse_expr_null_source_yields_null`)."""
+    value, sql_type = _execute_date_parse(None, date_format)
+    assert value is None
+    assert sql_type == date_parse_denoted_type(date_format)
+
+
+# ---------------------------------------------------------------------------
+# Mismatch error names table, column, and value — all three denotations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("date_format", ["%H:%M:%S", "%Y-%m-%d %H:%M:%S"])
+def test_render_date_parse_expr_mismatch_names_table_column_value_time_family(
+    date_format: str,
+) -> None:
+    """The loud mismatch error names table, column, and offending value for
+    the TIME and TIMESTAMP denotations too (DATE is covered by the existing
+    `test_render_date_parse_expr_mismatch_names_table_column_value`)."""
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("dob" VARCHAR)')
+    conn.execute('INSERT INTO "_grain" VALUES (?)', ["not-a-value"])
+    expr = render_date_parse_expr('"_grain"."dob"', date_format, "parsed", "visits")
+    try:
+        with pytest.raises(duckdb.Error) as excinfo:
+            conn.execute(f'SELECT {expr} FROM "_grain"').fetchall()
+    finally:
+        conn.close()
+    message = str(excinfo.value)
+    assert "visits" in message
+    assert "dob" in message
+    assert "not-a-value" in message
+    assert date_format in message
+
+
+# ---------------------------------------------------------------------------
+# Value preservation: round-trip to the source string, zero-fill included
+# ---------------------------------------------------------------------------
+
+
+def test_render_date_parse_expr_zero_fills_absent_lower_order_fields() -> None:
+    """A datetime format missing seconds zero-fills seconds; the parsed
+    value round-trips to the source string under the declared format."""
+    value, _ = _execute_date_parse("2026-08-17 14:30", "%Y-%m-%d %H:%M")
+    assert value == datetime(2026, 8, 17, 14, 30, 0)
+    assert value.strftime("%Y-%m-%d %H:%M") == "2026-08-17 14:30"
+
+
+@pytest.mark.parametrize(
+    "value_str,date_format",
+    [
+        ("2024-01-15", "%Y-%m-%d"),
+        ("14:30:05", "%H:%M:%S"),
+        ("2026-08-17 14:30:05", "%Y-%m-%d %H:%M:%S"),
+        ("02:30 PM", "%I:%M %p"),
+    ],
+)
+def test_render_date_parse_expr_round_trips_to_source_string(
+    value_str: str, date_format: str
+) -> None:
+    """The parsed value round-trips to its source string under the declared
+    format, across all three denotations."""
+    value, _ = _execute_date_parse(value_str, date_format)
+    assert value.strftime(date_format) == value_str
+
+
+def test_render_date_parse_expr_fraction_f_parses_at_microseconds() -> None:
+    """`%f` parses fractional seconds at microsecond precision."""
+    value, _ = _execute_date_parse("14:30:05.123456", "%H:%M:%S.%f")
+    assert value == time(14, 30, 5, 123456)
+
+
+def test_render_date_parse_expr_fraction_g_widens_milliseconds_to_microseconds() -> (
+    None
+):
+    """`%g` milliseconds widen exactly to microseconds (spliced into
+    STRPTIME as `%f`, which zero-pads a shorter fraction on the right)."""
+    value, _ = _execute_date_parse("14:30:05.123", "%H:%M:%S.%g")
+    assert value == time(14, 30, 5, 123000)
