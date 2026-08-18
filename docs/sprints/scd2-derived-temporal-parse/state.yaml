@@ -2,7 +2,7 @@ sprint: scd2-derived-temporal-parse
 parent_branch: prepare_for_classroom_env
 baseline_sha: fcee8bd843bad340418c90ccf9ad661a36037355
 started: 2026-08-18
-current_phase: 2
+current_phase: 3
 capabilities:
   - temporal-elections: [parse-family-widening, denoted-type]
   - dimensional-exporter: [scd2-per-record-derived-columns]
@@ -31,7 +31,7 @@ phases:
           - "tests/config/test_source_decls.py"
           - "tests/config/test_base_config.py"
   2:
-    status: pending
+    status: complete
     name: "SCD-2 per-record derived columns"
     demo: "docs/sprints/scd2-derived-temporal-parse/demos/phase_2_scd2_derived.py"
     steps:

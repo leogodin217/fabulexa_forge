@@ -5,9 +5,9 @@ SourceTableExists, KeyColumnsDeclared, ProjectionColumnExists,
 OrdinalRefsSiblings, TimestampSourceAvailable, DiscriminatorValueObserved,
 ExcludedKindNotSourced, ExcludedTableNotSourced, FkTargetIsDim,
 ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
-Scd2ColumnModeSupported, SliceOnlyColumnRefused (filter keys, column
-reads, and fk hops), ReservedPresentationName (last_mutation_sim_time —
-always-on, full export included).
+Scd2ColumnModeSupported, Scd2DerivedSourceUntracked, SliceOnlyColumnRefused
+(filter keys, column reads, and fk hops), ReservedPresentationName
+(last_mutation_sim_time — always-on, full export included).
 
 The SingleBranch rule is enforced by derivations.require_single_branch (the
 stage-wide guard); dimensional calls it but does not own it.
@@ -858,21 +858,22 @@ def check_scd2_column_mode_supported(
     col_decl: "ColumnDecl",
     table_decl: "TableDecl",
 ) -> None:
-    """Enforce Scd2ColumnModeSupported: type2 columns use only implemented modes.
+    """Enforce Scd2ColumnModeSupported: type2 columns use supported modes.
 
-    The SCD-2 type2 builder implements exactly three column modes: from, null,
-    and derived: scd_window. Any other mode — fk, correlation, or a derived
-    ordinal / value_map / timestamp / elapsed — would render as NULL on every
-    row: accepted config, silently wrong data (Principle #7). Reject at
-    validate time instead. (lookup is gated separately by LookupColumnSafety.)
+    The type2 surface admits from, null, derived: scd_window, and the
+    per-record derived modes timestamp / date_parse / value_map. It refuses
+    fk, correlation, derived: ordinal, and derived: elapsed — cross-row or
+    per-version semantics the type2 build does not define. (lookup is gated
+    separately by LookupColumnSafety; derived sources are additionally
+    gated by Scd2DerivedSourceUntracked.)
 
     Args:
         col_decl: The column declaration.
-        table_decl: The output table declaration (mode gate applies iff
+        table_decl: The output table declaration (gate applies iff
             scd: type2; also used for error messages).
 
     Raises:
-        ExportError: The column uses an unimplemented mode on an scd: type2
+        ExportError: The column uses an unsupported mode on an scd: type2
             table.
     """
     if table_decl.scd != "type2":
@@ -886,21 +887,64 @@ def check_scd2_column_mode_supported(
     elif col_decl.derived is not None and col_decl.derived.scd_window is None:
         if col_decl.derived.ordinal is not None:
             mode = "derived: ordinal"
-        elif col_decl.derived.value_map is not None:
-            mode = "derived: value_map"
-        elif col_decl.derived.timestamp is not None:
-            mode = "derived: timestamp"
         elif col_decl.derived.elapsed is not None:
             mode = "derived: elapsed"
-        elif col_decl.derived.date_parse is not None:
-            mode = "derived: date_parse"
 
     if mode is not None:
         raise ExportError(
-            f"table '{table_decl.name}' column '{col_decl.name}':"
+            f"column '{col_decl.name}' on table '{table_decl.name}':"
             f" {mode} is not supported on an scd: type2 table; type2 columns"
-            " support only from, null, and derived: scd_window"
+            " support only from, null, derived: scd_window, derived:"
+            " timestamp, derived: date_parse, and derived: value_map"
         )
+
+
+def check_scd2_derived_source_untracked(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    sidecar: "Sidecar",
+    source_table_name: str,
+) -> None:
+    """Enforce Scd2DerivedSourceUntracked: type2 derived sources are static.
+
+    A derived timestamp / date_parse / value_map column on an scd: type2
+    table must source an untracked column: the spec's source
+    (timestamp.source / date_parse.from / value_map.from) must not name a
+    prop__ column whose ColumnSpec.history_tracked is True. Structural and
+    projection-introduced sources are never tracked and always pass.
+
+    Args:
+        col_decl: The column declaration (no-op unless it carries one of
+            the three derived specs and the table is scd: type2).
+        table_decl: The output table declaration.
+        sidecar: The emit's typed sidecar.
+        source_table_name: The dim's source records table.
+
+    Raises:
+        ExportError: The derived spec sources a history-tracked property.
+    """
+    if table_decl.scd != "type2" or col_decl.derived is None:
+        return
+
+    source: str | None = None
+    if col_decl.derived.timestamp is not None:
+        source = col_decl.derived.timestamp.source
+    elif col_decl.derived.date_parse is not None:
+        source = col_decl.derived.date_parse.from_
+    elif col_decl.derived.value_map is not None:
+        source = col_decl.derived.value_map.from_
+
+    if source is None or not source.startswith("prop__"):
+        return
+
+    for col_spec in sidecar.columns(source_table_name):
+        if col_spec.name == source and col_spec.history_tracked is True:
+            raise ExportError(
+                f"column '{col_decl.name}' on scd: type2 table"
+                f" '{table_decl.name}': derived source '{source}' is"
+                " history-tracked; derived columns on a type2 table read"
+                " static values only"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1558,6 +1602,9 @@ def validate_table(
 
     for col_decl in table_decl.columns:
         check_scd2_column_mode_supported(col_decl, table_decl)
+        check_scd2_derived_source_untracked(
+            col_decl, table_decl, sidecar, source_table_name
+        )
         check_projection_column_exists(col_decl, table_decl, surface)
         check_ordinal_refs_siblings(col_decl, table_decl)
         check_timestamp_source_available(col_decl, table_decl, source, surface)

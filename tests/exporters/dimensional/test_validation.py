@@ -26,6 +26,7 @@ from fabulexa_forge.config.models import (
     SourceDecl,
     TableDecl,
     TimestampSpec,
+    ValueMapSpec,
 )
 from fabulexa_forge.errors import (
     DateParseSourceColumn,
@@ -40,6 +41,7 @@ from fabulexa_forge.exporters.dimensional.validation import (
     check_key_columns_declared,
     check_ordinal_refs_siblings,
     check_projection_column_exists,
+    check_scd2_derived_source_untracked,
     check_scd2_needs_history,
     check_slice_only_column_reads,
     check_slice_only_filter_keys,
@@ -746,6 +748,237 @@ def test_scd2_needs_history_refuses_flag_absent_emit() -> None:
 
     with pytest.raises(ExportError, match="re-emit with history_tracked"):
         check_scd2_needs_history(table_decl, "records__entity", sidecar)
+
+
+# ---------------------------------------------------------------------------
+# Scd2DerivedSourceUntracked
+# ---------------------------------------------------------------------------
+
+
+def _scd2_derived_source_sidecar() -> Sidecar:
+    """A records__actor sidecar with a tracked prop__status, an untracked
+    prop__birth_date, and a structural created_sim_time — the source
+    surfaces Scd2DerivedSourceUntracked distinguishes."""
+    return _bare_sidecar(
+        [
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": [
+                    identity_column("record_id", "VARCHAR"),
+                    {"name": "created_sim_time", "type": "BIGINT"},
+                    prop_column(
+                        "prop__status",
+                        "VARCHAR",
+                        history_tracked=True,
+                        temporal_class="tracked",
+                    ),
+                    prop_column(
+                        "prop__birth_date",
+                        "VARCHAR",
+                        history_tracked=False,
+                        temporal_class="constant",
+                    ),
+                ],
+                "rows": 0,
+            }
+        ]
+    )
+
+
+def _scd2_type2_decl_with(col_decl: ColumnDecl) -> TableDecl:
+    """A minimal scd: type2 dim_patient decl carrying only the given column
+    (plus id/valid_from) — Scd2DerivedSourceUntracked's fixture."""
+    return TableDecl(
+        name="dim_patient",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["id", "valid_from"],
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="valid_from", derived=DerivedSpec(scd_window="valid_from")),
+            col_decl,
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "col_decl",
+    [
+        ColumnDecl(
+            name="status_ts",
+            derived=DerivedSpec(timestamp=TimestampSpec(source="prop__status")),
+        ),
+        ColumnDecl(
+            name="status_date",
+            derived=DerivedSpec(
+                date_parse=DateParseSpec(
+                    **{"from": "prop__status", "format": "%Y-%m-%d"}
+                )
+            ),
+        ),
+        ColumnDecl(
+            name="status_code",
+            derived=DerivedSpec(
+                value_map=ValueMapSpec(**{"from": "prop__status"}, map={"admitted": 1})
+            ),
+        ),
+    ],
+    ids=["timestamp", "date_parse", "value_map"],
+)
+def test_scd2_derived_source_untracked_raises_for_tracked_source(
+    col_decl: ColumnDecl,
+) -> None:
+    """A derived spec sourcing a history-tracked prop__ column raises,
+    naming the column, the source, and the static-values-only rule."""
+    sidecar = _scd2_derived_source_sidecar()
+    tbl = _scd2_type2_decl_with(col_decl)
+    with pytest.raises(ExportError, match="static values only") as exc_info:
+        check_scd2_derived_source_untracked(col_decl, tbl, sidecar, "records__actor")
+    assert col_decl.name in str(exc_info.value)
+    assert "prop__status" in str(exc_info.value)
+
+
+def test_scd2_derived_source_untracked_passes_for_untracked_source() -> None:
+    """An untracked prop__ source passes."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="birth_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(
+                **{"from": "prop__birth_date", "format": "%Y-%m-%d"}
+            )
+        ),
+    )
+    tbl = _scd2_type2_decl_with(col)
+    check_scd2_derived_source_untracked(
+        col, tbl, sidecar, "records__actor"
+    )  # must not raise
+
+
+def test_scd2_derived_source_untracked_passes_for_structural_source() -> None:
+    """A structural source (never tracked) passes."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="created_at",
+        derived=DerivedSpec(timestamp=TimestampSpec(source="created_sim_time")),
+    )
+    tbl = _scd2_type2_decl_with(col)
+    check_scd2_derived_source_untracked(
+        col, tbl, sidecar, "records__actor"
+    )  # must not raise
+
+
+def test_scd2_derived_source_untracked_noop_for_non_type2_table() -> None:
+    """A non-type2 table is a no-op, even with a tracked derived source."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="status_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(**{"from": "prop__status", "format": "%Y-%m-%d"})
+        ),
+    )
+    fact_decl = TableDecl(
+        name="fact_actor",
+        role="fact",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["id"],
+        columns=[ColumnDecl(name="id", **{"from": "record_id"}), col],
+    )
+    check_scd2_derived_source_untracked(
+        col, fact_decl, sidecar, "records__actor"
+    )  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# validate_table: type2 derived columns run the records-grain column gates
+# ---------------------------------------------------------------------------
+
+
+def _scd2_derived_validate_table_decl(extra_col: ColumnDecl) -> TableDecl:
+    """A tracked-and-keyed scd: type2 dim_patient decl (Scd2NeedsHistory-safe)
+    carrying one extra derived column."""
+    return TableDecl(
+        name="dim_patient",
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["id", "valid_from"],
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="status", **{"from": "prop__status"}),
+            ColumnDecl(name="valid_from", derived=DerivedSpec(scd_window="valid_from")),
+            extra_col,
+        ],
+    )
+
+
+def test_validate_table_type2_derived_timestamp_election_no_anchor_raises() -> None:
+    """An explicit timestamp election on a type2 derived: timestamp column
+    with no anchor raises TemporalRenderRequiresAnchor — now reachable
+    through the admitted derived: timestamp mode."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="admitted_at",
+        derived=DerivedSpec(
+            timestamp=TimestampSpec(source="created_sim_time", **{"as": "date"})
+        ),
+    )
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(TemporalRenderRequiresAnchor, match="admitted_at"):
+        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+
+
+def test_validate_table_type2_derived_timestamp_unavailable_source_raises() -> None:
+    """TimestampSourceAvailable fires on a type2 derived: timestamp column
+    exactly as on the records grain."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="bad_ts",
+        derived=DerivedSpec(timestamp=TimestampSpec(source="prop__nonexistent")),
+    )
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(ExportError, match="timestamp source 'prop__nonexistent'"):
+        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+
+
+def test_validate_table_type2_derived_date_parse_non_varchar_raises() -> None:
+    """DateParseSourceColumn fires on a type2 derived: date_parse column
+    exactly as on the records grain."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="created_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(
+                **{"from": "created_sim_time", "format": "%Y-%m-%d"}
+            )
+        ),
+    )
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(DateParseSourceColumn, match="got BIGINT"):
+        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+
+
+def test_validate_table_type2_derived_date_parse_untracked_source_passes() -> None:
+    """A derived: date_parse column with a valid untracked VARCHAR source
+    passes validate_table on a type2 dim."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="birth_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(
+                **{"from": "prop__birth_date", "format": "%Y-%m-%d"}
+            )
+        ),
+    )
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    validate_table(tbl, config, sidecar, None, discard_notice_sink)  # must not raise
 
 
 # ---------------------------------------------------------------------------
