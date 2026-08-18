@@ -626,6 +626,12 @@ def test_date_parse_spec_missing_day_directive_raises() -> None:
         DateParseSpec.model_validate({"from": "prop__dob", "format": "%Y-%m"})
 
 
+def test_date_parse_spec_malformed_percent_directive_raises() -> None:
+    """A trailing `%` with no following character is refused as malformed."""
+    with pytest.raises(ValidationError, match="malformed"):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": "%Y-%m-%d %"})
+
+
 @pytest.mark.parametrize("directive", ["%x", "%A", "%z", "%Z"])
 def test_date_parse_spec_locale_zone_directive_still_refused(directive: str) -> None:
     """A locale (`%x`, `%A`) or zone (`%z`, `%Z`) directive stays outside the
@@ -688,6 +694,13 @@ def test_date_parse_spec_completeness_refusals(fmt: str, match: str) -> None:
     `%M` pairing rule."""
     with pytest.raises(ValidationError, match=match):
         DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
+
+
+def test_date_parse_spec_no_temporal_directive_raises() -> None:
+    """A format carrying directives but no date or time field (a bare `%%`
+    literal) is refused — neither date-complete nor time-complete."""
+    with pytest.raises(ValidationError, match="must denote a complete date"):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": "%%"})
 
 
 def test_date_parse_spec_empty_from_raises() -> None:

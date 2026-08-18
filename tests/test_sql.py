@@ -439,28 +439,29 @@ def test_date_parse_denoted_type(fmt: str, expected: str) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_render_date_parse_expr_timestamp_denotation_type() -> None:
-    """A datetime format's fragment is typed TIMESTAMP and parses to the
-    correct value."""
-    value, sql_type = _execute_date_parse("2026-08-17 14:30:05", "%Y-%m-%d %H:%M:%S")
-    assert sql_type == "TIMESTAMP"
-    assert value == datetime(2026, 8, 17, 14, 30, 5)
-
-
-def test_render_date_parse_expr_time_denotation_type() -> None:
-    """A time-only format's fragment is typed TIME and parses to the
-    correct value."""
-    value, sql_type = _execute_date_parse("14:30:05", "%H:%M:%S")
-    assert sql_type == "TIME"
-    assert value == time(14, 30, 5)
-
-
-def test_render_date_parse_expr_date_denotation_type() -> None:
-    """A date-only format's fragment is typed DATE (existing behavior,
-    unchanged)."""
-    value, sql_type = _execute_date_parse("2024-01-15", "%Y-%m-%d")
-    assert sql_type == "DATE"
-    assert value == date(2024, 1, 15)
+@pytest.mark.parametrize(
+    "raw_value,date_format,expected_type,expected_value",
+    [
+        (
+            "2026-08-17 14:30:05",
+            "%Y-%m-%d %H:%M:%S",
+            "TIMESTAMP",
+            datetime(2026, 8, 17, 14, 30, 5),
+        ),
+        ("14:30:05", "%H:%M:%S", "TIME", time(14, 30, 5)),
+        ("2024-01-15", "%Y-%m-%d", "DATE", date(2024, 1, 15)),
+    ],
+    ids=["timestamp", "time", "date"],
+)
+def test_render_date_parse_expr_denotation_type(
+    raw_value: str, date_format: str, expected_type: str, expected_value: object
+) -> None:
+    """A datetime format's fragment is typed TIMESTAMP, a time-only format's
+    is typed TIME, and a date-only format's is typed DATE (existing behavior,
+    unchanged) — each parsing to the correct value."""
+    value, sql_type = _execute_date_parse(raw_value, date_format)
+    assert sql_type == expected_type
+    assert value == expected_value
 
 
 # ---------------------------------------------------------------------------

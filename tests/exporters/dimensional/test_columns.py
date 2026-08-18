@@ -10,6 +10,8 @@ end-to-end (temporal-elections sprint Phase 4).
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 from zoneinfo import ZoneInfo
 
 import duckdb
@@ -39,6 +41,7 @@ from fabulexa_forge.exporters.dimensional.columns import (
     build_ordinal_expr,
     build_timestamp_expr,
     build_value_map_expr,
+    resolve_source_column_type,
 )
 
 
@@ -641,3 +644,23 @@ def test_build_value_map_expr_bigint_source_predicate_cast() -> None:
     expr = build_value_map_expr(col, source_col_type="BIGINT")
     # WHEN side must use CAST for BIGINT
     assert "CAST('5' AS BIGINT)" in expr
+
+
+def test_resolve_source_column_type_column_absent_returns_varchar() -> None:
+    """Table found but column absent returns VARCHAR (no-op cast fallback).
+
+    Genuinely reachable in production: a history_interval grain's projectable
+    surface includes the virtual `lead_sim_time` column (added by
+    ProjectionColumnExists's surface, not by the sidecar), so a value_map
+    naming it as its source resolves a table the sidecar does have, with a
+    column the sidecar does not declare.
+    """
+    sidecar = MagicMock()
+    sidecar.columns.return_value = [
+        SimpleNamespace(name="sim_time", type="BIGINT"),
+        SimpleNamespace(name="value", type="VARCHAR"),
+    ]
+    result = resolve_source_column_type(
+        sidecar, "history", "lead_sim_time", "value_map column 'x'"
+    )
+    assert result == "VARCHAR"

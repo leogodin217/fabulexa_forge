@@ -35,6 +35,40 @@ from fabulexa_forge.reader.errors import TableNotFoundError
 __all__ = ["render_anchor_temporal_expr", "render_typed_literal"]
 
 
+def resolve_source_column_type(
+    sidecar: "Sidecar",
+    source_table_name: str,
+    column_name: str,
+    error_context: str,
+) -> str:
+    """Look up a source column's sidecar DuckDB type.
+
+    Args:
+        sidecar: The emit's typed sidecar.
+        source_table_name: The source table to look the column up in.
+        column_name: The column to resolve.
+        error_context: Description of the calling column, for the ExportError
+            message (e.g. "value_map column 'status_label'").
+
+    Returns:
+        The column's sidecar-declared DuckDB type, or VARCHAR when the table
+        is found but the column is not (no-op cast for VARCHAR columns).
+
+    Raises:
+        ExportError: source_table_name is not found in the sidecar.
+    """
+    try:
+        col_specs = sidecar.columns(source_table_name)
+    except TableNotFoundError as exc:
+        raise ExportError(
+            f"{error_context}: source table '{source_table_name}' not found in sidecar"
+        ) from exc
+    for col_spec in col_specs:
+        if col_spec.name == column_name:
+            return col_spec.type
+    return "VARCHAR"
+
+
 def _value_map_duckdb_type(map_values: dict[str, int | float | str]) -> str:
     """Infer the DuckDB type for a value_map column from its map values.
 
@@ -495,17 +529,12 @@ def build_column_expr(
             # Resolve source column type for WHEN predicate literal typing
             source_col_type = "VARCHAR"
             if sidecar is not None and source_table_name is not None:
-                vm_from = derived.value_map.from_
-                try:
-                    for col_spec in sidecar.columns(source_table_name):
-                        if col_spec.name == vm_from:
-                            source_col_type = col_spec.type
-                            break
-                except TableNotFoundError as exc:
-                    raise ExportError(
-                        f"value_map column '{col_decl.name}': source table"
-                        f" '{source_table_name}' not found in sidecar"
-                    ) from exc
+                source_col_type = resolve_source_column_type(
+                    sidecar,
+                    source_table_name,
+                    derived.value_map.from_,
+                    f"value_map column '{col_decl.name}'",
+                )
             return build_value_map_expr(col_decl, grain_alias, source_col_type), []
         if derived.timestamp is not None:
             return build_timestamp_expr(col_decl, anchor, grain_alias), []

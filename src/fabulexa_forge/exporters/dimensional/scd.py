@@ -24,6 +24,7 @@ from fabulexa_forge.derivations.versioned_intervals import (
 from fabulexa_forge.exporters.dimensional.columns import (
     build_timestamp_expr,
     build_value_map_expr,
+    resolve_source_column_type,
 )
 from fabulexa_forge.reader.relations import build_records_relation_sql
 
@@ -36,28 +37,6 @@ if TYPE_CHECKING:
 _VERSIONS_ALIAS = "_versions"
 # Alias for the reader records-relation subquery (static columns).
 _RECORDS_ALIAS = "_records"
-
-
-def _resolve_source_column_type(
-    sidecar: "Sidecar",
-    source_table_name: str,
-    column_name: str,
-) -> str:
-    """Look up a source column's sidecar DuckDB type.
-
-    Args:
-        sidecar: The emit's typed sidecar.
-        source_table_name: The dim's source records table.
-        column_name: The column to resolve.
-
-    Returns:
-        The column's sidecar-declared DuckDB type, or VARCHAR when the
-        column is not found (no-op cast for VARCHAR columns).
-    """
-    for col_spec in sidecar.columns(source_table_name):
-        if col_spec.name == column_name:
-            return col_spec.type
-    return "VARCHAR"
 
 
 def build_scd2_column_expr_flag(
@@ -121,8 +100,8 @@ def build_scd2_column_expr_flag(
 
     if col_decl.derived is not None and col_decl.derived.value_map is not None:
         vm = col_decl.derived.value_map
-        source_col_type = _resolve_source_column_type(
-            sidecar, source_table_name, vm.from_
+        source_col_type = resolve_source_column_type(
+            sidecar, source_table_name, vm.from_, f"value_map column '{col_decl.name}'"
         )
         return build_value_map_expr(col_decl, records_alias, source_col_type)
 
@@ -132,8 +111,8 @@ def build_scd2_column_expr_flag(
     if is_tracked:
         # Project the pre-computed prop__<p> value from the derivation.
         prop_col = col_decl.from_  # e.g. "prop__status"
-        source_col_type = _resolve_source_column_type(
-            sidecar, source_table_name, prop_col
+        source_col_type = resolve_source_column_type(
+            sidecar, source_table_name, prop_col, f"tracked column '{col_decl.name}'"
         )
         return (
             f'CAST("{version_alias}"."{prop_col}"'
