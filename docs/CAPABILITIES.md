@@ -428,6 +428,19 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   Generic relation → file/table serializers; a writer holds no mode or schema
   knowledge. See [`architecture/writers.md`](architecture/writers.md).
 
+## Dataset comparison
+
+- ✓ **Compare surface** — `compare_datasets()` + `fabulexa-forge compare`: an exact
+  dataset-equivalence verdict (boolean + deterministic, bounded discrepancy report)
+  on an actual dataset (DuckDB or CSV directory) against an authoritative expected
+  forge render (DuckDB), under a forge-owned canonical form — canonical type
+  families absorbing lossless representation drift, Python-side canonical value
+  encoding, a UTC-pinned compare session, multiset row comparison. No tolerances,
+  no scoring; a pure two-input surface that never opens an emit. Text and
+  byte-stable JSON report renderers. The deterministic-grading consumer's verdict
+  surface and the shared engine for internal agreement checks. See
+  [`architecture/compare.md`](architecture/compare.md).
+
 ## CLI
 
 - ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C14 against an emit.
@@ -456,6 +469,11 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   --out <out_dir>`: apply a corrupter config, writing the broken `run.duckdb` +
   regenerated `base.json` plus `defects.json` (always written; no suppress flag). See
   [`architecture/corrupters.md`](architecture/corrupters.md).
+- ✓ `fabulexa-forge compare` — `fabulexa-forge compare EXPECTED ACTUAL [--tables ...]
+  [--max-row-diffs N] [--format text|json]`: exact-equality verdict + discrepancy
+  report on two materialized datasets; exit codes `0` equal · `1` not equal ·
+  `2` input error (its own contract, distinct from the other verbs' `0/1/3`). See
+  [`architecture/compare.md`](architecture/compare.md).
 
 ---
 
@@ -466,6 +484,9 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   a label-grade defect manifest (`defects.json`) as the answer key.
 - ✓ ML feature-store training data — point-in-time reconstruction from `history`
   via `mode: base` + `slice_at: T`, one flat as-of-T row per record.
+- ✓ Deterministic grading — a learner-built dataset judged exactly equal (or not,
+  with a structured discrepancy report) against forge's own render of the same
+  emit, via `fabulexa-forge compare`.
 - ○ Entity-resolution / MDM workloads — multi-observer views (needs a multi-branch
   contract + multi-emit; parked).
 

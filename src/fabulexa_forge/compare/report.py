@@ -4,9 +4,8 @@ Four frozen dataclasses carrying the outcome of one `compare_datasets` call:
 `ComparisonResult` (the verdict, § the top-level object) wraps one
 `TableComparison` per table in the union of both sides' table names, each
 carrying its `SchemaDiscrepancy` entries and (when the table exists on both
-sides) one `RowDiscrepancies`. See `docs/architecture/pending/dataset-
-equivalence.md` § Interface Contracts for the semantic authority; this module
-only defines the shapes.
+sides) one `RowDiscrepancies`. See `docs/architecture/compare.md` for the
+semantic authority; this module only defines the shapes.
 """
 
 from __future__ import annotations

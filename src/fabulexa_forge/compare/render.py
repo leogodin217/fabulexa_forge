@@ -7,9 +7,8 @@ grading consumer's wire format — a byte-stable JSON mirror of
 `ComparisonResult`'s dataclass shape (sorted keys, fixed separators; `null`
 for `None`, arrays for tuples).
 
-See `docs/architecture/pending/dataset-equivalence.md` § Interface Contracts
-for the semantic authority; this module only formats what `ComparisonResult`
-already carries.
+See `docs/architecture/compare.md` § The CLI verb for the semantic
+authority; this module only formats what `ComparisonResult` already carries.
 """
 
 from __future__ import annotations

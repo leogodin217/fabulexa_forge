@@ -5,12 +5,9 @@ exactly the relation an expected forge render (DuckDB) describes — a boolean
 verdict plus a deterministic, bounded discrepancy report. It reads its two
 inputs through its own in-memory DuckDB session; it never opens an emit, so
 the reader-first rule (which governs `run.duckdb` + `base.json`) is not in
-play. Public exports grow per phase; Phase 2 adds `compare_datasets` itself
-to Phase 1's canonical-form authority and report/error types. Phase 3 adds
-the text and JSON renderers.
+play.
 
-See `docs/architecture/pending/dataset-equivalence.md` for the semantic
-authority.
+See `docs/architecture/compare.md` for the semantic authority.
 """
 
 from __future__ import annotations

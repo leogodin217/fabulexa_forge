@@ -11,9 +11,9 @@ the C6 conformance codec's encode half (`reader.conformance.to_csv_text`) for
 the four overlapping families (integer / float / boolean / text) is the
 contract, asserted by test, never by import (`tests/compare/test_canonical.py`).
 
-See `docs/architecture/pending/dataset-equivalence.md` § Canonical value
-encoding for the semantic authority (the family table, the interval day-fold
-and month-carrying fallback, the timestamptz UTC normalization).
+See `docs/architecture/compare.md` § Canonical value encoding for the
+semantic authority (the family table, the interval day-fold and
+month-carrying fallback, the timestamptz UTC normalization).
 """
 
 from __future__ import annotations

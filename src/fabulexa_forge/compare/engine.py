@@ -5,9 +5,9 @@ Orchestrates the whole comparison: input validation and loading (via
 plus family compatibility, multiset row comparison with canonical ordering
 and truncation, and the deterministic `ComparisonResult` assembly.
 
-See `docs/architecture/pending/dataset-equivalence.md` § Semantics for the
-semantic authority (table matching, column matching and type compatibility,
-row comparison, the verdict, determinism).
+See `docs/architecture/compare.md` § Semantics for the semantic authority
+(table matching, column matching and type compatibility, row comparison,
+the verdict, determinism).
 """
 
 from __future__ import annotations

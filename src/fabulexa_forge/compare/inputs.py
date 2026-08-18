@@ -10,11 +10,11 @@ file, `ATTACH`ed as `expected_db`) and the actual side (a DuckDB file
 all-text relations in the session). It also owns the one SQL-side typing
 step — casting an actual-side CSV cell's raw text toward the expected
 column's canonical-family reference type — including the two bespoke
-parses (blob hex-decode, interval writer-form-then-`TRY_CAST`) the design
-doc pins.
+parses (blob hex-decode, interval writer-form-then-`TRY_CAST`) the
+architecture doc pins.
 
-See `docs/architecture/pending/dataset-equivalence.md` § Inputs and the
-schema authority, § Canonical value encoding for the semantic authority.
+See `docs/architecture/compare.md` § Inputs and the schema authority,
+§ Canonical value encoding for the semantic authority.
 """
 
 from __future__ import annotations
