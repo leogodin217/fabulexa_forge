@@ -70,16 +70,20 @@
 #            fact_usage_event: output names are the domain's, never the
 #            engine ontology's.
 #   SPLIT    dim_user -> dim_user (Type-1 identity: name/email/account FK)
-#            + dim_user_status (SCD-2 satellite: status only). The SCD-2
-#            builder implements exactly three column modes on a `scd: type2`
-#            table — `from`, `null`, `derived: scd_window` — so an `fk`
-#            column (dim_user's account_id) cannot live on the same table as
-#            the tracked `status` column today. This is a real engine
+#            + dim_user_status (SCD-2 satellite: status only). A `scd: type2`
+#            table refuses `fk` — a cross-row read the type2 build does not
+#            define — so dim_user's account_id cannot live on the same table
+#            as the tracked `status` column. This is a real engine
 #            constraint, not a style choice; the split is the standard
-#            mini-dimension/satellite pattern, not a fidelity loss. The same
-#            constraint drops `created_at` from dim_company/dim_account
-#            (their `valid_from` already carries the wallclock version
-#            start).
+#            mini-dimension/satellite pattern, not a fidelity loss.
+#   ELECTED  dim_company and dim_account carry `created_at`, a `derived:
+#            timestamp` off the structural `created_sim_time`. A type2 table
+#            admits the per-record derived modes over sources that are
+#            constant, and a structural column carries no temporal class at
+#            all, so it always qualifies. The value is per-record: identical
+#            on every version row, unlike `valid_from`, which moves with each
+#            version. The two answer different questions — when the record was
+#            born vs. when this version began.
 #   ELECTED  dim_company and dim_user_status's valid_from/valid_to elect a
 #            date-grained `scd_window` (`{bound, as: date}`) instead of the
 #            default TIMESTAMP window. Both track coarse CRM/seat-lifecycle
@@ -114,6 +118,10 @@ dimensional:
           from: presentation_id
         - name: status
           from: prop__status
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
         - name: valid_from
           derived:
             scd_window: {bound: valid_from, as: date}
@@ -147,6 +155,10 @@ dimensional:
           from: prop__churn_flag
         - name: engagement_score
           from: prop__engagement_score
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
         - name: valid_from
           derived:
             scd_window: valid_from

@@ -310,7 +310,8 @@ timestamps.
 disjoint across entries, the same posture the mode's `rename` list uses —
 carries a `columns` map electing a lifecycle timestamp's rendering
 (`created_sim_time` → `date`, say) and a `date_parse` map declaring a
-`prop__<p>` VARCHAR column a date string in an author format. Both maps are
+`prop__<p>` VARCHAR column a temporal string in an author format, rendered as
+the type that format denotes. Both maps are
 keyed on the same pre-default column identities `rename.columns` uses, and
 each entry re-renders the projected column in place. A `columns` key must
 name an instant-carrying structural column of the `records` category the
@@ -416,7 +417,7 @@ below state *what* is rejected and *when*.
 | `entries_disjoint` (`BaseConfig`) | Two `rename` **or** `render` entries targeting the same `table` — base has one output table per kind, so `table` alone is the key, checked across both lists |
 | `mode_section_matches` (`ExportConfig`, `base` arm) | A `dimensional` or `source` section present under `mode: base`; the `base` section itself is optional (a bare `mode: base` is a valid full dump) |
 | `base_slice_at_excludes_incremental` (`ExportConfig`) | A config setting both `base.slice_at` and an `incremental` block — a pinned instant and a window sequence are contradictory temporal selectors |
-| `render_maps_valid` (`BaseRenderDecl`) | A present `columns` / `date_parse` map that is empty or carries an empty key; a `date_parse` format that does not denote a complete calendar date; a column named in both maps ([`temporal-elections.md`](temporal-elections.md)) |
+| `render_maps_valid` (`BaseRenderDecl`) | A present `columns` / `date_parse` map that is empty or carries an empty key; a `date_parse` format that does not denote a complete date, a complete time, or both; a column named in both maps ([`temporal-elections.md`](temporal-elections.md)) |
 
 **Business rules.** Run at plan build against the open emit's sidecar, before any write;
 each raises an `ExportError` subclass surfaced through the CLI's existing error funnel.

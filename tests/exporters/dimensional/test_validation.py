@@ -41,7 +41,7 @@ from fabulexa_forge.exporters.dimensional.validation import (
     check_key_columns_declared,
     check_ordinal_refs_siblings,
     check_projection_column_exists,
-    check_scd2_derived_source_untracked,
+    check_scd2_derived_source_constant,
     check_scd2_needs_history,
     check_slice_only_column_reads,
     check_slice_only_filter_keys,
@@ -751,14 +751,18 @@ def test_scd2_needs_history_refuses_flag_absent_emit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scd2DerivedSourceUntracked
+# Scd2DerivedSourceConstant
 # ---------------------------------------------------------------------------
 
 
 def _scd2_derived_source_sidecar() -> Sidecar:
-    """A records__actor sidecar with a tracked prop__status, an untracked
-    prop__birth_date, and a structural created_sim_time — the source
-    surfaces Scd2DerivedSourceUntracked distinguishes."""
+    """A records__actor sidecar spanning every source surface
+    Scd2DerivedSourceConstant distinguishes: a tracked prop__status, an
+    untracked-and-constant prop__birth_date, a presentation-shaped
+    prop__minted_on (history_tracked with temporal_class constant — the
+    combination the contract mints for a presentation property bound to a
+    constant source), a slice_only prop__last_seen, and a structural
+    created_sim_time."""
     return _bare_sidecar(
         [
             {
@@ -780,6 +784,18 @@ def _scd2_derived_source_sidecar() -> Sidecar:
                         history_tracked=False,
                         temporal_class="constant",
                     ),
+                    prop_column(
+                        "prop__minted_on",
+                        "VARCHAR",
+                        history_tracked=True,
+                        temporal_class="constant",
+                    ),
+                    prop_column(
+                        "prop__last_seen",
+                        "VARCHAR",
+                        history_tracked=False,
+                        temporal_class="slice_only",
+                    ),
                 ],
                 "rows": 0,
             }
@@ -789,7 +805,7 @@ def _scd2_derived_source_sidecar() -> Sidecar:
 
 def _scd2_type2_decl_with(col_decl: ColumnDecl) -> TableDecl:
     """A minimal scd: type2 dim_patient decl carrying only the given column
-    (plus id/valid_from) — Scd2DerivedSourceUntracked's fixture."""
+    (plus id/valid_from) — Scd2DerivedSourceConstant's fixture."""
     return TableDecl(
         name="dim_patient",
         role="dim",
@@ -828,21 +844,39 @@ def _scd2_type2_decl_with(col_decl: ColumnDecl) -> TableDecl:
     ],
     ids=["timestamp", "date_parse", "value_map"],
 )
-def test_scd2_derived_source_untracked_raises_for_tracked_source(
+def test_scd2_derived_source_constant_raises_for_tracked_source(
     col_decl: ColumnDecl,
 ) -> None:
-    """A derived spec sourcing a history-tracked prop__ column raises,
-    naming the column, the source, and the static-values-only rule."""
+    """A derived spec sourcing a temporal_class: tracked prop__ column raises,
+    naming the column, the source, its class, and the constant-values-only
+    rule."""
     sidecar = _scd2_derived_source_sidecar()
     tbl = _scd2_type2_decl_with(col_decl)
-    with pytest.raises(ExportError, match="static values only") as exc_info:
-        check_scd2_derived_source_untracked(col_decl, tbl, sidecar, "records__actor")
+    with pytest.raises(ExportError, match="constant values only") as exc_info:
+        check_scd2_derived_source_constant(col_decl, tbl, sidecar, "records__actor")
     assert col_decl.name in str(exc_info.value)
     assert "prop__status" in str(exc_info.value)
+    assert "tracked" in str(exc_info.value)
 
 
-def test_scd2_derived_source_untracked_passes_for_untracked_source() -> None:
-    """An untracked prop__ source passes."""
+def test_scd2_derived_source_constant_raises_for_slice_only_source() -> None:
+    """A slice_only prop__ source raises: its past is unknowable, so it is no
+    more derivable on a type2 table than a tracked one."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="last_seen",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(**{"from": "prop__last_seen", "format": "%Y-%m-%d"})
+        ),
+    )
+    tbl = _scd2_type2_decl_with(col)
+    with pytest.raises(ExportError, match="constant values only") as exc_info:
+        check_scd2_derived_source_constant(col, tbl, sidecar, "records__actor")
+    assert "slice_only" in str(exc_info.value)
+
+
+def test_scd2_derived_source_constant_passes_for_untracked_source() -> None:
+    """An untracked, temporal_class: constant prop__ source passes."""
     sidecar = _scd2_derived_source_sidecar()
     col = ColumnDecl(
         name="birth_date",
@@ -853,12 +887,49 @@ def test_scd2_derived_source_untracked_passes_for_untracked_source() -> None:
         ),
     )
     tbl = _scd2_type2_decl_with(col)
-    check_scd2_derived_source_untracked(
+    check_scd2_derived_source_constant(
         col, tbl, sidecar, "records__actor"
     )  # must not raise
 
 
-def test_scd2_derived_source_untracked_passes_for_structural_source() -> None:
+def test_scd2_derived_source_constant_passes_for_tracked_but_constant_source() -> None:
+    """A history_tracked prop__ column whose temporal_class is constant passes.
+
+    The presentation-property shape: the contract mints history_tracked: true
+    on every presentation property, so the flag alone would refuse a column
+    holding exactly its genesis row. The class is the question, and it says
+    constant.
+    """
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="minted_on",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(**{"from": "prop__minted_on", "format": "%Y-%m-%d"})
+        ),
+    )
+    tbl = _scd2_type2_decl_with(col)
+    check_scd2_derived_source_constant(
+        col, tbl, sidecar, "records__actor"
+    )  # must not raise
+
+
+def test_scd2_derived_source_constant_defers_absent_source_to_existence_gate() -> None:
+    """An absent prop__ source is a no-op here — ProjectionColumnExists /
+    DateParseSourceColumn reports it, and both run after this gate."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="typo",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(**{"from": "prop__nope", "format": "%Y-%m-%d"})
+        ),
+    )
+    tbl = _scd2_type2_decl_with(col)
+    check_scd2_derived_source_constant(
+        col, tbl, sidecar, "records__actor"
+    )  # must not raise
+
+
+def test_scd2_derived_source_constant_passes_for_structural_source() -> None:
     """A structural source (never tracked) passes."""
     sidecar = _scd2_derived_source_sidecar()
     col = ColumnDecl(
@@ -866,12 +937,12 @@ def test_scd2_derived_source_untracked_passes_for_structural_source() -> None:
         derived=DerivedSpec(timestamp=TimestampSpec(source="created_sim_time")),
     )
     tbl = _scd2_type2_decl_with(col)
-    check_scd2_derived_source_untracked(
+    check_scd2_derived_source_constant(
         col, tbl, sidecar, "records__actor"
     )  # must not raise
 
 
-def test_scd2_derived_source_untracked_noop_for_non_type2_table() -> None:
+def test_scd2_derived_source_constant_noop_for_non_type2_table() -> None:
     """A non-type2 table is a no-op, even with a tracked derived source."""
     sidecar = _scd2_derived_source_sidecar()
     col = ColumnDecl(
@@ -887,7 +958,7 @@ def test_scd2_derived_source_untracked_noop_for_non_type2_table() -> None:
         key=["id"],
         columns=[ColumnDecl(name="id", **{"from": "record_id"}), col],
     )
-    check_scd2_derived_source_untracked(
+    check_scd2_derived_source_constant(
         col, fact_decl, sidecar, "records__actor"
     )  # must not raise
 

@@ -243,6 +243,60 @@ date grain (the underlying raw-ns bounds and version ordering are
 unaffected), and the open interval's `NULL` `valid_to` stays `NULL` under
 every election.
 
+**The type-2 column-mode surface.** A column mode is legal on a `scd: type2`
+table iff it is a pure per-record function of the static projectable surface
+— no cross-row read, no per-version semantics:
+
+| Column mode on a type2 table | Value semantics |
+|---|---|
+| `from` (tracked property) | Per-version, from the versioned-intervals derivation |
+| `from` (static column), `null` | Per-record, from the composed records relation |
+| `derived: scd_window` (bare or object form) | The version bounds, optionally elected |
+| `derived: timestamp` — source a structural instant or a `constant` time-valued property | Per-record, rendered through the shared anchor renderer |
+| `derived: date_parse` — source a `constant` VARCHAR property | Per-record, the format's denoted-type parse |
+| `derived: value_map` — source a `constant` column | Per-record, the typed-from-map `CASE` |
+
+`fk`, `correlation`, `derived: ordinal`, and `derived: elapsed` are refused
+(`Scd2ColumnModeSupported`, § Validation Rules), as is `lookup`
+(`LookupColumnSafety`, § Lookup). A derived spec sourcing a non-`constant`
+property is refused separately (`Scd2DerivedSourceConstant`) — a `tracked`
+property's value surface is per-version, so deriving from it asks a question
+the type-2 build does not answer, and a `slice_only` property's past is
+unknowable (§ Boundaries).
+
+**The class, not the flag, decides staticness.** The gate reads
+`temporal_class`, the contract's point-in-time question, rather than
+`history_tracked`. The two are not interchangeable here: a presentation
+property is `history_tracked: true` by construction
+([`contract/base-format.md`](../../contract/base-format.md) § Column temporal
+semantics) while being `constant` whenever its bound source is — it holds
+exactly its genesis row. Keying on the flag would refuse every
+upstream-minted date, name, or address column though its value is provably
+static, which is the false negative `temporal_class` exists to remove.
+`LookupColumnSafety`'s class clause reads it the same way.
+
+Two properties make the admitted modes sound:
+
+- **Per-version constancy.** Each is a pure per-record function of static
+  values, so its value is constant across one record's version rows. This is
+  what admits the mode without designing per-version semantics for it.
+- **One compiler.** A derived column on a type2 table compiles through the
+  same per-column builders the records grain uses (`build_timestamp_expr` /
+  `render_date_parse_expr` / `build_value_map_expr`), bound to the type2
+  build's composed records-relation alias, so its SQL is identical to the
+  records grain's modulo that alias. The type2 surface introduces no election
+  site of its own — it joins the records grain's, so the anchor requirement,
+  DST posture, precision, and mismatch errors are one contract across both
+  grains rather than two that must be kept in step.
+
+A type2 dim *is* a records-grain table, so a `derived: timestamp`'s `source`
+domain is the records-grain domain — the records category's instant-carrying
+structural columns plus untracked time-valued properties, with
+`TimestampSourceAvailable` applying as it does anywhere else. An unelected
+`derived: timestamp` with no resolved anchor renders the raw ns integer;
+any explicit election without an anchor is refused at validation
+(`TemporalRenderRequiresAnchor`).
+
 ### Foreign keys — the labeled-edge pathfind
 
 An `fk` column names a **destination dim table**; the engine finds the **path** over
@@ -428,7 +482,7 @@ does not resolve it.
 | `timestamp: {source, as}` | The named `sim_time` column rendered as wallclock `TIMESTAMP` via the runtime anchor, or — with `as` electing `date` / `time` / `timestamptz` — that projection of the same instant ([`temporal-elections.md`](temporal-elections.md)) | Pure function of the anchor; `sim_time = 0` → `start_datetime`; `as` absent renders the default `timestamp` byte-identically |
 | `scd_window: valid_from \| valid_to \| {bound, as}` | The SCD-2 version-window bound, or — the object form — that bound in an elected temporal type | From the `LEAD` reconstruction; election is a rendering choice over the same raw bounds |
 | `elapsed: {…, unit \| as}` | A cross-row time delta, as a `unit`-divided `DOUBLE` or — `as: interval` — a µs-precision `INTERVAL` | Same ns delta either way; exactly one of `unit` / `as` is set |
-| `date_parse: {from, format}` | A declared VARCHAR source column reinterpreted as `DATE` under the author format | Value-preserving; a non-matching non-`NULL` value fails the export loudly (§ Validation Rules) |
+| `date_parse: {from, format}` | A declared VARCHAR source column reinterpreted as the format's denoted temporal type — `DATE`, `TIME`, or naive `TIMESTAMP` ([`temporal-elections.md`](temporal-elections.md)) | Value-preserving; a non-matching non-`NULL` value fails the export loudly (§ Validation Rules) |
 
 `partition_by` and `order_by` name **sibling output columns** of the same table (e.g.
 `partition_by: patient_id` references the FK-resolved actor id; `order_by: timestamp`
@@ -485,7 +539,8 @@ refused as non-VARCHAR (`DateParseSourceColumn`, § Validation Rules). On the
 special case: it is an ordinary projectable-surface column whose declared
 type is the sidecar `history` table's `value` column type, the same type
 authority `value_map`'s literal typing already reads. The full election
-vocabulary, the anchor requirement, and the declared-date-parse contract are
+vocabulary, the anchor requirement, and the declared-parse contract — its
+closed directive vocabulary and the denoted type derived from it — are
 [`temporal-elections.md`](temporal-elections.md)'s.
 
 ### Timestamp source and the runtime anchor
@@ -861,6 +916,8 @@ error message. The remaining business rules run against the sidecar in
 | `TimestampSourceAvailable` | Each `derived: timestamp`'s `source` is available on the table's grain: an instant-carrying structural column of the grain's table category (resolved through the reader's structural-temporal surface, not a private list), the grain's virtual interval-end column where the grain defines one, or a `prop__<name>` present on the grain's projectable surface (§ Timestamp source) |
 | `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering — `derived: timestamp`'s `as`, or the `scd_window` object form — has a resolved effective anchor; naming the column when it does not ([`temporal-elections.md`](temporal-elections.md)) |
 | `DateParseSourceColumn` | Each `derived: date_parse`'s `from` resolves off the grain's projectable surface and carries a declared VARCHAR type (§ Derived columns); not `slice_only` |
+| `Scd2ColumnModeSupported` | Every column of an `scd: type2` table uses an admitted mode — `from`, `null`, `derived: scd_window`, or the per-record `derived: timestamp` / `date_parse` / `value_map` (§ SCD-2 wide reconstruction). `fk`, `correlation`, `derived: ordinal`, and `derived: elapsed` are refused; the error names the column, the table, and the offending mode |
+| `Scd2DerivedSourceConstant` | An `scd: type2` table's `derived: timestamp` / `date_parse` / `value_map` column sources a constant column — the spec's source (`timestamp.source` / `date_parse.from` / `value_map.from`), when it names a `prop__` column, resolves through `Sidecar.temporal_class` and is `constant`. Structural and projection-introduced sources carry no class and always pass; existence is `ProjectionColumnExists` / `DateParseSourceColumn`'s gate |
 | `Scd2NeedsHistory` | An `scd: type2` table declares a `valid_from` `scd_window` column in `key`, the emit carries the `history_tracked` flag, and the kind has at least one tracked column (flag-authoritative; a tracked-but-unchanged column qualifies). A flag-absent emit is refused — re-emit with `history_tracked` — never reconstructed by `history`-table inference |
 | `LookupColumnSafety` | A `lookup` column resolves and reads only temporally exact data: the terminal `records__<kind>` table and its `prop__<property>` exist; a unique reference path resolves from the anchor kind to `to` (or the `path` hint validates hop-by-hop); the terminal property plus every traversed hop column are `temporal_class: constant` (the exempt discriminator excepted, any class — § Lookup); a zero-hop self lookup is not on a `records` grain (redundant with `from`); and the table is not `scd: type2` (the SCD-2 wide builder does not project lookup columns) |
 | `ExcludedKindNotSourced` | No declared table sources an `exclude.kinds` kind |
@@ -1007,6 +1064,16 @@ What the dimensional exporter deliberately does not own:
   *during* a row's interval — a correlated as-of join over `history`, with its own
   interval-edge and determinism semantics — is not owned here. `lookup` serves only the
   type-1 case and refuses type-2 targets at validation.
+- **Version-grain column semantics.** A type-2 table admits only column modes
+  that are pure per-record functions of static values (§ SCD-2 wide
+  reconstruction). `fk`, `correlation`, `derived: ordinal`, and
+  `derived: elapsed` each raise a genuine semantic question on version rows —
+  which version an edge resolves against, what an ordinal partitions over
+  when one record contributes several rows, which version bound anchors a
+  cross-row delta — and a version-grain answer is not defined here. The same
+  boundary refuses a per-record derived column whose source is history-tracked:
+  a tracked property's value surface is per-version, so the record-level read
+  has no meaning to give.
 - **`lookup` candidate generation in `init`.** `init` proposes no `lookup` columns: an
   unfillable type-1 history- or membership-grain attribute is not auto-surfaced as a
   candidate, and the `init` inference contract carries no `lookup` proposal. The author

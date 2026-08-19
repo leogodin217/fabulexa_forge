@@ -11,8 +11,11 @@
 #
 # The date_parse derived column:
 #   from:   the VARCHAR source property holding date strings (prop__<p>)
-#   format: the author-declared strptime-style format — must denote a
-#           complete calendar date (year + month + day directives)
+#   format: the author-declared strptime-style format. The format is the
+#           election: its directives decide the output type. A complete
+#           date (year + month + day) denotes DATE, as here; adding
+#           time-of-day directives denotes TIMESTAMP, and a time-only
+#           format denotes TIME.
 #
 # A source value that matches the format parses to the DATE it denotes;
 # NULL stays NULL; a non-matching non-NULL value fails the export loudly,

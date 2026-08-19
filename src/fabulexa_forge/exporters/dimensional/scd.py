@@ -56,7 +56,7 @@ def build_scd2_column_expr_flag(
     project from the records relation; scd_window columns render the
     version bounds through the anchor renderer. A derived timestamp /
     date_parse / value_map spec — legal only with an untracked source
-    (Scd2DerivedSourceUntracked) — compiles through the same per-column
+    (Scd2DerivedSourceConstant) — compiles through the same per-column
     builders the records grain uses (build_timestamp_expr /
     render_date_parse_expr / build_value_map_expr), bound to records_alias,
     so its expression is identical to the records grain's modulo alias.

@@ -379,7 +379,7 @@ _SUPPORTED_MODE_COLUMNS: list[ColumnDecl] = [
 def test_scd2_supported_column_modes_pass(col_decl: ColumnDecl) -> None:
     """from/null/derived: scd_window/timestamp/date_parse/value_map stay
     supported on type2 — mode-gate only; source-tracked-ness is
-    Scd2DerivedSourceUntracked's separate concern."""
+    Scd2DerivedSourceConstant's separate concern."""
     check_scd2_column_mode_supported(col_decl, _type2_decl_with(col_decl))
 
 

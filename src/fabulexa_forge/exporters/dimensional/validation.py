@@ -5,7 +5,7 @@ SourceTableExists, KeyColumnsDeclared, ProjectionColumnExists,
 OrdinalRefsSiblings, TimestampSourceAvailable, DiscriminatorValueObserved,
 ExcludedKindNotSourced, ExcludedTableNotSourced, FkTargetIsDim,
 ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
-Scd2ColumnModeSupported, Scd2DerivedSourceUntracked, SliceOnlyColumnRefused
+Scd2ColumnModeSupported, Scd2DerivedSourceConstant, SliceOnlyColumnRefused
 (filter keys, column reads, and fk hops), ReservedPresentationName
 (last_mutation_sim_time — always-on, full export included).
 
@@ -865,7 +865,7 @@ def check_scd2_column_mode_supported(
     fk, correlation, derived: ordinal, and derived: elapsed — cross-row or
     per-version semantics the type2 build does not define. (lookup is gated
     separately by LookupColumnSafety; derived sources are additionally
-    gated by Scd2DerivedSourceUntracked.)
+    gated by Scd2DerivedSourceConstant.)
 
     Args:
         col_decl: The column declaration.
@@ -899,19 +899,27 @@ def check_scd2_column_mode_supported(
         )
 
 
-def check_scd2_derived_source_untracked(
+def check_scd2_derived_source_constant(
     col_decl: "ColumnDecl",
     table_decl: "TableDecl",
     sidecar: "Sidecar",
     source_table_name: str,
 ) -> None:
-    """Enforce Scd2DerivedSourceUntracked: type2 derived sources are static.
+    """Enforce Scd2DerivedSourceConstant: type2 derived sources are static.
 
     A derived timestamp / date_parse / value_map column on an scd: type2
-    table must source an untracked column: the spec's source
-    (timestamp.source / date_parse.from / value_map.from) must not name a
-    prop__ column whose ColumnSpec.history_tracked is True. Structural and
-    projection-introduced sources are never tracked and always pass.
+    table must source a temporal_class: constant column: the spec's source
+    (timestamp.source / date_parse.from / value_map.from), when it names a
+    prop__ column, resolves through Sidecar.temporal_class and must be
+    constant. Structural and projection-introduced sources carry no temporal
+    class and always pass.
+
+    The class, not history_tracked, is the question. A presentation property
+    is history_tracked: true by construction (base-format.md § Column
+    temporal semantics) yet is constant whenever its bound source is —
+    holding exactly its genesis row. Keying on the flag refused every such
+    column though its value is provably static; keying on the class admits
+    it, as LookupColumnSafety's own class clause already does.
 
     Args:
         col_decl: The column declaration (no-op unless it carries one of
@@ -921,7 +929,8 @@ def check_scd2_derived_source_untracked(
         source_table_name: The dim's source records table.
 
     Raises:
-        ExportError: The derived spec sources a history-tracked property.
+        ExportError: The derived spec sources a non-constant property.
+        TemporalClassUnavailableError: Propagated.
     """
     if table_decl.scd != "type2" or col_decl.derived is None:
         return
@@ -936,15 +945,19 @@ def check_scd2_derived_source_untracked(
 
     if source is None or not source.startswith("prop__"):
         return
+    if not any(c.name == source for c in sidecar.columns(source_table_name)):
+        # Existence is ProjectionColumnExists / DateParseSourceColumn's gate;
+        # it reports an absent source better than a bare column lookup would.
+        return
 
-    for col_spec in sidecar.columns(source_table_name):
-        if col_spec.name == source and col_spec.history_tracked is True:
-            raise ExportError(
-                f"column '{col_decl.name}' on scd: type2 table"
-                f" '{table_decl.name}': derived source '{source}' is"
-                " history-tracked; derived columns on a type2 table read"
-                " static values only"
-            )
+    cls = sidecar.temporal_class(source_table_name, source)
+    if cls != "constant":
+        raise ExportError(
+            f"column '{col_decl.name}' on scd: type2 table"
+            f" '{table_decl.name}': derived source '{source}' is"
+            f" temporal_class: {cls}; derived columns on a type2 table read"
+            " constant values only"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1602,7 +1615,7 @@ def validate_table(
 
     for col_decl in table_decl.columns:
         check_scd2_column_mode_supported(col_decl, table_decl)
-        check_scd2_derived_source_untracked(
+        check_scd2_derived_source_constant(
             col_decl, table_decl, sidecar, source_table_name
         )
         check_projection_column_exists(col_decl, table_decl, surface)

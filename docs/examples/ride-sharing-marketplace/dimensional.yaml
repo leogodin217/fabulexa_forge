@@ -103,8 +103,8 @@
 # properties, not derived timestamps — minted upstream as date strings, never
 # touching sim_time or the anchor. Verified clean `%Y-%m-%d` values for both
 # populations, so each is declared via `date_parse` and reinterpreted as a real
-# DATE. Both dims are Type-1, so — unlike retail's dim_customer — nothing here
-# hits the SCD-2 type2 column-mode restriction.
+# DATE. Both dims are Type-1, so the election is the plain records-grain case;
+# retail's dim_customer applies the same election on a `scd: type2` table.
 
 mode: dimensional
 

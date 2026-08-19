@@ -127,13 +127,15 @@
 #                      AND f.occurred_at >= d.valid_from
 #                      AND (f.occurred_at < d.valid_to OR d.valid_to IS NULL)
 #
-# NOT ELECTED: dim_customer.birth_date is a clean upstream-minted date string
-# (verified all 11,468 values match `%Y-%m-%d`, no NULLs) and would be a
-# textbook `date_parse` candidate elsewhere — but dim_customer is `scd: type2`,
-# and the type2 builder implements only from / null / scd_window column modes
-# (Scd2ColumnModeSupported), so `derived: date_parse` is refused here. See
-# source.yaml / base.yaml, whose customer/patient tables carry no such
-# restriction, for the same election on the same column.
+# ELECTED: dim_customer.birth_date is a clean upstream-minted date string
+# (verified all 11,468 values match `%Y-%m-%d`, no NULLs), so it is declared
+# via `date_parse` and reinterpreted as a real DATE — the same election
+# source.yaml / base.yaml apply to the same column. dim_customer is
+# `scd: type2`, which admits the per-record derived modes on a
+# `temporal_class: constant` source: birth_date is a presentation property, so
+# the sidecar marks it history_tracked, but its class is constant (it holds
+# exactly its genesis row) and the value is therefore identical on every one
+# of a customer's version rows.
 
 mode: dimensional
 
@@ -164,8 +166,9 @@ dimensional:
         - {name: age, from: prop__age}
         - {name: country, from: prop__country}
         # the storefront this shopper transacts against. A plain reference column,
-        # not an `fk`: a type2 table's columns support only from / null /
-        # scd_window. It still joins dim_storefront.storefront_id.
+        # not an `fk`: a type2 table refuses `fk` (it is a cross-row read, which
+        # the type2 build does not define). It still joins
+        # dim_storefront.storefront_id.
         - {name: storefront_id, from: prop__store}
         - {name: total_purchases, from: prop__total_purchases}
         - {name: first_name, from: prop__first_name}
@@ -175,7 +178,9 @@ dimensional:
         - {name: state_province, from: prop__place_subdivision}
         - {name: postal_code, from: prop__place_postal_code}
         - {name: area_code, from: prop__place_area_code}
-        - {name: birth_date, from: prop__birth_date}
+        - name: birth_date
+          derived:
+            date_parse: {from: prop__birth_date, format: "%Y-%m-%d"}
         - {name: email, from: prop__email}
         - {name: username, from: prop__username}
         - {name: phone, from: prop__phone}

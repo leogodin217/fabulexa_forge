@@ -229,8 +229,10 @@ Each mode reads the same emit and writes a different target shape.
 - ✓ **Table / column rename** — every output `name` is author-verbatim; `init` proposes
   prefix-stripped names with a structural-column collision check.
 - ◐ **Output transforms** — `derived` columns ship (ordinal, value-map, anchored
-  timestamp, SCD window, elapsed, declared date parse); arbitrary per-table
-  transforms beyond these are not.
+  timestamp, SCD window, elapsed, declared temporal parse); arbitrary per-table
+  transforms beyond these are not. On an `scd: type2` dim the per-record modes
+  (`timestamp`, `date_parse`, `value_map`) apply over `temporal_class: constant`
+  sources; `fk`, `correlation`, `ordinal`, and `elapsed` are refused there.
 - ✓ **`init`** — generate a commented candidate config from the sidecar; `--mode`
   selects the target (`dimensional`, the default, `source`, or `streaming`). Dimensional
   reads `record_roles` for warehouse role, kinds, discriminators, membership tables,
@@ -290,10 +292,12 @@ Each mode reads the same emit and writes a different target shape.
   / `timestamptz` in place of the default `timestamp` (dimensional `derived:
   timestamp` / `scd_window`; source's declared-table and event-log `render` maps;
   base's per-table render declarations), an elapsed delta renders as `interval` in
-  place of the divided numeric, and a declared VARCHAR source column parses as
-  `DATE` under an author format (`date_parse`, never sniffed). One shared election
+  place of the divided numeric, and a declared VARCHAR source column parses under
+  an author format (`date_parse`, never sniffed) as the type that format denotes
+  — `DATE`, `TIME`, or naive `TIMESTAMP`, derived from the date and time-of-day
+  directives the author wrote, with no second type knob. One shared election
   vocabulary through the one renderer every wallclock mode shares; an explicit
-  election requires a resolved anchor. The reader's session-zone pin and pinned
+  election requires a resolved anchor, while a parse never reads one. The reader's session-zone pin and pinned
   CSV text forms make zone-bearing output machine-independent. See
   [`architecture/temporal-elections.md`](architecture/temporal-elections.md).
   *Teaches: realistic warehouse/app-database column typing (admission dates,

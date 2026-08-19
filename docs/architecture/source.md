@@ -191,8 +191,9 @@ unsatisfiable and errors (`SourceColumnUnresolved`).
 **Temporal elections.** A per-table `render` map elects the rendering of a
 structural instant column — `created_sim_time` → `date`, say — in place of
 the default `created_at` wallclock `TIMESTAMP`; a `date_parse` map declares a
-payload VARCHAR column (`prop__<p>`) a date string in an author format,
-rendered as `DATE`. Both are keyed on source identity, re-render the
+payload VARCHAR column (`prop__<p>`) a temporal string in an author format,
+rendered as the type that format denotes — `DATE`, `TIME`, or naive
+`TIMESTAMP`. Both are keyed on source identity, re-render the
 projected column in place, and require the column to be one the render
 already emits ([`temporal-elections.md`](temporal-elections.md) § Per-mode
 attach points).
@@ -221,7 +222,7 @@ the kind internally regardless); the pair is atomic only inside the event log's
 
 The same `render` / `date_parse` maps apply to a junction table: `render`
 elects `joined_sim_time` / `left_sim_time`'s rendering; `date_parse` declares
-a payload `elem__<f>` VARCHAR field a date string.
+a payload `elem__<f>` VARCHAR field a temporal string.
 
 ### Row selection
 
