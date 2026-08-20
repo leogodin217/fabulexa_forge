@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fabulexa.example/schemas/base-format-v7.schema.json",
+  "$id": "https://fabulexa.example/schemas/base-format-v8.schema.json",
   "title": "Base Format Sidecar (base.json)",
   "description": "Sidecar manifest enumerating the branches and tables present in a base-layer emit's run.duckdb. Defined by base-format.md, beside this schema.",
   "type": "object",
@@ -9,12 +9,12 @@
   "properties": {
     "base_format_version": {
       "type": "integer",
-      "description": "Format version. v7 = 7. Reader gates on this; unknown versions must be rejected.",
-      "const": 7
+      "description": "Format version. v8 = 8. Reader gates on this; unknown versions must be rejected.",
+      "const": 8
     },
     "branches": {
       "type": "array",
-      "description": "Branches present in the emit, in branch tuple-lexicographic order.",
+      "description": "Branches present in the emit. A published emit covers exactly one branch.",
       "minItems": 1,
       "items": {
         "$ref": "#/$defs/branch"
@@ -263,7 +263,7 @@
         },
         "history_tracked": {
           "type": "boolean",
-          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 7 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
+          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 8 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
         },
         "temporal_class": {
           "type": "string",
@@ -297,6 +297,11 @@
           "type": "boolean",
           "const": true,
           "description": "Present, and always true, on a records-category prop__<name> column iff the property is required (for a partitioned kind, required by every declaring sub-type). Omitted (never rendered false) otherwise."
+        },
+        "extra_data": {
+          "type": "boolean",
+          "const": true,
+          "description": "Present, and always true, on a records-category prop__<name> column iff the source schema declares the property extra_data: every non-NULL cell is JSON object text (string keys, scalar values), readable with DuckDB's JSON operators. Omitted (never rendered false) otherwise."
         }
       }
     },

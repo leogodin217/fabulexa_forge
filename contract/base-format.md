@@ -25,7 +25,7 @@ The contract is **two artifacts per emit**, not a Python package:
 | `run.duckdb` | DuckDB's own format | DuckDB (any version supporting the schema written) |
 | `base.json` | `base-format.schema.json` (sibling of this doc) | Any reader of any kind |
 
-**`BASE_FORMAT_VERSION = 7`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
+**`BASE_FORMAT_VERSION = 8`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
 
 ---
 
@@ -123,7 +123,7 @@ Where P is the count of *scalar* declared properties for kind *K* and R is the c
 
 **`created_sim_time` is the record's immutable creation time.** Position 3 carries the `sim_time` at which the record was created and is set exactly once. It is unaffected by every later content event — a property write and a deactivation both leave it unchanged — and is non-NULL on every row, including write-once fact records (`history_tracked: false`). Consumers MAY use it to bound a record's lifetime from below.
 
-**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 7`.
+**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 8`.
 
 **Row order.** Creation order within kind, lexicographic on kind across kinds — the order in which the producer created each record, preserved by insertion-order iteration. A kind whose records are created through more than one id-minting path (e.g. sequential integer-string ids and hex-digest ids on the same kind) yields rows interleaved by creation time, **not** sorted by `record_id` value. Consumers MUST NOT rely on any sort derived from `record_id` — ids minted by different paths are structurally disjoint, and lexicographic order over the mixed set carries no semantic meaning.
 
@@ -313,7 +313,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 ```json
 {
-  "base_format_version": 7,
+  "base_format_version": 8,
   "branches": [
     {"fork_path": "trunk", "parent": null, "slice_at": 1728000000000000}
   ],
@@ -350,7 +350,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `base_format_version` | integer | yes | Format version. Current value: `7`. |
+| `base_format_version` | integer | yes | Format version. Current value: `8`. |
 | `branches` | array | yes | Exactly one entry — an emit covers a single branch. See § Branch enumeration and runtime anchor. |
 | `branches[].fork_path` | string | yes | Canonical `@`-joined fork path of the single branch. |
 | `branches[].parent` | string \| null | yes | Parent fork path (the `@`-joined prefix), or `null` for a root branch; the named parent need not be present in the emit. |
@@ -384,7 +384,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `row_census` | object | optional | Row counts describing the rows of the file this sidecar sits in, keyed by `fork_path` — one key, matching the single `branches[]` entry. Keys sorted lexicographically at every nesting level. Advisory: no conformance check ranges over its contents. See § The `row_census` block. |
 | `tables[].rows` | integer | yes | Row count of the table. |
 
-The fields above are the *required* shape at `base_format_version: 7`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 7` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
+The fields above are the *required* shape at `base_format_version: 8`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 8` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
 
 ### Branch enumeration and runtime anchor
 
@@ -450,7 +450,7 @@ The block is a nested object `{<kind>: {<property>: [<option>, ...]}}`:
 Closed domains are fixed at run initialization and persisted with the run, so
 every emit derived from the same persisted run carries the
 same registry across `slice_at` choices. Adding
-`enum_domains` is a version-compatible extension at `base_format_version: 7`:
+`enum_domains` is a version-compatible extension at `base_format_version: 8`:
 a reader that does not recognize the key ignores it (unknown top-level fields
 MAY warn but MUST NOT fail). Downstream tools that route per-sub-type read
 `enum_domains[<kind>][<kind>_type]` as the authoritative declared key set.
@@ -505,7 +505,7 @@ actor sub-types, never narrowed to those surviving a slice — this is what keep
 the block slice-stable.
 
 Adding `record_roles` is a version-compatible extension at
-`base_format_version: 7`: it is an optional top-level field a reader that does
+`base_format_version: 8`: it is an optional top-level field a reader that does
 not recognize it ignores (unknown top-level fields MAY warn but MUST NOT fail).
 A generic exporter branches on `record_roles` with no hard-coded kind→role map.
 
@@ -600,7 +600,7 @@ exactly this one column. C14 references this carve-out.
 The declared partition and the kind's structural properties are both fixed at
 run initialization and persisted with the run, so every emit derived from the
 same persisted run carries the same per-kind entry across `slice_at` choices. Adding `sub_type_columns` is a version-compatible
-extension at `base_format_version: 7`: an optional top-level field a reader
+extension at `base_format_version: 8`: an optional top-level field a reader
 that does not recognize it ignores (unknown top-level fields MAY warn but MUST
 NOT fail). Consumers gate on presence and fall back to union-schema behavior
 when absent.
@@ -662,7 +662,7 @@ semantics) — its identity-column analogue is the key declaration
 `tracked` — it is re-minted at each change instant of its source, and those mints
 are appended to the `history` table.
 
-**Coverage.** A `base_format_version: 7` emit carries both attributes on every
+**Coverage.** A `base_format_version: 8` emit carries both attributes on every
 records-category `prop__<name>` column, and on every presentation-property column.
 
 **All-or-none across an emit's `prop__` columns.** A producer that emits column
@@ -676,7 +676,7 @@ emit derived from the same persisted run carries the same pair for a given colum
 across `slice_at` choices — matching how `enum_domains` and `pinned_ids` are
 run-level.
 
-**Reader contract.** A reader gating on `base_format_version: 7` reads
+**Reader contract.** A reader gating on `base_format_version: 8` reads
 `temporal_class` directly. On a v4 emit the attribute is **absent and the class is
 unknown**; the reader falls back to `history_tracked` inference and inherits its
 false-negative tail — and cannot distinguish `constant` from `slice_only` at all,
@@ -727,6 +727,27 @@ treat it as optional.
 | Identity column (`record_id`, `fork_path`, `record_index`, `ref_index__<name>`) or lifecycle column | None — these are format structures, not properties, and are already outside the value-column population |
 | Membership-table `elem__` / `member__` column | None. An author never declares a collection-struct property's element fields, so every element field belongs to a producer-injected kind rather than an authored one |
 | Synthesized discriminator `prop__<K>_type` | `required: true` and `immutable: true`, from its synthesized schema — a record's sub-type is fixed at creation. It has no declared domain, so `min` / `max` never appear |
+
+### Extra-data columns (`extra_data`)
+
+One optional per-column boolean, rendered from the property schema's `extra_data`
+declaration. `extra_data: true` on a value column is a normative encoding
+guarantee: every non-NULL cell is a **JSON object text** — string keys mapping to
+scalar values (string, number, boolean, or null), in the producing declaration's
+key order. A consumer reads fields with DuckDB's JSON operators
+(`prop__<name>->>'key'`, `json_extract(...)`) or any JSON parser; no other parse
+is ever needed. Absence of the attribute means the column carries no such
+guarantee.
+
+The attribute exists for union-table kinds: many event flavors folded into one
+records-category table, common fields as real columns, per-flavor leftovers as
+one bag column. The bag's key set varies per row (typically with a discriminator
+column such as `prop__decision_type`); the JSON encoding keeps every field
+queryable without widening the table. Value types inside the object are
+self-describing per JSON; the sidecar does not declare per-key types.
+
+Only value columns of records-category tables may carry the attribute, and it is
+mutually exclusive with `references` on the same column.
 
 ### Author-declared column documentation (`description`, `unit`)
 
@@ -951,6 +972,7 @@ For `prop__<name>` columns and any other place a producer maps a Python value in
 | `bytes` | `BLOB` | identity |
 | `tuple` | `VARCHAR` | `repr(value)` (round-trip via `ast.literal_eval` on read) |
 | `tuple` with `references` annotation | `VARCHAR` | `value[1]` only (id portion); kind lives in the sidecar's `references` field |
+| `tuple` with `extra_data` annotation | `VARCHAR` | JSON object text (string keys, scalar values, declaration order); readable with DuckDB's JSON operators (`prop__<name>->>'key'`) |
 | `frozenset` | `VARCHAR` | `repr(value)` |
 | `NoneType` | `VARCHAR` | only NULL is ever stored |
 
@@ -977,7 +999,7 @@ load base.json
 validate against base-format.schema.json (the schema matching base_format_version)
 ```
 
-The schema validates *required shape*, not closed shape: its top level and the column object permit unknown members (`additionalProperties: true`), so a sidecar carrying a newer same-version optional field or column attribute still validates against an older revision of the v7 schema. Unknown members fall under the § Field semantics rule — a reader MAY warn but MUST NOT fail.
+The schema validates *required shape*, not closed shape: its top level and the column object permit unknown members (`additionalProperties: true`), so a sidecar carrying a newer same-version optional field or column attribute still validates against an older revision of the v8 schema. Unknown members fall under the § Field semantics rule — a reader MAY warn but MUST NOT fail.
 
 ### C2. DuckDB catalog matches the sidecar
 
@@ -1204,7 +1226,7 @@ A reference Python conformance check, `check_published_conformance.py`, ships in
 |---|---|---|
 | `base_format_version` | `base.json` | Required tables change, fixed-table column lists change, sidecar schema changes |
 
-**Current version = 7.** This document defines v7. A version bump implies one of:
+**Current version = 8.** This document defines v8. A version bump implies one of:
 - The required-tables set changed (added/removed/renamed tables)
 - A fixed-table required-column list changed
 - The sidecar schema gained a new *required* top-level field
@@ -1237,6 +1259,8 @@ A v4 reader applying v4's inference to a v5 emit is not wrong-but-safe; a v5 rea
 The `5 → 6` bump is forced by two new required columns on every `records__<kind>` table: `record_index` (position 7, every kind) and `ref_index__<name>` (immediately following each reference-typed property's `prop__<name>` column) — a fixed records-prefix and interleaved-block shape a v5 reader keying on the prior positions cannot interpret correctly, and C5's amended positional check. Both are identity columns (§ Dense record index): neither carries `temporal_class` nor `history_tracked`.
 
 The `6 → 7` bump is forced by moving the `presentation_id` key claims from the column descriptor to the top-level `presentation_keys` block: v6's optional column attributes `unique_within` / `branch_stable` / `slice_stable` do not exist at v7 — an existing field's semantics changed. The block alone would have been a version-compatible optional extension, but a same-version reader looking for key claims on the column descriptor would silently conclude "no claim" for a kind whose claims moved to the block.
+
+The `7 → 8` bump is likewise **not** forced by the `extra_data` column attribute — under the optional-attribute rule that alone would have been version-compatible. It is forced by the **cell-encoding change** that ships with it: a column whose property declares `extra_data` now stores JSON object text where a v7 producer stored the plain-`tuple` `repr()` encoding. A v7 reader applying `ast.literal_eval` to a v8 cell fails to parse; a v8 reader applying JSON to a v7 cell fails the same way. The two readings are incompatible, which is what a bump is for.
 
 A reader MUST gate on `base_format_version` and refuse to interpret an unknown version. No auto-upgrade.
 
