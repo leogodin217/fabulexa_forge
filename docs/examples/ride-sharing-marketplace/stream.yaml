@@ -10,7 +10,7 @@
 #   rider             — actor sub-type, demand FACT. status + zone (FSM + spatial)
 #                       and the rider scorecard (loyalty_band, ride_count) -> c/u/d.
 #   driver            — actor sub-type, supply FACT. status + zone and the driver
-#                       scorecard (session_earnings) -> c/u/d.
+#                       scorecard (session_rides) -> c/u/d.
 #   pairing           — ride_match FACT. One row per rider<->driver match; created
 #                       at match, deactivated at release -> ephemeral c/d. The
 #                       marketplace centerpiece.
@@ -50,11 +50,11 @@ streams:
     sub_types: [rider]
     # status + zone (FSM + spatial), plus the rider/driver SCD-2 scorecards.
     # All history-tracked; null-safe across both sub-types.
-    properties: [status, zone, loyalty_band, ride_count, session_earnings]
+    properties: [status, zone, loyalty_band, ride_count, session_rides]
   - name: driver
     kind: actor
     sub_types: [driver]
-    properties: [status, zone, loyalty_band, ride_count, session_earnings]
+    properties: [status, zone, loyalty_band, ride_count, session_rides]
   - name: zone_market
     kind: entity
     sub_types: [zone_market]
