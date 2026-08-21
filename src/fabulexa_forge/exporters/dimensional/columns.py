@@ -19,6 +19,8 @@ if TYPE_CHECKING:
 
 from fabulexa_forge._sql import (
     render_date_parse_expr,
+    render_decimal_expr,
+    render_json_precision_expr,
     render_predicate_condition,
     render_typed_literal,
 )
@@ -431,6 +433,66 @@ def build_date_parse_expr(
     )
 
 
+def build_decimal_expr(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    grain_alias: str = "_grain",
+) -> str:
+    """Build a SQL expression for a `derived: decimal` column.
+
+    Delegates to `render_decimal_expr` — the one decimal rendering authority
+    every mode shares. The source-type gate (DecimalSourceIsDouble) runs at
+    plan time; this builder assumes it already passed.
+
+    Args:
+        col_decl: A ColumnDecl with derived.decimal set.
+        table_decl: The enclosing table declaration (supplies the guard's
+            table label).
+        grain_alias: SQL alias for the grain table (qualifies the source column).
+
+    Returns:
+        A SQL expression fragment.
+    """
+    assert col_decl.derived is not None and col_decl.derived.decimal is not None
+    dec = col_decl.derived.decimal
+    qualified_source = f'"{grain_alias}"."{dec.from_}"'
+    precision, scale = dec.as_
+    expr = render_decimal_expr(
+        qualified_source, precision, scale, col_decl.name, table_decl.name
+    )
+    return f'{expr} AS "{col_decl.name}"'
+
+
+def build_json_precision_expr(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    grain_alias: str = "_grain",
+) -> str:
+    """Build a SQL expression for a `derived: json_precision` column.
+
+    Delegates to `render_json_precision_expr` — the one json_precision
+    rendering authority every mode shares. The source-type gate
+    (JsonPrecisionSourceIsVarchar) runs at plan time; this builder assumes it
+    already passed.
+
+    Args:
+        col_decl: A ColumnDecl with derived.json_precision set.
+        table_decl: The enclosing table declaration (supplies the guard's
+            table label).
+        grain_alias: SQL alias for the grain table (qualifies the source column).
+
+    Returns:
+        A SQL expression fragment.
+    """
+    assert col_decl.derived is not None and col_decl.derived.json_precision is not None
+    jp = col_decl.derived.json_precision
+    qualified_source = f'"{grain_alias}"."{jp.from_}"'
+    expr = render_json_precision_expr(
+        qualified_source, jp.leaves, col_decl.name, table_decl.name
+    )
+    return f'{expr} AS "{col_decl.name}"'
+
+
 def build_column_expr(
     col_decl: "ColumnDecl",
     anchor: "EffectiveAnchor | None",
@@ -547,6 +609,14 @@ def build_column_expr(
         if derived.date_parse is not None:
             assert table_decl is not None, "table_decl required for date_parse column"
             return build_date_parse_expr(col_decl, table_decl, grain_alias), []
+        if derived.decimal is not None:
+            assert table_decl is not None, "table_decl required for decimal column"
+            return build_decimal_expr(col_decl, table_decl, grain_alias), []
+        if derived.json_precision is not None:
+            assert table_decl is not None, (
+                "table_decl required for json_precision column"
+            )
+            return build_json_precision_expr(col_decl, table_decl, grain_alias), []
         # scd_window columns are assembled by the SCD-2 builder in scd.py;
         # if reached here the caller passed an scd_window column outside that path
         raise AssertionError(f"unsupported derived spec on column '{col_decl.name}'")

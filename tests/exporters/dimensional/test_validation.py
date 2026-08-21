@@ -18,9 +18,11 @@ from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DateParseSpec,
+    DecimalSpec,
     DerivedSpec,
     DimensionalConfig,
     ElapsedSpec,
+    JsonPrecisionSpec,
     OrdinalSpec,
     ScdWindowSpec,
     SourceDecl,
@@ -30,14 +32,18 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import (
     DateParseSourceColumn,
+    DecimalSourceIsDouble,
     ExportError,
+    JsonPrecisionSourceIsVarchar,
     TemporalRenderRequiresAnchor,
 )
 from fabulexa_forge.exporters.dimensional.validation import (
     check_date_parse_source_column,
+    check_decimal_source_column,
     check_discriminator_value_observed,
     check_excluded_kind_not_sourced,
     check_excluded_table_not_sourced,
+    check_json_precision_source_column,
     check_key_columns_declared,
     check_ordinal_refs_siblings,
     check_projection_column_exists,
@@ -182,6 +188,52 @@ def test_value_map_from_missing_raises(tmp_path: Path) -> None:
         col = ColumnDecl(
             name="x",
             derived=DerivedSpec(value_map={"from": "ghost_col", "map": {"a": 1}}),
+        )
+        tbl = _make_table_decl(columns=[col], key=["x"])
+        from fabulexa_forge.exporters.dimensional.validation import (
+            _grain_projectable_surface,
+            _resolve_source_table_name,
+        )
+
+        src_name = _resolve_source_table_name(tbl.source)
+        surface = _grain_projectable_surface(tbl.source, emit.sidecar, src_name)
+        with pytest.raises(ExportError, match="ghost_col"):
+            check_projection_column_exists(col, tbl, surface)
+
+
+def test_decimal_from_missing_raises(tmp_path: Path) -> None:
+    """derived.decimal.from naming absent column raises ExportError."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        col = ColumnDecl(
+            name="x",
+            derived=DerivedSpec(
+                decimal=DecimalSpec(**{"from": "ghost_col", "as": [4, 3]})
+            ),
+        )
+        tbl = _make_table_decl(columns=[col], key=["x"])
+        from fabulexa_forge.exporters.dimensional.validation import (
+            _grain_projectable_surface,
+            _resolve_source_table_name,
+        )
+
+        src_name = _resolve_source_table_name(tbl.source)
+        surface = _grain_projectable_surface(tbl.source, emit.sidecar, src_name)
+        with pytest.raises(ExportError, match="ghost_col"):
+            check_projection_column_exists(col, tbl, surface)
+
+
+def test_json_precision_from_missing_raises(tmp_path: Path) -> None:
+    """derived.json_precision.from naming absent column raises ExportError."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        col = ColumnDecl(
+            name="x",
+            derived=DerivedSpec(
+                json_precision=JsonPrecisionSpec(
+                    **{"from": "ghost_col", "leaves": {"discount": 2}}
+                )
+            ),
         )
         tbl = _make_table_decl(columns=[col], key=["x"])
         from fabulexa_forge.exporters.dimensional.validation import (
@@ -536,6 +588,112 @@ def test_date_parse_source_column_structural_source_raises() -> None:
     tbl = _make_table_decl(kind="actor", columns=[col], key=["parsed"])
     with pytest.raises(DateParseSourceColumn, match="no declared type"):
         check_date_parse_source_column(col, tbl, "records__actor", sidecar)
+
+
+# ---------------------------------------------------------------------------
+# DecimalSourceIsDouble / JsonPrecisionSourceIsVarchar
+# (value-rendering-elections Phase 5 — the dimensional derived spellings'
+# source-type gates, mirroring DateParseSourceColumn's shape.)
+# ---------------------------------------------------------------------------
+
+
+def test_decimal_source_column_declared_double_passes() -> None:
+    """A declared DOUBLE decimal source passes."""
+    sidecar = _date_parse_sidecar(
+        [
+            identity_column("record_id", "VARCHAR"),
+            {"name": "prop__amount", "type": "DOUBLE"},
+        ]
+    )
+    col = ColumnDecl(
+        name="amount",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "prop__amount", "as": [4, 3]})
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["amount"])
+    check_decimal_source_column(col, tbl, "records__actor", sidecar)  # must not raise
+
+
+def test_decimal_source_column_non_double_raises() -> None:
+    """A declared non-DOUBLE decimal source raises DecimalSourceIsDouble,
+    naming the column and the actual type."""
+    sidecar = _date_parse_sidecar(
+        [
+            identity_column("record_id", "VARCHAR"),
+            {"name": "prop__amount", "type": "BIGINT"},
+        ]
+    )
+    col = ColumnDecl(
+        name="amount",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "prop__amount", "as": [4, 3]})
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["amount"])
+    with pytest.raises(DecimalSourceIsDouble, match="amount") as exc_info:
+        check_decimal_source_column(col, tbl, "records__actor", sidecar)
+    assert "BIGINT" in str(exc_info.value)
+
+
+def test_decimal_source_column_structural_source_raises() -> None:
+    """A structural source with no declared prop__ type behind it raises,
+    naming 'no declared type'."""
+    sidecar = _date_parse_sidecar([identity_column("record_id", "VARCHAR")])
+    col = ColumnDecl(
+        name="amount",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "last_mutation_sim_time", "as": [4, 3]})
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["amount"])
+    with pytest.raises(DecimalSourceIsDouble, match="no declared type"):
+        check_decimal_source_column(col, tbl, "records__actor", sidecar)
+
+
+def test_json_precision_source_column_declared_varchar_passes() -> None:
+    """A declared VARCHAR json_precision source passes."""
+    sidecar = _date_parse_sidecar(
+        [
+            identity_column("record_id", "VARCHAR"),
+            {"name": "prop__payload", "type": "VARCHAR"},
+        ]
+    )
+    col = ColumnDecl(
+        name="payload",
+        derived=DerivedSpec(
+            json_precision=JsonPrecisionSpec(
+                **{"from": "prop__payload", "leaves": {"discount": 2}}
+            )
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["payload"])
+    check_json_precision_source_column(
+        col, tbl, "records__actor", sidecar
+    )  # must not raise
+
+
+def test_json_precision_source_column_non_varchar_raises() -> None:
+    """A declared non-VARCHAR json_precision source raises
+    JsonPrecisionSourceIsVarchar, naming the column and the actual type."""
+    sidecar = _date_parse_sidecar(
+        [
+            identity_column("record_id", "VARCHAR"),
+            {"name": "prop__payload", "type": "DOUBLE"},
+        ]
+    )
+    col = ColumnDecl(
+        name="payload",
+        derived=DerivedSpec(
+            json_precision=JsonPrecisionSpec(
+                **{"from": "prop__payload", "leaves": {"discount": 2}}
+            )
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["payload"])
+    with pytest.raises(JsonPrecisionSourceIsVarchar, match="payload") as exc_info:
+        check_json_precision_source_column(col, tbl, "records__actor", sidecar)
+    assert "DOUBLE" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
@@ -1261,6 +1419,47 @@ def test_derived_date_parse_from_refuses_slice_only() -> None:
         ),
     )
     tbl = _make_table_decl(kind="actor", columns=[col], key=["tier_date"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused — derived: decimal / derived: json_precision
+# (value-rendering-elections Phase 5)
+# ---------------------------------------------------------------------------
+
+
+def test_derived_decimal_from_refuses_slice_only() -> None:
+    """derived.decimal.from: reading a non-exempt slice_only column raises —
+    a decimal source joins the value-read surface list exactly as
+    from/correlation/value_map.from do."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(
+        name="tier_amount",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "prop__tier", "as": [4, 3]})
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier_amount"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+def test_derived_json_precision_from_refuses_slice_only() -> None:
+    """derived.json_precision.from: reading a non-exempt slice_only column
+    raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(
+        name="tier_payload",
+        derived=DerivedSpec(
+            json_precision=JsonPrecisionSpec(
+                **{"from": "prop__tier", "leaves": {"discount": 2}}
+            )
+        ),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier_payload"])
     with pytest.raises(ExportError) as exc_info:
         check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
     _assert_slice_only_message(str(exc_info.value))

@@ -55,8 +55,10 @@ from fabulexa_forge.derivations.reference_resolution import (
 )
 from fabulexa_forge.errors import (
     DateParseSourceColumn,
+    DecimalSourceIsDouble,
     ElectionDimKeyDisagrees,
     ExportError,
+    JsonPrecisionSourceIsVarchar,
     TemporalRenderRequiresAnchor,
 )
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
@@ -270,9 +272,10 @@ def check_projection_column_exists(
 ) -> None:
     """Enforce ProjectionColumnExists for a single column declaration.
 
-    Checks from, correlation, derived.value_map.from, and derived.date_parse.from
-    against the grain surface — `date_parse.from` resolves off the grain's
-    projectable surface exactly as `value_map.from` does.
+    Checks from, correlation, derived.value_map.from, derived.date_parse.from,
+    derived.decimal.from, and derived.json_precision.from against the grain
+    surface — each derived `from` resolves off the grain's projectable
+    surface exactly as `value_map.from` does.
 
     Args:
         col_decl: The column declaration being validated.
@@ -291,6 +294,10 @@ def check_projection_column_exists(
         src = col_decl.derived.value_map.from_
     elif col_decl.derived is not None and col_decl.derived.date_parse is not None:
         src = col_decl.derived.date_parse.from_
+    elif col_decl.derived is not None and col_decl.derived.decimal is not None:
+        src = col_decl.derived.decimal.from_
+    elif col_decl.derived is not None and col_decl.derived.json_precision is not None:
+        src = col_decl.derived.json_precision.from_
 
     if src is not None and src not in surface:
         raise ExportError(
@@ -413,22 +420,23 @@ def check_temporal_render_requires_anchor(
         )
 
 
-def _resolve_date_parse_source_type(
+def _resolve_grain_source_type(
     from_: str,
     source_table_name: str,
     sidecar: "Sidecar",
 ) -> str | None:
-    """Resolve a date_parse source column's declared DuckDB type, or None.
+    """Resolve a grain-surface source column's declared DuckDB type, or None.
 
     Reads the sidecar's column list for the resolved source table — the same
     type authority `value_map`'s literal typing reads, which already covers
     the history_interval grain's `value` alias (its source table is
     'history', whose sidecar `value` column carries the type). A structural,
     virtual, or grain-constant source with no matching sidecar column
-    returns None — no declared type behind it.
+    returns None — no declared type behind it. Shared by the three typed
+    derived-source gates (`date_parse`, `decimal`, `json_precision`).
 
     Args:
-        from_: The date_parse source column's name (source spelling).
+        from_: The source column's name (source spelling).
         source_table_name: The resolved DuckDB source table name.
         sidecar: The open emit's sidecar.
 
@@ -472,11 +480,83 @@ def check_date_parse_source_column(
         return
 
     dp_from = col_decl.derived.date_parse.from_
-    resolved_type = _resolve_date_parse_source_type(dp_from, source_table_name, sidecar)
+    resolved_type = _resolve_grain_source_type(dp_from, source_table_name, sidecar)
     if resolved_type is None or resolved_type.upper() != "VARCHAR":
         got = resolved_type if resolved_type is not None else "no declared type"
         raise DateParseSourceColumn(
             f"date_parse column '{col_decl.name}' on '{table_decl.name}':"
+            f" source must be an existing VARCHAR column (got {got})"
+        )
+
+
+def check_decimal_source_column(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    source_table_name: str,
+    sidecar: "Sidecar",
+) -> None:
+    """Enforce DecimalSourceIsDouble: the decimal source is a declared DOUBLE column.
+
+    Existence/resolution is ProjectionColumnExists' (`from` resolves off the
+    grain's projectable surface exactly as `value_map.from` does); this rule
+    additionally requires the resolved column carry a declared DOUBLE type —
+    the contract's one floating-point type.
+
+    Args:
+        col_decl: The column declaration potentially containing a decimal spec.
+        table_decl: The output table declaration (for error messages).
+        source_table_name: The resolved DuckDB source table name.
+        sidecar: The open emit's sidecar.
+
+    Raises:
+        DecimalSourceIsDouble: The resolved source column carries no declared
+            DOUBLE type.
+    """
+    if col_decl.derived is None or col_decl.derived.decimal is None:
+        return
+
+    dec_from = col_decl.derived.decimal.from_
+    resolved_type = _resolve_grain_source_type(dec_from, source_table_name, sidecar)
+    if resolved_type is None or resolved_type.upper() != "DOUBLE":
+        got = resolved_type if resolved_type is not None else "no declared type"
+        raise DecimalSourceIsDouble(
+            f"decimal column '{col_decl.name}' on '{table_decl.name}':"
+            f" source must be an existing DOUBLE column (got {got})"
+        )
+
+
+def check_json_precision_source_column(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    source_table_name: str,
+    sidecar: "Sidecar",
+) -> None:
+    """Enforce JsonPrecisionSourceIsVarchar: the source is a declared VARCHAR column.
+
+    Existence/resolution is ProjectionColumnExists' (`from` resolves off the
+    grain's projectable surface exactly as `value_map.from` does); this rule
+    additionally requires the resolved column carry a declared VARCHAR type.
+
+    Args:
+        col_decl: The column declaration potentially containing a
+            json_precision spec.
+        table_decl: The output table declaration (for error messages).
+        source_table_name: The resolved DuckDB source table name.
+        sidecar: The open emit's sidecar.
+
+    Raises:
+        JsonPrecisionSourceIsVarchar: The resolved source column carries no
+            declared VARCHAR type.
+    """
+    if col_decl.derived is None or col_decl.derived.json_precision is None:
+        return
+
+    jp_from = col_decl.derived.json_precision.from_
+    resolved_type = _resolve_grain_source_type(jp_from, source_table_name, sidecar)
+    if resolved_type is None or resolved_type.upper() != "VARCHAR":
+        got = resolved_type if resolved_type is not None else "no declared type"
+        raise JsonPrecisionSourceIsVarchar(
+            f"json_precision column '{col_decl.name}' on '{table_decl.name}':"
             f" source must be an existing VARCHAR column (got {got})"
         )
 
@@ -673,11 +753,12 @@ def _collect_value_read_sources(col_decl: "ColumnDecl") -> list[str]:
 
     Covers from, correlation, resolved value_map.from, derived: timestamp
     source, derived: elapsed correlate_on/start_source/end_source/
-    other_where keys, and derived: date_parse.from — the exhaustive
-    SliceOnlyColumnRefused value-read surface (lookup and fk hops are
-    checked separately). A date_parse source is a value-read like any
-    other: it joins this surface list, so a parse from a slice_only column
-    is refused at plan time (§ The declared date parse).
+    other_where keys, derived: date_parse.from, derived: decimal.from, and
+    derived: json_precision.from — the exhaustive SliceOnlyColumnRefused
+    value-read surface (lookup and fk hops are checked separately). Each
+    derived source is a value-read like any other: it joins this surface
+    list, so deriving from a slice_only column is refused at plan time
+    (§ The declared date parse).
 
     Args:
         col_decl: The column declaration.
@@ -703,6 +784,10 @@ def _collect_value_read_sources(col_decl: "ColumnDecl") -> list[str]:
             refs.extend(derived.elapsed.other_where.keys())
         if derived.date_parse is not None:
             refs.append(derived.date_parse.from_)
+        if derived.decimal is not None:
+            refs.append(derived.decimal.from_)
+        if derived.json_precision is not None:
+            refs.append(derived.json_precision.from_)
     return refs
 
 
@@ -862,10 +947,11 @@ def check_scd2_column_mode_supported(
 
     The type2 surface admits from, null, derived: scd_window, and the
     per-record derived modes timestamp / date_parse / value_map. It refuses
-    fk, correlation, derived: ordinal, and derived: elapsed — cross-row or
-    per-version semantics the type2 build does not define. (lookup is gated
-    separately by LookupColumnSafety; derived sources are additionally
-    gated by Scd2DerivedSourceConstant.)
+    fk, correlation, derived: ordinal, derived: elapsed, derived: decimal,
+    and derived: json_precision — cross-row, per-version, or grain-surface
+    semantics the type2 build does not define. (lookup is gated separately
+    by LookupColumnSafety; derived sources are additionally gated by
+    Scd2DerivedSourceConstant.)
 
     Args:
         col_decl: The column declaration.
@@ -889,6 +975,10 @@ def check_scd2_column_mode_supported(
             mode = "derived: ordinal"
         elif col_decl.derived.elapsed is not None:
             mode = "derived: elapsed"
+        elif col_decl.derived.decimal is not None:
+            mode = "derived: decimal"
+        elif col_decl.derived.json_precision is not None:
+            mode = "derived: json_precision"
 
     if mode is not None:
         raise ExportError(
@@ -1508,10 +1598,12 @@ def validate_table(
     Runs: SourceTableExists, ExcludedKindNotSourced, ExcludedTableNotSourced,
     KeyColumnsDeclared, ProjectionColumnExists, OrdinalRefsSiblings,
     TimestampSourceAvailable, TemporalRenderRequiresAnchor,
-    DateParseSourceColumn, DiscriminatorValueObserved, FkTargetIsDim,
+    DateParseSourceColumn, DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar,
+    DiscriminatorValueObserved, FkTargetIsDim,
     ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
     Scd2ColumnModeSupported, LookupColumnSafety, SliceOnlyColumnRefused
-    (filter keys, column reads including date_parse.from, fk hops),
+    (filter keys, column reads including date_parse.from / decimal.from /
+    json_precision.from, fk hops),
     ReservedPresentationName (last_mutation_sim_time — always-on, full
     export included). Per fk column: resolves the destination dim's source
     population set (`resolve_dim_source_populations`), the edge's one
@@ -1552,6 +1644,10 @@ def validate_table(
             has no resolved anchor.
         DateParseSourceColumn: A date_parse source is not a declared VARCHAR
             column.
+        DecimalSourceIsDouble: A decimal source is not a declared DOUBLE
+            column.
+        JsonPrecisionSourceIsVarchar: A json_precision source is not a
+            declared VARCHAR column.
         ElectionInheritanceAmbiguous: An fk column's `target_key` is absent
             and the destination dim's source population set carries more
             than one distinct election.
@@ -1623,6 +1719,10 @@ def validate_table(
         check_timestamp_source_available(col_decl, table_decl, source, surface)
         check_temporal_render_requires_anchor(col_decl, anchor)
         check_date_parse_source_column(col_decl, table_decl, source_table_name, sidecar)
+        check_decimal_source_column(col_decl, table_decl, source_table_name, sidecar)
+        check_json_precision_source_column(
+            col_decl, table_decl, source_table_name, sidecar
+        )
         check_elapsed_columns_exist(col_decl, table_decl, source_table_name, sidecar)
         check_slice_only_column_reads(
             col_decl, table_decl, source, source_table_name, sidecar

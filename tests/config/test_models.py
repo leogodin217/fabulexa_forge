@@ -15,6 +15,7 @@ from fabulexa_forge.config.models import (
     ColumnDecl,
     DateParseElection,
     DateParseSpec,
+    DecimalSpec,
     DerivedSpec,
     DimensionalConfig,
     ElapsedSpec,
@@ -22,6 +23,7 @@ from fabulexa_forge.config.models import (
     ExportConfig,
     FkClause,
     IncrementalConfig,
+    JsonPrecisionSpec,
     RebaseConfig,
     ScdWindowSpec,
     SourceDecl,
@@ -423,6 +425,85 @@ def test_derived_date_parse_and_timestamp_raises() -> None:
                 "date_parse": {"from": "prop__dob", "format": "%Y-%m-%d"},
                 "timestamp": {"source": "sim_time"},
             }
+        )
+
+
+# ---------------------------------------------------------------------------
+# derived: decimal / derived: json_precision (value-rendering-elections
+# Phase 5 — the dimensional derived spellings)
+# ---------------------------------------------------------------------------
+
+
+def test_derived_decimal_alone_parses() -> None:
+    """A DerivedSpec with only `decimal` set parses into a typed DecimalSpec."""
+    spec = DerivedSpec.model_validate(
+        {"decimal": {"from": "prop__amount", "as": [4, 3]}}
+    )
+    assert spec.decimal is not None
+    assert spec.decimal.from_ == "prop__amount"
+    assert spec.decimal.as_ == (4, 3)
+    assert spec.date_parse is None
+    assert spec.json_precision is None
+
+
+def test_derived_decimal_and_timestamp_raises() -> None:
+    """decimal + timestamp combination raises."""
+    with pytest.raises(ValidationError, match="exactly one"):
+        DerivedSpec.model_validate(
+            {
+                "decimal": {"from": "prop__amount", "as": [4, 3]},
+                "timestamp": {"source": "sim_time"},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "precision,scale",
+    [(0, 0), (39, 0), (4, 5), (4, -1)],
+)
+def test_decimal_spec_bounds_rejects(precision: int, scale: int) -> None:
+    """DecimalSpec rejects precision outside 1..38 or scale outside 0..precision —
+    the same bounds `DecimalElection.decimal_bounds` enforces (shared validator)."""
+    with pytest.raises(ValidationError):
+        DecimalSpec.model_validate({"from": "prop__amount", "as": [precision, scale]})
+
+
+def test_derived_json_precision_alone_parses() -> None:
+    """A DerivedSpec with only `json_precision` set parses into a typed
+    JsonPrecisionSpec."""
+    spec = DerivedSpec.model_validate(
+        {"json_precision": {"from": "prop__payload", "leaves": {"discount": 2}}}
+    )
+    assert spec.json_precision is not None
+    assert spec.json_precision.from_ == "prop__payload"
+    assert spec.json_precision.leaves == {"discount": 2}
+    assert spec.decimal is None
+    assert spec.date_parse is None
+
+
+def test_derived_json_precision_and_decimal_raises() -> None:
+    """json_precision + decimal combination raises."""
+    with pytest.raises(ValidationError, match="exactly one"):
+        DerivedSpec.model_validate(
+            {
+                "json_precision": {"from": "prop__payload", "leaves": {"x": 2}},
+                "decimal": {"from": "prop__amount", "as": [4, 3]},
+            }
+        )
+
+
+def test_json_precision_spec_empty_leaves_rejects() -> None:
+    """JsonPrecisionSpec rejects an empty leaf map — the same shape
+    `JsonPrecisionElection.json_precision_shape` enforces (shared validator)."""
+    with pytest.raises(ValidationError, match="must not be empty"):
+        JsonPrecisionSpec.model_validate({"from": "prop__payload", "leaves": {}})
+
+
+def test_json_precision_spec_digits_out_of_range_rejects() -> None:
+    """JsonPrecisionSpec rejects a digits value outside 0..12."""
+    with pytest.raises(ValidationError, match="0..12"):
+        JsonPrecisionSpec.model_validate(
+            {"from": "prop__payload", "leaves": {"discount": 13}}
         )
 
 

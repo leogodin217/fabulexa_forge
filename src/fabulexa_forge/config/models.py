@@ -138,6 +138,52 @@ class StrictBaseModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 
+def _check_decimal_bounds(precision: int, scale: int, field_name: str) -> None:
+    """1 <= precision <= 38; 0 <= scale <= precision — shared by both decimal
+    spellings (the `render` map's `DecimalElection` and dimensional's
+    `derived: decimal` `DecimalSpec`).
+
+    Args:
+        precision: The declared precision.
+        scale: The declared scale.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `precision` outside 1..38, or `scale` outside 0..precision.
+    """
+    if not (1 <= precision <= 38):
+        raise ValueError(f"{field_name}: precision must be 1..38 (got {precision})")
+    if not (0 <= scale <= precision):
+        raise ValueError(
+            f"{field_name}: scale must be 0..precision"
+            f" (got scale={scale}, precision={precision})"
+        )
+
+
+def _check_json_precision_shape(leaves: "Mapping[str, int]", field_name: str) -> None:
+    """Leaf map non-empty; keys non-empty; 0 <= digits <= 12 — shared by both
+    json_precision spellings (the `render` map's `JsonPrecisionElection` and
+    dimensional's `derived: json_precision` `JsonPrecisionSpec`).
+
+    Args:
+        leaves: The declared top-level key -> fraction-digits map.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `leaves` is empty, has an empty key, or a digits value
+            outside 0..12.
+    """
+    if not leaves:
+        raise ValueError(f"{field_name}: leaf map must not be empty")
+    for key, digits in leaves.items():
+        if not key:
+            raise ValueError(f"{field_name}: keys must be non-empty")
+        if not (0 <= digits <= 12):
+            raise ValueError(
+                f"{field_name}: digits for key {key!r} must be 0..12 (got {digits})"
+            )
+
+
 class DecimalElection(StrictBaseModel):
     """Numeric precision rendering: DOUBLE source -> DECIMAL(p, s)."""
 
@@ -153,13 +199,7 @@ class DecimalElection(StrictBaseModel):
                 0..precision.
         """
         precision, scale = self.decimal
-        if not (1 <= precision <= 38):
-            raise ValueError(f"decimal: precision must be 1..38 (got {precision})")
-        if not (0 <= scale <= precision):
-            raise ValueError(
-                "decimal: scale must be 0..precision"
-                f" (got scale={scale}, precision={precision})"
-            )
+        _check_decimal_bounds(precision, scale, "decimal")
         return self
 
 
@@ -184,16 +224,7 @@ class JsonPrecisionElection(StrictBaseModel):
             ValueError: `json_precision` is empty, has an empty key, or a
                 digits value outside 0..12.
         """
-        if not self.json_precision:
-            raise ValueError("json_precision: leaf map must not be empty")
-        for key, digits in self.json_precision.items():
-            if not key:
-                raise ValueError("json_precision: keys must be non-empty")
-            if not (0 <= digits <= 12):
-                raise ValueError(
-                    f"json_precision: digits for key {key!r} must be 0..12"
-                    f" (got {digits})"
-                )
+        _check_json_precision_shape(self.json_precision, "json_precision")
         return self
 
 
@@ -486,6 +517,47 @@ class DateParseSpec(StrictBaseModel):
         return self
 
 
+class DecimalSpec(StrictBaseModel):
+    """Dimensional derived spelling of the decimal election."""
+
+    from_: str = Field(alias="from")
+    """The grain-surface source column (DOUBLE payload column)."""
+    as_: tuple[int, int] = Field(alias="as")
+    """(precision, scale), same bounds as DecimalElection."""
+
+    @model_validator(mode="after")
+    def decimal_bounds(self) -> Self:
+        """1 <= precision <= 38; 0 <= scale <= precision.
+
+        Raises:
+            ValueError: `precision` outside 1..38, or `scale` outside
+                0..precision.
+        """
+        precision, scale = self.as_
+        _check_decimal_bounds(precision, scale, "derived.decimal")
+        return self
+
+
+class JsonPrecisionSpec(StrictBaseModel):
+    """Dimensional derived spelling of the json_precision election."""
+
+    from_: str = Field(alias="from")
+    """The grain-surface source column (VARCHAR JSON payload)."""
+    leaves: dict[str, int]
+    """Top-level key -> fraction digits (0..12); non-empty."""
+
+    @model_validator(mode="after")
+    def json_precision_shape(self) -> Self:
+        """Leaf map non-empty; keys non-empty; 0 <= digits <= 12.
+
+        Raises:
+            ValueError: `leaves` is empty, has an empty key, or a digits
+                value outside 0..12.
+        """
+        _check_json_precision_shape(self.leaves, "derived.json_precision")
+        return self
+
+
 class ElapsedSpec(StrictBaseModel):
     """A cross-row elapsed time-delta between two correlated events."""
 
@@ -542,7 +614,7 @@ class ElapsedSpec(StrictBaseModel):
 
 
 class DerivedSpec(StrictBaseModel):
-    """A computed column; exactly one of the six derivation kinds is set."""
+    """A computed column; exactly one of the eight derivation kinds is set."""
 
     ordinal: OrdinalSpec | None = None
     """Assigns a ROW_NUMBER within a partition ordered by a named column."""
@@ -557,13 +629,17 @@ class DerivedSpec(StrictBaseModel):
     """Computes a cross-row time delta between two correlated events."""
     date_parse: DateParseSpec | None = None
     """Declared VARCHAR->DATE reinterpretation of a source column."""
+    decimal: DecimalSpec | None = None
+    """Numeric precision rendering of a DOUBLE grain-surface column."""
+    json_precision: JsonPrecisionSpec | None = None
+    """In-place leaf rounding of a VARCHAR JSON grain-surface column."""
 
     @model_validator(mode="after")
     def exactly_one_derived(self) -> Self:
         """A DerivedSpec sets exactly one derived kind.
 
-        Exactly one of ordinal/value_map/timestamp/scd_window/elapsed/date_parse
-        must be set.
+        Exactly one of ordinal/value_map/timestamp/scd_window/elapsed/
+        date_parse/decimal/json_precision must be set.
         """
         set_fields = [
             f
@@ -574,13 +650,16 @@ class DerivedSpec(StrictBaseModel):
                 ("scd_window", self.scd_window),
                 ("elapsed", self.elapsed),
                 ("date_parse", self.date_parse),
+                ("decimal", self.decimal),
+                ("json_precision", self.json_precision),
             ]
             if v is not None
         ]
         if len(set_fields) != 1:
             raise ValueError(
                 "DerivedSpec must set exactly one of"
-                " ordinal/value_map/timestamp/scd_window/elapsed/date_parse; "
+                " ordinal/value_map/timestamp/scd_window/elapsed/date_parse/"
+                "decimal/json_precision; "
                 f"got {len(set_fields)}: {set_fields}"
             )
         return self

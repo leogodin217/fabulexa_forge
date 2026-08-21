@@ -17,12 +17,14 @@ from zoneinfo import ZoneInfo
 import duckdb
 import pytest
 
-from fabulexa_forge._sql import render_typed_literal
+from fabulexa_forge._sql import register_render_functions, render_typed_literal
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DateParseSpec,
+    DecimalSpec,
     DerivedSpec,
+    JsonPrecisionSpec,
     OrdinalSpec,
     ScdWindowSpec,
     SourceDecl,
@@ -36,7 +38,9 @@ from fabulexa_forge.exporters.dimensional.columns import (
     build_column_expr,
     build_correlation_expr,
     build_date_parse_expr,
+    build_decimal_expr,
     build_from_expr,
+    build_json_precision_expr,
     build_null_expr,
     build_ordinal_expr,
     build_timestamp_expr,
@@ -512,6 +516,131 @@ def test_build_date_parse_expr_end_to_end_membership_elem_field() -> None:
 
 
 # ---------------------------------------------------------------------------
+# derived: decimal — end-to-end (value-rendering-elections Phase 5)
+# ---------------------------------------------------------------------------
+
+
+def test_build_decimal_expr_end_to_end_rounds_to_declared_scale() -> None:
+    """decimal over a DOUBLE grain-surface source rounds to the declared
+    (precision, scale) — byte-identical to the shared decimal authority."""
+    col = ColumnDecl(
+        name="amount",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "prop__amount", "as": [4, 3]})
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr = build_decimal_expr(col, tbl)
+
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("prop__amount" DOUBLE)')
+    conn.execute('INSERT INTO "_grain" VALUES (?)', [1.2345])
+    row = conn.execute(f'SELECT {expr} FROM "_grain"').fetchone()
+    conn.close()
+
+    assert row is not None
+    assert str(row[0]) == "1.235"
+
+
+def test_build_decimal_expr_end_to_end_null_source_is_null() -> None:
+    """A NULL DOUBLE source renders NULL of the declared decimal type."""
+    col = ColumnDecl(
+        name="amount",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "prop__amount", "as": [4, 3]})
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr = build_decimal_expr(col, tbl)
+
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("prop__amount" DOUBLE)')
+    conn.execute('INSERT INTO "_grain" VALUES (NULL)')
+    row = conn.execute(f'SELECT {expr} FROM "_grain"').fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row[0] is None
+
+
+def test_build_decimal_expr_end_to_end_overflow_raises_naming_table_column() -> None:
+    """A value overflowing the declared (precision, scale) raises, naming the
+    output table and column."""
+    col = ColumnDecl(
+        name="amount",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "prop__amount", "as": [4, 3]})
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr = build_decimal_expr(col, tbl)
+
+    conn = duckdb.connect(":memory:")
+    conn.execute('CREATE TABLE "_grain" ("prop__amount" DOUBLE)')
+    conn.execute('INSERT INTO "_grain" VALUES (?)', [123.0])
+    with pytest.raises(duckdb.Error, match="visits") as exc_info:
+        conn.execute(f'SELECT {expr} FROM "_grain"').fetchone()
+    conn.close()
+    assert "amount" in str(exc_info.value)
+
+
+# ---------------------------------------------------------------------------
+# derived: json_precision — end-to-end (value-rendering-elections Phase 5)
+# ---------------------------------------------------------------------------
+
+
+def test_build_json_precision_expr_end_to_end_rounds_leaf_in_place() -> None:
+    """json_precision rounds a declared top-level leaf in place, preserving
+    every other byte of the payload."""
+    col = ColumnDecl(
+        name="payload",
+        derived=DerivedSpec(
+            json_precision=JsonPrecisionSpec(
+                **{"from": "prop__payload", "leaves": {"discount": 2}}
+            )
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr = build_json_precision_expr(col, tbl)
+
+    conn = duckdb.connect(":memory:")
+    register_render_functions(conn)
+    conn.execute('CREATE TABLE "_grain" ("prop__payload" VARCHAR)')
+    conn.execute(
+        'INSERT INTO "_grain" VALUES (?)', ['{"discount": 1.2345, "sku": "A1"}']
+    )
+    row = conn.execute(f'SELECT {expr} FROM "_grain"').fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row[0] == '{"discount": 1.23, "sku": "A1"}'
+
+
+def test_build_json_precision_expr_end_to_end_null_payload_is_null() -> None:
+    """A NULL payload renders NULL."""
+    col = ColumnDecl(
+        name="payload",
+        derived=DerivedSpec(
+            json_precision=JsonPrecisionSpec(
+                **{"from": "prop__payload", "leaves": {"discount": 2}}
+            )
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr = build_json_precision_expr(col, tbl)
+
+    conn = duckdb.connect(":memory:")
+    register_render_functions(conn)
+    conn.execute('CREATE TABLE "_grain" ("prop__payload" VARCHAR)')
+    conn.execute('INSERT INTO "_grain" VALUES (NULL)')
+    row = conn.execute(f'SELECT {expr} FROM "_grain"').fetchone()
+    conn.close()
+
+    assert row is not None
+    assert row[0] is None
+
+
+# ---------------------------------------------------------------------------
 # build_column_expr dispatch
 # ---------------------------------------------------------------------------
 
@@ -521,6 +650,39 @@ def test_dispatch_from() -> None:
     col = ColumnDecl(name="id", **{"from": "record_id"})
     expr, joins = build_column_expr(col, None)
     assert '"_grain"."record_id" AS "id"' == expr
+    assert joins == []
+
+
+def test_dispatch_derived_decimal() -> None:
+    """build_column_expr dispatches derived: decimal through build_decimal_expr."""
+    col = ColumnDecl(
+        name="amount",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "prop__amount", "as": [4, 3]})
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr, joins = build_column_expr(col, None, table_decl=tbl)
+    assert 'AS "amount"' in expr
+    assert '"_grain"."prop__amount"' in expr
+    assert joins == []
+
+
+def test_dispatch_derived_json_precision() -> None:
+    """build_column_expr dispatches derived: json_precision through
+    build_json_precision_expr."""
+    col = ColumnDecl(
+        name="payload",
+        derived=DerivedSpec(
+            json_precision=JsonPrecisionSpec(
+                **{"from": "prop__payload", "leaves": {"discount": 2}}
+            )
+        ),
+    )
+    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
+    expr, joins = build_column_expr(col, None, table_decl=tbl)
+    assert 'AS "payload"' in expr
+    assert "forge_json_precision" in expr
     assert joins == []
 
 
