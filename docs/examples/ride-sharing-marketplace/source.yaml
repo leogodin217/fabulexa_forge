@@ -130,8 +130,8 @@ source:
         prop__dest_zone: dest_zone_id
       # prop__date_of_birth is a plain upstream-minted date string (verified
       # %Y-%m-%d, no exceptions) — declared, not sniffed.
-      date_parse:
-        prop__date_of_birth: "%Y-%m-%d"
+      render:
+        prop__date_of_birth: {date_parse: "%Y-%m-%d"}
     - name: driver
       kind: actor
       sub_types: [driver]
@@ -144,8 +144,8 @@ source:
       rename:
         prop__zone: zone_id
         prop__base_zone: base_zone_id
-      date_parse:
-        prop__date_of_birth: "%Y-%m-%d"
+      render:
+        prop__date_of_birth: {date_parse: "%Y-%m-%d"}
     - name: zone
       kind: entity
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,

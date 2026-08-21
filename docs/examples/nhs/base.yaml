@@ -39,13 +39,18 @@
 # Timestamps: no `rebase:` block here, so the effective anchor is whatever the
 # sidecar carries. This bundle HAS a `runtime` anchor (2023-01-01T00:00 UTC), so
 # the framework LIFECYCLE columns (`created_sim_time`, `deactivated_at`) land as
-# wallclock TIMESTAMP. Domain `prop__` columns are never anchored — the
-# sim-time-valued ones (booking.requested_at / opening_at) stay raw BIGINT ns.
-# Add a `rebase:` block (see source.yaml) only to override that origin/zone.
+# wallclock TIMESTAMP. A domain `prop__` column is anchored only when a render
+# election declares it an instant (see below); undeclared ones pass through
+# verbatim. Add a `rebase:` block (see source.yaml) only to override origin/zone.
 #
 #   ELECTED  patient.prop__birth_date is a plain upstream-minted date string
 #            (verified %Y-%m-%d, 15,060/15,060, no exceptions) — declared via
 #            `date_parse` and reinterpreted as a real DATE.
+#   ELECTED  booking.prop__requested_at / prop__opening_at hold sim-instants
+#            as raw ns BIGINTs (temporal_class: constant, no instant marker in
+#            the sidecar). The `instant` election declares what the value IS
+#            and renders both as wallclock TIMESTAMP through the anchor —
+#            matching the dimensional config's `derived: {timestamp: ...}`.
 
 mode: base
 
@@ -59,5 +64,12 @@ base:
     - {table: records__tick_decision, name: clinical_event}
   render:
     - table: records__actor
-      date_parse:
-        prop__birth_date: "%Y-%m-%d"
+      render:
+        prop__birth_date: {date_parse: "%Y-%m-%d"}
+    - table: records__booking
+      render:
+        prop__requested_at: {instant: timestamp}
+        prop__opening_at: {instant: timestamp}
+    - table: records__diary
+      render:
+        prop__next_opening: {instant: timestamp}

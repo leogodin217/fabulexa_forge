@@ -63,8 +63,13 @@ mode: base
 base:
   render:
     - table: records__actor
-      date_parse:
-        prop__birth_date: "%Y-%m-%d"
+      render:
+        prop__birth_date: {date_parse: "%Y-%m-%d"}
+    # context.discount_pct rounded in place to 4dp (raw float64 noise
+    # otherwise); every other payload byte verbatim.
+    - table: records__tick_decision
+      render:
+        prop__context: {json_precision: {discount_pct: 4}}
 
 # Uniform shorthand: every declared sub-type of the kind elects the surface.
 keys:

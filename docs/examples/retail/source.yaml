@@ -147,8 +147,8 @@ source:
         prop__store: storefront_id
       # prop__birth_date is a plain upstream-minted date string (verified
       # %Y-%m-%d, 11,468/11,468, no NULLs) — declared, not sniffed.
-      date_parse:
-        prop__birth_date: "%Y-%m-%d"
+      render:
+        prop__birth_date: {date_parse: "%Y-%m-%d"}
     - name: ops_agent
       kind: actor
       sub_types: [ops]
@@ -180,6 +180,11 @@ source:
       rename:
         prop__journey_instance: session_id
         prop__decision_type: action_type
+      # context.discount_pct carries raw float64 noise (up to 19 fraction
+      # digits, e.g. 0.027498429157793724) — no real instrumentation records
+      # that. Rounded in place to 4dp; every other payload byte verbatim.
+      render:
+        prop__context: {json_precision: {discount_pct: 4}}
     - name: action_product
       membership: {kind: tick_decision, property: bindings}
       columns: [joined_sim_time, left_sim_time, elem__role_name,

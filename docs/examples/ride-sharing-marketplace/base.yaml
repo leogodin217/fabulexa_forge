@@ -52,5 +52,5 @@ mode: base
 base:
   render:
     - table: records__actor
-      date_parse:
-        prop__date_of_birth: "%Y-%m-%d"
+      render:
+        prop__date_of_birth: {date_parse: "%Y-%m-%d"}

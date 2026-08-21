@@ -54,17 +54,21 @@
 #            (company_fk / user_fk) rather than a single ambiguous column —
 #            exactly one of the pair is populated per row, discriminated by
 #            journey_type.
-#   OPAQUE   tick_decision.prop__context is a genuine, well-formed value
-#            (declared `tuple[tuple[str, scalar], ...]`, repr-encoded per
-#            the base-format contract's round-trip convention) — confirmed
-#            via consult(composite) NOT to be engine noise. But this
-#            package's config grammar has no derived-column mode that
-#            parses a repr'd string, so it is carried through opaque as
-#            `context` (VARCHAR) on fact_usage_event rather than fabricated
-#            into a numeric column the grammar cannot actually produce.
-#            Key names inside it (e.g. `volume`) are this scenario's own
-#            authoring, not a base-format vocabulary — do not assume they
-#            generalize to other emits.
+#   ELECTED  tick_decision.prop__context is a genuine, well-formed JSON
+#            payload — confirmed via consult(composite) NOT to be engine
+#            noise. It stays a single `context` column on fact_usage_event
+#            (not fabricated into numeric columns), but its `volume` leaf
+#            carries raw float64 noise (16 fraction digits), so
+#            `derived: {json_precision: ...}` rounds it in place to 2dp;
+#            every other payload byte is preserved verbatim. Key names
+#            inside it (e.g. `volume`) are this scenario's own authoring,
+#            not a base-format vocabulary — do not assume they generalize.
+#   KNOWN RESIDUAL  entity.prop__engagement_score (a 1-100 score) carries
+#            the same float64 noise, but dim_account is `scd: type2` and the
+#            SCD-2 wide reconstruction refuses `derived: decimal`
+#            (Scd2ColumnModeSupported — see architecture/dimensional.md
+#            § SCD-2 wide reconstruction). The score ships raw DOUBLE here;
+#            the source config's state table DOES elect it DECIMAL(5,2).
 #   RENAMED  actor.company -> dim_company, entity.company_hub -> dim_account,
 #            entity.sku -> dim_sku, actor.user -> dim_user, tick_decision ->
 #            fact_usage_event: output names are the domain's, never the
@@ -269,7 +273,10 @@ dimensional:
             member_field: entity
             where: {elem__role_name: sku}
         - name: context
-          from: prop__context
+          derived:
+            json_precision:
+              from: prop__context
+              leaves: {volume: 2}
 
     # --- fact_lifecycle_interval: state-occupancy timeline (journey_instance) ---
     - name: fact_lifecycle_interval

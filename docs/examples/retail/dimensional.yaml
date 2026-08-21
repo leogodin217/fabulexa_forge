@@ -298,7 +298,9 @@ dimensional:
             via: reference
             path: [prop__journey_instance, prop__actor]
         - {name: action_type, from: prop__decision_type}
-        - {name: context, from: prop__context}
+        # context.discount_pct rounded in place to 4dp (raw float64 noise
+        # otherwise — up to 19 fraction digits); other payload bytes verbatim
+        - {name: context, derived: {json_precision: {from: prop__context, leaves: {discount_pct: 4}}}}
         # wallclock event time, so this fact is point-in-time joinable against the
         # SCD-2 dims' valid_from/valid_to windows
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}

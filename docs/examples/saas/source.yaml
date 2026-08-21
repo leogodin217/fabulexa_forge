@@ -109,6 +109,11 @@ source:
           deactivated_at,
           last_mutation_sim_time,
         ]
+      # engagement_score is a 1-100 score carrying raw float64 noise (15
+      # fraction digits) in records AND history. DECIMAL(5,2) out; the
+      # elected form also reaches this kind's `versions` audit entries.
+      render:
+        prop__engagement_score: {decimal: [5, 2]}
 
     - name: skus
       kind: entity
@@ -129,6 +134,10 @@ source:
       rename:
         prop__journey_instance: lifecycle_instance_id
         prop__context: context
+      # context.volume carries raw float64 noise (16 fraction digits, e.g.
+      # 65.38160578755163). Rounded in place to 2dp; other bytes verbatim.
+      render:
+        prop__context: {json_precision: {volume: 2}}
 
     - name: usage_event_skus
       membership: {kind: tick_decision, property: bindings}
