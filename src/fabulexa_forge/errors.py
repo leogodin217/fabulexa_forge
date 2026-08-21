@@ -427,6 +427,19 @@ class RenderKeyResolves(ExportError):
     (mode-definitional); any other key is refused the same way."""
 
 
+class ElectionKindConflict(ExportError):
+    """Across the declared tables of one `(kind, property)` membership
+    (junction tables share the membership grain) that emit a source
+    property the event log renders, every table must declare the identical
+    render election — a silent emitting table counts as differing, its
+    column asserting the default raw rendering. Scoped to properties inside
+    some `events` source's audited set; tables differing on a property no
+    log renders are legal. Message names the property, the membership, and
+    the two disagreeing tables — either the "conflicting elections" shape
+    (both elect, differently) or the "declares none" shape (one elects, one
+    is silent)."""
+
+
 class DecimalSourceIsDouble(ExportError):
     """A `decimal` election's source column does not carry a declared DOUBLE
     type — the contract's one floating-point type; integers and VARCHARs

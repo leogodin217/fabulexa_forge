@@ -1,11 +1,15 @@
-"""Tests for the event-log render (`exporters/source/events.py`, Phase 2).
+"""Tests for the event-log render (`exporters/source/events.py`).
 
 `SourceEventSourcePlan` / `SourceEventLogPlan` are hand-constructed directly
-(no plan builder exists yet) against `build_events_test_emit` (a tracked,
+(bypassing the plan builder) against `build_events_test_emit` (a tracked,
 sub-typed `ticket` kind referencing a flat `agent` kind, plus a
 `ticket.watchers` membership table) and `build_windowed_source_test_emit`
 (the windowed visit/order/location/junction fixture, reused for the window
-test).
+test). Every hand-constructed source here leaves `SourceEventSourcePlan.render`
+at its default `()` (uniformly silent), so every `changes` entry stays raw
+codec text — the render-election dispatch at the codec seam (`ElectionKindConflict`,
+elected `changes` text, the export-time guards) is `test_value_election_events.py`'s
+charter, plan-builder-driven end to end.
 """
 
 from __future__ import annotations
@@ -13,7 +17,6 @@ from __future__ import annotations
 import json
 from datetime import date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
 
 import duckdb
 
@@ -30,6 +33,9 @@ from fabulexa_forge.exporters.source.events import (
 from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceWhereEntry
 from fabulexa_forge.reader.emit import open_emit
 
+from ._event_log_helpers import changes_of as _changes
+from ._event_log_helpers import event_log_rows as _rows
+from ._event_log_helpers import row_for as _row_for
 from ._source_fixtures import (
     build_event_log_suppressed_update_test_emit,
     build_event_tie_test_emit,
@@ -39,35 +45,9 @@ from ._source_fixtures import (
     windowed_test_windows,
 )
 
-if TYPE_CHECKING:
-    from fabulexa_forge.reader.emit import Emit
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _rows(emit: "Emit", sql: str) -> list[dict[str, object]]:
-    """Execute sql and zip every row against the event log's fixed columns."""
-    columns = ("id", "item_type", "item_id", "event", "occurred_at", "changes")
-    return [dict(zip(columns, row)) for row in emit.query(sql, ())]
-
-
-def _changes(row: dict[str, object]) -> dict[str, object]:
-    """Parse one row's `changes` VARCHAR cell as JSON."""
-    assert isinstance(row["changes"], str)
-    return cast("dict[str, object]", json.loads(row["changes"]))
-
-
-def _row_for(
-    rows: list[dict[str, object]], item_id: object, event: str
-) -> dict[str, object]:
-    """The sole row matching (item_id, event); asserts exactly one match."""
-    matches = [r for r in rows if r["item_id"] == item_id and r["event"] == event]
-    assert len(matches) == 1, (
-        f"expected exactly one ({item_id}, {event}) row: {matches}"
-    )
-    return matches[0]
 
 
 _RECORD_ID_SURFACE: tuple[tuple[str | None, KeySurface], ...] = (

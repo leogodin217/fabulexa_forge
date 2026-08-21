@@ -39,7 +39,7 @@ Never imports exporters.dimensional.* or exporters.streaming.*.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 if TYPE_CHECKING:
@@ -70,6 +70,7 @@ from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import (
     DateParseSourceColumn,
     DecimalSourceIsDouble,
+    ElectionKindConflict,
     ExportError,
     InstantSourceIsBigint,
     JsonPrecisionSourceIsVarchar,
@@ -2811,6 +2812,264 @@ def _check_item_type_union_safety(
         )
 
 
+# ---------------------------------------------------------------------------
+# ElectionKindConflict: the per-membership render-election agreement gate
+# (doc § Event-log and after-image reach)
+# ---------------------------------------------------------------------------
+
+_DeclaredTable = SourceStateTablePlan | SourceJunctionTablePlan
+"""One resolved declared table, either shape — the `ElectionKindConflict`
+gate's declaring-side type, spelled once to keep its several signatures
+under the line-length limit."""
+
+
+def _table_emitted_properties(
+    table: "_DeclaredTable",
+) -> "tuple[tuple[str, RenderElection | None], ...]":
+    """One declared table's emitted payload properties: bare name -> its
+    table-level elected form, or None when the table is silent on it (the
+    default raw rendering). State table: `prop__<p>` columns of
+    `table.columns`; junction table: `elem__<f>` columns (the junction
+    render's own name strip — an `elem__<f>` election reaches the log's
+    bare field `<f>`).
+
+    Args:
+        table: One resolved declared table.
+
+    Returns:
+        (bare name, elected form or None) pairs, `table.columns` order.
+    """
+    prefix = _PROP_PREFIX if isinstance(table, SourceStateTablePlan) else _ELEM_PREFIX
+    render_map = dict(table.render)
+    return tuple(
+        (src[len(prefix) :], render_map.get(src))
+        for src, _out in table.columns
+        if src.startswith(prefix)
+    )
+
+
+def _table_membership_key(
+    table: "_DeclaredTable",
+) -> "tuple[str, str | None]":
+    """One declared table's `(kind, property)` membership — the same grain
+    an events source audits (`SourceEventSourcePlan.kind` / `.property`):
+    `(kind, None)` for a state table, `(owner_kind, property)` for a
+    junction table.
+
+    Args:
+        table: One resolved declared table.
+
+    Returns:
+        The membership key.
+    """
+    if isinstance(table, SourceStateTablePlan):
+        return (table.kind, None)
+    return (table.owner_kind, table.property)
+
+
+def _membership_label(kind: str, property_name: "str | None") -> str:
+    """A `(kind, property)` membership's message label: `kind` for a records
+    membership, `kind.property` for a membership-table membership — the
+    same `.` composition the item-type default and population labels use.
+
+    Args:
+        kind: The membership's kind.
+        property_name: The membership's property, or None for a records
+            membership.
+
+    Returns:
+        The message label.
+    """
+    if property_name is None:
+        return kind
+    return f"{kind}.{property_name}"
+
+
+def _log_rendered_properties(
+    sources: "tuple[SourceEventSourcePlan, ...]",
+) -> "dict[tuple[str, str | None], frozenset[str]]":
+    """Every `(kind, property)` membership the log renders, to its audited
+    bare property/field names — the union across every source sharing that
+    membership (disjoint-population sources of one kind may audit differing
+    property sets via `where`).
+
+    Args:
+        sources: The event log's resolved sources.
+
+    Returns:
+        Membership key -> audited bare names.
+    """
+    result: dict[tuple[str, str | None], set[str]] = {}
+    for source in sources:
+        key = (source.kind, source.property)
+        bucket = result.setdefault(key, set())
+        bucket.update(bare for bare, _output in source.audited_properties)
+    return {key: frozenset(names) for key, names in result.items()}
+
+
+def _group_tables_by_membership(
+    tables: "tuple[_DeclaredTable, ...]",
+) -> "dict[tuple[str, str | None], list[_DeclaredTable]]":
+    """Group the plan's declared tables by `(kind, property)` membership,
+    declaration order within each group.
+
+    Args:
+        tables: The plan's resolved declared tables, declaration order.
+
+    Returns:
+        Membership key -> its declared tables.
+    """
+    grouped: "dict[tuple[str, str | None], list[_DeclaredTable]]" = {}
+    for table in tables:
+        grouped.setdefault(_table_membership_key(table), []).append(table)
+    return grouped
+
+
+def _raise_election_kind_conflict(
+    bare: str,
+    kind_label: str,
+    first: "tuple[str, RenderElection | None]",
+    second: "tuple[str, RenderElection | None]",
+) -> None:
+    """Raise ElectionKindConflict for one property's disagreeing pair —
+    either the silent-table message shape (one side elects, one is silent)
+    or the differing-elections shape (both elect, differently).
+
+    Args:
+        bare: The bare property/field name (the message's '{column}').
+        kind_label: The membership's message label (`_membership_label`).
+        first: (table name, election or None) — the first declared table
+            emitting the property, table declaration order.
+        second: (table name, election or None) — a later table disagreeing
+            with `first`.
+
+    Raises:
+        ElectionKindConflict: Always.
+    """
+    first_name, first_election = first
+    second_name, second_election = second
+    if first_election is None or second_election is None:
+        electing, silent = (
+            (first, second) if first_election is not None else (second, first)
+        )
+        raise ElectionKindConflict(
+            f"property '{bare}' of kind '{kind_label}': '{electing[0]}'"
+            f" declares a render election and '{silent[0]}' declares none"
+        )
+    raise ElectionKindConflict(
+        f"property '{bare}' of kind '{kind_label}': '{first_name}' and"
+        f" '{second_name}' declare conflicting render elections"
+    )
+
+
+def _resolve_membership_property_election(
+    entries: "list[tuple[str, RenderElection | None]]",
+    bare: str,
+    kind_label: str,
+) -> "RenderElection | None":
+    """Agreement-gate one `(kind, property)` membership's one audited
+    property across every declared table that emits it: unanimous election
+    wins; uniform silence is legal (raw codec text); any disagreement —
+    differing elections, or an electing table beside a silent one — raises
+    `ElectionKindConflict`.
+
+    Args:
+        entries: (table name, election or None) pairs, declaration order —
+            every declared table that projects this bare property.
+        bare: The bare property/field name.
+        kind_label: The membership's message label.
+
+    Returns:
+        The unanimous election, or None under uniform silence.
+
+    Raises:
+        ElectionKindConflict: The declared tables disagree.
+    """
+    first = entries[0]
+    for candidate in entries[1:]:
+        if candidate[1] != first[1]:
+            _raise_election_kind_conflict(bare, kind_label, first, candidate)
+    return first[1]
+
+
+def _resolve_election_kind_conflicts(
+    tables: "tuple[_DeclaredTable, ...]",
+    sources: "tuple[SourceEventSourcePlan, ...]",
+) -> "dict[tuple[str, str | None], dict[str, RenderElection]]":
+    """Enforce `ElectionKindConflict` and resolve the agreed per-property
+    election every log-rendered property carries (doc § Event-log and
+    after-image reach). Scoped to properties inside some events source's
+    audited set — a property no source audits, or a `(kind, property)`
+    membership with no declared table, never reaches the gate.
+
+    Args:
+        tables: The plan's resolved declared tables, declaration order.
+        sources: The event log's resolved sources.
+
+    Returns:
+        Per `(kind, property)` membership, the agreed bare-property ->
+        election map (a uniformly-silent property carries no entry — raw
+        codec text needs none).
+
+    Raises:
+        ElectionKindConflict: Two declared tables of one membership
+            disagree on a property the log renders.
+    """
+    log_rendered = _log_rendered_properties(sources)
+    by_membership = _group_tables_by_membership(tables)
+    resolved: dict[tuple[str, str | None], dict[str, RenderElection]] = {}
+    for membership, rendered_names in log_rendered.items():
+        if not rendered_names:
+            continue
+        per_property: dict[str, list[tuple[str, RenderElection | None]]] = {}
+        for table in by_membership.get(membership, []):
+            for bare, election in _table_emitted_properties(table):
+                if bare in rendered_names:
+                    per_property.setdefault(bare, []).append((table.name, election))
+        kind_label = _membership_label(*membership)
+        agreed: dict[str, RenderElection] = {}
+        for bare, entries in per_property.items():
+            election = _resolve_membership_property_election(entries, bare, kind_label)
+            if election is not None:
+                agreed[bare] = election
+        if agreed:
+            resolved[membership] = agreed
+    return resolved
+
+
+def _source_render_entries(
+    source: SourceEventSourcePlan,
+    election_map: "dict[tuple[str, str | None], dict[str, RenderElection]]",
+) -> "tuple[tuple[str, RenderElection], ...]":
+    """One source's resolved log-site render entries (§
+    `SourceEventSourcePlan.render`): its membership's agreed election per
+    audited bare name, excluding any bare name carrying a change_edge — a
+    reference-valued property's `changes` entry always renders through
+    identity translation (`_edge_translation_join`), never a value election.
+
+    Args:
+        source: The resolved events source (change_edges already resolved).
+        election_map: `_resolve_election_kind_conflicts`'s per-membership
+            agreed elections.
+
+    Returns:
+        (bare name, elected form) pairs, `audited_properties` order.
+    """
+    agreed = election_map.get((source.kind, source.property))
+    if not agreed:
+        return ()
+    edged_bare = {
+        edge.source_column[len(_PROP_PREFIX) :]
+        for edge in source.change_edges
+        if edge.source_column.startswith(_PROP_PREFIX)
+    }
+    return tuple(
+        (bare, agreed[bare])
+        for bare, _output in source.audited_properties
+        if bare in agreed and bare not in edged_bare
+    )
+
+
 def _resolve_log_item_id_type(
     sidecar: "Sidecar", sources: tuple[SourceEventSourcePlan, ...]
 ) -> str:
@@ -2884,6 +3143,7 @@ def _build_event_log_plan(
     declare_keys: bool,
     notice_sink: "NoticeSink",
     kind_labels: "tuple[tuple[str, str], ...]",
+    tables: "tuple[_DeclaredTable, ...]",
 ) -> SourceEventLogPlan:
     """Resolve the `events` declaration to a `SourceEventLogPlan`.
 
@@ -2898,6 +3158,8 @@ def _build_event_log_plan(
         notice_sink: Receiver for slice-only-column-omitted notices.
         kind_labels: The resolved `source.kind_labels` map (§
             `_resolve_kind_labels`), threaded onto every source.
+        tables: The plan's resolved declared tables (`tables[]`) — the
+            `ElectionKindConflict` agreement gate's declaring side.
 
     Returns:
         The resolved event-log plan.
@@ -2921,6 +3183,9 @@ def _build_event_log_plan(
         ElectionUnionUnsafe: An item-type or change-edge gate fails.
         RenderKeyResolves: `decl.render` names a key other than
             `event_sim_time`.
+        ElectionKindConflict: Two declared tables of one `(kind, property)`
+            membership disagree on a render election for a property this
+            log renders (doc § Event-log and after-image reach).
     """
     known_kinds_set = frozenset(known_kinds)
     sources = tuple(
@@ -2939,6 +3204,11 @@ def _build_event_log_plan(
     _check_events_source_overlap(sources)
     _check_item_type_distinctness(sources, known_kinds, kind_labels)
     _check_item_type_union_safety(election, sources)
+    election_map = _resolve_election_kind_conflicts(tables, sources)
+    sources = tuple(
+        replace(source, render=_source_render_entries(source, election_map))
+        for source in sources
+    )
     item_id_type = _resolve_log_item_id_type(sidecar, sources)
     return SourceEventLogPlan(
         name=decl.name,
@@ -3424,6 +3694,9 @@ def build_source_plan(
         ElectionMixedIdentity, ElectionUnionUnsafe: the identity gates
             per declared table; the edge gates per referencing column and
             per event-log item-type.
+        ElectionKindConflict: two declared tables of one `(kind, property)`
+            membership disagree on a render election for a property the
+            event log renders.
         SourceHistoryTrackedRequired: the sidecar predates per-column
             history_tracked flags.
         TemporalClassUnavailableError: a consulted flagged column declares
@@ -3483,6 +3756,7 @@ def build_source_plan(
             declare_keys,
             notices,
             kind_labels,
+            tables_t,
         )
 
     _check_output_collisions(tables_t, events_plan)

@@ -2,7 +2,7 @@ sprint: value-rendering-elections
 parent_branch: prepare_for_classroom_env
 baseline_sha: 806e3795d3e97c4b91fa8174453b822c4ad536ac
 started: 2026-08-21
-current_phase: 4
+current_phase: 5
 capabilities:
   - export-config-grammar: [unified-render-map, date-parse-absorption, base-columns-rename, derived-one-of-members, stream-render-map]
   - shared-sql-rendering: [decimal-authority, json-precision-authority, render-function-registration]
@@ -74,7 +74,7 @@ phases:
           - "tests/exporters/base/test_value_election_plan.py"
           - "tests/exporters/base/test_value_election_renders.py"
   4:
-    status: pending
+    status: complete
     name: "Event-log reach"
     demo: "docs/sprints/value-rendering-elections/demos/phase_4_event_log_reach.py"
     steps:

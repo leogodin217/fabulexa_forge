@@ -16,13 +16,18 @@ plan-builder derives by calling those same functions.
 Layer-direction invariant: imports the reader (through the derivations
 layer), the derivations layer's two event folds, the mode-neutral election
 module (`build_identity_translation_sql`), `fabulexa_forge.anchor`,
-`fabulexa_forge._sql`, the sibling `source.plan` module (`SourceEdgeSurface`
-/ `SourceWhereEntry`, TYPE_CHECKING only), the sibling `source.columns`
-module (`build_kind_label_expr` — the one labeling authority, also the
-junction render's call site), `exporters.populations` (`Population`,
-TYPE_CHECKING only), config.models (`KeySurface`, `TemporalRender`,
-TYPE_CHECKING only), and stdlib. Never imports `exporters.dimensional.*` or
-`exporters.streaming.*`.
+`fabulexa_forge._sql` (including the three typed-election rendering
+authorities and `date_parse_denoted_type` — the codec-seam dispatch, § doc
+Event-log and after-image reach), the sibling `source.plan` module
+(`SourceEdgeSurface` / `SourceWhereEntry`, TYPE_CHECKING only), the sibling
+`source.columns` module (`build_kind_label_expr` — the one labeling
+authority, also the junction render's call site), `exporters.populations`
+(`Population`, TYPE_CHECKING only), config.models (`KeySurface`,
+`TemporalRender`, `RenderElection`, TYPE_CHECKING only, except the four
+typed-election classes — `DateParseElection` / `InstantElection` /
+`DecimalElection` / `JsonPrecisionElection` — imported at runtime for the
+election-form dispatch), and stdlib. Never imports `exporters.dimensional.*`
+or `exporters.streaming.*`.
 One exception to "imports at module top": `_narrow_fold_by_spine_sql` imports
 the sibling `source.renders` module's `build_selection_spine_sql` locally, at
 call time — `renders.py` imports runtime constants from `plan.py`, which
@@ -39,21 +44,55 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
-    from fabulexa_forge.config.models import KeySurface
+    from fabulexa_forge.config.models import KeySurface, RenderElection
     from fabulexa_forge.exporters.populations import Population
     from fabulexa_forge.exporters.query_spec import TableKeys
     from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceWhereEntry
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import _sql_literal
+from fabulexa_forge._sql import (
+    _sql_literal,
+    date_parse_denoted_type,
+    render_date_parse_expr,
+    render_decimal_expr,
+    render_json_precision_expr,
+)
 from fabulexa_forge.anchor import render_anchor_temporal_expr
+from fabulexa_forge.config.models import (
+    DateParseElection,
+    DecimalElection,
+    InstantElection,
+    JsonPrecisionElection,
+)
 from fabulexa_forge.derivations.membership_events import build_membership_events_sql
 from fabulexa_forge.derivations.row_state_events import build_row_state_events_sql
 from fabulexa_forge.exporters.election import build_identity_translation_sql
 from fabulexa_forge.exporters.source.columns import build_kind_label_expr
 
 _PROP_PREFIX = "prop__"
+
+_ELECTION_SOURCE_TYPE: "dict[type, str]" = {
+    DecimalElection: "DOUBLE",
+    InstantElection: "BIGINT",
+    JsonPrecisionElection: "VARCHAR",
+    DateParseElection: "VARCHAR",
+}
+"""Every typed election's fixed required source type — mode-definitional:
+the table-render source-type gates (`DecimalSourceIsDouble` /
+`InstantSourceIsBigint` / `JsonPrecisionSourceIsVarchar` /
+`DateParseSourceColumn`) already enforce it at plan time on every declared
+table carrying the election, so the log site derives the CAST-back type
+from the election's own class rather than re-reading the sidecar."""
+
+_INSTANT_DENOTED_TYPE: "dict[TemporalRender, str]" = {
+    "date": "DATE",
+    "time": "TIME",
+    "timestamp": "TIMESTAMP",
+    "timestamptz": "TIMESTAMPTZ",
+}
+"""An `instant` election's denoted DuckDB type per elected rendering — the
+same vocabulary `render_anchor_temporal_expr` dispatches on."""
 
 
 @dataclass(frozen=True)
@@ -118,6 +157,16 @@ class SourceEventSourcePlan:
     detected at the decl. Narrows the fold's records/intervals
     (`_build_records_arm_sql` / `_build_membership_arm_sql`) and feeds the
     plan-time selection-aware overlap gate's typed-value comparison."""
+    render: "tuple[tuple[str, RenderElection], ...]" = ()
+    """The source's resolved log-site render entries (doc § Event-log and
+    after-image reach): bare audited name -> the `(kind, property)`
+    membership's agreed election, resolved by the plan builder's
+    `ElectionKindConflict` agreement gate over every declared table emitting
+    that property. Excludes any bare name carrying a `change_edges` entry —
+    a reference-valued property's `changes` entry always renders through
+    identity translation, never a value election. Empty when the membership
+    carries no agreed election (every declared table silent, or none
+    declared) — every entry renders raw codec text."""
 
 
 @dataclass(frozen=True)
@@ -230,18 +279,29 @@ def build_changes_object_expr(
     return "'{' || " + " || ',' || ".join(fragments) + " || '}'"
 
 
-def _build_diff_changes_expr(entries: "tuple[tuple[str, str, str], ...]") -> str:
-    """The update-diff `changes` expression: only entries whose old value
-    differs from its new value, in the given order.
+def _build_diff_changes_expr(
+    entries: "tuple[tuple[str, str, str, str, str], ...]",
+) -> str:
+    """The update-diff `changes` expression: only entries whose raw old
+    value differs from its raw new value, in the given order.
 
-    The caller-side diff logic `build_changes_object_expr`'s docstring
-    disclaims: per entry, a CASE evaluates to the fragment or SQL NULL when
-    old and new are not distinct, and the surviving fragments are filtered
-    (`list_filter`) and comma-joined (`array_to_string`).
+    Changeset membership is a raw-value fact (doc § Event-log and
+    after-image reach): the comparison always runs over the raw, unrendered
+    after-image pair, never the elected text — a presentation election can
+    never suppress or renumber a row (two raw values rounding to one
+    decimal text still emit the `u` row, an equal-looking pair). The
+    surviving fragment renders the *output* pair, which carries the
+    property's elected text when one applies. Per entry, a CASE evaluates
+    to the fragment or SQL NULL when the raw pair is not distinct, and the
+    surviving fragments are filtered (`list_filter`) and comma-joined
+    (`array_to_string`).
 
     Args:
-        entries: (JSON key, old-value SQL expr, new-value SQL expr)
-            triples, output order.
+        entries: (JSON key, raw old-value SQL expr, raw new-value SQL expr,
+            output old-value SQL expr, output new-value SQL expr) tuples,
+            output order. The raw pair drives the comparison; the output
+            pair drives the fragment (identical to the raw pair for an
+            unelected property).
 
     Returns:
         A VARCHAR-typed SQL expression; `'{}'` when every entry is
@@ -250,9 +310,9 @@ def _build_diff_changes_expr(entries: "tuple[tuple[str, str, str], ...]") -> str
     if not entries:
         return "'{}'"
     cases = [
-        f"CASE WHEN ({old_expr}) IS NOT DISTINCT FROM ({new_expr}) THEN NULL"
-        f" ELSE {_json_pair_fragment_sql(key, old_expr, new_expr)} END"
-        for key, old_expr, new_expr in entries
+        f"CASE WHEN ({raw_old_expr}) IS NOT DISTINCT FROM ({raw_new_expr}) THEN NULL"
+        f" ELSE {_json_pair_fragment_sql(key, out_old_expr, out_new_expr)} END"
+        for key, raw_old_expr, raw_new_expr, out_old_expr, out_new_expr in entries
     ]
     array_sql = "[" + ", ".join(cases) + "]"
     filtered_sql = f"list_filter({array_sql}, x -> x IS NOT NULL)"
@@ -395,6 +455,225 @@ def _narrow_fold_by_spine_sql(
 
 
 # ---------------------------------------------------------------------------
+# Rendering elections at the codec seam (doc § Event-log and after-image
+# reach): CAST the fold's codec VARCHAR after-image back to its declared
+# source type and apply the same rendering authorities every table render
+# composes, producing pinned in-JSON temporal text for the four elected
+# types (writers.md § Temporal text forms) or the decimal / json_precision
+# text form directly.
+# ---------------------------------------------------------------------------
+
+
+_BARE_EXPR_ALIAS = "_render_bare"
+
+
+def _strip_output_alias(aliased_sql: str) -> str:
+    """Strip the `AS "<_BARE_EXPR_ALIAS>"` suffix a shared-authority
+    SELECT-list fragment (`render_anchor_temporal_expr` /
+    `render_date_parse_expr`) appends. Every call site here embeds the
+    expression inside the larger `changes` JSON-assembly string, never as
+    its own SELECT-list entry, so the alias those two functions always
+    append must come back off; calling them with the fixed sentinel
+    `_BARE_EXPR_ALIAS` as `out_name` makes the strip exact and mechanical.
+
+    Args:
+        aliased_sql: The aliased fragment, built with `_BARE_EXPR_ALIAS` as
+            its `out_name`.
+
+    Returns:
+        The bare expression, alias removed.
+    """
+    suffix = f' AS "{_BARE_EXPR_ALIAS}"'
+    assert aliased_sql.endswith(suffix), f"unexpected render shape: {aliased_sql!r}"
+    return aliased_sql[: -len(suffix)]
+
+
+def _pinned_date_text_sql(date_expr: str) -> str:
+    """The pinned CSV DATE text form, in SQL (writers.md § Temporal text
+    forms): `YYYY-MM-DD`.
+
+    Args:
+        date_expr: A DATE-typed SQL expression.
+
+    Returns:
+        A VARCHAR SQL expression.
+    """
+    return f"strftime({date_expr}, '%Y-%m-%d')"
+
+
+def _pinned_time_text_sql(time_expr: str) -> str:
+    """The pinned CSV TIME text form, in SQL: `HH:MM:SS.ffffff` — fixed
+    six-digit microsecond field.
+
+    DuckDB's `strftime` has no TIME overload (and casting TIME to VARCHAR
+    trims trailing zeros, matching no pinned form), so the value is added to
+    a fixed epoch DATE — a pure syntactic step, TIME carries no calendar
+    component — to reach a TIMESTAMP `strftime` does support.
+
+    Args:
+        time_expr: A TIME-typed SQL expression.
+
+    Returns:
+        A VARCHAR SQL expression.
+    """
+    return f"strftime(DATE '2000-01-01' + ({time_expr}), '%H:%M:%S.%f')"
+
+
+def _pinned_naive_timestamp_text_sql(ts_expr: str) -> str:
+    """The writer's default naive-TIMESTAMP serialization, pinned for the
+    in-JSON site (doc § Event-log and after-image reach): `YYYY-MM-DD
+    HH:MM:SS.ffffff`, the six-digit microsecond field omitted entirely when
+    the instant's microseconds are zero.
+
+    Args:
+        ts_expr: A naive TIMESTAMP-typed SQL expression.
+
+    Returns:
+        A parenthesized VARCHAR SQL expression.
+    """
+    with_us = f"strftime({ts_expr}, '%Y-%m-%d %H:%M:%S.%f')"
+    without_us = f"strftime({ts_expr}, '%Y-%m-%d %H:%M:%S')"
+    return (
+        f"(CASE WHEN date_part('microsecond', {ts_expr}) % 1000000 = 0"
+        f" THEN {without_us} ELSE {with_us} END)"
+    )
+
+
+def _pinned_timestamptz_offset_sql(instant_expr: str, zone: str) -> str:
+    """One absolute instant's UTC offset in `zone`, as `±HH:MM` SQL text —
+    computed session-TimeZone-independently via `date_diff` against the
+    instant's own UTC and `zone`-local naive projections (DuckDB's `%z`
+    strftime directive follows the *session* TimeZone and omits `:00`,
+    neither of which the pinned form allows).
+
+    Args:
+        instant_expr: A TIMESTAMPTZ-typed SQL expression.
+        zone: The anchor's IANA zone key.
+
+    Returns:
+        A parenthesized VARCHAR SQL expression.
+    """
+    zone_literal = _sql_literal(zone)
+    seconds_expr = (
+        f"date_diff('second', timezone('UTC', {instant_expr}),"
+        f" timezone({zone_literal}, {instant_expr}))"
+    )
+    sign_expr = f"CASE WHEN ({seconds_expr}) < 0 THEN '-' ELSE '+' END"
+    abs_expr = f"abs({seconds_expr})"
+    hours_expr = f"lpad(CAST(({abs_expr}) // 3600 AS VARCHAR), 2, '0')"
+    minutes_expr = f"lpad(CAST((({abs_expr}) % 3600) // 60 AS VARCHAR), 2, '0')"
+    return f"({sign_expr} || {hours_expr} || ':' || {minutes_expr})"
+
+
+def _pinned_timestamptz_text_sql(instant_expr: str, zone: str) -> str:
+    """The pinned CSV TIMESTAMPTZ text form, in SQL: `YYYY-MM-DD
+    HH:MM:SS.ffffff±HH:MM` — the local wall clock in `zone`, fixed
+    six-digit microsecond field, that instant's own UTC offset.
+
+    Args:
+        instant_expr: A TIMESTAMPTZ-typed SQL expression.
+        zone: The anchor's IANA zone key.
+
+    Returns:
+        A parenthesized VARCHAR SQL expression.
+    """
+    zone_literal = _sql_literal(zone)
+    wall_clock = (
+        f"strftime(timezone({zone_literal}, {instant_expr}), '%Y-%m-%d %H:%M:%S.%f')"
+    )
+    return f"({wall_clock} || {_pinned_timestamptz_offset_sql(instant_expr, zone)})"
+
+
+def _pinned_temporal_text_sql(
+    typed_expr: str, denoted_type: str, zone: "str | None"
+) -> str:
+    """Dispatch one already-typed temporal expression to its pinned text
+    form (doc § Event-log and after-image reach), by the type an `instant`
+    election or a `date_parse` format denotes.
+
+    Args:
+        typed_expr: A DATE / TIME / TIMESTAMP / TIMESTAMPTZ-typed SQL
+            expression.
+        denoted_type: Which of the four `typed_expr` carries.
+        zone: The anchor's IANA zone key — required (and used) only for
+            `'TIMESTAMPTZ'`; `date_parse` never denotes it.
+
+    Returns:
+        A VARCHAR SQL expression, the pinned text form.
+    """
+    if denoted_type == "DATE":
+        return _pinned_date_text_sql(typed_expr)
+    if denoted_type == "TIME":
+        return _pinned_time_text_sql(typed_expr)
+    if denoted_type == "TIMESTAMPTZ":
+        assert zone is not None, "a TIMESTAMPTZ pin requires the anchor zone"
+        return _pinned_timestamptz_text_sql(typed_expr, zone)
+    return _pinned_naive_timestamp_text_sql(typed_expr)
+
+
+def _render_elected_changes_value_sql(
+    anchor: "EffectiveAnchor",
+    election: "RenderElection",
+    codec_expr: str,
+    column_label: str,
+    table_label: str,
+) -> str:
+    """The elected VARCHAR text for one audited property's codec after-
+    image, at the log's codec seam (doc § Event-log and after-image reach):
+    CASTs the fold's codec VARCHAR back to the election's fixed required
+    source type (`_ELECTION_SOURCE_TYPE`), then applies the same rendering
+    authority every table render composes — so the log's `changes` text is
+    byte-identical to the declaring table's own column. NULL-preserving
+    throughout (every composed authority NULL-preserves).
+
+    Args:
+        anchor: The resolved wallclock anchor (`instant` elections).
+        election: The property's resolved election — uniform across every
+            declared table that emits it (the agreement gate's guarantee).
+        codec_expr: The fold's codec VARCHAR after-image expression (a lag
+            output, or a join/leave field value) — not yet CAST.
+        column_label: The bare property name, for guard attribution.
+        table_label: The log's own output name, for guard attribution — a
+            log can fail loudly on a value no declared table selects.
+
+    Returns:
+        A bare VARCHAR SQL expression (no alias).
+    """
+    typed_expr = f"CAST({codec_expr} AS {_ELECTION_SOURCE_TYPE[type(election)]})"
+    if isinstance(election, DecimalElection):
+        precision, scale = election.decimal
+        decimal_expr = render_decimal_expr(
+            typed_expr, precision, scale, column_label, table_label
+        )
+        return f"CAST({decimal_expr} AS VARCHAR)"
+    if isinstance(election, JsonPrecisionElection):
+        return render_json_precision_expr(
+            typed_expr, election.json_precision, column_label, table_label
+        )
+    if isinstance(election, InstantElection):
+        native_expr = _strip_output_alias(
+            render_anchor_temporal_expr(
+                anchor, typed_expr, _BARE_EXPR_ALIAS, election.instant
+            )
+        )
+        zone = str(anchor.timezone) if election.instant == "timestamptz" else None
+        return _pinned_temporal_text_sql(
+            native_expr, _INSTANT_DENOTED_TYPE[election.instant], zone
+        )
+    assert isinstance(election, DateParseElection), (
+        f"unrecognized RenderElection form for {column_label!r}: {election!r}"
+    )
+    parsed_expr = _strip_output_alias(
+        render_date_parse_expr(
+            typed_expr, election.date_parse, _BARE_EXPR_ALIAS, table_label
+        )
+    )
+    return _pinned_temporal_text_sql(
+        parsed_expr, date_parse_denoted_type(election.date_parse), None
+    )
+
+
+# ---------------------------------------------------------------------------
 # Records-source arm
 # ---------------------------------------------------------------------------
 
@@ -406,6 +685,7 @@ def _build_records_arm_sql(
     source: "SourceEventSourcePlan",
     item_id_type: str,
     render: "TemporalRender",
+    log_name: str,
 ) -> str:
     """One records source's UNION-ALL arm of the event-log render.
 
@@ -424,7 +704,12 @@ def _build_records_arm_sql(
     for create/destroy rows, the differing-only object
     (`_build_diff_changes_expr`) for update rows — an update row touching no
     audited property is dropped, keyed by each pair's resolved `changes`
-    output key. `item_id` joins the source's `item_surface` translation
+    output key. Every audited property's `changes` value is its raw lag
+    pair unless `source.render` carries an entry for it, in which case both
+    the old and new values render through `_render_elected_changes_value_sql`
+    (doc § Event-log and after-image reach) — the diff's own comparison
+    still runs over the raw pair (`_build_diff_changes_expr`), never the
+    elected text. `item_id` joins the source's `item_surface` translation
     relation on the fold's own `record_id` (never the nulled after-image),
     so it is never NULL.
 
@@ -435,6 +720,8 @@ def _build_records_arm_sql(
         source: The resolved records-source unit.
         item_id_type: The log's resolved `item_id` column type.
         render: The log's resolved instant rendering (`log.render`).
+        log_name: The log's output table name, for elected-value guard
+            attribution.
 
     Returns:
         A SELECT producing the arm's row shape (§ `build_event_log_sql`).
@@ -496,12 +783,27 @@ def _build_records_arm_sql(
     lagged_select = ", ".join(['"_valued".*', *lag_selects])
     lagged_sql = f'SELECT {lagged_select} FROM ({valued_sql}) AS "_valued"'
 
-    entries = tuple(
-        (output, f'"_lagged"."_old__{bare}"', f'"_lagged"."_val__{bare}"')
-        for bare, output in source.audited_properties
+    election_by_bare = dict(source.render)
+    entries = []
+    for bare, output in source.audited_properties:
+        raw_old = f'"_lagged"."_old__{bare}"'
+        raw_new = f'"_lagged"."_val__{bare}"'
+        election = election_by_bare.get(bare)
+        if election is None:
+            entries.append((output, raw_old, raw_new, raw_old, raw_new))
+            continue
+        out_old = _render_elected_changes_value_sql(
+            anchor, election, raw_old, bare, log_name
+        )
+        out_new = _render_elected_changes_value_sql(
+            anchor, election, raw_new, bare, log_name
+        )
+        entries.append((output, raw_old, raw_new, out_old, out_new))
+    entries_t = tuple(entries)
+    full_expr = build_changes_object_expr(
+        tuple((key, out_old, out_new) for key, _ro, _rn, out_old, out_new in entries_t)
     )
-    full_expr = build_changes_object_expr(entries)
-    diff_expr = _build_diff_changes_expr(entries)
+    diff_expr = _build_diff_changes_expr(entries_t)
     changes_expr = (
         f'CASE WHEN "_lagged"."op" = \'u\' THEN {diff_expr} ELSE {full_expr} END'
     )
@@ -626,6 +928,7 @@ def _build_membership_arm_sql(
     source: "SourceEventSourcePlan",
     item_id_type: str,
     render: "TemporalRender",
+    log_name: str,
 ) -> str:
     """One membership source's UNION-ALL arm of the event-log render.
 
@@ -640,8 +943,13 @@ def _build_membership_arm_sql(
     `<key>_kind` / `<key>_id`, its resolved `changes` output key; the
     `_kind` half's old and new both render through `build_kind_label_expr`
     (identity fall-through, applied once to the underlying value before the
-    old/new CASE split, which commutes with labeling). `item_id` joins the
-    owner's `item_surface` translation relation on the fold's own
+    old/new CASE split, which commutes with labeling). A scalar field's
+    value renders through `_render_elected_changes_value_sql` the same way,
+    once, when `source.render` carries an entry for it (doc § Event-log and
+    after-image reach) — before the old/new CASE split, which commutes with
+    rendering exactly as it does with labeling; no diff runs here (every
+    row is already one op), so no raw/output split is needed. `item_id`
+    joins the owner's `item_surface` translation relation on the fold's own
     (already-owner-VARCHAR) `record_id`.
 
     Args:
@@ -651,6 +959,8 @@ def _build_membership_arm_sql(
         source: The resolved membership-source unit.
         item_id_type: The log's resolved `item_id` column type.
         render: The log's resolved instant rendering (`log.render`).
+        log_name: The log's output table name, for elected-value guard
+            attribution.
 
     Returns:
         A SELECT producing the arm's row shape (§ `build_event_log_sql`).
@@ -679,12 +989,21 @@ def _build_membership_arm_sql(
     )
     joins = [item_join]
 
+    election_by_bare = dict(source.render)
     entries: list[tuple[str, str, str]] = []
     for field, output in source.audited_properties:
         cols = _membership_field_columns(sidecar, table_name, field)
         if len(cols) == 1:
             raw_expr = f'"_fold"."{cols[0]}"'
-            entries.append((output, *_join_leave_old_new(raw_expr)))
+            election = election_by_bare.get(field)
+            value_expr = (
+                raw_expr
+                if election is None
+                else _render_elected_changes_value_sql(
+                    anchor, election, raw_expr, field, log_name
+                )
+            )
+            entries.append((output, *_join_leave_old_new(value_expr)))
             continue
 
         kind_col, id_col = cols
@@ -757,13 +1076,22 @@ def build_event_log_sql(
     resolved output key (sidecar column-declaration order — rename
     relabels, never reorders), values the folds' CAST-AS-VARCHAR
     after-image strings verbatim or null, assembled via
-    `build_changes_object_expr`. Reference-valued entries and membership
-    member fields translate through `build_identity_translation_sql` per
-    `change_edges` (fan-out-free, applied around the lag — order
-    irrelevant, both agree); a member reference field's pair expands in
-    place to its `<key>_kind` / `<key>_id` entry pair, the `_kind` half's
-    old and new values each rendered through `build_kind_label_expr`
-    (identity fall-through). `item_id` joins the source's `item_surface`
+    `build_changes_object_expr`. A property carrying a `source.render`
+    entry (`ElectionKindConflict`'s agreed election, doc § Event-log and
+    after-image reach) renders both its old and new values through
+    `_render_elected_changes_value_sql` instead — the elected text
+    byte-identical to the declaring table's own column — while the update
+    diff's own comparison (`_build_diff_changes_expr`) always runs over the
+    raw, unrendered pair: changeset membership is a raw-value fact, never
+    suppressed or renumbered by a presentation election. Reference-valued
+    entries and membership member fields translate through
+    `build_identity_translation_sql` per `change_edges` (fan-out-free,
+    applied around the lag — order irrelevant, both agree; mutually
+    exclusive with a value election at one property) instead of a render
+    election; a member reference field's pair expands in place to its
+    `<key>_kind` / `<key>_id` entry pair, the `_kind` half's old and new
+    values each rendered through `build_kind_label_expr` (identity
+    fall-through). `item_id` joins the source's `item_surface`
     translation relation (destroy rows included — never the nulled
     after-image; the owner's identity for a membership source), CAST to
     `log.item_id_type` when non-VARCHAR. `occurred_at` renders `log.render`'s
@@ -805,11 +1133,11 @@ def build_event_log_sql(
     """
     arms = [
         _build_membership_arm_sql(
-            sidecar, fork_path, anchor, source, log.item_id_type, log.render
+            sidecar, fork_path, anchor, source, log.item_id_type, log.render, log.name
         )
         if source.property is not None
         else _build_records_arm_sql(
-            sidecar, fork_path, anchor, source, log.item_id_type, log.render
+            sidecar, fork_path, anchor, source, log.item_id_type, log.render, log.name
         )
         for source in log.sources
     ]
