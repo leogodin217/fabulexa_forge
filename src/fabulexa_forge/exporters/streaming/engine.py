@@ -8,8 +8,13 @@ payload-independent (change scope = the kind's full property set, projection
 canonical key whose source-identity component is the declared stream name.
 Also resolves the message-key election (`exporters.election`) and renders the
 elected key and after-image identity through it (design doc § Message-key
-election). Layer-direction invariant: imports derivations, config, reader,
-anchor, the mode-neutral election module, and errors — never writers or CLI.
+election). A declared stream's numeric `render` map (`decimal` /
+`json_precision`) applies at the codec seam — the post-fold SELECT
+`_wrap_stream_render_sql` composes ahead of the after-image assembly,
+through the same `fabulexa_forge._sql` rendering authorities the table modes
+compose (design doc § Streaming attach). Layer-direction invariant: imports
+derivations, config, reader, anchor, `fabulexa_forge._sql`, the mode-neutral
+election module, and errors — never writers or CLI.
 """
 
 from __future__ import annotations
@@ -17,8 +22,14 @@ from __future__ import annotations
 import heapq
 from typing import TYPE_CHECKING, Iterator, Literal, Sequence, cast
 
+from fabulexa_forge._sql import render_decimal_expr, render_json_precision_expr
 from fabulexa_forge.anchor import render_ts
-from fabulexa_forge.config.models import KindStream, MembershipStream
+from fabulexa_forge.config.models import (
+    DecimalElection,
+    JsonPrecisionElection,
+    KindStream,
+    MembershipStream,
+)
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.derivations.membership_events import (
     build_membership_events_sql,
@@ -33,7 +44,12 @@ from fabulexa_forge.derivations.row_state_events import (
 from fabulexa_forge.derivations.row_state_events import (
     fold_row_column_names as record_fold_row_column_names,
 )
-from fabulexa_forge.errors import ExportError
+from fabulexa_forge.errors import (
+    DecimalSourceIsDouble,
+    ExportError,
+    JsonPrecisionSourceIsVarchar,
+    RenderKeyResolves,
+)
 from fabulexa_forge.exporters.election import (
     _presentation_key_sql,
     _record_index_sql,
@@ -55,6 +71,8 @@ from fabulexa_forge.exporters.streaming.types import StreamEvent
 from fabulexa_forge.reader.errors import TableNotFoundError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import KeySurface, StreamConfig
     from fabulexa_forge.exporters.election import Election
@@ -104,6 +122,137 @@ def _check_stream_properties_slice_only(
             )
 
 
+#: Per numeric-only streaming election kind: the required declared source
+#: type and the error class its gate raises — streaming's own addressing of
+#: the decimal / json_precision source-type gates (no instant election
+#: reaches streaming; design doc § Streaming attach).
+_STREAM_RENDER_SOURCE_GATES: dict[str, tuple[str, type[ExportError], str]] = {
+    "decimal": (
+        "DOUBLE",
+        DecimalSourceIsDouble,
+        "decimal rendering requires a DOUBLE source",
+    ),
+    "json_precision": (
+        "VARCHAR",
+        JsonPrecisionSourceIsVarchar,
+        "json_precision requires a VARCHAR JSON payload source",
+    ),
+}
+
+
+def _verify_stream_render_source_type(
+    stream_name: str,
+    key: str,
+    column_name: str,
+    election: "DecimalElection | JsonPrecisionElection",
+    col_types: dict[str, str],
+) -> None:
+    """Enforce one stream render entry's source-type gate.
+
+    Args:
+        stream_name: The declaring stream's name, for the error.
+        key: The render-map key (bare property or element-schema field name).
+        column_name: The resolved after-image column (`prop__<key>` /
+            `elem__<key>`) whose declared type is checked.
+        election: The elected form.
+        col_types: The addressed table's column name -> declared DuckDB type.
+
+    Raises:
+        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: `column_name`'s
+            declared type fails the election's source-type gate.
+    """
+    form = "decimal" if isinstance(election, DecimalElection) else "json_precision"
+    expected_type, error_cls, reason = _STREAM_RENDER_SOURCE_GATES[form]
+    sql_type = col_types.get(column_name)
+    if sql_type is None or sql_type.upper() != expected_type:
+        got = sql_type if sql_type is not None else "no declared type"
+        raise error_cls(
+            f"render key '{key}' on stream '{stream_name}': {reason} (got {got})"
+        )
+
+
+def _verify_stream_render_key_in_projection(
+    stream_name: str, key: str, projected: "frozenset[str]", noun: str
+) -> None:
+    """Enforce RenderKeyResolves' streaming domain: a render key names a
+    member of the stream's own projection.
+
+    Args:
+        stream_name: The declaring stream's name.
+        key: The render-map key (bare property or element-schema field name).
+        projected: The stream's declared projection (`properties` /
+            `fields`), as a set.
+        noun: 'property' or 'field', for the message.
+
+    Raises:
+        RenderKeyResolves: `key` is not a member of `projected`.
+    """
+    if key not in projected:
+        raise RenderKeyResolves(
+            f"stream '{stream_name}': render key '{key}' does not name a"
+            f" declared {noun} of the stream's projection"
+        )
+
+
+def _validate_kind_stream_render(
+    stream: "KindStream", col_types: dict[str, str]
+) -> None:
+    """Run the streaming render-map business rules for one kind-shaped stream.
+
+    Args:
+        stream: The kind-shaped stream declaration.
+        col_types: records__<kind>'s column name -> declared DuckDB type.
+
+    Raises:
+        RenderKeyResolves: A render key is not a member of `stream.properties`.
+        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: The election's
+            source-type gate fails.
+    """
+    if not stream.render:
+        return
+    properties = frozenset(stream.properties)
+    for key, election in stream.render.items():
+        _verify_stream_render_key_in_projection(
+            stream.name, key, properties, "property"
+        )
+        _verify_stream_render_source_type(
+            stream.name, key, f"prop__{key}", election, col_types
+        )
+
+
+def _validate_membership_stream_render(
+    stream: "MembershipStream", col_types: dict[str, str], col_names: "set[str]"
+) -> None:
+    """Run the streaming render-map business rules for one membership stream.
+
+    Args:
+        stream: The membership-shaped stream declaration.
+        col_types: The membership table's column name -> declared DuckDB type.
+        col_names: The membership table's column names.
+
+    Raises:
+        RenderKeyResolves: A render key is not a member of `stream.fields`,
+            or names a reference field (outside the typed-election domain —
+            reference identity is key election's surface).
+        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: The election's
+            source-type gate fails.
+    """
+    if not stream.render:
+        return
+    fields = frozenset(stream.fields)
+    for key, election in stream.render.items():
+        _verify_stream_render_key_in_projection(stream.name, key, fields, "field")
+        if f"member__{key}__kind" in col_names:
+            raise RenderKeyResolves(
+                f"stream '{stream.name}': render key '{key}' names a"
+                " reference field; typed elections require a scalar"
+                " elem__ column"
+            )
+        _verify_stream_render_source_type(
+            stream.name, key, f"elem__{key}", election, col_types
+        )
+
+
 def _validate_kind_stream(sidecar: "Sidecar", stream: "KindStream") -> None:
     """Run StreamKindResolvable through StreamPropertySliceOnly for one stream.
 
@@ -115,6 +264,10 @@ def _validate_kind_stream(sidecar: "Sidecar", stream: "KindStream") -> None:
         ExportError: StreamKindResolvable, StreamSubTypesRequireSubtyping,
             StreamSubTypesDeclared, StreamPropertyResolvable, or
             StreamPropertySliceOnly fails. Message leads with the stream name.
+        RenderKeyResolves: A `render` key is not a member of
+            `stream.properties`.
+        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: A `render`
+            entry's source-type gate fails.
         TemporalClassUnavailableError: Propagated from the slice_only check.
     """
     kind = stream.kind
@@ -154,6 +307,8 @@ def _validate_kind_stream(sidecar: "Sidecar", stream: "KindStream") -> None:
             )
 
     _check_stream_properties_slice_only(sidecar, stream.name, kind, stream.properties)
+    col_types = {c.name: c.type for c in cols}
+    _validate_kind_stream_render(stream, col_types)
 
 
 def _validate_membership_stream(sidecar: "Sidecar", stream: "MembershipStream") -> None:
@@ -166,6 +321,10 @@ def _validate_membership_stream(sidecar: "Sidecar", stream: "MembershipStream") 
     Raises:
         ExportError: MembershipResolvable or MembershipFieldResolvable fails.
             Message leads with the stream name.
+        RenderKeyResolves: A `render` key is not a member of `stream.fields`,
+            or names a reference field.
+        DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: A `render`
+            entry's source-type gate fails.
     """
     kind = stream.membership.kind
     property_name = stream.membership.property
@@ -178,14 +337,17 @@ def _validate_membership_stream(sidecar: "Sidecar", stream: "MembershipStream") 
             f" has no {table_name} table"
         ) from None
 
+    col_names = {c.name for c in cols}
     if stream.fields:
-        col_names = {c.name for c in cols}
         for field in stream.fields:
             if not field_resolves(col_names, field):
                 raise ExportError(
                     f"stream '{stream.name}': field '{field}'"
                     " has no elem__/member__ column"
                 )
+
+    col_types = {c.name: c.type for c in cols}
+    _validate_membership_stream_render(stream, col_types, col_names)
 
 
 def _resolve_kind_stream_surface(
@@ -798,6 +960,61 @@ def _rows_to_keyed(
     return keyed
 
 
+def _wrap_stream_render_sql(
+    fold_sql: str,
+    col_names: "Sequence[str]",
+    render: "Mapping[str, DecimalElection | JsonPrecisionElection] | None",
+    prefix: str,
+    stream_name: str,
+) -> str:
+    """Wrap a fold's SQL with the stream's numeric render elections, applied
+    at the codec seam (design doc § Streaming attach): the post-fold SELECT
+    that assembles after-images, upstream of `_build_after_image` /
+    `_build_membership_after_image`. An elected column's codec-VARCHAR value
+    renders through the shared decimal/json_precision authorities in place;
+    every other column passes through verbatim. `render` empty/None ->
+    `fold_sql` unchanged (byte-identical to today).
+
+    Args:
+        fold_sql: The fold's own SELECT (row-state-events or
+            membership-events); its after-image columns are codec VARCHAR.
+        col_names: The fold row's column names, in emission order (the fixed
+            4-column prefix, then the after-image columns).
+        render: The stream's resolved render map (bare name -> election), or
+            None/empty.
+        prefix: The after-image column prefix a render key addresses
+            (`prop__` for a kind stream, `elem__` for a membership stream).
+        stream_name: The declaring stream's name, for guard attribution.
+
+    Returns:
+        The wrapping SELECT, or `fold_sql` unchanged when `render` is empty.
+    """
+    if not render:
+        return fold_sql
+    alias = "_render"
+    select_parts: list[str] = []
+    for name in col_names:
+        qualified = f'"{alias}"."{name}"'
+        bare = name[len(prefix) :] if name.startswith(prefix) else None
+        election = render.get(bare) if bare is not None else None
+        if election is None:
+            select_parts.append(f'{qualified} AS "{name}"')
+        elif isinstance(election, DecimalElection):
+            precision, scale = election.decimal
+            double_expr = f"CAST({qualified} AS DOUBLE)"
+            decimal_expr = render_decimal_expr(
+                double_expr, precision, scale, name, stream_name
+            )
+            select_parts.append(f'CAST({decimal_expr} AS VARCHAR) AS "{name}"')
+        else:
+            json_expr = render_json_precision_expr(
+                qualified, election.json_precision, name, stream_name
+            )
+            select_parts.append(f'{json_expr} AS "{name}"')
+    select_list = ", ".join(select_parts)
+    return f'SELECT {select_list} FROM ({fold_sql}) AS "{alias}"'
+
+
 def _build_after_image(
     row: tuple[object, ...],
     col_names: list[str],
@@ -900,8 +1117,12 @@ def _iter_kind_streams_inner(
         properties = frozenset(stream.properties)
         change_scope = _kind_property_names(sidecar, kind)
 
+        col_names = record_fold_row_column_names(sidecar, kind, properties)
         sql = build_row_state_events_sql(
             sidecar, fork_path, kind, properties, change_scope=change_scope
+        )
+        sql = _wrap_stream_render_sql(
+            sql, col_names, stream.render, "prop__", stream.name
         )
         rows = emit.query(sql, ())
 
@@ -909,9 +1130,7 @@ def _iter_kind_streams_inner(
             rows = _filter_rows_by_types(rows, stream.sub_types, subtype_indexes[kind])
 
         stream_rows.append(_rows_to_keyed(rows, stream.name))
-        col_names_by_stream[stream.name] = record_fold_row_column_names(
-            sidecar, kind, properties
-        )
+        col_names_by_stream[stream.name] = col_names
         kind_by_stream[stream.name] = kind
         reference_targets_by_stream[stream.name] = kind_reference_targets(
             sidecar, kind, stream.properties, known_kinds
@@ -1025,15 +1244,19 @@ def _iter_membership_streams_inner(
         owner_kind = stream.membership.kind
         property_name = stream.membership.property
 
+        col_names = membership_fold_row_column_names(
+            sidecar, owner_kind, property_name, stream.fields
+        )
         sql = build_membership_events_sql(
             sidecar, fork_path, owner_kind, property_name, stream.fields
+        )
+        sql = _wrap_stream_render_sql(
+            sql, col_names, stream.render, "elem__", stream.name
         )
         rows = emit.query(sql, ())
 
         stream_rows.append(_rows_to_keyed(rows, stream.name))
-        col_names_by_stream[stream.name] = membership_fold_row_column_names(
-            sidecar, owner_kind, property_name, stream.fields
-        )
+        col_names_by_stream[stream.name] = col_names
         owner_kind_by_stream[stream.name] = owner_kind
         property_by_stream[stream.name] = property_name
         reference_fields_by_stream[stream.name] = membership_reference_fields(

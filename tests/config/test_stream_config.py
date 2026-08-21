@@ -14,6 +14,8 @@ from fabulexa_forge.config.models import (
     ClockConfig,
     DebeziumConfig,
     DebeziumSourceIdentity,
+    DecimalElection,
+    JsonPrecisionElection,
     KafkaConfig,
     KindStream,
     MembershipStream,
@@ -21,6 +23,16 @@ from fabulexa_forge.config.models import (
     StreamConfig,
 )
 from fabulexa_forge.errors import ConfigError
+
+#: The three unified-map temporal forms — the bare structural-instant
+#: shorthand, `date_parse`, and `instant` — every one unrepresentable on a
+#: stream's `render` map (`StreamRenderElection` excludes them; design doc §
+#: Streaming attach).
+_TEMPORAL_RENDER_FORMS: list[object] = [
+    "date",
+    {"date_parse": "%Y-%m-%d"},
+    {"instant": "date"},
+]
 
 # ---------------------------------------------------------------------------
 # KindStream
@@ -105,6 +117,48 @@ def test_kind_stream_unknown_field_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# KindStream.render
+# ---------------------------------------------------------------------------
+
+
+def test_kind_stream_render_absent_is_none() -> None:
+    """Omitting `render` -> None (default rendering)."""
+    ks = KindStream.model_validate(_make_kind_stream())
+    assert ks.render is None
+
+
+def test_kind_stream_render_decimal_parses() -> None:
+    """A `decimal` election, keyed by a bare property name, parses."""
+    ks = KindStream.model_validate(
+        _make_kind_stream(render={"status": {"decimal": [6, 3]}})
+    )
+    assert ks.render == {"status": DecimalElection(decimal=(6, 3))}
+
+
+def test_kind_stream_render_json_precision_parses() -> None:
+    """A `json_precision` election, keyed by a bare property name, parses."""
+    ks = KindStream.model_validate(
+        _make_kind_stream(render={"status": {"json_precision": {"x": 2}}})
+    )
+    assert ks.render == {"status": JsonPrecisionElection(json_precision={"x": 2})}
+
+
+def test_kind_stream_render_empty_map_rejected() -> None:
+    """`render: {}` (present but empty) is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(render={}))
+
+
+@pytest.mark.parametrize("temporal_form", _TEMPORAL_RENDER_FORMS)
+def test_kind_stream_render_temporal_form_rejected(temporal_form: object) -> None:
+    """No temporal form (bare literal shorthand, date_parse, instant) is
+    representable on a stream's render map — streaming's temporal
+    exclusion."""
+    with pytest.raises(ValidationError):
+        KindStream.model_validate(_make_kind_stream(render={"status": temporal_form}))
+
+
+# ---------------------------------------------------------------------------
 # MembershipStream
 # ---------------------------------------------------------------------------
 
@@ -166,6 +220,49 @@ def test_membership_stream_unknown_field_raises() -> None:
     """An unknown field on MembershipStream raises (extra='forbid')."""
     with pytest.raises(ValidationError):
         MembershipStream.model_validate(_make_membership_stream(extra="bad"))
+
+
+# ---------------------------------------------------------------------------
+# MembershipStream.render
+# ---------------------------------------------------------------------------
+
+
+def test_membership_stream_render_absent_is_none() -> None:
+    """Omitting `render` -> None (default rendering)."""
+    ms = MembershipStream.model_validate(_make_membership_stream())
+    assert ms.render is None
+
+
+def test_membership_stream_render_decimal_parses() -> None:
+    """A `decimal` election, keyed by a bare field name, parses."""
+    ms = MembershipStream.model_validate(
+        _make_membership_stream(render={"priority": {"decimal": [6, 3]}})
+    )
+    assert ms.render == {"priority": DecimalElection(decimal=(6, 3))}
+
+
+def test_membership_stream_render_json_precision_parses() -> None:
+    """A `json_precision` election, keyed by a bare field name, parses."""
+    ms = MembershipStream.model_validate(
+        _make_membership_stream(render={"priority": {"json_precision": {"x": 2}}})
+    )
+    assert ms.render == {"priority": JsonPrecisionElection(json_precision={"x": 2})}
+
+
+def test_membership_stream_render_empty_map_rejected() -> None:
+    """`render: {}` (present but empty) is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        MembershipStream.model_validate(_make_membership_stream(render={}))
+
+
+@pytest.mark.parametrize("temporal_form", _TEMPORAL_RENDER_FORMS)
+def test_membership_stream_render_temporal_form_rejected(temporal_form: object) -> None:
+    """No temporal form is representable on a stream's render map, either
+    (same union exclusion as KindStream)."""
+    with pytest.raises(ValidationError):
+        MembershipStream.model_validate(
+            _make_membership_stream(render={"priority": temporal_form})
+        )
 
 
 # ---------------------------------------------------------------------------

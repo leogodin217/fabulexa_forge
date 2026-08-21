@@ -424,7 +424,11 @@ class RenderKeyResolves(ExportError):
     junction; the member pair columns are outside the domain) — a typed
     election naming a structural column is refused, so no rendering ever has
     two spellings. The event log's one legal key is `event_sim_time`
-    (mode-definitional); any other key is refused the same way."""
+    (mode-definitional); any other key is refused the same way. A stream's
+    `render` key must likewise resolve to a declared property or
+    element-schema field of that stream's own projection (`decimal` /
+    `json_precision` only; a membership stream's reference-field pair is
+    outside the domain)."""
 
 
 class ElectionKindConflict(ExportError):

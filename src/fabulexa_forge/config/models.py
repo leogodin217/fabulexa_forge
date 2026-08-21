@@ -258,6 +258,11 @@ RenderElection = (
 """A render-map value: a bare temporal-election literal (structural instant
 shorthand) or one typed election object. Source identity -> RenderElection."""
 
+StreamRenderElection = DecimalElection | JsonPrecisionElection
+"""A stream `render`-map value: the numeric elections only. Streaming's
+temporal exclusion admits no bare shorthand, `date_parse`, or `instant` form
+(design doc § Streaming attach)."""
+
 
 # ---------------------------------------------------------------------------
 # Predicate values (dimensional row predicates: scalar or non-empty list)
@@ -1773,11 +1778,17 @@ class KindStream(StrictBaseModel):
     default: `[]` must be written to declare a notification feed (identity-only
     payload; the event set is payload-independent). Never `prop__`-prefixed;
     duplicate-free."""
+    render: "dict[str, StreamRenderElection] | None" = None
+    """Per-property numeric rendering election, keyed by bare property name
+    (a member of `properties`). `decimal` / `json_precision` only — no
+    temporal election attaches to streaming (design doc § Streaming attach).
+    Absent = default rendering."""
 
     @model_validator(mode="after")
     def kind_stream_well_formed(self) -> Self:
         """name matches the topic-name rule; properties never prop__-prefixed
-        and duplicate-free; sub_types non-empty and duplicate-free when present.
+        and duplicate-free; sub_types non-empty and duplicate-free when
+        present; render present-but-empty or empty-keyed rejected.
 
         Raises:
             ValueError: Any of the above.
@@ -1793,6 +1804,7 @@ class KindStream(StrictBaseModel):
                     " present (omit the field for the full discriminator domain)"
                 )
             _reject_duplicate_names(self.sub_types, f"stream {self.name!r}: sub_types")
+        _require_render_map_valid(self.render, f"stream {self.name!r}: render")
         return self
 
 
@@ -1809,11 +1821,17 @@ class MembershipStream(StrictBaseModel):
     """Bare element-schema field names — required, no default: `[]` must be
     written to declare an owner-identity-only feed. Never `elem__`/`member__`-
     prefixed; duplicate-free."""
+    render: "dict[str, StreamRenderElection] | None" = None
+    """Per-field numeric rendering election, keyed by bare element-schema
+    field name (a member of `fields`). `decimal` / `json_precision` only; a
+    reference field is outside the domain (reference identity is key
+    election's surface). Absent = default rendering."""
 
     @model_validator(mode="after")
     def membership_stream_well_formed(self) -> Self:
         """name matches the topic-name rule; fields never elem__/member__-
-        prefixed and duplicate-free.
+        prefixed and duplicate-free; render present-but-empty or empty-keyed
+        rejected.
 
         Raises:
             ValueError: Any of the above.
@@ -1822,6 +1840,7 @@ class MembershipStream(StrictBaseModel):
         label = f"stream {self.name!r}: fields"
         _reject_prefixed_names(self.fields, ("elem__", "member__"), label)
         _reject_duplicate_names(self.fields, label)
+        _require_render_map_valid(self.render, f"stream {self.name!r}: render")
         return self
 
 
