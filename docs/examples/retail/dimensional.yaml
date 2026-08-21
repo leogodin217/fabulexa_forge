@@ -26,6 +26,9 @@
 #            projects exactly its own sub-type's columns; NO output table mixes
 #            the two concepts (see SEPARATE below). NOTE `prop__store` is a
 #            CUSTOMER column — projecting it on the ops dim would export all-NULL.
+#            It is not projected on dim_customer either: this run has ONE
+#            storefront host, so the column is one constant reference value on
+#            all 11,468 rows, carrying no information.
 #   SPLIT    entity -> dim_product / dim_storefront. `sub_type_columns.entity`
 #            partitions into product (11 columns) and infrastructure (5), with NO
 #            overlap beyond presentation_id. Measured: 193 products, 1 storefront
@@ -33,7 +36,7 @@
 #            columns are NULL for every infrastructure row and vice versa — and
 #            because only the infrastructure columns (status, error_rate) are
 #            history-tracked, SCD-2 over the conformed table turns a 194-entity
-#            catalogue into 308 rows, 115 of them versions of the single server.
+#            catalogue into 318 rows, 125 of them versions of the single server.
 #            Split, each dim projects exactly its own sub-type's columns.
 #   SEPARATE customer tables carry only customer activity. The single
 #            storefront_ops journey is the monitoring loop, and its rows
@@ -41,14 +44,14 @@
 #            agent is not in dim_customer; the storefront host is not in
 #            dim_product). Each customer-side table now filters to its concept:
 #              - dim_session: filter prop__journey_type = shopping_session
-#                (measured: 31,518 of 31,519 journey_instance rows)
+#                (measured: 31,174 of 31,175 journey_instance rows)
 #              - fact_customer_action: filter prop__decision_type IN the six
-#                shopping actions (measured: 122,669 of 122,670 tick_decisions;
+#                shopping actions (measured: 122,124 of 122,125 tick_decisions;
 #                the excluded row is the ops journey's single `store_bound`
 #                decision — tick_decision carries no journey column, and
 #                decision_type partitions the two journeys exactly)
 #              - fact_action_product: where elem__role_name IN the three product
-#                roles (measured: 92,709 of 92,710 bindings; the excluded row is
+#                roles (measured: 92,357 of 92,358 bindings; the excluded row is
 #                the ops journey's single `store`-role binding to the host)
 #            Every FK now resolves completely — no dangling references remain.
 #   DROPPED  the ops journey's mechanism rows (1 session, 1 store_bound decision,
@@ -57,12 +60,12 @@
 #            exported — dim_storefront's SCD-2 versions. The ops AGENT itself
 #            stays exported (dim_ops_agent), so the actor kind is fully covered.
 #   DROPPED  journey_instance's current_state history (previously exported as a
-#            fact_session_state occupancy fact, 399,872 rows). The state machine
+#            fact_session_state occupancy fact, 397,672 rows). The state machine
 #            is how the simulator generates shopper behaviour, not something a
 #            retail site's instrumentation records: measured, its milestone
 #            entries duplicate the clickstream exactly (browsing = visit,
-#            31,518 = 31,518; checkout = begin_checkout, 2,365 = 2,365; the
-#            1,778 purchased sessions = the 1,778 sessions with a purchase
+#            31,174 = 31,174; checkout = begin_checkout, 2,453 = 2,453; the
+#            1,897 purchased sessions = the 1,897 sessions with a purchase
 #            action), ~60% of its rows are gate/loop decision states
 #            (browse_view_gate, browse_cart_gate, browse_loop, browse_advance),
 #            and the remainder (considering entries, the *_stop abandonment
@@ -79,7 +82,7 @@
 #   SCD-2    dim_storefront: `status` and `error_rate` are the only `tracked`
 #            columns in the entity kind, and they are the incident timeline the
 #            atlas is built around (five storefront degradations across the run,
-#            during which checkout completion collapses). 115 versions of one host.
+#            during which checkout completion collapses). 125 versions of one host.
 #   SCD-2    dim_customer: `total_purchases` is `tracked` — the lifetime order
 #            count genuinely versions per completed order.
 #   DIM      dim_session keeps what genuinely does NOT version about a session
@@ -99,20 +102,30 @@
 #            rows), ordered by elem__pick_index — and dimensional.md § "Membership-
 #            grain facts (multi-pick)" is explicit that a multi-pick role's fact
 #            grain must be the BINDING, not the owner. So the bindings become their
-#            own binding-grain fact, fact_action_product, carrying all 92,709
+#            own binding-grain fact, fact_action_product, carrying all 92,357
 #            product-role bindings; dropping a compared product to force 1:1
 #            would be a fidelity violation.
-#   KEYS     entity/product elects presentation_id. The bundle's record_id for
-#            products mixes two upstream id-assignment schemes (measured: 44
-#            short integer ids, 149 64-char hashes — seeded vs runtime-spawned
-#            creation paths), while the registry declares a uniform SKU_ counter
-#            key space for the product sub-type, unique within the emit. Electing
-#            it keys dim_product on the SKU and renders fact_action_product's
-#            inherited FK in the same surface. actor is NOT elected: its ids are
-#            already uniform (11,468 64-char customers), and the customer_id fact
-#            column built by `lookup` renders prop__actor verbatim (a lookup
-#            projects prop__ columns only), so re-keying dim_customer on CUST_
-#            would break that join. journey_instance carries no registry claim.
+#   KEYS     actor and entity elect presentation_id, whole-kind. Every sub-type
+#            is registry-declared with its own prefixed counter space (CUST_ /
+#            OPS_ / SKU_ / INFRA_ — pairwise union-safe), and the engine
+#            record_ids are the mess the election exists to hide: products mix
+#            two upstream id-assignment schemes (measured: 44 short integer ids,
+#            149 64-char hashes — seeded vs runtime-spawned creation paths), and
+#            customers are 64-char hashes. Each dim keys on its registry code
+#            and every FK renders the same surface; the fact's customer_id is a
+#            two-hop `fk:` (decision -> session -> actor), which the election
+#            re-renders — the `lookup` it replaces projected the raw prop__actor
+#            hash and was the one join that previously blocked electing actor.
+#            journey_instance and tick_decision carry no registry claim and stay
+#            on their verbatim digit-string record ids (session_id, action_id).
+#   HYGIENE  (realism QA) dim_product drops the generator's naming machinery
+#            (identity_naming_style, designator — inputs to how product names
+#            were minted, not catalogue attributes). dim_storefront drops
+#            primary_ip / domain: constant on every row and drawn from reserved
+#            documentation ranges (203.0.113.10 is RFC 5737 TEST-NET,
+#            techmart.example.com an example.com name) — values a cold read
+#            instantly flags as synthetic. The raw `*_ns` sim-epoch twins are
+#            gone: every instant renders once, as a TIMESTAMP via the anchor.
 #   DROPPED  journey_instance.output_roles — engine role bookkeeping, no domain
 #            meaning. journey_instance's slice_only columns (state_entry_time,
 #            complete, bound_roles) are not projectable in any mode; in dimensional
@@ -120,9 +133,9 @@
 #
 # TIME: the sidecar carries a `runtime` anchor (2022-03-01T00:00:00 UTC), so no
 # `rebase:` block is needed. `derived: {timestamp: ...}` renders wallclock
-# TIMESTAMPs through it; `_ns` siblings keep raw sim-time BIGINT for exact
-# arithmetic. The fact carries a wallclock event time, so the point-in-time join
-# against the SCD-2 dims' valid_from/valid_to is actually writable:
+# TIMESTAMPs through it. The fact carries a wallclock event time, so the
+# point-in-time join against the SCD-2 dims' valid_from/valid_to is actually
+# writable:
 #   JOIN dim_customer d ON f.customer_id = d.customer_id
 #                      AND f.occurred_at >= d.valid_from
 #                      AND (f.occurred_at < d.valid_to OR d.valid_to IS NULL)
@@ -139,11 +152,11 @@
 
 mode: dimensional
 
-# entity/product presents as its registry-declared SKU_ presentation key (see the
-# KEYS decision above). Unlisted populations (infrastructure) keep record_id.
+# Every population presents as its registry-declared prefixed presentation key
+# (see the KEYS decision above).
 keys:
-  entity:
-    product: presentation_id
+  actor: presentation_id
+  entity: presentation_id
 
 dimensional:
   tables:
@@ -157,19 +170,16 @@ dimensional:
         filter: {prop__actor_type: customer}
       key: [customer_id, valid_from]
       columns:
-        - {name: customer_id, from: record_id}
-        - {name: customer_number, from: presentation_id}
+        # the elected surface: the CUST_-prefixed registry key (KEYS note)
+        - {name: customer_id, from: presentation_id}
         - {name: acquisition_source, from: prop__acquisition_source}
         - {name: tier, from: prop__tier}
         - {name: segment, from: prop__segment}
         - {name: income, from: prop__income}
         - {name: age, from: prop__age}
         - {name: country, from: prop__country}
-        # the storefront this shopper transacts against. A plain reference column,
-        # not an `fk`: a type2 table refuses `fk` (it is a cross-row read, which
-        # the type2 build does not define). It still joins
-        # dim_storefront.storefront_id.
-        - {name: storefront_id, from: prop__store}
+        # prop__store (the storefront reference) is NOT projected: one host in
+        # this run, so it is a single constant value on every row (SPLIT note).
         - {name: total_purchases, from: prop__total_purchases}
         - {name: first_name, from: prop__first_name}
         - {name: last_name, from: prop__last_name}
@@ -202,8 +212,7 @@ dimensional:
         filter: {prop__actor_type: ops}
       key: [agent_id]
       columns:
-        - {name: agent_id, from: record_id}
-        - {name: agent_code, from: presentation_id}
+        - {name: agent_id, from: presentation_id}
         - {name: component, from: prop__component}
 
     # --- dim: product (the catalogue) — Type-1, every column constant ---
@@ -229,9 +238,7 @@ dimensional:
         - {name: popularity, from: prop__popularity}
         - {name: brand, from: prop__identity_brand}
         - {name: product_line, from: prop__identity_line}
-        - {name: naming_style, from: prop__identity_naming_style}
         - {name: brand_tier, from: prop__identity_tier}
-        - {name: designator, from: prop__designator}
 
     # --- dim: storefront (the serving host) — SCD-2: THE incident timeline ---
     #     status/error_rate are the only tracked columns in the entity kind; the
@@ -245,12 +252,9 @@ dimensional:
         filter: {prop__entity_type: infrastructure}
       key: [storefront_id, valid_from]
       columns:
-        - {name: storefront_id, from: record_id}
-        - {name: storefront_code, from: presentation_id}
+        - {name: storefront_id, from: presentation_id}
         - {name: status, from: prop__status}
         - {name: error_rate, from: prop__error_rate}
-        - {name: primary_ip, from: prop__primary_ip}
-        - {name: domain, from: prop__domain}
         - {name: valid_from, derived: {scd_window: valid_from}}
         - {name: valid_to, derived: {scd_window: valid_to}}
 
@@ -286,15 +290,18 @@ dimensional:
       columns:
         - {name: action_id, from: record_id}
         - {name: session_id, fk: {to: dim_session, via: reference}}
-        # the shopper, reached by hopping the session's actor reference — so the
-        # funnel is attributable to a customer without a two-step join
-        - {name: customer_id, lookup: {to: journey_instance, property: actor}}
+        # the shopper, reached by the two-hop reference path decision -> session
+        # -> actor, rendered in dim_customer's elected CUST_ key (KEYS note)
+        - name: customer_id
+          fk:
+            to: dim_customer
+            via: reference
+            path: [prop__journey_instance, prop__actor]
         - {name: action_type, from: prop__decision_type}
         - {name: context, from: prop__context}
         # wallclock event time, so this fact is point-in-time joinable against the
         # SCD-2 dims' valid_from/valid_to windows
         - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
-        - {name: occurred_at_ns, from: created_sim_time}
 
     # --- fact: action_product (the binding bridge) — grain: one binding,
     #     product roles only (see SEPARATE). Single-pick roles contribute one
@@ -321,6 +328,5 @@ dimensional:
         - {name: binding_role, from: elem__role_name}
         - {name: pick_index, from: elem__pick_index}
         - {name: bound_at, derived: {timestamp: {source: joined_sim_time}}}
-        - {name: bound_at_ns, from: joined_sim_time}
         # left_sim_time is not projected: no product binding is ever released
-        # within the run, so the column is empty for all 92,709 rows.
+        # within the run, so the column is empty for all 92,357 rows.

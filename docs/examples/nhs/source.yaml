@@ -40,11 +40,26 @@
 #     vocabulary column names (journey_type -> pathway_type, decision_type ->
 #     event_type, diary_type -> book_type, pick_index -> position).
 #   - The junctions drop their constant kind columns (entity_kind='entity' on
-#     all 23,505 bindings, actor_kind='actor' on all 12,414 allocations — one
+#     all 23,708 bindings, actor_kind='actor' on all 12,615 allocations — one
 #     simulator word, zero information; role_name / the table's own meaning
 #     already disambiguates) via `columns:`, and rename the surviving member id.
 #   - Per-source `rename:` keeps the `changes` payload keys in step with the
 #     renamed state-table columns.
+#   - prop__entity_code renames per table to the domain code it is (ward_code,
+#     theatre_code, test_code, opcs4_code, medication_code, consultant_code) —
+#     "entity_code" as a column name on six reference tables was the naming
+#     gate's remaining issue, one engine noun surviving the table renames.
+#
+# KEYS (realism QA): the `keys:` block elects each population's presented id.
+#   actor -> presentation_id: the PAT_-prefixed hospital number IS the trust's
+#   patient identifier, so `patient.id` carries it and every patient reference
+#   (pathway_episode.patient_id, booking.patient_id, the allocation junction's
+#   member, audit item_id) renders it. Every other kind -> record_index: compact
+#   BIGINT ids, with each catalogue table keeping its NATURAL code (W001,
+#   OPCS-4, C0001) as an attribute beside the surrogate. The registry's CON_/
+#   WARD_/DIAG_-prefixed presentation counters are dropped from the projections
+#   as a third spelling of the same identity; the engine's 64-hex actor
+#   record_id appears nowhere.
 #
 # `booking` keeps its sidecar name — it is a genuine NHS term (an e-RS booking),
 # not engine vocabulary that happens to read well.
@@ -68,7 +83,7 @@
 # is source's own exclusion mechanism, so a kind is exported only through its own
 # `tables[]` / `events.sources[]` entry.
 #
-#   RESTORED tick_decision -> clinical_event (115,289 rows). An earlier revision
+#   RESTORED tick_decision -> clinical_event (116,450 rows). An earlier revision
 #            omitted it as "engine bookkeeping" from the kind name alone;
 #            `record_roles` declares it a fact kind and its decision_type values
 #            ARE the clinical event stream (ed_arrival, triage, admission,
@@ -86,14 +101,14 @@
 #            surgery_procedure / surgery_theatre), pick-indexed where a
 #            decision binds several (up to three medications). The only place
 #            the base layer records the event -> catalogue linkage; its
-#            left_at is empty for all 23,505 rows because a binding is never
+#            left_at is empty for all 23,708 rows because a binding is never
 #            released once made.
 #   GRAIN    patient keeps the person, not the episode (QA F9). The actor
 #            kind carries per-episode state and pre-assigned routing flags
 #            as single scalars on the patient row, and a one-row-per-patient
 #            table asked to hold per-episode facts asserts contradictions:
 #            procedure_code on all 15,060 patients while
-#            surgical_indicated='no' on 13,290; 1,575 recorded FFT outcomes
+#            surgical_indicated='no' on 13,290; 1,545 recorded FFT outcomes
 #            under fft_invited='no'; an admission_disposition on every
 #            patient while only 1,951 were ever admitted. `columns:`
 #            therefore narrows patient to identity, demographics and the
@@ -110,15 +125,14 @@
 #            is governed elsewhere — and it is a generator input besides.
 #            The appointment_book scheduler columns are KEPT, decided the
 #            other way: per-clinic booking rules (horizon, discipline,
-#            on_overflow, an expected no_show_rate for overbooking
-#            planning) are exactly what a scheduling system stores on a
-#            clinic template, and in a config-shaped operational table
-#            "planning parameter" is the honest reading. The dimensional
-#            star deleted them because a consumer would report the
-#            parameter as a measurement; that argument does not transfer
-#            here. slot_interval stays too — its values are raw sim-time
-#            ns (an engine scale, ~17h/~58h), faithful bundle content, so
-#            nobody should read them as clinic slot lengths.
+#            lead/window bounds) are exactly what a scheduling system
+#            stores on a clinic template, and in a config-shaped
+#            operational table "planning parameter" is the honest reading.
+#            The dimensional star deleted them because a consumer would
+#            report the parameter as a measurement; that argument does not
+#            transfer here. slot_interval stays too — its values are raw
+#            sim-time ns (an engine scale, ~17h/~58h), faithful bundle
+#            content, so nobody should read them as clinic slot lengths.
 #
 # COLUMNS: `sub_types:` narrows the ROWS a table draws but NOT its columns —
 # absent `columns:`, each catalogue table would still carry the whole entity
@@ -140,14 +154,23 @@
 # config defect — worth knowing so they are not mistaken for the sub-type leakage
 # the split above fixes:
 #   - `deactivated_at` is set only where something retires. Measured: 87 of 15,060
-#     patients and 46,045 of 47,184 pathway episodes, and no consultant, catalogue
+#     patients and 46,463 of 47,612 pathway episodes, and no consultant, catalogue
 #     item or appointment book at all.
-#   - `min_lead` and `window` are empty for all 15 appointment books, and
-#     `no_show_rate` is carried only by the 5 outpatient clinics. All three
-#     columns are declared for every diary sub-type; this run simply never assigns
-#     them. That is value-absent, not structurally inapplicable.
-#   - `consultant_allocation.on_preempted_rule` is empty for all 12,414
+#   - `min_lead` and `window` are empty for all 15 appointment books. Both
+#     columns are declared for every diary sub-type; this run simply never
+#     assigns them. That is value-absent, not structurally inapplicable.
+#   - `consultant_allocation.on_preempted_rule` is empty for all 12,615
 #     allocations: preemption is a mechanism this run never exercises.
+#   - `booking.rebooked_from` / `rebooked_to` are empty on all 9,363 bookings:
+#     no booking is rebooked in this run.
+#
+# KNOWN RESIDUAL: booking.requested_at / opening_at carry raw sim-time ns
+# (BIGINT). The sidecar declares them temporal_class: constant with no instant
+# marker, and source's `render:` elections are restricted to instant-carrying
+# STRUCTURAL columns — so unlike the dimensional config (whose per-column
+# `derived: {timestamp: ...}` renders them as wallclock), source has no author
+# surface to reinterpret a payload property as an instant. Tracked as a
+# finding; do not work around it by hand-editing output.
 #
 # Source is the first mode that REQUIRES a resolved wallclock anchor (the log's
 # `occurred_at` is a real TIMESTAMP). No rebase block is given, so the anchor
@@ -155,6 +178,15 @@
 # clock. Uncomment `rebase:` to override origin/zone.
 
 mode: source
+
+keys:
+  actor: presentation_id
+  resource: record_index
+  entity: record_index
+  diary: record_index
+  journey_instance: record_index
+  tick_decision: record_index
+  booking: record_index
 
 source:
   kind_labels:
@@ -166,7 +198,9 @@ source:
   tables:
     - name: patient
       kind: actor
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      # presentation_id is not listed: under the actor presentation election it
+      # IS the id column (absorption).
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__forename, prop__surname, prop__full_name, prop__birth_date,
                 prop__gender_code, prop__ethnic_category, prop__imd_decile,
                 prop__gp_practice_code, prop__primary_condition, prop__comorbidity_count,
@@ -177,9 +211,11 @@ source:
         prop__birth_date: "%Y-%m-%d"
     - name: consultant
       kind: resource
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__capacity, prop__allocated, prop__retiring, prop__entity_code,
                 prop__main_specialty, prop__grade]
+      rename:
+        prop__entity_code: consultant_code
     - name: pathway_episode
       kind: journey_instance
       rename:
@@ -199,33 +235,43 @@ source:
     - name: ward
       kind: entity
       sub_types: [ward]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__ward_type,
                 prop__total_beds, prop__cost_per_bed_day, prop__site_code]
+      rename:
+        prop__entity_code: ward_code
     - name: theatre
       kind: entity
       sub_types: [theatre]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__theatre_specialty,
                 prop__sessions_per_day]
+      rename:
+        prop__entity_code: theatre_code
     - name: diagnostic_test
       kind: entity
       sub_types: [diagnostic]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__test_type,
                 prop__turnaround_days, prop__cost]
+      rename:
+        prop__entity_code: test_code
     - name: procedure
       kind: entity
       sub_types: [procedure]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__specialty_group,
                 prop__hrg_code, prop__tariff, prop__complexity]
+      rename:
+        prop__entity_code: opcs4_code
     - name: medication
       kind: entity
       sub_types: [medication]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__specialty_group,
                 prop__drug_class]
+      rename:
+        prop__entity_code: medication_code
 
     - name: clinical_event
       kind: tick_decision
@@ -253,7 +299,15 @@ source:
     name: audit_log
     sources:
       - kind: actor
+        # the sub-type discriminator is constant ('default') and pure engine
+        ignore: [actor_type]
       - kind: resource
+        # quality_rating: the PARAM governance argument applies to the audit
+        # payload exactly as to the state table; resource_type is the constant
+        # discriminator; queue is the engine's scheduling-queue reference
+        ignore: [quality_rating, resource_type, queue]
+        rename:
+          entity_code: consultant_code
       - kind: journey_instance
         rename:
           actor: patient_id

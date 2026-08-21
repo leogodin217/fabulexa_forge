@@ -1,0 +1,66 @@
+# CorruptConfig — NHS bundle, light realism pass
+# ============================================================
+# `fabulexa-forge corrupt docs/examples/nhs/bundle --config docs/examples/nhs/corrupt.yaml --out <corrupt_dir>`
+#
+# Purpose (realism QA, step 4): the clean emit's zero-mess signature — no NULL
+# outside SCD-2 open intervals, no duplicate rows, no lost events — is itself
+# the strongest synthetic-data tell. This config injects a small, labeled dose
+# of the defects every real trust dataset carries, at rates low enough that the
+# star and the app-database exports stay analyzable. The output is a
+# structurally-conformant base emit; compose it with any export config:
+#
+#   fabulexa-forge corrupt docs/examples/nhs/bundle --config docs/examples/nhs/corrupt.yaml --out /tmp/nhs-corrupt
+#   fabulexa-forge export /tmp/nhs-corrupt docs/examples/nhs/dimensional.yaml /tmp/nhs-messy.duckdb --fmt duckdb
+#
+# `defects.json` in the output dir is the deterministic ground truth naming
+# every injected defect.
+#
+# The dose (rates sized against this emit's populations):
+#   - incomplete demographics, MNAR: ethnicity coding is famously patchy, and
+#     patchiest for emergency arrivals (weighted 3x; ~6% of 15,060 patients);
+#     ~2% of GP practice codes are missing uniformly.
+#   - duplicate bookings: 25 of the 9,363 booking records duplicated verbatim —
+#     the double-keyed clinic entry.
+#   - an interface outage: episode state-change events dropped inside two
+#     one-day windows — the ADT feed was down; pathways jump states there.
+#     (count: 500 is a cap; the two drawn windows hold 324 events, all dropped.)
+
+seed: 12
+
+operations:
+  - kind: null_cells
+    name: mnar_missing_ethnicity_emergency
+    target:
+      table: records__actor
+      columns: [prop__ethnic_category]
+    amount: { rate: 0.06 }
+    placement:
+      kind: correlated
+      column: prop__pathway_type
+      value: emergency
+      weight: 3.0
+
+  - kind: null_cells
+    name: missing_gp_practice_code
+    target:
+      table: records__actor
+      columns: [prop__gp_practice_code]
+    amount: { rate: 0.02 }
+
+  - kind: duplicate_rows
+    name: double_keyed_bookings
+    target:
+      table: records__booking
+    amount: { count: 25 }
+
+  - kind: drop_events
+    name: adt_feed_outage
+    target:
+      table: history
+      where: { kind: journey_instance, property: current_state }
+    amount: { count: 500 }
+    placement:
+      kind: clustered_temporal
+      column: sim_time
+      clusters: 2
+      width: 43200000000000   # 12h half-width: two ~1-day outage windows
