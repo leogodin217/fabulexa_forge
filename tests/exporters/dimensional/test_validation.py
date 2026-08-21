@@ -866,7 +866,9 @@ def test_scd2_derived_source_constant_raises_for_slice_only_source() -> None:
     col = ColumnDecl(
         name="last_seen",
         derived=DerivedSpec(
-            date_parse=DateParseSpec(**{"from": "prop__last_seen", "format": "%Y-%m-%d"})
+            date_parse=DateParseSpec(
+                **{"from": "prop__last_seen", "format": "%Y-%m-%d"}
+            )
         ),
     )
     tbl = _scd2_type2_decl_with(col)
@@ -904,7 +906,9 @@ def test_scd2_derived_source_constant_passes_for_tracked_but_constant_source() -
     col = ColumnDecl(
         name="minted_on",
         derived=DerivedSpec(
-            date_parse=DateParseSpec(**{"from": "prop__minted_on", "format": "%Y-%m-%d"})
+            date_parse=DateParseSpec(
+                **{"from": "prop__minted_on", "format": "%Y-%m-%d"}
+            )
         ),
     )
     tbl = _scd2_type2_decl_with(col)
