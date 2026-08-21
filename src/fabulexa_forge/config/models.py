@@ -122,55 +122,6 @@ def _require_render_map_valid(
             raise ValueError(f"{field_name} keys must be non-empty")
 
 
-def _require_date_parse_map_valid(
-    value: dict[str, str] | None, field_name: str
-) -> None:
-    """A `date_parse` map: when present, non-empty, non-empty keys, valid formats.
-
-    Args:
-        value: The field's value, or None when absent.
-        field_name: The field's dotted name, for the error message.
-
-    Raises:
-        ValueError: `value` is an empty dict, contains an empty key, or a
-            format does not denote a complete date, a complete time, or both
-            (see `validate_date_parse_format`).
-    """
-    if value is None:
-        return
-    if not value:
-        raise ValueError(f"{field_name} must be non-empty when present")
-    for key, fmt in value.items():
-        if not key:
-            raise ValueError(f"{field_name} keys must be non-empty")
-        validate_date_parse_format(fmt, f"{field_name}[{key!r}]")
-
-
-def _require_render_date_parse_disjoint(
-    render: "dict[str, TemporalRender] | None",
-    date_parse: dict[str, str] | None,
-    label: str,
-) -> None:
-    """A column names at most one of `render` / `date_parse`.
-
-    Args:
-        render: The declaration's `render` map, or None.
-        date_parse: The declaration's `date_parse` map, or None.
-        label: The declaring unit's message label.
-
-    Raises:
-        ValueError: A column key appears in both maps.
-    """
-    if render is None or date_parse is None:
-        return
-    overlap = sorted(set(render) & set(date_parse))
-    if overlap:
-        raise ValueError(
-            f"{label}: column(s) {overlap} appear in both 'render' and"
-            " 'date_parse' (a column names at most one)"
-        )
-
-
 # ---------------------------------------------------------------------------
 # Kafka connection config (streaming sink)
 # ---------------------------------------------------------------------------
@@ -1361,34 +1312,30 @@ def _duplicate_tables(entries: "list[RenameEntry] | list[BaseRenderDecl]") -> li
 
 
 class BaseRenderDecl(StrictBaseModel):
-    """Per-table temporal elections for the base mode."""
+    """Per-table rendering elections for the base mode."""
 
     table: str
     """The sidecar `records__<kind>` table this entry targets (the same
     keying as the mode's rename entries; targets disjoint across entries)."""
-    columns: dict[str, TemporalRender] | None = None
-    """Lifecycle-instant elections keyed on pre-default column identities
-    (e.g. `created_sim_time`, `deactivated_at`'s source identity).
-    `last_mutation_sim_time` is outside the key domain — the mode never
-    emits it (business rule)."""
-    date_parse: dict[str, str] | None = None
-    """Declared date parses: `prop__<p>` -> parse format."""
+    render: "dict[str, RenderElection] | None" = None
+    """Per-column election, keyed on pre-default identities (e.g.
+    `created_sim_time`, `prop__error_rate`). A bare temporal literal elects
+    a structural lifecycle column (shorthand); a typed object elects a
+    payload column (`prop__<p>`). `last_mutation_sim_time` is outside the
+    key domain. One column, one election; keys and shape validated at
+    plan time. Absent = default rendering."""
 
     @model_validator(mode="after")
     def entry_well_formed(self) -> Self:
-        """`table` is non-empty; `columns` / `date_parse` maps are
-        well-formed and disjoint per column.
+        """`table` is non-empty; `render` is well-formed.
 
         Raises:
-            ValueError: `table` is empty; `columns` / `date_parse` is
-                present-but-empty, has an empty key, an invalid format, or
-                a column named in both.
+            ValueError: `table` is empty, or `render` is present-but-empty
+                or has an empty key. (Each entry's own shape is carried by
+                its `RenderElection` model.)
         """
         _require_nonempty_str(self.table, "BaseRenderDecl.table")
-        label = f"base.render table {self.table!r}"
-        _require_render_map_valid(self.columns, "BaseRenderDecl.columns")
-        _require_date_parse_map_valid(self.date_parse, "BaseRenderDecl.date_parse")
-        _require_render_date_parse_disjoint(self.columns, self.date_parse, label)
+        _require_render_map_valid(self.render, "BaseRenderDecl.render")
         return self
 
 
@@ -1404,7 +1351,7 @@ class BaseConfig(StrictBaseModel):
     (`record_id`, `presentation_id`, `created_sim_time`, `active`,
     `deactivated_at`, `prop__<p>`). `sub_type` rejected; `table` targets disjoint."""
     render: list[BaseRenderDecl] | None = None
-    """Per-table temporal elections; entries' `table` targets disjoint."""
+    """Per-table rendering elections; entries' `table` targets disjoint."""
     slice_at: int | None = None
     """Inclusive point-in-time horizon (sim-time ns). Absent -> tape's end.
     Mutually exclusive with `incremental` (enforced on ExportConfig)."""

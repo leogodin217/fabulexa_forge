@@ -6,11 +6,12 @@
 # same pre-default column identities.
 #
 # `table` is sidecar identity (`records__<kind>`), same as `rename`.
-# `columns` elects lifecycle-instant renderings (source identities, e.g.
-# `created_sim_time`); `date_parse` declares payload `prop__<p>` parses.
-# Both re-render the projected column in place — output naming still
-# follows base's usual prefix-stripped defaults, unaffected by the
-# election.
+# The per-table `render` map elects both lifecycle-instant renderings
+# (source identities, e.g. `created_sim_time`, keyed to a bare temporal
+# literal) and payload `prop__<p>` parses (keyed to a `date_parse: <fmt>`
+# election) in one unified map. Both re-render the projected column in
+# place — output naming still follows base's usual prefix-stripped
+# defaults, unaffected by the election.
 #
 # Fixture world (recipe emit):
 #   records__patient — created_sim_time (1*DAY for p001, 2*DAY for p002);
@@ -26,7 +27,7 @@ mode: base
 base:
   render:
     - table: records__patient
-      columns:
+      render:
         created_sim_time: date
-      date_parse:
-        prop__dob: "%Y-%m-%d"
+        prop__dob:
+          date_parse: "%Y-%m-%d"

@@ -27,6 +27,7 @@ from _support.notices import discard_notice_sink
 from _support.sidecar_builder import write_emit
 
 from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.config.models import DateParseElection
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.derivations.state_at import (
     build_state_at_end_sql,
@@ -289,7 +290,7 @@ def test_empty_property_set_renders_identity_and_lifecycle_only(
 
 
 # ---------------------------------------------------------------------------
-# `render` / `date_parse`: temporal rendering elections
+# `render`: temporal rendering elections (bare shorthand + `date_parse` form)
 # ---------------------------------------------------------------------------
 
 
@@ -311,7 +312,10 @@ def test_date_parse_on_prop_renders_date_and_nulls_flow_through(
     through as NULL."""
     with _election_emit(tmp_path) as (emit, spec, fork_path):
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        elected_spec = replace(spec, date_parse=(("prop__signup_date", "%Y-%m-%d"),))
+        elected_spec = replace(
+            spec,
+            render=(("prop__signup_date", DateParseElection(date_parse="%Y-%m-%d")),),
+        )
         sql = build_base_render_sql(emit.sidecar, fork_path, elected_spec, anchor, None)
         rows = {r["id"]: r for r in _election_rows(emit, sql)}
     assert rows["p001"]["prop__signup_date"] == date(2024, 1, 15)
@@ -399,7 +403,10 @@ def test_date_parse_time_only_format_renders_time_end_to_end(tmp_path: Path) -> 
     family) denotes and renders TIME through the base map form, end-to-end."""
     with _time_parse_patient_emit(tmp_path) as (emit, spec, fork_path):
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        elected_spec = replace(spec, date_parse=(("prop__meeting_time", "%H:%M"),))
+        elected_spec = replace(
+            spec,
+            render=(("prop__meeting_time", DateParseElection(date_parse="%H:%M")),),
+        )
         sql = build_base_render_sql(emit.sidecar, fork_path, elected_spec, anchor, None)
         rows = [dict(zip(_TIME_PARSE_COLUMN_ORDER, row)) for row in emit.query(sql, ())]
     assert rows[0]["prop__meeting_time"] == time(14, 30)
@@ -412,7 +419,10 @@ def test_date_parse_mismatch_fails_loudly_naming_table_column_value(
     naming the table, source column, and offending value."""
     with _election_emit(tmp_path) as (emit, spec, fork_path):
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        elected_spec = replace(spec, date_parse=(("prop__status", "%Y-%m-%d"),))
+        elected_spec = replace(
+            spec,
+            render=(("prop__status", DateParseElection(date_parse="%Y-%m-%d")),),
+        )
         sql = build_base_render_sql(emit.sidecar, fork_path, elected_spec, anchor, None)
         with pytest.raises(RunDatabaseError) as excinfo:
             emit.query(sql, ())

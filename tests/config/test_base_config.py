@@ -9,7 +9,12 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from fabulexa_forge.config.models import BaseConfig, BaseRenderDecl, ExportConfig
+from fabulexa_forge.config.models import (
+    BaseConfig,
+    BaseRenderDecl,
+    DateParseElection,
+    ExportConfig,
+)
 
 # ---------------------------------------------------------------------------
 # Bare mode: base parses
@@ -143,31 +148,29 @@ def test_base_render_decl_table_empty_rejected() -> None:
 
 
 def test_base_render_decl_columns_parses() -> None:
-    """A well-formed `columns` map parses."""
+    """A well-formed `render` map (bare temporal-literal shorthand) parses."""
     decl = BaseRenderDecl.model_validate(
-        {"table": "records__actor", "columns": {"created_sim_time": "date"}}
+        {"table": "records__actor", "render": {"created_sim_time": "date"}}
     )
-    assert decl.columns == {"created_sim_time": "date"}
+    assert decl.render == {"created_sim_time": "date"}
 
 
 def test_base_render_decl_columns_empty_map_rejected() -> None:
-    """`columns: {}` (present but empty) -> rejected."""
+    """`render: {}` (present but empty) -> rejected."""
     with pytest.raises(ValidationError, match="non-empty"):
-        BaseRenderDecl.model_validate({"table": "records__actor", "columns": {}})
+        BaseRenderDecl.model_validate({"table": "records__actor", "render": {}})
 
 
 def test_base_render_decl_date_parse_parses() -> None:
-    """A well-formed `date_parse` map parses."""
+    """A well-formed `date_parse` election, nested in `render`, parses."""
     decl = BaseRenderDecl.model_validate(
-        {"table": "records__actor", "date_parse": {"prop__dob": "%Y-%m-%d"}}
+        {
+            "table": "records__actor",
+            "render": {"prop__dob": {"date_parse": "%Y-%m-%d"}},
+        }
     )
-    assert decl.date_parse == {"prop__dob": "%Y-%m-%d"}
-
-
-def test_base_render_decl_date_parse_empty_map_rejected() -> None:
-    """`date_parse: {}` (present but empty) -> rejected."""
-    with pytest.raises(ValidationError, match="non-empty"):
-        BaseRenderDecl.model_validate({"table": "records__actor", "date_parse": {}})
+    assert decl.render is not None
+    assert decl.render["prop__dob"] == DateParseElection(date_parse="%Y-%m-%d")
 
 
 def test_base_render_decl_date_parse_datetime_format_parses() -> None:
@@ -176,32 +179,22 @@ def test_base_render_decl_date_parse_datetime_format_parses() -> None:
     decl = BaseRenderDecl.model_validate(
         {
             "table": "records__actor",
-            "date_parse": {"prop__registered_at": "%Y-%m-%d %H:%M:%S"},
+            "render": {"prop__registered_at": {"date_parse": "%Y-%m-%d %H:%M:%S"}},
         }
     )
-    assert decl.date_parse == {"prop__registered_at": "%Y-%m-%d %H:%M:%S"}
+    assert decl.render is not None
+    assert decl.render["prop__registered_at"] == DateParseElection(
+        date_parse="%Y-%m-%d %H:%M:%S"
+    )
 
 
-def test_base_render_decl_date_parse_family_violation_rejected_entry_keyed() -> None:
-    """A `date_parse` entry violating a family pairing rule -> rejected,
-    the error naming the entry-keyed field name."""
-    with pytest.raises(
-        ValidationError, match=r"BaseRenderDecl\.date_parse\['prop__dob'\]"
-    ):
-        BaseRenderDecl.model_validate(
-            {"table": "records__actor", "date_parse": {"prop__dob": "%I:%M"}}
-        )
-
-
-def test_base_render_decl_columns_and_date_parse_overlap_rejected() -> None:
-    """A column named in both `columns` and `date_parse` -> rejected (a
-    column names at most one)."""
-    with pytest.raises(ValidationError, match="both"):
+def test_base_render_decl_date_parse_family_violation_rejected() -> None:
+    """A `date_parse` election violating a family pairing rule -> rejected."""
+    with pytest.raises(ValidationError, match=r"%I and %p must appear together"):
         BaseRenderDecl.model_validate(
             {
                 "table": "records__actor",
-                "columns": {"prop__dob": "date"},
-                "date_parse": {"prop__dob": "%Y-%m-%d"},
+                "render": {"prop__dob": {"date_parse": "%I:%M"}},
             }
         )
 
@@ -216,7 +209,7 @@ def test_base_render_alone_satisfies_at_least_one_field() -> None:
     cfg = BaseConfig.model_validate(
         {
             "render": [
-                {"table": "records__actor", "columns": {"created_sim_time": "date"}}
+                {"table": "records__actor", "render": {"created_sim_time": "date"}}
             ]
         }
     )
@@ -232,11 +225,11 @@ def test_two_render_entries_same_table_rejected() -> None:
                 "render": [
                     {
                         "table": "records__actor",
-                        "columns": {"created_sim_time": "date"},
+                        "render": {"created_sim_time": "date"},
                     },
                     {
                         "table": "records__actor",
-                        "date_parse": {"prop__dob": "%Y-%m-%d"},
+                        "render": {"prop__dob": {"date_parse": "%Y-%m-%d"}},
                     },
                 ]
             }
@@ -248,8 +241,8 @@ def test_two_render_entries_different_tables_valid() -> None:
     cfg = BaseConfig.model_validate(
         {
             "render": [
-                {"table": "records__actor", "columns": {"created_sim_time": "date"}},
-                {"table": "records__patient", "columns": {"created_sim_time": "time"}},
+                {"table": "records__actor", "render": {"created_sim_time": "date"}},
+                {"table": "records__patient", "render": {"created_sim_time": "time"}},
             ]
         }
     )

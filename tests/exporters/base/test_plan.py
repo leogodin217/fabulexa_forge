@@ -18,6 +18,7 @@ from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     BaseConfig,
     BaseRenderDecl,
+    DateParseElection,
     ExcludeDecl,
     RenameEntry,
 )
@@ -958,7 +959,7 @@ def test_render_election_on_lifecycle_instant_resolves_with_anchor() -> None:
     config = BaseConfig(
         render=[
             BaseRenderDecl(
-                table="records__patient", columns={"created_sim_time": "date"}
+                table="records__patient", render={"created_sim_time": "date"}
             )
         ]
     )
@@ -980,7 +981,7 @@ def test_render_election_composes_with_rename_keys_stay_pre_default() -> None:
         ],
         render=[
             BaseRenderDecl(
-                table="records__patient", columns={"created_sim_time": "timestamptz"}
+                table="records__patient", render={"created_sim_time": "timestamptz"}
             )
         ],
     )
@@ -998,7 +999,7 @@ def test_render_key_last_mutation_sim_time_refused() -> None:
     config = BaseConfig(
         render=[
             BaseRenderDecl(
-                table="records__patient", columns={"last_mutation_sim_time": "date"}
+                table="records__patient", render={"last_mutation_sim_time": "date"}
             )
         ]
     )
@@ -1012,7 +1013,7 @@ def test_render_key_not_instant_column_refused() -> None:
     """A render key naming a non-instant column (a prop__ payload) raises
     RenderKeyResolves."""
     config = BaseConfig(
-        render=[BaseRenderDecl(table="records__patient", columns={"prop__age": "date"})]
+        render=[BaseRenderDecl(table="records__patient", render={"prop__age": "date"})]
     )
     with pytest.raises(RenderKeyResolves):
         build_base_plan(
@@ -1026,7 +1027,7 @@ def test_render_key_unresolved_column_refused() -> None:
     config = BaseConfig(
         render=[
             BaseRenderDecl(
-                table="records__patient", columns={"prop__nonexistent": "date"}
+                table="records__patient", render={"prop__nonexistent": "date"}
             )
         ]
     )
@@ -1041,7 +1042,7 @@ def test_render_election_with_no_anchor_refused() -> None:
     TemporalRenderRequiresAnchor, base's anchor is optional."""
     config = BaseConfig(
         render=[
-            BaseRenderDecl(table="records__patient", columns={"deactivated_at": "date"})
+            BaseRenderDecl(table="records__patient", render={"deactivated_at": "date"})
         ]
     )
     with pytest.raises(TemporalRenderRequiresAnchor, match="deactivated_at"):
@@ -1054,7 +1055,7 @@ def test_render_table_not_surviving_raises() -> None:
     config = BaseConfig(
         render=[
             BaseRenderDecl(
-                table="records__nonexistent", columns={"created_sim_time": "date"}
+                table="records__nonexistent", render={"created_sim_time": "date"}
             )
         ]
     )
@@ -1070,13 +1071,16 @@ def test_date_parse_on_varchar_prop_resolves_without_anchor() -> None:
     config = BaseConfig(
         render=[
             BaseRenderDecl(
-                table="records__patient", date_parse={"prop__signup_date": "%Y-%m-%d"}
+                table="records__patient",
+                render={"prop__signup_date": {"date_parse": "%Y-%m-%d"}},
             )
         ]
     )
     plan = build_base_plan(_render_election_sidecar(), config, discard_notice_sink)
     spec = next(t for t in plan.tables if t.kind == "patient")
-    assert spec.date_parse == (("prop__signup_date", "%Y-%m-%d"),)
+    assert spec.render == (
+        ("prop__signup_date", DateParseElection(date_parse="%Y-%m-%d")),
+    )
 
 
 def test_date_parse_on_non_varchar_prop_refused() -> None:
@@ -1084,7 +1088,8 @@ def test_date_parse_on_non_varchar_prop_refused() -> None:
     config = BaseConfig(
         render=[
             BaseRenderDecl(
-                table="records__patient", date_parse={"prop__age": "%Y-%m-%d"}
+                table="records__patient",
+                render={"prop__age": {"date_parse": "%Y-%m-%d"}},
             )
         ]
     )
@@ -1099,7 +1104,8 @@ def test_date_parse_on_slice_only_column_refused() -> None:
     config = BaseConfig(
         render=[
             BaseRenderDecl(
-                table="records__patient", date_parse={"prop__loyalty_tier": "%Y-%m-%d"}
+                table="records__patient",
+                render={"prop__loyalty_tier": {"date_parse": "%Y-%m-%d"}},
             )
         ]
     )

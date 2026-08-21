@@ -403,7 +403,7 @@ def test_build_base_query_specs_render_election_threads_anchor_into_plan(
         base=BaseConfig(
             render=[
                 BaseRenderDecl(
-                    table="records__patient", columns={"created_sim_time": "date"}
+                    table="records__patient", render={"created_sim_time": "date"}
                 )
             ]
         ),
@@ -438,7 +438,7 @@ def test_build_base_query_specs_render_election_no_anchor_raises(
         base=BaseConfig(
             render=[
                 BaseRenderDecl(
-                    table="records__patient", columns={"created_sim_time": "date"}
+                    table="records__patient", render={"created_sim_time": "date"}
                 )
             ]
         ),
