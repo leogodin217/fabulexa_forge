@@ -2,14 +2,14 @@
 encoding.
 
 Two functions carry the whole canonical-form contract: `family_of` classifies
-a DuckDB type name into one of the ten canonical families the comparison
-universe recognizes (`None` for a type outside every family — `DECIMAL`
-deliberately among them); `encode_value` renders one materialized value to
-its canonical text form within a family. Encoding is Python-side on already-
-materialized values, never a SQL `CAST(... AS VARCHAR)` — byte-identity with
-the C6 conformance codec's encode half (`reader.conformance.to_csv_text`) for
-the four overlapping families (integer / float / boolean / text) is the
-contract, asserted by test, never by import (`tests/compare/test_canonical.py`).
+a DuckDB type name into one of the eleven canonical families the comparison
+universe recognizes (`None` for a type outside every family); `encode_value`
+renders one materialized value to its canonical text form within a family.
+Encoding is Python-side on already-materialized values, never a SQL
+`CAST(... AS VARCHAR)` — byte-identity with the C6 conformance codec's encode
+half (`reader.conformance.to_csv_text`) for the four overlapping families
+(integer / float / boolean / text) is the contract, asserted by test, never
+by import (`tests/compare/test_canonical.py`).
 
 See `docs/architecture/compare.md` § Canonical value encoding for the
 semantic authority (the family table, the interval day-fold and
@@ -19,6 +19,7 @@ month-carrying fallback, the timestamptz UTC normalization).
 from __future__ import annotations
 
 import datetime
+import decimal
 from typing import TYPE_CHECKING, Literal
 
 from fabulexa_forge._sql import _INTEGER_TYPES
@@ -37,6 +38,7 @@ CanonicalFamily = Literal[
     "timestamptz",
     "interval",
     "blob",
+    "decimal",
 ]
 
 _FLOAT_TYPES = frozenset({"DOUBLE", "FLOAT"})
@@ -50,15 +52,15 @@ def family_of(duckdb_type: str) -> CanonicalFamily | None:
     DOUBLE/FLOAT -> float; BOOLEAN -> boolean; VARCHAR -> text; TIMESTAMP at
     any precision -> timestamp; DATE -> date; TIME at any precision -> time;
     TIMESTAMPTZ at any precision -> timestamptz; INTERVAL -> interval;
-    BLOB -> blob.
+    BLOB -> blob; DECIMAL at any (precision, scale) -> decimal.
 
     Args:
         duckdb_type: A DuckDB type name as the catalog reports it.
 
     Returns:
-        The canonical family, or None for a type outside every family
-        (DECIMAL deliberately among them — the caller decides whether that
-        is an error, per the comparison-universe scope rule).
+        The canonical family, or None for a type outside every family (e.g.
+        UUID) — the caller decides whether that is an error, per the
+        comparison-universe scope rule.
     """
     norm = duckdb_type.upper().strip()
     if norm in _INTEGER_TYPES:
@@ -81,6 +83,8 @@ def family_of(duckdb_type: str) -> CanonicalFamily | None:
         return "interval"
     if norm == "BLOB":
         return "blob"
+    if norm.startswith("DECIMAL"):
+        return "decimal"
     return None
 
 
@@ -92,14 +96,17 @@ def encode_value(value: object, family: CanonicalFamily) -> str | None:
     "true"/"false" / identity text / microsecond-precision temporal forms
     (timestamptz normalized to UTC `+00:00`; naive timestamp as stored) /
     the interval `[-]H:MM:SS.ffffff` form with the 24h day-fold and the
-    DuckDB-text fallback for month-carrying values / lowercase hex for blob.
-    Byte-identical to the C6 codec's `to_csv_text` for the four families it
-    covers (integer, float, boolean, text) — asserted by test, never imported.
+    DuckDB-text fallback for month-carrying values / lowercase hex for blob /
+    scale-normalized fixed-point for decimal (trailing fractional zeros
+    stripped, no exponent). Byte-identical to the C6 codec's `to_csv_text`
+    for the four families it covers (integer, float, boolean, text) —
+    asserted by test, never imported.
 
     Args:
         value: The materialized cell value. NULL arrives as None. Interval
             values arrive as the Arrow month/day/nanosecond triple so
-            calendar components are observable.
+            calendar components are observable. Decimal values arrive as
+            Python `decimal.Decimal`.
         family: The expected column's canonical family, directing the encoding.
 
     Returns:
@@ -134,9 +141,12 @@ def encode_value(value: object, family: CanonicalFamily) -> str | None:
         return _encode_timestamptz(value)
     if family == "interval":
         return _encode_interval(value)
-    assert family == "blob"
-    assert isinstance(value, (bytes, bytearray))
-    return value.hex()
+    if family == "blob":
+        assert isinstance(value, (bytes, bytearray))
+        return value.hex()
+    assert family == "decimal"
+    assert isinstance(value, decimal.Decimal)
+    return _encode_decimal(value)
 
 
 def _encode_timestamptz(value: datetime.datetime) -> str:
@@ -150,6 +160,27 @@ def _encode_timestamptz(value: datetime.datetime) -> str:
     """
     utc_value = value.astimezone(datetime.timezone.utc)
     return f"{utc_value.strftime('%Y-%m-%d %H:%M:%S.%f')}+00:00"
+
+
+def _encode_decimal(value: decimal.Decimal) -> str:
+    """Scale-normalize a decimal value to canonical fixed-point text.
+
+    Two DECIMAL columns declared at different `(precision, scale)` compare
+    equal when their values are equal — `1.50` and `1.5` are the same
+    number — so trailing fractional zeros strip (and the decimal point
+    itself drops when nothing follows it, matching the writers' `s = 0` bare
+    integer form). Never scientific notation.
+
+    Args:
+        value: The materialized DECIMAL cell value.
+
+    Returns:
+        Fixed-point text with no exponent and no trailing fractional zeros.
+    """
+    text = format(value, "f")
+    if "." not in text:
+        return text
+    return text.rstrip("0").rstrip(".")
 
 
 def _encode_interval(value: "pa.MonthDayNano") -> str:

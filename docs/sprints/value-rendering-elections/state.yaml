@@ -102,6 +102,6 @@ phases:
           - "tests/config/test_stream_config.py"
           - "tests/exporters/streaming/test_value_election_stream.py"
   7:
-    status: pending
+    status: complete
     name: "Compare decimal family"
     demo: "docs/sprints/value-rendering-elections/demos/phase_7_compare_decimal.py"

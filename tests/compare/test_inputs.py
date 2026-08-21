@@ -154,26 +154,26 @@ def test_max_row_diffs_zero_accepted_empty_listings_totals_reported(
 # ---------------------------------------------------------------------------
 
 
-def test_expected_decimal_column_in_universe_raises(tmp_path: "Path") -> None:
+def test_expected_uuid_column_in_universe_raises(tmp_path: "Path") -> None:
     expected = build_duckdb(
         tmp_path / "expected.duckdb",
-        ["CREATE TABLE t (id BIGINT, amount DECIMAL(18,3))"],
+        ["CREATE TABLE t (id BIGINT, token UUID)"],
     )
     actual = build_duckdb(
         tmp_path / "actual.duckdb",
-        ["CREATE TABLE t (id BIGINT, amount DECIMAL(18,3))"],
+        ["CREATE TABLE t (id BIGINT, token UUID)"],
     )
     with pytest.raises(CompareInputError, match="unsupported type"):
         compare_datasets(expected, actual)
 
 
-def test_expected_decimal_column_excluded_by_tables_no_error(
+def test_expected_uuid_column_excluded_by_tables_no_error(
     tmp_path: "Path",
 ) -> None:
     expected = build_duckdb(
         tmp_path / "expected.duckdb",
         [
-            "CREATE TABLE t (id BIGINT, amount DECIMAL(18,3))",
+            "CREATE TABLE t (id BIGINT, token UUID)",
             "CREATE TABLE u (id BIGINT)",
             "INSERT INTO u VALUES (1)",
         ],
@@ -181,7 +181,7 @@ def test_expected_decimal_column_excluded_by_tables_no_error(
     actual = build_duckdb(
         tmp_path / "actual.duckdb",
         [
-            "CREATE TABLE t (id BIGINT, amount DECIMAL(18,3))",
+            "CREATE TABLE t (id BIGINT, token UUID)",
             "CREATE TABLE u (id BIGINT)",
             "INSERT INTO u VALUES (1)",
         ],

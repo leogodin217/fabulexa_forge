@@ -10,6 +10,7 @@ frozen-ness / constructibility (Phase 1 smoke; semantics land in Phase 2).
 from __future__ import annotations
 
 import datetime
+import decimal
 
 import pyarrow as pa
 import pytest
@@ -89,9 +90,16 @@ def test_family_of_blob() -> None:
     assert family_of("BLOB") == "blob"
 
 
-@pytest.mark.parametrize("duckdb_type", ["DECIMAL(18,3)", "UUID"])
+@pytest.mark.parametrize("duckdb_type", ["UUID"])
 def test_family_of_unclassified_type_returns_none(duckdb_type: str) -> None:
     assert family_of(duckdb_type) is None
+
+
+@pytest.mark.parametrize(
+    "duckdb_type", ["DECIMAL(18,3)", "DECIMAL(4,0)", "DECIMAL(9,9)"]
+)
+def test_family_of_decimal_types(duckdb_type: str) -> None:
+    assert family_of(duckdb_type) == "decimal"
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +153,39 @@ def test_encode_timestamptz_normalizes_to_utc() -> None:
     zone = datetime.timezone(datetime.timedelta(hours=-4))
     value = datetime.datetime(2024, 6, 1, 12, 0, 0, 500000, tzinfo=zone)
     assert encode_value(value, "timestamptz") == "2024-06-01 16:00:00.500000+00:00"
+
+
+# ---------------------------------------------------------------------------
+# encode_value — decimal
+# ---------------------------------------------------------------------------
+
+
+def test_encode_decimal_strips_trailing_fractional_zeros() -> None:
+    assert encode_value(decimal.Decimal("1.50"), "decimal") == "1.5"
+
+
+def test_encode_decimal_scale_normalization_makes_equal_values_match() -> None:
+    assert encode_value(decimal.Decimal("1.50"), "decimal") == encode_value(
+        decimal.Decimal("1.5"), "decimal"
+    )
+
+
+def test_encode_decimal_genuinely_different_values_do_not_match() -> None:
+    assert encode_value(decimal.Decimal("1.50"), "decimal") != encode_value(
+        decimal.Decimal("1.51"), "decimal"
+    )
+
+
+def test_encode_decimal_all_zero_fraction_drops_point() -> None:
+    assert encode_value(decimal.Decimal("2.00"), "decimal") == "2"
+
+
+def test_encode_decimal_negative_value() -> None:
+    assert encode_value(decimal.Decimal("-1.50"), "decimal") == "-1.5"
+
+
+def test_encode_decimal_no_exponent_for_large_scale() -> None:
+    assert encode_value(decimal.Decimal("1000000.00"), "decimal") == "1000000"
 
 
 # ---------------------------------------------------------------------------
@@ -203,6 +244,7 @@ def test_encode_blob_empty_bytes() -> None:
         "timestamptz",
         "interval",
         "blob",
+        "decimal",
     ],
 )
 def test_encode_null_returns_none(family: CanonicalFamily) -> None:

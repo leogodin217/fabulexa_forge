@@ -486,3 +486,76 @@ def test_timestamp_precision_drift_same_instants_is_equal(tmp_path: "Path") -> N
     result = compare_datasets(expected, actual)
     assert result.equal
     assert result.tables[0].schema == ()
+
+
+# ---------------------------------------------------------------------------
+# decimal family
+# ---------------------------------------------------------------------------
+
+
+def test_decimal_column_is_admitted_to_family_coverage(tmp_path: "Path") -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, amount DECIMAL(18,3))",
+            "INSERT INTO t VALUES (1, 1.50)",
+        ],
+    )
+    actual = build_duckdb(
+        tmp_path / "actual.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, amount DECIMAL(18,3))",
+            "INSERT INTO t VALUES (1, 1.50)",
+        ],
+    )
+    result = compare_datasets(expected, actual)
+    assert result.equal
+    assert result.tables[0].schema == ()
+
+
+def test_decimal_different_declared_scale_same_value_is_equal(
+    tmp_path: "Path",
+) -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, amount DECIMAL(18,3))",
+            "INSERT INTO t VALUES (1, 1.50)",
+        ],
+    )
+    actual = build_duckdb(
+        tmp_path / "actual.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, amount DECIMAL(9,1))",
+            "INSERT INTO t VALUES (1, 1.5)",
+        ],
+    )
+    result = compare_datasets(expected, actual)
+    assert result.equal
+    assert result.tables[0].schema == ()
+
+
+def test_decimal_genuinely_different_value_is_row_discrepancy(
+    tmp_path: "Path",
+) -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, amount DECIMAL(18,3))",
+            "INSERT INTO t VALUES (1, 1.50)",
+        ],
+    )
+    actual = build_duckdb(
+        tmp_path / "actual.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, amount DECIMAL(18,3))",
+            "INSERT INTO t VALUES (1, 1.51)",
+        ],
+    )
+    result = compare_datasets(expected, actual)
+    assert not result.equal
+    table_comparison = result.tables[0]
+    assert table_comparison.schema == ()
+    assert table_comparison.rows is not None
+    assert table_comparison.rows.missing_total == 1
+    assert table_comparison.rows.extra_total == 1
