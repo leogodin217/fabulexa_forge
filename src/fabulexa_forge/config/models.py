@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 
@@ -96,9 +97,14 @@ def _require_sql_identifier(value: str, context: str) -> None:
 
 
 def _require_render_map_valid(
-    value: "dict[str, TemporalRender] | None", field_name: str
+    value: "Mapping[str, object] | None", field_name: str
 ) -> None:
     """A `render` map: when present, non-empty, with non-empty keys.
+
+    Value-type-agnostic (`Mapping[str, object]`): shared by every `render`
+    field, whether its narrow structural-shorthand-only spelling (the events
+    block's own map) or the unified `RenderElection` spelling — the shape
+    check is the same regardless of the value form.
 
     Args:
         value: The field's value, or None when absent.
@@ -174,6 +180,101 @@ class StrictBaseModel(BaseModel):
     """Base model rejecting unknown fields (extra='forbid')."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+# ---------------------------------------------------------------------------
+# Value rendering elections: the unified `render:` map's value forms
+# ---------------------------------------------------------------------------
+
+
+class DecimalElection(StrictBaseModel):
+    """Numeric precision rendering: DOUBLE source -> DECIMAL(p, s)."""
+
+    decimal: tuple[int, int]
+    """(precision, scale); 1 <= precision <= 38, 0 <= scale <= precision."""
+
+    @model_validator(mode="after")
+    def decimal_bounds(self) -> Self:
+        """1 <= precision <= 38; 0 <= scale <= precision.
+
+        Raises:
+            ValueError: `precision` outside 1..38, or `scale` outside
+                0..precision.
+        """
+        precision, scale = self.decimal
+        if not (1 <= precision <= 38):
+            raise ValueError(f"decimal: precision must be 1..38 (got {precision})")
+        if not (0 <= scale <= precision):
+            raise ValueError(
+                "decimal: scale must be 0..precision"
+                f" (got scale={scale}, precision={precision})"
+            )
+        return self
+
+
+class InstantElection(StrictBaseModel):
+    """Payload sim-instant declaration: BIGINT ns source, rendered via the anchor through the shared instant-election vocabulary."""  # noqa: E501
+
+    instant: TemporalRender
+    """Which instant rendering the declared ns offset receives."""
+
+
+class JsonPrecisionElection(StrictBaseModel):
+    """In-place rounding of named top-level numeric leaves of a JSON payload."""
+
+    json_precision: dict[str, int]
+    """Top-level key -> fraction digits (0..12); non-empty."""
+
+    @model_validator(mode="after")
+    def json_precision_shape(self) -> Self:
+        """Leaf map non-empty; keys non-empty; 0 <= digits <= 12.
+
+        Raises:
+            ValueError: `json_precision` is empty, has an empty key, or a
+                digits value outside 0..12.
+        """
+        if not self.json_precision:
+            raise ValueError("json_precision: leaf map must not be empty")
+        for key, digits in self.json_precision.items():
+            if not key:
+                raise ValueError("json_precision: keys must be non-empty")
+            if not (0 <= digits <= 12):
+                raise ValueError(
+                    f"json_precision: digits for key {key!r} must be 0..12"
+                    f" (got {digits})"
+                )
+        return self
+
+
+class DateParseElection(StrictBaseModel):
+    """The declared parse, relocated into the unified render map; format semantics unchanged (validated by validate_date_parse_format)."""  # noqa: E501
+
+    date_parse: str
+    """strptime-style format; shared format rules."""
+
+    @model_validator(mode="after")
+    def format_valid(self) -> Self:
+        """`date_parse` denotes a complete date, a complete time, or both.
+
+        Raises:
+            ValueError: The format is empty, uses a directive outside the
+                closed set, violates a pairing rule, duplicates a temporal
+                field, or is neither date-complete nor time-complete (see
+                `validate_date_parse_format`).
+        """
+        validate_date_parse_format(self.date_parse, "render.date_parse")
+        return self
+
+
+RenderElection = (
+    TemporalRender
+    | DateParseElection
+    | InstantElection
+    | DecimalElection
+    | JsonPrecisionElection
+)
+"""A render-map value: a bare temporal-election literal (structural instant
+shorthand) or one typed election object. Source identity -> RenderElection."""
 
 
 # ---------------------------------------------------------------------------
@@ -1037,13 +1138,13 @@ class SourceTableDecl(StrictBaseModel):
     properties of the subject kind (gated at plan time): source column names
     (`prop__<p>`) with `kind`, bare owner-property names with `membership`.
     Absent = every row of the selected populations."""
-    render: dict[str, TemporalRender] | None = None
-    """Structural-instant rendering elections, keyed by source identity
-    (e.g. `created_sim_time`). Keys validated against the table category's
-    instant-carrying structural columns at plan time
-    (RenderKeyIsInstantColumn). Absent = default rendering."""
-    date_parse: dict[str, str] | None = None
-    """Declared date parses: payload source column -> parse format."""
+    render: "dict[str, RenderElection] | None" = None
+    """Per-column rendering election, keyed by source identity (e.g.
+    `created_sim_time`, `prop__error_rate`). A bare temporal literal elects a
+    structural instant column (shorthand); a typed election object elects a
+    payload column (`prop__<p>` on `state`, `elem__<f>` on `junction`). One
+    column, one election; keys and shape validated at plan time. Absent =
+    default rendering."""
 
     @model_validator(mode="after")
     def table_shape(self) -> Self:
@@ -1054,10 +1155,11 @@ class SourceTableDecl(StrictBaseModel):
                 `membership` is set; `sub_types` / `columns` is
                 present-but-empty or carries a duplicate entry; `rename` is
                 present-but-empty or two keys share a target value; `where` is
-                present-but-empty or has an empty key; `render` / `date_parse`
-                is present-but-empty, has an empty key, an invalid format, or
-                a column named in both. (Value emptiness / duplication is
-                carried by `PredicateValue` per entry.)
+                present-but-empty or has an empty key; `render` is
+                present-but-empty or has an empty key. (Value emptiness /
+                duplication is carried by `PredicateValue` per entry; each
+                `render` entry's own shape is carried by its `RenderElection`
+                model.)
         """
         _require_nonempty_str(self.name, "SourceTableDecl.name")
         label = f"table {self.name!r}"
@@ -1067,8 +1169,6 @@ class SourceTableDecl(StrictBaseModel):
         _require_rename_map_valid(self.rename, "SourceTableDecl.rename")
         _require_where_map_valid(self.where, "SourceTableDecl.where")
         _require_render_map_valid(self.render, "SourceTableDecl.render")
-        _require_date_parse_map_valid(self.date_parse, "SourceTableDecl.date_parse")
-        _require_render_date_parse_disjoint(self.render, self.date_parse, label)
         return self
 
 

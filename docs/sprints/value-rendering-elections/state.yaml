@@ -2,7 +2,7 @@ sprint: value-rendering-elections
 parent_branch: prepare_for_classroom_env
 baseline_sha: 806e3795d3e97c4b91fa8174453b822c4ad536ac
 started: 2026-08-21
-current_phase: 2
+current_phase: 3
 capabilities:
   - export-config-grammar: [unified-render-map, date-parse-absorption, base-columns-rename, derived-one-of-members, stream-render-map]
   - shared-sql-rendering: [decimal-authority, json-precision-authority, render-function-registration]
@@ -30,7 +30,7 @@ phases:
           - "tests/reader/test_open_emit.py"
           - "tests/writers/test_csv.py"
   2:
-    status: pending
+    status: complete
     name: "Unified render map + source-mode attach"
     demo: "docs/sprints/value-rendering-elections/demos/phase_2_source_elections.py"
     steps:

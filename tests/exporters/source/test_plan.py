@@ -22,6 +22,7 @@ from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
+    DateParseElection,
     ExportConfig,
     MembershipRef,
     SourceConfig,
@@ -32,7 +33,7 @@ from fabulexa_forge.config.models import (
 from fabulexa_forge.errors import (
     DateParseSourceColumn,
     ExportError,
-    RenderKeyIsInstantColumn,
+    RenderKeyResolves,
     SourceColumnNotAddressable,
     SourceColumnUnresolved,
     SourceEventSourceOverlap,
@@ -1470,8 +1471,8 @@ def test_render_junction_table_elects_types_on_interval_columns(
 
 def test_render_key_on_state_payload_column_refused(tmp_path: Path) -> None:
     """A `render` key naming a payload (non-instant) column on a `state`
-    table raises RenderKeyIsInstantColumn."""
-    with pytest.raises(RenderKeyIsInstantColumn):
+    table raises RenderKeyResolves."""
+    with pytest.raises(RenderKeyResolves):
         _open_plan(
             build_source_test_emit(tmp_path),
             _config(
@@ -1486,9 +1487,9 @@ def test_render_key_on_state_payload_column_refused(tmp_path: Path) -> None:
 
 def test_render_key_on_junction_non_interval_column_refused(tmp_path: Path) -> None:
     """A `render` key naming a non-interval column on a `junction` table
-    raises RenderKeyIsInstantColumn — the membership category's own instant
+    raises RenderKeyResolves — the membership category's own instant
     set."""
-    with pytest.raises(RenderKeyIsInstantColumn):
+    with pytest.raises(RenderKeyResolves):
         _open_plan(
             build_source_test_emit(tmp_path),
             _config(
@@ -1568,31 +1569,34 @@ def test_render_key_composes_with_rename(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# `date_parse`: declared date parses (state + junction)
+# `render`: declared date parses (state + junction) — the `date_parse`
+# typed election, folded into the unified `render` map
 # ---------------------------------------------------------------------------
 
 
 def test_date_parse_resolves_on_state_table_payload_varchar(tmp_path: Path) -> None:
-    """`date_parse` on a `state` table's payload VARCHAR resolves onto
-    `table.date_parse`."""
+    """A `date_parse` election on a `state` table's payload VARCHAR resolves
+    onto `table.render`."""
     plan = _open_plan(
         build_source_test_emit(tmp_path),
         _config(
             tables=(
                 SourceTableDecl(
-                    name="locs", kind="location", date_parse={"prop__name": "%Y-%m-%d"}
+                    name="locs",
+                    kind="location",
+                    render={"prop__name": DateParseElection(date_parse="%Y-%m-%d")},
                 ),
             ),
         ),
     )
     table = plan.tables[0]
     assert isinstance(table, SourceStateTablePlan)
-    assert table.date_parse == (("prop__name", "%Y-%m-%d"),)
+    assert table.render == (("prop__name", DateParseElection(date_parse="%Y-%m-%d")),)
 
 
 def test_date_parse_resolves_on_junction_elem_field(tmp_path: Path) -> None:
-    """`date_parse` on a junction table's `elem__<f>` scalar payload column
-    resolves onto `table.date_parse`."""
+    """A `date_parse` election on a junction table's `elem__<f>` scalar
+    payload column resolves onto `table.render`."""
     plan = _open_plan(
         build_source_test_emit(tmp_path),
         _config(
@@ -1600,18 +1604,22 @@ def test_date_parse_resolves_on_junction_elem_field(tmp_path: Path) -> None:
                 SourceTableDecl(
                     name="visit_team",
                     membership=MembershipRef(kind="visit", property="team"),
-                    date_parse={"elem__role_name": "%Y-%m-%d"},
+                    render={
+                        "elem__role_name": DateParseElection(date_parse="%Y-%m-%d")
+                    },
                 ),
             ),
         ),
     )
     table = plan.tables[0]
     assert isinstance(table, SourceJunctionTablePlan)
-    assert table.date_parse == (("elem__role_name", "%Y-%m-%d"),)
+    assert table.render == (
+        ("elem__role_name", DateParseElection(date_parse="%Y-%m-%d")),
+    )
 
 
 def test_date_parse_non_varchar_source_refused(tmp_path: Path) -> None:
-    """`date_parse` on a non-VARCHAR declared column raises
+    """A `date_parse` election on a non-VARCHAR declared column raises
     DateParseSourceColumn."""
     with pytest.raises(DateParseSourceColumn):
         _open_plan(
@@ -1621,7 +1629,9 @@ def test_date_parse_non_varchar_source_refused(tmp_path: Path) -> None:
                     SourceTableDecl(
                         name="ords",
                         kind="order",
-                        date_parse={"prop__amount": "%Y-%m-%d"},
+                        render={
+                            "prop__amount": DateParseElection(date_parse="%Y-%m-%d")
+                        },
                     ),
                 ),
             ),
@@ -1629,7 +1639,7 @@ def test_date_parse_non_varchar_source_refused(tmp_path: Path) -> None:
 
 
 def test_date_parse_on_slice_only_source_refused(tmp_path: Path) -> None:
-    """`date_parse` naming a non-exempt slice_only column raises
+    """A `date_parse` election naming a non-exempt slice_only column raises
     SourceSliceOnlyRead — the mode's omission posture composing with the
     parse's own refusal (surface-list growth)."""
     with pytest.raises(SourceSliceOnlyRead):
@@ -1640,7 +1650,11 @@ def test_date_parse_on_slice_only_source_refused(tmp_path: Path) -> None:
                     SourceTableDecl(
                         name="patients",
                         kind="patient",
-                        date_parse={"prop__loyalty_tier": "%Y-%m-%d"},
+                        render={
+                            "prop__loyalty_tier": DateParseElection(
+                                date_parse="%Y-%m-%d"
+                            )
+                        },
                     ),
                 ),
             ),
@@ -1649,7 +1663,7 @@ def test_date_parse_on_slice_only_source_refused(tmp_path: Path) -> None:
 
 def test_date_parse_key_composes_with_rename(tmp_path: Path) -> None:
     """`date_parse` keys are source identities, composing with `rename` the
-    same way `render` keys do."""
+    same way other `render` keys do."""
     plan = _open_plan(
         build_source_test_emit(tmp_path),
         _config(
@@ -1658,7 +1672,7 @@ def test_date_parse_key_composes_with_rename(tmp_path: Path) -> None:
                     name="locs",
                     kind="location",
                     rename={"prop__name": "site_name"},
-                    date_parse={"prop__name": "%Y-%m-%d"},
+                    render={"prop__name": DateParseElection(date_parse="%Y-%m-%d")},
                 ),
             ),
         ),
@@ -1666,7 +1680,7 @@ def test_date_parse_key_composes_with_rename(tmp_path: Path) -> None:
     table = plan.tables[0]
     assert isinstance(table, SourceStateTablePlan)
     assert ("prop__name", "site_name") in table.columns
-    assert table.date_parse == (("prop__name", "%Y-%m-%d"),)
+    assert table.render == (("prop__name", DateParseElection(date_parse="%Y-%m-%d")),)
 
 
 # ---------------------------------------------------------------------------
@@ -1702,9 +1716,9 @@ def test_events_render_elects_event_sim_time_rendering(tmp_path: Path) -> None:
 
 def test_events_render_key_other_than_event_sim_time_refused(tmp_path: Path) -> None:
     """An `events.render` key other than `event_sim_time` raises
-    RenderKeyIsInstantColumn, naming the log's one legal key."""
+    RenderKeyResolves, naming the log's one legal key."""
     with pytest.raises(
-        RenderKeyIsInstantColumn, match="the log's one legal key is 'event_sim_time'"
+        RenderKeyResolves, match="the log's one legal key is 'event_sim_time'"
     ):
         _open_plan(
             build_source_test_emit(tmp_path),

@@ -13,6 +13,7 @@ import pytest
 from pydantic import ValidationError
 
 from fabulexa_forge.config.models import (
+    DateParseElection,
     MembershipRef,
     SourceEventsDecl,
     SourceEventSourceDecl,
@@ -227,8 +228,13 @@ def test_table_decl_extra_field_forbidden() -> None:
 
 
 # ---------------------------------------------------------------------------
-# SourceTableDecl.render / date_parse — structural-instant elections and
-# declared date parses (doc § Config Models; render_maps_valid)
+# SourceTableDecl.render — the unified property-first render map: bare
+# structural-instant elections and (now-relocated) declared date parses
+# (doc § Config Models; render_maps_valid). `date_parse` no longer has its
+# own field: it is one `RenderElection` value form inside `render`, keyed by
+# the same source-identity keys as every other election
+# (`_require_render_date_parse_disjoint` is deleted — one map makes a
+# column naming both forms unrepresentable).
 # ---------------------------------------------------------------------------
 
 
@@ -252,30 +258,37 @@ def test_table_decl_render_empty_key_rejected() -> None:
         SourceTableDecl(name="trips", kind="trip", render={"": "date"})
 
 
+def test_table_decl_render_empty_key_date_parse_value_rejected() -> None:
+    """An empty `render` key -> rejected, regardless of the value form (here
+    a `date_parse` election rather than the bare shorthand)."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceTableDecl(
+            name="trips", kind="trip", render={"": {"date_parse": "%Y-%m-%d"}}
+        )
+
+
 def test_table_decl_date_parse_parses() -> None:
-    """A well-formed `date_parse` map parses."""
+    """A well-formed `render` entry electing `date_parse` parses."""
     decl = SourceTableDecl(
-        name="trips", kind="trip", date_parse={"prop__dob": "%Y-%m-%d"}
+        name="trips", kind="trip", render={"prop__dob": {"date_parse": "%Y-%m-%d"}}
     )
-    assert decl.date_parse == {"prop__dob": "%Y-%m-%d"}
+    assert decl.render == {"prop__dob": DateParseElection(date_parse="%Y-%m-%d")}
 
 
-def test_table_decl_date_parse_empty_map_rejected() -> None:
-    """`date_parse: {}` (present but empty) -> rejected."""
+def test_table_decl_date_parse_empty_format_rejected() -> None:
+    """An empty `date_parse` format string -> rejected."""
     with pytest.raises(ValidationError, match="non-empty"):
-        SourceTableDecl(name="trips", kind="trip", date_parse={})
-
-
-def test_table_decl_date_parse_empty_key_rejected() -> None:
-    """A `date_parse` entry with an empty key -> rejected."""
-    with pytest.raises(ValidationError, match="non-empty"):
-        SourceTableDecl(name="trips", kind="trip", date_parse={"": "%Y-%m-%d"})
+        SourceTableDecl(
+            name="trips", kind="trip", render={"prop__dob": {"date_parse": ""}}
+        )
 
 
 def test_table_decl_date_parse_invalid_format_rejected() -> None:
     """A `date_parse` format missing a required directive -> rejected."""
     with pytest.raises(ValidationError, match="year"):
-        SourceTableDecl(name="trips", kind="trip", date_parse={"prop__dob": "%m-%d"})
+        SourceTableDecl(
+            name="trips", kind="trip", render={"prop__dob": {"date_parse": "%m-%d"}}
+        )
 
 
 def test_table_decl_date_parse_datetime_format_parses() -> None:
@@ -284,29 +297,19 @@ def test_table_decl_date_parse_datetime_format_parses() -> None:
     decl = SourceTableDecl(
         name="trips",
         kind="trip",
-        date_parse={"prop__registered_at": "%Y-%m-%d %H:%M:%S"},
+        render={"prop__registered_at": {"date_parse": "%Y-%m-%d %H:%M:%S"}},
     )
-    assert decl.date_parse == {"prop__registered_at": "%Y-%m-%d %H:%M:%S"}
+    assert decl.render == {
+        "prop__registered_at": DateParseElection(date_parse="%Y-%m-%d %H:%M:%S")
+    }
 
 
 def test_table_decl_date_parse_family_violation_rejected_entry_keyed() -> None:
-    """A `date_parse` entry violating a family pairing rule -> rejected,
+    """A `date_parse` election violating a family pairing rule -> rejected,
     the error naming the entry-keyed field name."""
-    with pytest.raises(
-        ValidationError, match=r"SourceTableDecl\.date_parse\['prop__dob'\]"
-    ):
-        SourceTableDecl(name="trips", kind="trip", date_parse={"prop__dob": "%I:%M"})
-
-
-def test_table_decl_render_and_date_parse_column_overlap_rejected() -> None:
-    """A column named in both `render` and `date_parse` -> rejected (a
-    column names at most one)."""
-    with pytest.raises(ValidationError, match="both"):
+    with pytest.raises(ValidationError, match=r"render\.prop__dob"):
         SourceTableDecl(
-            name="trips",
-            kind="trip",
-            render={"prop__dob": "date"},
-            date_parse={"prop__dob": "%Y-%m-%d"},
+            name="trips", kind="trip", render={"prop__dob": {"date_parse": "%I:%M"}}
         )
 
 

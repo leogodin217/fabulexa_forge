@@ -4,7 +4,8 @@ tables:
     row_count: 2
     contains_rows:
       # created_at is DATE (elected via render), not the default TIMESTAMP;
-      # dob is DATE (parsed via date_parse), not plain VARCHAR text.
+      # dob is DATE (elected via a date_parse render entry), not plain
+      # VARCHAR text.
       - id: p001
         created_at: 2024-01-02
         name: Alice

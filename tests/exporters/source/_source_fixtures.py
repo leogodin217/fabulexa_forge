@@ -1838,6 +1838,92 @@ _WARD_COLUMNS: list[dict[str, object]] = [
 ]
 
 
+_VALUE_ELECTION_WIDGET_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__error_rate", "DOUBLE", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__requested_offset_ns",
+        "BIGINT",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+    prop_column(
+        "prop__opened_at", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__context", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+#: `prop__requested_offset_ns` is set to the same raw ns offset as
+#: `created_sim_time` (§ render tests: `instant` renders identically to a
+#: structural instant of the same value).
+_VALUE_ELECTION_WIDGET_OFFSET_NS = 5 * 3600 * _MS
+
+
+def build_value_election_source_emit(tmp_path: Path) -> Path:
+    """Build the value-rendering-election render fixture: one `widget`
+    records kind, one row, carrying one payload column per new election kind
+    (`decimal` / `instant` / `date_parse` / `json_precision`) alongside the
+    structural `created_sim_time` the `instant` election's identical-value
+    comparison needs.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__widget", _VALUE_ELECTION_WIDGET_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "w001",
+            _VALUE_ELECTION_WIDGET_OFFSET_NS,
+            True,
+            _VALUE_ELECTION_WIDGET_OFFSET_NS,
+            0,
+            12.3456,
+            _VALUE_ELECTION_WIDGET_OFFSET_NS,
+            "2024-02-01",
+            '{"discount_pct": 0.125, "note": "vip"}',
+        ],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__widget",
+                "records",
+                _VALUE_ELECTION_WIDGET_COLUMNS,
+                1,
+                record_kind="widget",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100 * _MS}],
+        extra={
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
 def build_source_junction_selection_emit(tmp_path: Path) -> Path:
     """Build a source-mode emit for junction owner selection: two `worker`
     owners split day/night and by `prop__region`, each with one

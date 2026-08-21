@@ -1101,7 +1101,7 @@ def test_junction_render_windowed_left_at_masking_honors_render_election(
 
 
 # ---------------------------------------------------------------------------
-# `date_parse`: declared date parses
+# `render` map: `date_parse` elections
 # ---------------------------------------------------------------------------
 
 _DATE_PARSE_PATIENT_COLUMNS: list[dict[str, object]] = [
@@ -1169,7 +1169,7 @@ def test_state_render_date_parse_renders_date_in_place(tmp_path: Path) -> None:
             name="patients",
             kind="patient",
             rename={"prop__dob": "birth_date"},
-            date_parse={"prop__dob": "%Y-%m-%d"},
+            render={"prop__dob": {"date_parse": "%Y-%m-%d"}},
         ),
     )
     with _plan(_build_date_parse_patient_emit(tmp_path, "2024-06-01"), tables) as (
@@ -1191,7 +1191,9 @@ def test_state_render_date_parse_mismatch_fails_loudly_with_attribution(
     the table, the column, and the offending value — never a silent NULL."""
     tables = (
         SourceTableDecl(
-            name="patients", kind="patient", date_parse={"prop__dob": "%Y-%m-%d"}
+            name="patients",
+            kind="patient",
+            render={"prop__dob": {"date_parse": "%Y-%m-%d"}},
         ),
     )
     with _plan(_build_date_parse_patient_emit(tmp_path, "not-a-date"), tables) as (
@@ -1220,7 +1222,7 @@ def test_state_render_date_parse_datetime_format_renders_timestamp(
             name="patients",
             kind="patient",
             rename={"prop__dob": "registered_at"},
-            date_parse={"prop__dob": "%Y-%m-%d %H:%M:%S"},
+            render={"prop__dob": {"date_parse": "%Y-%m-%d %H:%M:%S"}},
         ),
     )
     with _plan(

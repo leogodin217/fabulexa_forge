@@ -414,9 +414,31 @@ class DateParseSourceColumn(ExportError):
     virtual, or grain-constant source, or a non-VARCHAR declared column."""
 
 
-class RenderKeyIsInstantColumn(ExportError):
-    """A source declared-table or base-entry `render` key does not name an
-    instant-carrying structural column of the table's category (per the
-    reader's `structural_instant_columns`) — a payload or mechanism column
-    key. The event log's one legal key is `event_sim_time`
+class RenderKeyResolves(ExportError):
+    """A source declared-table or base-entry `render` key does not name a
+    column in its value form's key domain: the bare shorthand form requires
+    an instant-carrying structural column of the table's category (per the
+    reader's `structural_instant_columns`); a typed election
+    (`date_parse` / `instant` / `decimal` / `json_precision`) requires a
+    payload column of the table's kind (`elem__<f>` element columns on a
+    junction; the member pair columns are outside the domain) — a typed
+    election naming a structural column is refused, so no rendering ever has
+    two spellings. The event log's one legal key is `event_sim_time`
     (mode-definitional); any other key is refused the same way."""
+
+
+class DecimalSourceIsDouble(ExportError):
+    """A `decimal` election's source column does not carry a declared DOUBLE
+    type — the contract's one floating-point type; integers and VARCHARs
+    have no precision to elect."""
+
+
+class InstantSourceIsBigint(ExportError):
+    """An `instant` election's source column does not carry a declared
+    BIGINT type — the assertion is checkable only against an integer
+    sim-offset column."""
+
+
+class JsonPrecisionSourceIsVarchar(ExportError):
+    """A `json_precision` election's source column does not carry a declared
+    VARCHAR type — electing the column asserts it is a JSON object payload."""

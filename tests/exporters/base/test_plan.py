@@ -28,7 +28,7 @@ from fabulexa_forge.errors import (
     BaseRenameUnresolved,
     DateParseSourceColumn,
     ExportError,
-    RenderKeyIsInstantColumn,
+    RenderKeyResolves,
     TemporalRenderRequiresAnchor,
 )
 from fabulexa_forge.exporters.base.plan import (
@@ -1010,11 +1010,11 @@ def test_render_key_last_mutation_sim_time_refused() -> None:
 
 def test_render_key_not_instant_column_refused() -> None:
     """A render key naming a non-instant column (a prop__ payload) raises
-    RenderKeyIsInstantColumn."""
+    RenderKeyResolves."""
     config = BaseConfig(
         render=[BaseRenderDecl(table="records__patient", columns={"prop__age": "date"})]
     )
-    with pytest.raises(RenderKeyIsInstantColumn):
+    with pytest.raises(RenderKeyResolves):
         build_base_plan(
             _render_election_sidecar(), config, discard_notice_sink, anchor=_ANCHOR
         )

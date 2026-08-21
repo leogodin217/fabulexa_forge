@@ -13,6 +13,7 @@ from pydantic import ValidationError
 
 from fabulexa_forge.config.models import (
     ColumnDecl,
+    DateParseElection,
     DateParseSpec,
     DerivedSpec,
     DimensionalConfig,
@@ -716,35 +717,38 @@ def test_date_parse_spec_empty_format_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
-# _require_date_parse_map_valid — map-form attach points (SourceTableDecl)
+# date_parse — property-first render-map attach point (SourceTableDecl)
 # ---------------------------------------------------------------------------
 
 
 def test_source_table_decl_date_parse_map_timestamp_format_accepted() -> None:
-    """A `date_parse` map entry with a TIMESTAMP-denoting format is accepted."""
+    """A `render` map entry electing `date_parse` with a TIMESTAMP-denoting
+    format is accepted."""
     decl = SourceTableDecl.model_validate(
         {
             "name": "visits",
             "kind": "actor",
-            "date_parse": {"prop__dob": "%Y-%m-%d %H:%M:%S"},
+            "render": {"prop__dob": {"date_parse": "%Y-%m-%d %H:%M:%S"}},
         }
     )
-    assert decl.date_parse == {"prop__dob": "%Y-%m-%d %H:%M:%S"}
+    assert decl.render == {
+        "prop__dob": DateParseElection(date_parse="%Y-%m-%d %H:%M:%S")
+    }
 
 
 def test_source_table_decl_date_parse_map_family_violation_refused() -> None:
-    """A map entry violating a family rule is refused, naming the
-    entry-keyed field name and the violated rule."""
+    """A `render` map entry electing `date_parse` that violates a family rule
+    is refused, naming the entry-keyed field name and the violated rule."""
     with pytest.raises(ValidationError) as excinfo:
         SourceTableDecl.model_validate(
             {
                 "name": "visits",
                 "kind": "actor",
-                "date_parse": {"prop__dob": "%H:%S"},
+                "render": {"prop__dob": {"date_parse": "%H:%S"}},
             }
         )
     message = str(excinfo.value)
-    assert "SourceTableDecl.date_parse['prop__dob']" in message
+    assert "render.prop__dob" in message
     assert "%S requires %M" in message
 
 

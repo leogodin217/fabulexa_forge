@@ -42,10 +42,11 @@ via `build_state_at_sql` (windowed `state` reconstruction), the mode-neutral
 election module (`build_identity_translation_sql`, and the record-index /
 presentation-key horizon dispatchers `_record_index_sql` / `_presentation_key_sql`
 the self-identity join composes, shared with base's renders — doc § module
-placement), fabulexa_forge.anchor, fabulexa_forge._sql (`render_predicate_condition`
-composes a `where` entry's condition; `render_date_parse_expr` renders a
-`date_parse`-keyed column — the one renderer every mode shares), the
-sibling source.columns
+placement), fabulexa_forge.anchor, fabulexa_forge._sql
+(`render_predicate_condition` composes a `where` entry's condition;
+`render_date_parse_expr` / `render_decimal_expr` / `render_json_precision_expr`
+are the three typed-election authorities `_render_elected_column` dispatches
+to — the one dispatch every render composes), the sibling source.columns
 (`_PROP_PREFIX`, and the one labeling authority `build_kind_label_expr` the
 junction render's `member__<f>__kind` column renders through) and source.plan
 modules (`_column_types` and the latter's `_MEMBER_PREFIX` /
@@ -53,8 +54,11 @@ modules (`_column_types` and the latter's `_MEMBER_PREFIX` /
 constants at runtime, mirroring base's runtime import of `_self_identity`;
 `SourceEdgeSurface` / `SourceStateTablePlan` / `SourceJunctionTablePlan` /
 `SourceWhereEntry` TYPE_CHECKING only), `exporters.populations` (`Population`,
-TYPE_CHECKING only), config.models (TYPE_CHECKING only), and stdlib. Never
-imports exporters.dimensional.* or exporters.streaming.*.
+TYPE_CHECKING only), config.models (the `RenderElection` typed-election
+classes — `DateParseElection` / `InstantElection` / `DecimalElection` /
+`JsonPrecisionElection` — imported at runtime for the render-map form
+dispatch; TYPE_CHECKING only otherwise), and stdlib. Never imports
+exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -65,7 +69,7 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
-    from fabulexa_forge.config.models import KeySurface
+    from fabulexa_forge.config.models import KeySurface, RenderElection
     from fabulexa_forge.exporters.populations import Population
     from fabulexa_forge.exporters.source.plan import (
         SourceEdgeSurface,
@@ -79,9 +83,17 @@ if TYPE_CHECKING:
 from fabulexa_forge._sql import (
     _sql_literal,
     render_date_parse_expr,
+    render_decimal_expr,
+    render_json_precision_expr,
     render_predicate_condition,
 )
 from fabulexa_forge.anchor import render_anchor_temporal_expr
+from fabulexa_forge.config.models import (
+    DateParseElection,
+    DecimalElection,
+    InstantElection,
+    JsonPrecisionElection,
+)
 from fabulexa_forge.derivations.state_at import build_state_at_sql
 from fabulexa_forge.exporters.election import (
     _presentation_key_sql,
@@ -131,13 +143,36 @@ _JUNCTION_FIXED_COLUMNS: frozenset[str] = frozenset(
 _STATE_AT_VERBATIM_COLUMNS: frozenset[str] = frozenset({"record_id", "active"})
 
 
+def _shorthand_render(
+    render_map: "Mapping[str, RenderElection]", key: str
+) -> "TemporalRender":
+    """The bare-shorthand rendering elected for a structural instant column key.
+
+    A structural key's `render` entry is always the bare shorthand form —
+    the `RenderKeyResolves` domain gate admits no other form there — so this
+    narrows the map's mixed-form value type back to `TemporalRender` for
+    callers that only ever address structural keys.
+
+    Args:
+        render_map: The table's resolved `render` map.
+        key: A structural instant column's source identity.
+
+    Returns:
+        The elected rendering, or the mode-definitional default `timestamp`
+        when `key` carries no entry.
+    """
+    value = render_map.get(key, "timestamp")
+    assert isinstance(value, str), f"structural render key {key!r} must be shorthand"
+    return value
+
+
 def _render_wallclock_column(
     src: str,
     out: str,
     alias: str,
     anchor: "EffectiveAnchor",
     wallclock_columns: "frozenset[str]",
-    render_map: "Mapping[str, TemporalRender]",
+    render_map: "Mapping[str, RenderElection]",
 ) -> str:
     """Render one faithful-read column expression.
 
@@ -154,7 +189,7 @@ def _render_wallclock_column(
         anchor: The resolved effective anchor.
         wallclock_columns: The structural sim-time column names for this render.
         render_map: The table's resolved `render` map (source identity ->
-            elected rendering; § `SourceStateTablePlan.render` /
+            elected form; § `SourceStateTablePlan.render` /
             `SourceJunctionTablePlan.render`), as a dict.
 
     Returns:
@@ -162,9 +197,53 @@ def _render_wallclock_column(
     """
     qualified = f'"{alias}"."{src}"'
     if src in wallclock_columns:
-        elect = render_map.get(src, "timestamp")
-        return render_anchor_temporal_expr(anchor, qualified, out, elect)
+        return render_anchor_temporal_expr(
+            anchor, qualified, out, _shorthand_render(render_map, src)
+        )
     return f'{qualified} AS "{out}"'
+
+
+def _render_elected_column(
+    qualified_source: str,
+    out: str,
+    src: str,
+    value: "RenderElection",
+    anchor: "EffectiveAnchor",
+    table_name: str,
+) -> str:
+    """Render one typed-election column's SQL fragment — the one dispatch
+    every render composes for a `render`-map entry outside the bare
+    shorthand form (state's payload columns, junction's `elem__<f>`
+    columns).
+
+    Args:
+        qualified_source: The fully table-qualified source column SQL.
+        out: The resolved output column name.
+        src: The source identity, for guard attribution (`column_label`).
+        value: The elected typed election (never the bare shorthand form).
+        anchor: The resolved wallclock anchor.
+        table_name: The output table name, for guard attribution.
+
+    Returns:
+        A SQL SELECT-list expression fragment ending in `AS "<out>"`.
+    """
+    if isinstance(value, DateParseElection):
+        return render_date_parse_expr(
+            qualified_source, value.date_parse, out, table_name
+        )
+    if isinstance(value, InstantElection):
+        return render_anchor_temporal_expr(anchor, qualified_source, out, value.instant)
+    if isinstance(value, DecimalElection):
+        precision, scale = value.decimal
+        expr = render_decimal_expr(qualified_source, precision, scale, src, table_name)
+        return f'{expr} AS "{out}"'
+    assert isinstance(value, JsonPrecisionElection), (
+        f"unrecognized RenderElection form for {src!r}: {value!r}"
+    )
+    expr = render_json_precision_expr(
+        qualified_source, value.json_precision, src, table_name
+    )
+    return f'{expr} AS "{out}"'
 
 
 def _half_open_predicate(alias: str, column: str, window: "Window") -> str:
@@ -479,11 +558,15 @@ def build_state_render_sql(
     `(created_sim_time, record_id)` — raw keys, never rendered timestamps.
     A table with every surface at its default composes join-free SQL.
     `table.render` elects each structural instant's rendering (the
-    mode-definitional default `timestamp` for an unelected one);
-    `table.date_parse` renders each keyed payload column through
-    `render_date_parse_expr` in place — the same raw VARCHAR source in both
-    shapes, since the state-at fold's codec after-image of a VARCHAR column
-    is itself VARCHAR.
+    mode-definitional default `timestamp` for an unelected one), and each
+    keyed payload column's typed election through `_render_elected_column`
+    in place — the same raw (or, windowed, codec-VARCHAR) source feeds every
+    election's authority in both shapes, since `render_date_parse_expr` /
+    `render_decimal_expr` / `render_json_precision_expr` each accept the
+    codec-VARCHAR after-image directly (a VARCHAR source is unaffected; a
+    numeric source's VARCHAR text CASTs through DuckDB's implicit
+    string-to-typed conversion, identically to the `where` predicate's own
+    posture above).
 
     Args:
         sidecar: The plan's sidecar.
@@ -546,7 +629,6 @@ def build_state_render_sql(
     joins_sql = "".join(joins)
 
     render_map = dict(table.render)
-    date_parse_map = dict(table.date_parse)
     select_parts: list[str] = []
     for src, out in table.columns:
         if src == table.identity_surface and table.identity_surface != "record_id":
@@ -555,10 +637,15 @@ def build_state_render_sql(
             )
         elif src in edge_exprs:
             select_parts.append(f'{edge_exprs[src]} AS "{out}"')
-        elif src in date_parse_map:
+        elif src in render_map and not isinstance(render_map[src], str):
             select_parts.append(
-                render_date_parse_expr(
-                    f'"{base_alias}"."{src}"', date_parse_map[src], out, table.name
+                _render_elected_column(
+                    f'"{base_alias}"."{src}"',
+                    out,
+                    src,
+                    render_map[src],
+                    anchor,
+                    table.name,
                 )
             )
         elif (
@@ -635,9 +722,9 @@ def build_junction_render_sql(
     it applies identically at every horizon. Total ORDER BY `(record_id,
     joined_sim_time, element fields in element-schema declaration order,
     VARCHAR-compared, NULLS FIRST)`. `table.render` elects each interval
-    column's rendering (the masked `left_at` included); `table.date_parse`
-    renders each keyed `elem__<f>` payload column through
-    `render_date_parse_expr` in place.
+    column's rendering (the masked `left_at` included) and each keyed
+    `elem__<f>` payload column's typed election through
+    `_render_elected_column` in place.
 
     Args:
         sidecar: The plan's sidecar.
@@ -671,7 +758,6 @@ def build_junction_render_sql(
     joins_sql = "".join(joins)
 
     render_map = dict(table.render)
-    date_parse_map = dict(table.date_parse)
     select_parts: list[str] = []
     for src, out in table.columns:
         if src in edge_exprs:
@@ -679,13 +765,13 @@ def build_junction_render_sql(
         elif src == "left_sim_time" and window is not None:
             select_parts.append(
                 _junction_masked_left_at_expr(
-                    src, out, "_mem", anchor, window, render_map.get(src, "timestamp")
+                    src, out, "_mem", anchor, window, _shorthand_render(render_map, src)
                 )
             )
-        elif src in date_parse_map:
+        elif src in render_map and not isinstance(render_map[src], str):
             select_parts.append(
-                render_date_parse_expr(
-                    f'"_mem"."{src}"', date_parse_map[src], out, table.name
+                _render_elected_column(
+                    f'"_mem"."{src}"', out, src, render_map[src], anchor, table.name
                 )
             )
         elif src.startswith(_MEMBER_PREFIX) and src.endswith(_MEMBER_KIND_SUFFIX):

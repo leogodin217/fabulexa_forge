@@ -30,9 +30,11 @@ seam), the mode-neutral `reserved_names` / `slice_only` / `query_spec`
 (`TableKeys`) / `populations` modules, the sibling `source.columns`
 (`_PROP_PREFIX`) and `source.events` (`SourceEventSourcePlan`,
 `SourceEventLogPlan`) modules, `notices`, `derivations.guard`
-(`require_single_branch`), config.models (TYPE_CHECKING only except
-`KeySurface`), and stdlib. Never imports exporters.dimensional.* or
-exporters.streaming.*.
+(`require_single_branch`), config.models (the `RenderElection` typed-election
+classes — `DateParseElection` / `InstantElection` / `DecimalElection` /
+`JsonPrecisionElection` — imported at runtime for the render-map form
+dispatch; TYPE_CHECKING only otherwise, except `KeySurface`), and stdlib.
+Never imports exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -48,6 +50,7 @@ if TYPE_CHECKING:
         ExportConfig,
         KeySurface,
         PredicateValue,
+        RenderElection,
         SourceEventsDecl,
         SourceEventSourceDecl,
         SourceTableDecl,
@@ -57,11 +60,20 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import PresentationKeys, Sidecar
 
 from fabulexa_forge._sql import cast_predicate_element
+from fabulexa_forge.config.models import (
+    DateParseElection,
+    DecimalElection,
+    InstantElection,
+    JsonPrecisionElection,
+)
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import (
     DateParseSourceColumn,
+    DecimalSourceIsDouble,
     ExportError,
-    RenderKeyIsInstantColumn,
+    InstantSourceIsBigint,
+    JsonPrecisionSourceIsVarchar,
+    RenderKeyResolves,
     SourceColumnNotAddressable,
     SourceColumnUnresolved,
     SourceEventSourceOverlap,
@@ -242,20 +254,19 @@ class SourceStateTablePlan:
     decl. Defaults to empty so existing construction call sites (a table
     with no `where`) need no change; `_build_state_table_plan` always
     passes it explicitly."""
-    render: tuple[tuple[str, "TemporalRender"], ...] = ()
-    """Resolved structural-instant rendering elections, (source identity,
-    elected rendering) pairs, `decl.render` iteration order; keys gated at
-    plan time (`RenderKeyIsInstantColumn`) against the records category's
-    instant-carrying structural columns and against the table's final
-    projected column sources (the windowed-omission / `columns`-selection
-    posture `rename` already carries). Empty when `decl.render` is absent —
-    every structural instant renders the mode-definitional default
-    `timestamp`."""
-    date_parse: tuple[tuple[str, str], ...] = ()
-    """Resolved declared date parses, (source identity, format) pairs,
-    `decl.date_parse` iteration order; keys gated the same two-stage way as
-    `render`, plus `DateParseSourceColumn` (the resolved source must carry a
-    declared VARCHAR type). Empty when `decl.date_parse` is absent."""
+    render: "tuple[tuple[str, RenderElection], ...]" = ()
+    """Resolved rendering elections, (source identity, elected form) pairs,
+    `decl.render` iteration order; keys gated at plan time
+    (`RenderKeyResolves`) against the value form's key domain — the bare
+    shorthand against the records category's instant-carrying structural
+    columns, a typed election against `prop__<p>` payload columns — plus the
+    election's own source-type gate (`DecimalSourceIsDouble` /
+    `InstantSourceIsBigint` / `JsonPrecisionSourceIsVarchar` /
+    `DateParseSourceColumn`), and against the table's final projected column
+    sources (the windowed-omission / `columns`-selection posture `rename`
+    already carries). Empty when `decl.render` is absent — every structural
+    instant renders the mode-definitional default `timestamp`, every payload
+    column renders verbatim."""
 
 
 @dataclass(frozen=True)
@@ -303,17 +314,13 @@ class SourceJunctionTablePlan:
     """The unit's resolved owner row predicate (doc § The parent lookup),
     `where` declaration order; empty when `where` is absent. Defaults to
     empty for the same reason as `owner_populations`."""
-    render: "tuple[tuple[str, TemporalRender], ...]" = ()
-    """Resolved structural-instant rendering elections over the membership
-    category's interval columns (`joined_sim_time` / `left_sim_time`),
-    (source identity, elected rendering) pairs, `decl.render` iteration
-    order — gated the same two-stage way as `SourceStateTablePlan.render`.
-    Empty when `decl.render` is absent."""
-    date_parse: "tuple[tuple[str, str], ...]" = ()
-    """Resolved declared date parses over the table's `elem__<f>` scalar
-    payload columns, (source identity, format) pairs, `decl.date_parse`
-    iteration order — gated the same way as `SourceStateTablePlan.date_parse`.
-    Empty when `decl.date_parse` is absent."""
+    render: "tuple[tuple[str, RenderElection], ...]" = ()
+    """Resolved rendering elections over the membership category's interval
+    columns (`joined_sim_time` / `left_sim_time`, bare shorthand only) and
+    `elem__<f>` scalar payload columns (typed elections only), (source
+    identity, elected form) pairs, `decl.render` iteration order — gated the
+    same way as `SourceStateTablePlan.render`. Empty when `decl.render` is
+    absent."""
 
 
 @dataclass(frozen=True)
@@ -1023,14 +1030,14 @@ def _apply_state_table_rename(
 
 
 # ---------------------------------------------------------------------------
-# `render` / `date_parse`: temporal rendering elections (shared, state +
-# junction)
+# `render`: the unified rendering-election map (shared, state + junction)
 # ---------------------------------------------------------------------------
 
 
 def _verify_render_key_is_instant(key: str, category: str, table_name: str) -> None:
-    """Enforce RenderKeyIsInstantColumn: a `render` key names an
-    instant-carrying structural column of the table's category.
+    """Enforce RenderKeyResolves' shorthand-form domain: a bare-literal
+    `render` key names an instant-carrying structural column of the table's
+    category.
 
     Args:
         key: The `render` key, already confirmed a projected column source.
@@ -1040,24 +1047,50 @@ def _verify_render_key_is_instant(key: str, category: str, table_name: str) -> N
         table_name: The table's output name, for the error.
 
     Raises:
-        RenderKeyIsInstantColumn: `key` is not among the category's
-            instant-carrying structural columns.
+        RenderKeyResolves: `key` is not among the category's instant-carrying
+            structural columns.
     """
     if key not in structural_instant_columns(category):
-        raise RenderKeyIsInstantColumn(
+        raise RenderKeyResolves(
             f"table '{table_name}': render key '{key}' is not an"
             f" instant-carrying structural column of category '{category}'"
+        )
+
+
+def _verify_render_key_is_payload(key: str, category: str, table_name: str) -> None:
+    """Enforce RenderKeyResolves' typed-form domain: a typed election's
+    `render` key names a payload column of the table's category —
+    `prop__<p>` on records, `elem__<f>` on membership. Never a structural
+    column (so no rendering ever has two spellings) and never a junction
+    member-pair column (`member__<f>__kind` / `__id`, outside the
+    typed-election key domain — reference identity is key election's
+    surface).
+
+    Args:
+        key: The `render` key, already confirmed a projected column source.
+        category: The sidecar table category ('records' or 'membership').
+        table_name: The table's output name, for the error.
+
+    Raises:
+        RenderKeyResolves: `key` is not a payload column of `category`.
+    """
+    prefix = _PROP_PREFIX if category == "records" else _ELEM_PREFIX
+    if not key.startswith(prefix):
+        raise RenderKeyResolves(
+            f"table '{table_name}': render key '{key}' names a typed"
+            f" election but is not a payload column of category '{category}'"
+            f" (typed elections require a '{prefix}' key)"
         )
 
 
 def _verify_date_parse_source_varchar(
     key: str, col_types: dict[str, str], table_name: str
 ) -> None:
-    """Enforce DateParseSourceColumn: a `date_parse` key resolves to a
-    declared VARCHAR column.
+    """Enforce DateParseSourceColumn: a `date_parse` election's key resolves
+    to a declared VARCHAR column.
 
     Args:
-        key: The `date_parse` key, already confirmed a projected column source.
+        key: The `render` key, already confirmed a projected column source.
         col_types: Every real column of the table's source, name -> declared
             DuckDB type (`_column_types`).
         table_name: The table's output name, for the error.
@@ -1074,26 +1107,118 @@ def _verify_date_parse_source_varchar(
         )
 
 
+#: Per typed-election kind (excluding `date_parse`, whose message shape
+#: predates this map and stays its own function): the required declared
+#: source type, the error class its gate raises, and the full reason clause
+#: spliced into that error's message ahead of "(got <type>)".
+_TYPED_ELECTION_SOURCE_GATES: dict[str, tuple[str, type[ExportError], str]] = {
+    "decimal": (
+        "DOUBLE",
+        DecimalSourceIsDouble,
+        "decimal rendering requires a DOUBLE source",
+    ),
+    "instant": (
+        "BIGINT",
+        InstantSourceIsBigint,
+        "instant rendering requires a BIGINT sim-time source",
+    ),
+    "json_precision": (
+        "VARCHAR",
+        JsonPrecisionSourceIsVarchar,
+        "json_precision requires a VARCHAR JSON payload source",
+    ),
+}
+
+
+def _verify_typed_election_source_type(
+    key: str, form: str, col_types: dict[str, str], table_name: str
+) -> None:
+    """Enforce one typed election's source-type gate (`DecimalSourceIsDouble`
+    / `InstantSourceIsBigint` / `JsonPrecisionSourceIsVarchar`) — the one
+    shape every non-`date_parse` typed election's gate shares, per
+    `_TYPED_ELECTION_SOURCE_GATES`.
+
+    Args:
+        key: The `render` key, already confirmed a projected column source.
+        form: The election's form name (`decimal` / `instant` /
+            `json_precision`), keying `_TYPED_ELECTION_SOURCE_GATES`.
+        col_types: Every real column of the table's source, name -> declared
+            DuckDB type.
+        table_name: The table's output name, for the error.
+
+    Raises:
+        DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar: `key`'s declared type does not
+            match `form`'s required source type.
+    """
+    expected_type, error_cls, reason = _TYPED_ELECTION_SOURCE_GATES[form]
+    sql_type = col_types.get(key)
+    if sql_type is None or sql_type.upper() != expected_type:
+        got = sql_type if sql_type is not None else "no declared type"
+        raise error_cls(f"render key '{key}' on '{table_name}': {reason} (got {got})")
+
+
+def _verify_render_election(
+    key: str,
+    value: "RenderElection",
+    category: str,
+    col_types: dict[str, str],
+    table_name: str,
+) -> None:
+    """Enforce RenderKeyResolves' form-domain check plus the election's own
+    source-type gate, for one resolved `render` entry.
+
+    Args:
+        key: The `render` key, already confirmed a projected column source.
+        value: The parsed election value.
+        category: The sidecar table category ('records' or 'membership').
+        col_types: Every real column of the table's source, name -> declared
+            DuckDB type.
+        table_name: The table's output name, for errors.
+
+    Raises:
+        RenderKeyResolves: `key` is outside `value`'s form domain.
+        DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: `key`'s
+            declared type fails the election's source-type gate.
+    """
+    if isinstance(value, str):
+        _verify_render_key_is_instant(key, category, table_name)
+        return
+    _verify_render_key_is_payload(key, category, table_name)
+    if isinstance(value, DecimalElection):
+        _verify_typed_election_source_type(key, "decimal", col_types, table_name)
+    elif isinstance(value, InstantElection):
+        _verify_typed_election_source_type(key, "instant", col_types, table_name)
+    elif isinstance(value, JsonPrecisionElection):
+        _verify_typed_election_source_type(key, "json_precision", col_types, table_name)
+    else:
+        assert isinstance(value, DateParseElection), (
+            f"unrecognized RenderElection form for key {key!r}: {value!r}"
+        )
+        _verify_date_parse_source_varchar(key, col_types, table_name)
+
+
 def _resolve_temporal_key_map(
     entries: "dict[str, _TemporalMapValue] | None",
     sources: "frozenset[str]",
     table_name: str,
     check_name: "Callable[[str], None]",
-    verify: "Callable[[str], None]",
+    verify: "Callable[[str, _TemporalMapValue], None]",
 ) -> tuple[tuple[str, "_TemporalMapValue"], ...]:
-    """Resolve one declared `render` / `date_parse` map to (key, value)
-    pairs, gating each key through the shared two-stage check every such map
-    shares: first, that it names one of the table's final projected column
-    sources — `render` keys are source identities, composing with `rename`
-    exactly as a `rename` key does (`check_name` diagnoses the specific
-    reason when it does not: a real-but-excluded column under `columns`
-    selection or a windowed omission, a mechanism column, or a non-exempt
-    slice_only column; else a generic "not among this table's projected
-    columns", `SourceColumnUnresolved` — the windowed omitted-column posture
-    composes here for free, since a key naming a column the windowed render
-    omits is never in `sources`). Second, the map's own business rule
-    (`verify` — `RenderKeyIsInstantColumn` for `render`, `DateParseSourceColumn`
-    for `date_parse`).
+    """Resolve one declared `render` map to (key, value) pairs, gating each
+    key through the shared two-stage check every such map shares: first,
+    that it names one of the table's final projected column sources —
+    `render` keys are source identities, composing with `rename` exactly as
+    a `rename` key does (`check_name` diagnoses the specific reason when it
+    does not: a real-but-excluded column under `columns` selection or a
+    windowed omission, a mechanism column, or a non-exempt slice_only
+    column; else a generic "not among this table's projected columns",
+    `SourceColumnUnresolved` — the windowed omitted-column posture composes
+    here for free, since a key naming a column the windowed render omits is
+    never in `sources`; an elected source joins this same slice_only
+    refusal). Second, the map's own business rule (`verify` —
+    `RenderKeyResolves` plus the entry's own source-type gate).
 
     Args:
         entries: The declared map, or None (no entries).
@@ -1103,8 +1228,8 @@ def _resolve_temporal_key_map(
             not in `sources`; returns silently otherwise (unreachable in
             practice — a resolving key is always excluded only by `columns`
             selection, per this function's own gate).
-        verify: Raises the map-specific business-rule error for a key
-            already confirmed to be a projected column source.
+        verify: Raises the map-specific business-rule error for a
+            (key, value) pair already confirmed a projected column source.
 
     Returns:
         (key, value) pairs, `entries` iteration order; empty when `entries`
@@ -1113,8 +1238,9 @@ def _resolve_temporal_key_map(
     Raises:
         SourceColumnUnresolved, SourceColumnNotAddressable, SourceSliceOnlyRead:
             Propagated from `check_name`.
-        RenderKeyIsInstantColumn, DateParseSourceColumn: Propagated from
-            `verify`.
+        RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: Propagated
+            from `verify`.
     """
     if entries is None:
         return ()
@@ -1126,22 +1252,23 @@ def _resolve_temporal_key_map(
                 f"table '{table_name}': '{key}' is not among this table's"
                 " projected columns"
             )
-        verify(key)
+        verify(key, value)
         resolved.append((key, value))
     return tuple(resolved)
 
 
 def _resolve_state_table_render(
     columns: tuple[tuple[str, str], ...],
-    render: "dict[str, TemporalRender] | None",
+    render: "dict[str, RenderElection] | None",
     identity_surface: "KeySurface",
     windowed: bool,
     sidecar: "Sidecar",
     kind: str,
     table_name: str,
     all_source_columns: frozenset[str],
-) -> "tuple[tuple[str, TemporalRender], ...]":
-    """Resolve a `state` table's declared `render` map
+    col_types: dict[str, str],
+) -> "tuple[tuple[str, RenderElection], ...]":
+    """Resolve a `state` table's declared unified `render` map
     (§ `SourceStateTablePlan.render`).
 
     Args:
@@ -1155,13 +1282,17 @@ def _resolve_state_table_render(
         table_name: The table's output name, for errors.
         all_source_columns: Every real column name of the kind's records
             table.
+        col_types: Every real column of the kind's records table, name ->
+            declared DuckDB type.
 
     Returns:
-        The resolved (source identity, elected rendering) pairs.
+        The resolved (source identity, elected form) pairs.
 
     Raises:
         SourceColumnUnresolved, SourceColumnNotAddressable, SourceSliceOnlyRead,
-            RenderKeyIsInstantColumn: Propagated from `_resolve_temporal_key_map`.
+            RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: Propagated
+            from `_resolve_temporal_key_map`.
     """
     sources = frozenset(src for src, _ in columns)
     return _resolve_temporal_key_map(
@@ -1178,61 +1309,9 @@ def _resolve_state_table_render(
             table_name,
             allow_identity=False,
         ),
-        lambda key: _verify_render_key_is_instant(key, "records", table_name),
-    )
-
-
-def _resolve_state_table_date_parse(
-    columns: tuple[tuple[str, str], ...],
-    date_parse: "dict[str, str] | None",
-    identity_surface: "KeySurface",
-    windowed: bool,
-    sidecar: "Sidecar",
-    kind: str,
-    table_name: str,
-    all_source_columns: frozenset[str],
-    col_types: dict[str, str],
-) -> tuple[tuple[str, str], ...]:
-    """Resolve a `state` table's declared `date_parse` map
-    (§ `SourceStateTablePlan.date_parse`).
-
-    Args:
-        columns: The table's final (source, output) pairs, post `columns` /
-            `rename`.
-        date_parse: The `tables[].date_parse` entry, or None.
-        identity_surface: The table's gated elected identity surface.
-        windowed: Whether the invocation is windowed.
-        sidecar: The open emit's sidecar.
-        kind: The table's record kind.
-        table_name: The table's output name, for errors.
-        all_source_columns: Every real column name of the kind's records
-            table.
-        col_types: Every real column of the kind's records table, name ->
-            declared DuckDB type.
-
-    Returns:
-        The resolved (source identity, format) pairs.
-
-    Raises:
-        SourceColumnUnresolved, SourceColumnNotAddressable, SourceSliceOnlyRead,
-            DateParseSourceColumn: Propagated from `_resolve_temporal_key_map`.
-    """
-    sources = frozenset(src for src, _ in columns)
-    return _resolve_temporal_key_map(
-        date_parse,
-        sources,
-        table_name,
-        lambda key: _check_state_column_name(
-            key,
-            identity_surface,
-            windowed,
-            all_source_columns,
-            sidecar,
-            kind,
-            table_name,
-            allow_identity=False,
+        lambda key, value: _verify_render_election(
+            key, value, "records", col_types, table_name
         ),
-        lambda key: _verify_date_parse_source_varchar(key, col_types, table_name),
     )
 
 
@@ -1399,13 +1478,15 @@ def _apply_junction_rename(
 
 def _resolve_junction_table_render(
     columns: tuple[tuple[str, str], ...],
-    render: "dict[str, TemporalRender] | None",
+    render: "dict[str, RenderElection] | None",
     table_name: str,
     all_source_columns: frozenset[str],
-) -> "tuple[tuple[str, TemporalRender], ...]":
-    """Resolve a `junction` table's declared `render` map (§
+    col_types: dict[str, str],
+) -> "tuple[tuple[str, RenderElection], ...]":
+    """Resolve a `junction` table's declared unified `render` map (§
     `SourceJunctionTablePlan.render`) — the membership category's interval
-    columns (`joined_sim_time` / `left_sim_time`).
+    columns (`joined_sim_time` / `left_sim_time`, bare shorthand only) and
+    the table's `elem__<f>` scalar payload columns (typed elections only).
 
     Args:
         columns: The table's final (source, output) pairs, post `columns` /
@@ -1413,13 +1494,17 @@ def _resolve_junction_table_render(
         render: The `tables[].render` entry, or None.
         table_name: The table's output name, for errors.
         all_source_columns: Every real column name of the membership table.
+        col_types: Every real column of the membership table, name ->
+            declared DuckDB type.
 
     Returns:
-        The resolved (source identity, elected rendering) pairs.
+        The resolved (source identity, elected form) pairs.
 
     Raises:
         SourceColumnUnresolved, SourceColumnNotAddressable,
-            RenderKeyIsInstantColumn: Propagated from `_resolve_temporal_key_map`.
+            RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: Propagated
+            from `_resolve_temporal_key_map`.
     """
     sources = frozenset(src for src, _ in columns)
     return _resolve_temporal_key_map(
@@ -1429,46 +1514,9 @@ def _resolve_junction_table_render(
         lambda key: _check_junction_column_name(
             key, all_source_columns, table_name, allow_owner=False
         ),
-        lambda key: _verify_render_key_is_instant(key, "membership", table_name),
-    )
-
-
-def _resolve_junction_table_date_parse(
-    columns: tuple[tuple[str, str], ...],
-    date_parse: "dict[str, str] | None",
-    table_name: str,
-    all_source_columns: frozenset[str],
-    col_types: dict[str, str],
-) -> tuple[tuple[str, str], ...]:
-    """Resolve a `junction` table's declared `date_parse` map (§
-    `SourceJunctionTablePlan.date_parse`) — the table's `elem__<f>` scalar
-    payload columns.
-
-    Args:
-        columns: The table's final (source, output) pairs, post `columns` /
-            `rename`.
-        date_parse: The `tables[].date_parse` entry, or None.
-        table_name: The table's output name, for errors.
-        all_source_columns: Every real column name of the membership table.
-        col_types: Every real column of the membership table, name ->
-            declared DuckDB type.
-
-    Returns:
-        The resolved (source identity, format) pairs.
-
-    Raises:
-        SourceColumnUnresolved, SourceColumnNotAddressable,
-            DateParseSourceColumn: Propagated from `_resolve_temporal_key_map`.
-    """
-    sources = frozenset(src for src, _ in columns)
-    return _resolve_temporal_key_map(
-        date_parse,
-        sources,
-        table_name,
-        lambda key: _check_junction_column_name(
-            key, all_source_columns, table_name, allow_owner=False
+        lambda key, value: _verify_render_election(
+            key, value, "membership", col_types, table_name
         ),
-        lambda key: _verify_date_parse_source_varchar(key, col_types, table_name),
     )
 
 
@@ -1726,8 +1774,9 @@ def _build_state_table_plan(
         SourceWhereColumnUnresolved, SourceWhereNotConstant,
             SourceWhereOnDiscriminator, SourceWhereValueUncastable: `where`
             resolution fails (the constant-column gate).
-        RenderKeyIsInstantColumn, DateParseSourceColumn: `render` /
-            `date_parse` resolution fails.
+        RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: `render`
+            resolution fails.
     """
     assert decl.kind is not None, "a records tables[] declaration carries kind"
     kind = decl.kind
@@ -1780,16 +1829,6 @@ def _build_state_table_plan(
         kind,
         decl.name,
         all_source_columns,
-    )
-    date_parse = _resolve_state_table_date_parse(
-        columns,
-        decl.date_parse,
-        identity_surface,
-        windowed,
-        sidecar,
-        kind,
-        decl.name,
-        all_source_columns,
         _column_types(sidecar, source_table),
     )
 
@@ -1829,7 +1868,6 @@ def _build_state_table_plan(
         keys=keys,
         where=where,
         render=render,
-        date_parse=date_parse,
     )
 
 
@@ -1875,8 +1913,9 @@ def _build_junction_table_plan(
             resolution fails (the constant-column gate, applied to the owner
             kind).
         ElectionUnionUnsafe: An edge gate fails.
-        RenderKeyIsInstantColumn, DateParseSourceColumn: `render` /
-            `date_parse` resolution fails.
+        RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: `render`
+            resolution fails.
     """
     assert decl.membership is not None, "a membership tables[] declaration carries it"
     owner_kind = decl.membership.kind
@@ -1914,11 +1953,8 @@ def _build_junction_table_plan(
     )
 
     render = _resolve_junction_table_render(
-        columns, decl.render, decl.name, all_source_columns
-    )
-    date_parse = _resolve_junction_table_date_parse(
         columns,
-        decl.date_parse,
+        decl.render,
         decl.name,
         all_source_columns,
         _column_types(sidecar, source_table),
@@ -1944,7 +1980,6 @@ def _build_junction_table_plan(
         owner_populations=owner_populations,
         where=where,
         render=render,
-        date_parse=date_parse,
     )
 
 
@@ -2827,14 +2862,14 @@ def _resolve_event_log_render(
         default `'timestamp'` when `render` is None.
 
     Raises:
-        RenderKeyIsInstantColumn: `render` names any key other than
+        RenderKeyResolves: `render` names any key other than
             `event_sim_time` (the log's one legal key, mode-definitional).
     """
     if render is None:
         return "timestamp"
     invalid = sorted(set(render) - {_EVENT_LOG_INSTANT_KEY})
     if invalid:
-        raise RenderKeyIsInstantColumn(
+        raise RenderKeyResolves(
             f"events: render key(s) {invalid} not legal; the log's one"
             f" legal key is '{_EVENT_LOG_INSTANT_KEY}'"
         )
@@ -2884,7 +2919,7 @@ def _build_event_log_plan(
             item-type, or a resolved item-type collides with a kind's
             rendered name.
         ElectionUnionUnsafe: An item-type or change-edge gate fails.
-        RenderKeyIsInstantColumn: `decl.render` names a key other than
+        RenderKeyResolves: `decl.render` names a key other than
             `event_sim_time`.
     """
     known_kinds_set = frozenset(known_kinds)

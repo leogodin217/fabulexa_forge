@@ -14,7 +14,7 @@ self identity's contract column name `-> id`, `record_index -> <kind>_key`,
 and per surviving reference edge `ref_index__<p> -> <p>_key`); (5) `rename`;
 (6) `render` — per-table lifecycle-instant elections and declared date
 parses, keyed on the same pre-default column identities `rename` shares
-(`TemporalRenderRequiresAnchor`, `RenderKeyIsInstantColumn`,
+(`TemporalRenderRequiresAnchor`, `RenderKeyResolves`,
 `DateParseSourceColumn`); (7) the collision and reserved-name checks. See
 `docs/architecture/base.md` for the semantics this module implements (no
 horizon here — render.py's concern) and
@@ -62,7 +62,7 @@ from fabulexa_forge.errors import (
     BaseRenameUnresolved,
     DateParseSourceColumn,
     ExportError,
-    RenderKeyIsInstantColumn,
+    RenderKeyResolves,
     TemporalRenderRequiresAnchor,
 )
 from fabulexa_forge.exporters.election import (
@@ -162,7 +162,7 @@ class BaseTableSpec:
     identity, elected rendering) pairs, the matching `BaseRenderDecl.columns`
     iteration order; keys gated at plan time against the domain `rename`
     shares (`last_mutation_sim_time` is outside it — the mode never emits
-    it) and against `RenderKeyIsInstantColumn`. Empty when no `render` entry
+    it) and against `RenderKeyResolves`. Empty when no `render` entry
     matches this kind — every lifecycle instant renders the
     mode-definitional default `timestamp`. Defaults to empty so existing
     construction call sites need no change; `_resolve_specs` always passes
@@ -758,8 +758,8 @@ def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:
 
 
 def _verify_render_key_is_instant(key: str, table_name: str) -> None:
-    """Enforce RenderKeyIsInstantColumn: a `render` key names an
-    instant-carrying structural column of the records category.
+    """Enforce RenderKeyResolves: a `render` key names an instant-carrying
+    structural column of the records category.
 
     Args:
         key: The `render` key, already confirmed a state-at or key column
@@ -767,11 +767,11 @@ def _verify_render_key_is_instant(key: str, table_name: str) -> None:
         table_name: The kind's `records__<kind>` table, for the error.
 
     Raises:
-        RenderKeyIsInstantColumn: `key` is not among the records category's
+        RenderKeyResolves: `key` is not among the records category's
             instant-carrying structural columns.
     """
     if key not in structural_instant_columns("records"):
-        raise RenderKeyIsInstantColumn(
+        raise RenderKeyResolves(
             f"table '{table_name}': render key '{key}' is not an"
             " instant-carrying structural column of category 'records'"
         )
@@ -813,7 +813,7 @@ def _resolve_table_render(
 
     Gates each key through the domain `rename` shares
     (`_check_column_domain` — `last_mutation_sim_time` is outside it, the
-    mode never emits it), then `RenderKeyIsInstantColumn`, then
+    mode never emits it), then `RenderKeyResolves`, then
     `TemporalRenderRequiresAnchor`: every explicitly-elected rendering
     (whatever the elected type — `timestamp` included) requires a resolved
     anchor, since base's anchor is optional and a None anchor has no wallclock
@@ -834,7 +834,7 @@ def _resolve_table_render(
     Raises:
         BaseRenameSliceOnly, BaseRenameUnresolved: Propagated from
             `_check_column_domain`.
-        RenderKeyIsInstantColumn: Propagated from `_verify_render_key_is_instant`.
+        RenderKeyResolves: Propagated from `_verify_render_key_is_instant`.
         TemporalRenderRequiresAnchor: An explicit election is set and no
             anchor resolved.
     """
@@ -974,7 +974,7 @@ def _resolve_specs(
         ElectionUnionUnsafe: A uniform presentation_id election, or a
             reference edge's admitted target populations, contain a
             pairwise-unsafe key-space pair.
-        RenderKeyIsInstantColumn: A `render` key does not name an
+        RenderKeyResolves: A `render` key does not name an
             instant-carrying structural column of the records category.
         TemporalClassUnavailableError: Propagated from the omitted-column scan.
         TemporalRenderRequiresAnchor: A `render` entry elects a rendering and
@@ -1325,7 +1325,7 @@ def build_base_plan(
             `last_mutation_sim_time`) — checked always-on via
             `exporters.reserved_names`, as source's `_check_reserved_names` does,
             so a full export and a later incremental drip on the same target agree.
-        RenderKeyIsInstantColumn: A `render` key does not name an
+        RenderKeyResolves: A `render` key does not name an
             instant-carrying structural column of the records category.
         TableNotFoundError: A declared `records__<kind>` table is absent.
         TemporalRenderRequiresAnchor: A `render` entry elects a rendering and

@@ -2,15 +2,17 @@
 # ============================================================
 # Demonstrates the temporal-rendering election on a declared source table:
 # a per-table `render` map elects the rendering of a structural instant
-# column, and a `date_parse` map declares a payload VARCHAR column a date
-# string in an author format — both re-render the projected column IN
-# PLACE (no column is added; the output name stays governed by the
-# mode's defaults and `rename`).
+# column (a bare temporal-election literal) and, in the same map, declares
+# a payload VARCHAR column a date string in an author format (a
+# `date_parse` typed election object) — both re-render the projected
+# column IN PLACE (no column is added; the output name stays governed by
+# the mode's defaults and `rename`).
 #
 # `render` keys are source identities (e.g. `created_sim_time`), never
-# output names — a key must name an instant-carrying structural column of
-# the table's category (reader-sourced, never a hardcoded list).
-# `date_parse` keys are payload source columns (`prop__<p>`).
+# output names — a bare literal key must name an instant-carrying
+# structural column of the table's category (reader-sourced, never a
+# hardcoded list); a typed election (`date_parse` here) keys a payload
+# source column (`prop__<p>`).
 #
 # Contrast with source-state-tables, whose created_at is the default
 # TIMESTAMP and whose dob (if selected) would pass through as plain
@@ -32,9 +34,9 @@ source:
     - name: patient
       kind: patient
       columns: [created_sim_time, prop__name, prop__dob]
-      # Elect DATE for the structural created_sim_time instant.
       render:
+        # Elect DATE for the structural created_sim_time instant.
         created_sim_time: date
-      # Declare prop__dob a date string in this format, parsed to DATE.
-      date_parse:
-        prop__dob: "%Y-%m-%d"
+        # Declare prop__dob a date string in this format, parsed to DATE.
+        prop__dob:
+          date_parse: "%Y-%m-%d"
