@@ -14,6 +14,9 @@ TIMESTAMP denotation authority — and `render_date_parse_expr`, the one
 VARCHAR->{DATE,TIME,TIMESTAMP} parse renderer every mode (dimensional,
 source, base) shares (temporal-elections sprint Phase 4;
 scd2-derived-temporal-parse sprint Phase 1 widens the family beyond DATE).
+Also covers `render_decimal_expr` / `render_json_precision_expr` /
+`forge_json_precision` / `register_render_functions` — the two value-
+rendering-election authorities (value-rendering-elections sprint Phase 1).
 """
 
 from __future__ import annotations
@@ -27,8 +30,12 @@ import pytest
 from fabulexa_forge._sql import (
     cast_predicate_element,
     date_parse_denoted_type,
+    forge_json_precision,
     quote_identifier,
+    register_render_functions,
     render_date_parse_expr,
+    render_decimal_expr,
+    render_json_precision_expr,
     render_predicate_condition,
 )
 from fabulexa_forge.errors import ExportError
@@ -553,3 +560,310 @@ def test_render_date_parse_expr_fraction_g_widens_milliseconds_to_microseconds()
     STRPTIME as `%f`, which zero-pads a shorter fraction on the right)."""
     value, _ = _execute_date_parse("14:30:05.123", "%H:%M:%S.%g")
     assert value == time(14, 30, 5, 123000)
+
+
+# ---------------------------------------------------------------------------
+# render_decimal_expr — the one DOUBLE->DECIMAL(p,s) rendering authority
+# ---------------------------------------------------------------------------
+
+
+def _execute_decimal(
+    value: float | None,
+    precision: int,
+    scale: int,
+    *,
+    table_label: str = "visits",
+    column_label: str = "amount",
+    from_table: str = "visits",
+) -> tuple[object, str]:
+    """Execute render_decimal_expr's SQL fragment against a one-row DOUBLE
+    table, returning the rendered value and the fragment's DuckDB type name.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute(f'CREATE TABLE "{from_table}" ("{column_label}" DOUBLE)')
+    conn.execute(f'INSERT INTO "{from_table}" VALUES (?)', [value])
+    expr = render_decimal_expr(
+        f'"{from_table}"."{column_label}"', precision, scale, column_label, table_label
+    )
+    try:
+        row = conn.execute(
+            f'SELECT {expr}, typeof({expr}) FROM "{from_table}"'
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    return row[0], row[1]
+
+
+def _raises_decimal_error(
+    value: float,
+    precision: int,
+    scale: int,
+    *,
+    table_label: str = "visits",
+    column_label: str = "amount",
+) -> str:
+    """Execute render_decimal_expr expecting a DuckDB error; return its
+    message text."""
+    conn = duckdb.connect(":memory:")
+    conn.execute(f'CREATE TABLE "visits" ("{column_label}" DOUBLE)')
+    conn.execute('INSERT INTO "visits" VALUES (?)', [value])
+    expr = render_decimal_expr(
+        f'"visits"."{column_label}"', precision, scale, column_label, table_label
+    )
+    try:
+        with pytest.raises(duckdb.Error) as excinfo:
+            conn.execute(f'SELECT {expr} FROM "visits"').fetchall()
+    finally:
+        conn.close()
+    return str(excinfo.value)
+
+
+def test_render_decimal_expr_rounds_to_exact_scale() -> None:
+    """A value with more fraction digits than the declared scale rounds to
+    exactly `s` fraction digits."""
+    value, sql_type = _execute_decimal(1.23456, 6, 2)
+    assert value == Decimal("1.23")
+    assert sql_type == "DECIMAL(6,2)"
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [(2.5, Decimal("3")), (-2.5, Decimal("-3"))],
+)
+def test_render_decimal_expr_exact_binary_half_rounds_away_from_zero(
+    value: float, expected: Decimal
+) -> None:
+    """An exact binary half (2.5 is exact in DOUBLE) rounds away from zero
+    under DECIMAL(2,0), positive and negative."""
+    rendered, _ = _execute_decimal(value, 2, 0)
+    assert rendered == expected
+
+
+def test_render_decimal_expr_null_yields_typed_null() -> None:
+    """A NULL source value yields NULL of the declared DECIMAL(p,s) type,
+    not a guard failure."""
+    value, sql_type = _execute_decimal(None, 6, 2)
+    assert value is None
+    assert sql_type == "DECIMAL(6,2)"
+
+
+def test_render_decimal_expr_integer_digit_overflow_raises_named_error() -> None:
+    """A value overflowing the declared precision raises in SQL, naming
+    table, column, and the offending value."""
+    message = _raises_decimal_error(
+        12345.6, 4, 0, table_label="visits", column_label="amount"
+    )
+    assert "visits" in message
+    assert "amount" in message
+    assert "12345.6" in message
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_render_decimal_expr_nan_and_infinity_raise(value: float) -> None:
+    """NaN and +/-Infinity are not representable as DECIMAL and raise the
+    same enriched conversion error."""
+    message = _raises_decimal_error(value, 4, 0)
+    assert "visits" in message
+    assert "amount" in message
+
+
+def test_render_decimal_expr_scale_zero_renders_bare_integer() -> None:
+    """`s = 0` renders a DECIMAL with no fractional part."""
+    value, _ = _execute_decimal(17.4, 4, 0)
+    assert value == Decimal("17")
+
+
+def test_render_decimal_expr_negative_value_rounds_correctly() -> None:
+    """A negative value rounds to the declared scale, sign preserved."""
+    value, _ = _execute_decimal(-17.4, 4, 0)
+    assert value == Decimal("-17")
+
+
+# ---------------------------------------------------------------------------
+# forge_json_precision — the JSON-leaf rendering scalar (pure function)
+# ---------------------------------------------------------------------------
+
+
+def test_forge_json_precision_declared_leaf_replaced_byte_identical_around_it() -> None:
+    """A declared present numeric leaf is replaced in place; whitespace, key
+    order, and undeclared values are byte-identical around it."""
+    payload = '{ "b": 2, "amount": 1.005 , "a": [1,2,3] }'
+    rendered = forge_json_precision(payload, '{"amount": 2}', "amount", "t")
+    assert rendered == '{ "b": 2, "amount": 1.01 , "a": [1,2,3] }'
+
+
+def test_forge_json_precision_absent_key_leaves_payload_unchanged() -> None:
+    """A declared leaf key absent from the payload leaves it unchanged."""
+    payload = '{"other": 1.5}'
+    rendered = forge_json_precision(payload, '{"amount": 2}', "amount", "t")
+    assert rendered == payload
+
+
+def test_forge_json_precision_null_leaf_left_verbatim() -> None:
+    """A declared leaf present as JSON `null` is left verbatim (missingness,
+    not a contradiction)."""
+    payload = '{"amount": null}'
+    rendered = forge_json_precision(payload, '{"amount": 2}', "amount", "t")
+    assert rendered == payload
+
+
+def test_forge_json_precision_non_numeric_leaf_raises_named_error() -> None:
+    """A declared leaf whose value is not numeric (and not null) raises
+    ValueError naming table, column, and key."""
+    with pytest.raises(ValueError) as excinfo:
+        forge_json_precision('{"amount": "abc"}', '{"amount": 2}', "amount", "orders")
+    message = str(excinfo.value)
+    assert "orders" in message
+    assert "amount" in message
+
+
+def test_forge_json_precision_duplicate_top_level_key_raises() -> None:
+    """A duplicate top-level key among the declared leaves raises."""
+    with pytest.raises(ValueError, match="duplicate top-level key"):
+        forge_json_precision(
+            '{"amount": 1.5, "amount": 2.5}', '{"amount": 2}', "amount", "orders"
+        )
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ["[1, 2, 3]", "{not valid json", "null", '"just a string"'],
+)
+def test_forge_json_precision_non_object_or_unparseable_payload_raises(
+    payload: str,
+) -> None:
+    """A payload that is not a JSON object — a non-object top-level value,
+    or plain-unparseable text — raises."""
+    with pytest.raises(ValueError):
+        forge_json_precision(payload, '{"amount": 2}', "amount", "orders")
+
+
+def test_forge_json_precision_none_payload_returns_none() -> None:
+    """A None payload (SQL NULL) returns None regardless of leaves."""
+    assert forge_json_precision(None, '{"amount": 2}', "amount", "orders") is None
+
+
+def test_forge_json_precision_exponent_token_rounds_to_plain_form() -> None:
+    """An exponent-form number token rounds to plain decimal notation."""
+    rendered = forge_json_precision('{"amount": 6.5e1}', '{"amount": 1}', "amount", "t")
+    assert rendered == '{"amount": 65.0}'
+
+
+def test_forge_json_precision_negative_rounds_to_zero_without_sign() -> None:
+    """A negative value that rounds to zero renders unsigned (no negative
+    zero)."""
+    rendered = forge_json_precision(
+        '{"amount": -0.001}', '{"amount": 2}', "amount", "t"
+    )
+    assert rendered == '{"amount": 0.00}'
+
+
+def test_forge_json_precision_zero_digits_renders_bare_integer() -> None:
+    """`digits == 0` renders the bare integer, no decimal point."""
+    rendered = forge_json_precision('{"amount": 3.7}', '{"amount": 0}', "amount", "t")
+    assert rendered == '{"amount": 4}'
+
+
+def test_forge_json_precision_same_named_nested_key_not_touched() -> None:
+    """A same-named key nested deeper (not top-level) is not touched — only
+    the top-level declared leaf is replaced."""
+    payload = '{"amount": 1.005, "meta": {"amount": 9.999}}'
+    rendered = forge_json_precision(payload, '{"amount": 2}', "amount", "t")
+    assert rendered == '{"amount": 1.01, "meta": {"amount": 9.999}}'
+
+
+def test_forge_json_precision_exact_decimal_half_never_float64_reparse() -> None:
+    """`0.005` rounded to 2 digits is `0.01` — exact decimal arithmetic on
+    the token text, never a float64 re-parse (which would round 0.005 down,
+    since 0.005 is not exactly representable in binary)."""
+    rendered = forge_json_precision('{"amount": 0.005}', '{"amount": 2}', "amount", "t")
+    assert rendered == '{"amount": 0.01}'
+
+
+# ---------------------------------------------------------------------------
+# render_json_precision_expr — the SQL-level authority calling the scalar
+# ---------------------------------------------------------------------------
+
+
+def _execute_json_precision(
+    payload: str | None,
+    leaves: dict[str, int],
+    *,
+    column_label: str = "amount",
+    table_label: str = "t",
+    from_table: str = "t",
+) -> object:
+    """Execute render_json_precision_expr's SQL fragment against a one-row
+    VARCHAR table on a connection with the scalar registered."""
+    conn = duckdb.connect(":memory:")
+    register_render_functions(conn)
+    conn.execute(f'CREATE TABLE "{from_table}" ("{column_label}" VARCHAR)')
+    conn.execute(f'INSERT INTO "{from_table}" VALUES (?)', [payload])
+    expr = render_json_precision_expr(
+        f'"{from_table}"."{column_label}"', leaves, column_label, table_label
+    )
+    try:
+        row = conn.execute(f'SELECT {expr} FROM "{from_table}"').fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    return row[0]
+
+
+def test_render_json_precision_expr_round_trips_through_duckdb() -> None:
+    """The compiled expression round-trips a declared leaf through DuckDB
+    with the registered scalar."""
+    rendered = _execute_json_precision('{"amount": 1.005}', {"amount": 2})
+    assert rendered == '{"amount": 1.01}'
+
+
+def test_render_json_precision_expr_quote_bearing_labels_splice_safely() -> None:
+    """A table_label / column_label containing a single quote splices safely
+    (no SQL breakout) and the expression still executes correctly."""
+    rendered = _execute_json_precision(
+        '{"amount": 1.005}',
+        {"amount": 2},
+        column_label="amount",
+        table_label="vi'sits",
+    )
+    assert rendered == '{"amount": 1.01}'
+
+
+def test_render_json_precision_expr_quote_bearing_label_survives_into_error() -> None:
+    """A quote-bearing table_label survives unescaped into the raised
+    error's message."""
+    conn = duckdb.connect(":memory:")
+    register_render_functions(conn)
+    conn.execute('CREATE TABLE "t" ("amount" VARCHAR)')
+    conn.execute('INSERT INTO "t" VALUES (?)', ['{"amount": "abc"}'])
+    expr = render_json_precision_expr(
+        '"t"."amount"', {"amount": 2}, "amount", "vi'sits"
+    )
+    try:
+        with pytest.raises(duckdb.Error) as excinfo:
+            conn.execute(f'SELECT {expr} FROM "t"').fetchall()
+    finally:
+        conn.close()
+    assert "vi'sits" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# register_render_functions — connection-scoped scalar registration
+# ---------------------------------------------------------------------------
+
+
+def test_register_render_functions_makes_scalar_callable() -> None:
+    """After registration, the connection can evaluate a
+    `forge_json_precision` call directly."""
+    conn = duckdb.connect(":memory:")
+    register_render_functions(conn)
+    try:
+        row = conn.execute(
+            "SELECT forge_json_precision('{\"amount\": 1.005}',"
+            " '{\"amount\": 2}', 'amount', 't')"
+        ).fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    assert row[0] == '{"amount": 1.01}'

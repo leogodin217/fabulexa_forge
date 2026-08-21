@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
     from fabulexa_forge.anchor import EffectiveAnchor
 
+from fabulexa_forge._sql import register_render_functions
 from fabulexa_forge.reader.errors import (
     EmitNotFoundError,
     RunDatabaseError,
@@ -258,4 +259,5 @@ def open_emit(emit_dir: Path) -> Emit:
     raw = _parse_base_json(base_json_path)
     sidecar = Sidecar.from_raw(raw)
     conn = _open_duckdb_readonly(run_duckdb_path)
+    register_render_functions(conn)
     return Emit(sidecar=sidecar, emit_dir=emit_dir, conn=conn)

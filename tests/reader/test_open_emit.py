@@ -196,3 +196,36 @@ def test_emit_exposes_emit_dir_and_sidecar(tmp_path: Path) -> None:
         assert emit.emit_dir == tmp_path
         tables = emit.sidecar.tables()
         assert len(tables) >= 1
+
+
+# ---------------------------------------------------------------------------
+# register_render_functions is called at open — the connection can evaluate
+# a forge_json_precision call
+# ---------------------------------------------------------------------------
+
+
+def test_open_emit_connection_evaluates_forge_json_precision(tmp_path: Path) -> None:
+    """open_emit registers the shared rendering scalar on the connection it
+    creates: a `forge_json_precision` call evaluates directly on it."""
+    write_emit(tmp_path)
+    with open_emit(tmp_path) as emit:
+        rows = emit.query(
+            "SELECT forge_json_precision(?, ?, ?, ?)",
+            ('{"amount": 1.005}', '{"amount": 2}', "amount", "orders"),
+        )
+    assert rows == [('{"amount": 1.01}',)]
+
+
+def test_open_emit_normal_reads_unaffected_by_registration(tmp_path: Path) -> None:
+    """Registration is additive session setup: an ordinary query against the
+    sidecar's own tables (unrelated to json_precision) still works
+    unaffected — conformance and corrupter reads never call the scalar."""
+    write_emit(
+        tmp_path,
+        db_tables={
+            "firings": "CREATE TABLE firings (fork_path VARCHAR, sim_time BIGINT)"
+        },
+    )
+    with open_emit(tmp_path) as emit:
+        rows = emit.query('SELECT * FROM "firings"', ())
+    assert rows == []

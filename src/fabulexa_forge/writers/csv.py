@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     import datetime as _datetime
+    from decimal import Decimal
 
     import pyarrow as pa
 
@@ -137,13 +138,26 @@ def _format_interval(value: "pa.MonthDayNano") -> str:
     return f"{sign}{hours}:{minutes:02d}:{seconds:02d}.{microseconds:06d}"
 
 
+def _format_decimal(value: "Decimal") -> str:
+    """Render a DECIMAL(p, s) value in the pinned CSV text form.
+
+    Args:
+        value: The materialized decimal, already scaled to the column's
+            declared `s` by Arrow (§ decimal election).
+
+    Returns:
+        Plain fixed-point decimal text — never exponent notation.
+    """
+    return format(value, "f")
+
+
 def _format_value(scalar: object) -> object:
     """Convert a pyarrow scalar to a Python value suitable for CSV writing.
 
-    DATE / TIME / TIMESTAMPTZ / INTERVAL format by the pinned per-type text
-    forms (§ Serialization); every other type falls through to its existing
-    `.as_py()` representation, byte-identical to before this grew the four
-    new forms.
+    DATE / TIME / TIMESTAMPTZ / INTERVAL / DECIMAL format by the pinned
+    per-type text forms (§ Serialization); every other type falls through
+    to its existing `.as_py()` representation, byte-identical to before
+    this grew the five new forms.
 
     Args:
         scalar: A pyarrow scalar value from an Arrow column slice.
@@ -167,4 +181,6 @@ def _format_value(scalar: object) -> object:
         return _format_timestamptz(value)
     if pa.types.is_interval(scalar.type):
         return _format_interval(value)
+    if pa.types.is_decimal(scalar.type):
+        return _format_decimal(value)
     return value

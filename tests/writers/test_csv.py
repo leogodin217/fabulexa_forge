@@ -255,3 +255,65 @@ def test_write_csv_double_form_unchanged(tmp_path: Path) -> None:
         write_csv(emit, "t", sql, out_dir)
 
     assert _rows(out_dir / "t.csv") == [["d"], ["3.14"]]
+
+
+# ---------------------------------------------------------------------------
+# Pinned decimal text form — DECIMAL(p, s)
+# ---------------------------------------------------------------------------
+
+
+def test_write_csv_decimal_form(tmp_path: Path) -> None:
+    """A DECIMAL(7,2) column renders sign + exactly 2 fraction digits."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = "SELECT CAST(1234.5 AS DECIMAL(7,2)) AS amount"
+        write_csv(emit, "t", sql, out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["amount"], ["1234.50"]]
+
+
+def test_write_csv_decimal_scale_zero_renders_bare_integer(tmp_path: Path) -> None:
+    """A DECIMAL(4,0) column renders a bare (negative) integer, no decimal
+    point."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = "SELECT CAST(-17 AS DECIMAL(4,0)) AS amount"
+        write_csv(emit, "t", sql, out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["amount"], ["-17"]]
+
+
+def test_write_csv_decimal_large_value_no_exponent(tmp_path: Path) -> None:
+    """A large-magnitude DECIMAL value renders plain fixed-point text —
+    never exponent notation."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = "SELECT CAST(123456789012.3400 AS DECIMAL(18,4)) AS amount"
+        write_csv(emit, "t", sql, out_dir)
+
+    rows = _rows(out_dir / "t.csv")
+    assert rows == [["amount"], ["123456789012.3400"]]
+    assert "e" not in rows[1][0].lower()
+
+
+def test_write_csv_decimal_null_renders_empty_field(tmp_path: Path) -> None:
+    """A NULL DECIMAL value renders as today's empty NULL field, like every
+    other type's NULL."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = "SELECT CAST(NULL AS DECIMAL(7,2)) AS amount"
+        write_csv(emit, "t", sql, out_dir)
+
+    assert _rows(out_dir / "t.csv") == [["amount"], [""]]
