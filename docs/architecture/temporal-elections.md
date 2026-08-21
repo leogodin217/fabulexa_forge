@@ -198,14 +198,24 @@ source must carry a declared VARCHAR type — parsing a non-VARCHAR column is
 a plan-time error, not an implicit cast. Resolution follows each mode's
 existing column-resolution rule (§ Per-mode attach points).
 
+A parsed property's reach extends past its table column: under the source
+mode's election-reach rule, its event-log `changes` entries carry the
+denoted value's pinned text form
+([`value-rendering-elections.md`](value-rendering-elections.md)
+§ Event-log and after-image reach).
+
 ### Per-mode attach points
 
 `render` map keys are **source identities** (e.g. `created_sim_time`,
 `joined_sim_time`, `event_sim_time`), never output names — the same posture
 as `rename`, and for the same reason: a renamed column stays addressable. A
-`render` / `date_parse` entry re-renders the projected column **in place** —
-no column is added, and the output name stays governed by the mode's
-existing defaults and `rename`.
+`render` entry re-renders the projected column **in place** — no column is
+added, and the output name stays governed by the mode's existing defaults
+and `rename`. On source and base, the temporal spellings — the bare
+instant shorthand and the `{date_parse: "<format>"}` entry — live in the
+unified property-first `render:` map shared with the value rendering
+elections ([`value-rendering-elections.md`](value-rendering-elections.md)
+§ The unified render map).
 
 | Mode | Surface | Attach | Detail |
 |---|---|---|---|
@@ -213,9 +223,9 @@ existing defaults and `rename`.
 | dimensional | `derived: scd_window` | object form `{bound, as}`; the bare-literal shorthand means default rendering | [`dimensional.md`](dimensional.md) § Timestamp source and the runtime anchor |
 | dimensional | `derived: elapsed` | exactly one of `unit` (numeric) / `as: interval` | [`dimensional.md`](dimensional.md) § Derived columns |
 | dimensional | `derived: date_parse` | `{from, format}` | [`dimensional.md`](dimensional.md) § Derived columns |
-| source | declared table (`state` / `junction`) | `render:` map (structural instant) / `date_parse:` map (payload) | [`source.md`](source.md) § Wallclock timestamps |
+| source | declared table (`state` / `junction`) | unified `render:` map — bare shorthand (structural instant) / `{date_parse: …}` entry (payload) | [`source.md`](source.md) § Wallclock timestamps |
 | source | event log | `render:` map, keyed on the log's one instant column `event_sim_time` — a constant of the log's published contract, not a reader question | [`source.md`](source.md) § The event log |
-| base | per-table render declaration | `render:` / `date_parse:` maps keyed on the same pre-default column identities the mode's `rename` uses | [`base.md`](base.md) § Presentation, typing, and ordering |
+| base | per-table render declaration | unified `render:` map keyed on the same pre-default column identities the mode's `rename` uses | [`base.md`](base.md) § Presentation, typing, and ordering |
 
 Which columns are legal `render` keys on a declared table or base entry is
 the reader's answer — an instant-carrying structural column of the table's
@@ -274,9 +284,9 @@ version ordering is unaffected); the open interval's `NULL` `valid_to` stays
 
 | Rule | Checks | Error |
 |---|---|---|
-| `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering (dimensional `as`, `scd_window` object form, source/base `render` entries) has a resolved effective anchor. The source mode's global anchor requirement subsumes its entries; the rule still names the offending column | `"column '{column}': temporal rendering '{render}' requires a resolved anchor; this emit declares no runtime calendar and none was supplied"` |
+| `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering (dimensional `as`, `scd_window` object form, source/base `render` entries — payload `instant` elections included, [`value-rendering-elections.md`](value-rendering-elections.md)) has a resolved effective anchor. The source mode's global anchor requirement subsumes its entries; the rule still names the offending column | `"column '{column}': temporal rendering '{render}' requires a resolved anchor; this emit declares no runtime calendar and none was supplied"` |
 | `DateParseSourceColumn` | Each declared parse source resolves per its mode's addressing convention and carries a declared VARCHAR type, and is not `slice_only` | `"date_parse column '{column}' on '{table}': source must be an existing VARCHAR column (got {type})"` |
-| `RenderKeyIsInstantColumn` | A declared-table or base-entry `render` key names an instant-carrying structural column of the table's category (reader-sourced, never hardcoded); the event log's one legal key, `event_sim_time`, is mode-definitional. A key must also name a column the render emits | `"render key '{column}' on '{table}': not an instant-carrying structural column of this table"` |
+| `RenderKeyResolves` | A declared-table or base-entry `render` key resolves in its value form's domain. The bare-shorthand form names an instant-carrying structural column of the table's category (reader-sourced, never hardcoded); the event log's one legal key, `event_sim_time`, is mode-definitional. A key must also name a column the render emits. The typed forms' domains are the value elections' ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | `"render key '{column}' on '{table}': not an instant-carrying structural column of this table"` (shorthand form; per-form shapes for the typed forms) |
 | Incremental append-mode `order_by` (amended) | Window-key membership is election-aware: a column whose declared source is the window's raw-ns column counts as a window key only if its rendering is also window-monotone. A `time`-elected column over the window's raw-ns source is excluded | The existing rule's message, naming the column and the table's window key ([`incremental.md`](incremental.md)) |
 
 Each rule's exact resolution mechanics (grain-projection resolution on
@@ -328,10 +338,13 @@ byte-identically for the same election.
 
 ## Boundaries
 
-- **Streaming carries no election.** The streaming mode's payloads are
-  string-typed by codec (JSONL / Debezium carry no SQL type surface) and
+- **Streaming carries no temporal election.** The streaming mode's payloads
+  are string-typed by codec (JSONL / Debezium carry no SQL type surface) and
   its `ts` rendering is a separate Python-side contract
-  ([`streaming.md`](streaming.md)).
+  ([`streaming.md`](streaming.md)). The numeric value elections do attach
+  per stream — they change value text only
+  ([`value-rendering-elections.md`](value-rendering-elections.md)
+  § Streaming attach).
 - **The parse family covers naive strings only.** There are no zone
   directives (`%z` / `%Z`) and no `timestamptz` denotation: a zone-bearing
   string would need a zone policy for offsets the anchor never saw, and the
@@ -360,7 +373,8 @@ byte-identically for the same election.
 | [`reader.md`](reader.md) | The structural-temporal surface (legal `render` keys) and the session-zone pin that makes zone-bearing serialization machine-independent. |
 | [`writers.md`](writers.md) | The pinned CSV text forms for the elected temporal types, which parsed values serialize through identically. |
 | [`dimensional.md`](dimensional.md) | The dimensional mode's attach points, the election-aware ordinal amendment, and the `scd: type2` column-mode surface a `date_parse` or `timestamp` column may attach to. |
-| [`source.md`](source.md) | The source mode's `render` / `date_parse` maps on declared tables and the event log. |
+| [`source.md`](source.md) | The source mode's unified `render` map on declared tables and the event log. |
+| [`value-rendering-elections.md`](value-rendering-elections.md) | The value-election siblings sharing the unified `render` map — the payload `instant` election that reuses this family's vocabulary and anchor rules, and the event-log reach of parsed and elected temporal text. |
 | [`base.md`](base.md) | The base mode's per-table render declaration list. |
 | [`incremental.md`](incremental.md) | The election-aware append-mode window-key rule. |
 | [`playback.md`](playback.md) | Tier-2 shaped playback's reuse of the modes' own compile and validation surfaces, session-zone pin included. |

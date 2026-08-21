@@ -229,10 +229,12 @@ Each mode reads the same emit and writes a different target shape.
 - ✓ **Table / column rename** — every output `name` is author-verbatim; `init` proposes
   prefix-stripped names with a structural-column collision check.
 - ◐ **Output transforms** — `derived` columns ship (ordinal, value-map, anchored
-  timestamp, SCD window, elapsed, declared temporal parse); arbitrary per-table
-  transforms beyond these are not. On an `scd: type2` dim the per-record modes
-  (`timestamp`, `date_parse`, `value_map`) apply over `temporal_class: constant`
-  sources; `fk`, `correlation`, `ordinal`, and `elapsed` are refused there.
+  timestamp, SCD window, elapsed, declared temporal parse, decimal precision,
+  JSON leaf rounding); arbitrary per-table transforms beyond these are not. On
+  an `scd: type2` dim the per-record modes (`timestamp`, `date_parse`,
+  `value_map`) apply over `temporal_class: constant` sources; `fk`,
+  `correlation`, `ordinal`, `elapsed`, `decimal`, and `json_precision` are
+  refused there.
 - ✓ **`init`** — generate a commented candidate config from the sidecar; `--mode`
   selects the target (`dimensional`, the default, `source`, or `streaming`). Dimensional
   reads `record_roles` for warehouse role, kinds, discriminators, membership tables,
@@ -303,6 +305,24 @@ Each mode reads the same emit and writes a different target shape.
   *Teaches: realistic warehouse/app-database column typing (admission dates,
   wait-time intervals, zone-aware timestamps) instead of one universal
   `TIMESTAMP`.*
+- ✓ **Value rendering elections** — author-elected renderings of payload column
+  *values*, declared in one property-first `render:` map on source declared
+  tables and base render entries (shared with the temporal shorthand and
+  `date_parse`, so one column can never carry two elections), as
+  `derived: decimal` / `derived: json_precision` on dimensional, and per
+  declared stream on streaming (numeric family only): `decimal` renders a
+  DOUBLE payload as exact `DECIMAL(p, s)` (ties away from zero, loud
+  overflow/NaN error, pinned CSV text form); `instant` declares a payload
+  BIGINT a sim-instant and renders it through the temporal vocabulary and the
+  anchor; `json_precision` rounds named top-level numeric leaves of a JSON
+  payload in place, every other byte preserved. One rendering authority per
+  election keeps every mode byte-identical; in source, elections reach the
+  event log's `changes` entries under a per-kind agreement gate, while
+  changeset membership and `id` numbering compare raw values. A config with no
+  election renders byte-identically to before. See
+  [`architecture/value-rendering-elections.md`](architecture/value-rendering-elections.md).
+  *Teaches: realistic numeric precision (no 17-digit floats in payloads) and
+  consistent wallclock rendering of payload-held instants across modes.*
 - ✓ **`slice_only` export policy** — export-wide: no output value, row membership,
   linkage, or ordering derives from a `slice_only` column's value. Author-named reads
   refused always-on (dimensional + streaming); auto-projected surfaces omit with a
@@ -438,8 +458,9 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   dataset-equivalence verdict (boolean + deterministic, bounded discrepancy report)
   on an actual dataset (DuckDB or CSV directory) against an authoritative expected
   forge render (DuckDB), under a forge-owned canonical form — canonical type
-  families absorbing lossless representation drift, Python-side canonical value
-  encoding, a UTC-pinned compare session, multiset row comparison. No tolerances,
+  families absorbing lossless representation drift (a decimal family keeps
+  decimal-elected renders comparable, scale-normalized), Python-side canonical
+  value encoding, a UTC-pinned compare session, multiset row comparison. No tolerances,
   no scoring; a pure two-input surface that never opens an emit. Text and
   byte-stable JSON report renderers. The deterministic-grading consumer's verdict
   surface and the shared engine for internal agreement checks. See

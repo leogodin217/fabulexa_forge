@@ -217,6 +217,19 @@ chose the combination, and the NULL is the faithful rendering of structural
 inapplicability (the sidecar's `sub_type_columns` partition states which value columns
 each sub-type owns). `init` never proposes a combined stream.
 
+**Value elections on after-images.** A declared stream's optional `render:` map
+carries `decimal` and `json_precision` entries keyed by the stream's bare
+property (or membership field) names; an elected property's after-image entry
+(`c` / `u`) carries the elected text form — the decimal string with `s`
+fraction digits, or the leaf-rounded payload — in place of the raw codec
+string. The `d` tombstone, the Debezium value schema (elected entries remain
+string-typed by codec), the message key, merge order, `seq`, and `ts` are all
+unaffected. The authorities apply at the codec seam in the post-fold SELECT
+that assembles after-images — the fold itself is untouched, and the elected
+text is identical to the table modes' render of the same value
+([`value-rendering-elections.md`](value-rendering-elections.md) § Streaming
+attach). The temporal elections do not attach (§ Boundaries).
+
 ### Cross-stream merge and global `seq`
 
 There is one **canonical total order** over all events of all declared streams, where
@@ -897,6 +910,7 @@ that identifies the offending declaration.
 | `MembershipResolvable` | each membership-shaped stream's table exists | `"stream '{name}': membership '{kind}.{property}' has no membership__… table"` |
 | `MembershipFieldResolvable` | each selected field resolves to an `elem__<f>` column or a `member__<f>__kind` / `member__<f>__id` pair on its table | `"stream '{name}': field '{field}' has no elem__/member__ column"` |
 | Election resolution gates | `ElectionKindUnknown` / `ElectionSubTypeUnknown` / `ElectionPresentationUndeclared` — the shipped surface's gates, reused verbatim ([`key-election.md`](key-election.md) § Static gates) | The shipped messages |
+| Stream render elections | each `render:` key names a declared property (or membership field) of the stream's projection, and its source column carries the election's admitted sidecar type — `DecimalSourceIsDouble` / `JsonPrecisionSourceIsVarchar`, run per declared stream ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | Leads with `stream '{name}'`; names the property and the type |
 | Stream key uniformity | one stream, one key surface: every population the stream's keys draw from elects the same surface (kind-shaped: the spanned populations; membership-shaped: the owner kind's full domain); uniform `presentation_id` additionally pairwise union-safe | `ElectionMixedIdentity` / `ElectionUnionUnsafe`, naming the stream and the differing (population, surface) pairs |
 | Edge union safety | per after-image reference column and per membership member field, admitted target populations' resolved surfaces pairwise union-safe; the admitted set is the kind-targeted posture — the target kind's full declared domain (per member kind for a member field) | `ElectionUnionUnsafe`, naming the stream, the column, and the unsafe pair |
 | Elected-key uniqueness | render-time, per composed identity relation at the end-of-tape entry point: `rows = DISTINCT record_id = DISTINCT elected value`, elected value non-NULL | `ElectedKeyDuplicate`, naming the stream or edge and the surface |
@@ -1060,6 +1074,11 @@ What the streaming exporter deliberately does not own:
 - **Per-column output renaming.** `properties` / `fields` entries are bare base names
   and appear in the after-image under their base-derived keys; after-image columns are
   not renamable.
+- **Temporal elections.** A stream `render:` map carries the numeric value
+  elections only ([`value-rendering-elections.md`](value-rendering-elections.md));
+  the temporal family does not attach — payloads are string-typed by codec and
+  `ts` is a separate contract ([`temporal-elections.md`](temporal-elections.md)
+  § Boundaries).
 - **Member-kind / per-field partitioning of memberships.** A membership stream feeds
   from one `(owner_kind, property)` table; the per-row member kind is a payload column
   (`member__<f>__kind`), not a declarable feed axis — one table may reference several
@@ -1103,6 +1122,7 @@ What the streaming exporter deliberately does not own:
 | [`derivations.md`](derivations.md) | The row-state-events fold (`state-changes` — including the change-scope / projection two-scope contract) and the membership-events fold (`membership-events`) this driver composes — `c`/`u`/`d` and `join`/`leave` generation, op classification, after-image reconstruction, and per-source order; the source of the shared `require_single_branch` guard |
 | [`playback.md`](playback.md) | The seam that owns the canonical total order and the global-`seq` definition this stream conforms to; the tier-1 `events` head that re-seams `stream` later |
 | [`slice-only.md`](slice-only.md) | The export-wide `slice_only` policy — streaming's refuse-only posture and the class-level event-set vacuity |
+| [`value-rendering-elections.md`](value-rendering-elections.md) | The per-stream `render:` map's numeric value elections and their codec-seam application to after-images |
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` resolution surface — origin/zone precedence, `rebase` + CLI flags; the absolute instant `ts` renders from |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — the records spine, current values, `subtype_values`, `sub_type_columns`, and the `history_tracked` flag |
 | [`config-docstrings.md`](config-docstrings.md) | The three-channel docstring convention the `StreamConfig` models follow |

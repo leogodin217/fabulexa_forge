@@ -306,21 +306,26 @@ here (§ Lifecycle and mutation columns at a horizon). Ordering is
 the state-at resident's `(created_sim_time, record_id)` over raw ns keys, never rendered
 timestamps.
 
-**Temporal elections.** A per-table entry in `base.render` — keyed on `table`,
-disjoint across entries, the same posture the mode's `rename` list uses —
-carries a `columns` map electing a lifecycle timestamp's rendering
-(`created_sim_time` → `date`, say) and a `date_parse` map declaring a
-`prop__<p>` VARCHAR column a temporal string in an author format, rendered as
-the type that format denotes. Both maps are
-keyed on the same pre-default column identities `rename.columns` uses, and
-each entry re-renders the projected column in place. A `columns` key must
-name an instant-carrying structural column of the `records` category the
-render actually emits — `last_mutation_sim_time` is outside the domain, the
-same exclusion `rename` already makes for it
-(`RenderKeyIsInstantColumn`, [`temporal-elections.md`](temporal-elections.md)
-§ Validation Rules). A `date_parse` source reads its declared type directly
-from the sidecar and must not be `slice_only`
-(`DateParseSourceColumn`, same doc).
+**Render elections.** A per-table entry in `base.render` — `{table, render}`,
+keyed on `table`, disjoint across entries, the same posture the mode's
+`rename` list uses — carries the unified property-first `render` map: a bare
+scalar elects a lifecycle timestamp's rendering (`created_sim_time` → `date`,
+say); the typed forms address `prop__<p>` payload columns —
+`{date_parse: "<format>"}` (a VARCHAR temporal string, rendered as its
+format's denoted type), `{instant: <election>}` (a BIGINT sim-instant),
+`{decimal: [p, s]}` (DOUBLE → exact `DECIMAL`), `{json_precision: {…}}`
+(in-place JSON leaf rounding). The map is keyed on the same pre-default
+column identities `rename.columns` uses, and each entry re-renders the
+projected column in place. A bare-shorthand key must name an
+instant-carrying structural column of the `records` category the render
+actually emits — `last_mutation_sim_time` is outside the domain, the same
+exclusion `rename` already makes for it (`RenderKeyResolves`,
+[`temporal-elections.md`](temporal-elections.md) § Validation Rules); the
+typed forms' key domains and source-type gates are the value elections'
+([`value-rendering-elections.md`](value-rendering-elections.md) § The
+unified render map). A `date_parse` source reads its declared type directly
+from the sidecar and must not be `slice_only` (`DateParseSourceColumn`,
+[`temporal-elections.md`](temporal-elections.md)).
 
 ### Corrupter composition
 
@@ -417,7 +422,7 @@ below state *what* is rejected and *when*.
 | `entries_disjoint` (`BaseConfig`) | Two `rename` **or** `render` entries targeting the same `table` — base has one output table per kind, so `table` alone is the key, checked across both lists |
 | `mode_section_matches` (`ExportConfig`, `base` arm) | A `dimensional` or `source` section present under `mode: base`; the `base` section itself is optional (a bare `mode: base` is a valid full dump) |
 | `base_slice_at_excludes_incremental` (`ExportConfig`) | A config setting both `base.slice_at` and an `incremental` block — a pinned instant and a window sequence are contradictory temporal selectors |
-| `render_maps_valid` (`BaseRenderDecl`) | A present `columns` / `date_parse` map that is empty or carries an empty key; a `date_parse` format that does not denote a complete date, a complete time, or both; a column named in both maps ([`temporal-elections.md`](temporal-elections.md)) |
+| `entry_well_formed` (`BaseRenderDecl`) | An empty `table`; a present `render` map that is empty or carries an empty key. Each entry's own shape — decimal bounds, the json-precision leaf map, the date-parse format rules — is carried by its `RenderElection` model ([`value-rendering-elections.md`](value-rendering-elections.md)); one map per column makes a conflicting pair unrepresentable |
 
 **Business rules.** Run at plan build against the open emit's sidecar, before any write;
 each raises an `ExportError` subclass surfaced through the CLI's existing error funnel.
@@ -430,9 +435,10 @@ each raises an `ExportError` subclass surfaced through the CLI's existing error 
 | `BaseNameCollision` | All output table names are unique, and within each table all output column names are unique, after presentation defaults and `rename` — the key identities participating in the same domain as the state-at ones |
 | Reserved-name check (`ExportError`) | No resolved output table name is `_export_meta` / `_export_windows` / `*__rows`, and no output column name — key columns included — is `__valid_from_ns` or `last_mutation_sim_time` — enforced always-on via `exporters/reserved_names.py` |
 | Reference target resolvable | Each surviving reference property's target kind has a records table in the sidecar. Present: the edge key is emitted. Absent: the edge key is omitted and one `reference-key-target-absent` notice is emitted — a notice, not an error |
-| `RenderKeyIsInstantColumn` | Every `render` entry's `columns` key names an instant-carrying structural column of the `records` category the render emits (reader-sourced, never a private list); `last_mutation_sim_time` is outside the domain, the mode's existing `rename` exclusion ([`temporal-elections.md`](temporal-elections.md)) |
-| `DateParseSourceColumn` | Every `render` entry's `date_parse` key names a declared VARCHAR `prop__<p>` column, read from the sidecar type directly, and not `slice_only` ([`temporal-elections.md`](temporal-elections.md)) |
-| `TemporalRenderRequiresAnchor` | Every elected `columns` rendering has a resolved effective anchor ([`temporal-elections.md`](temporal-elections.md)) |
+| `RenderKeyResolves` | Every `render`-map key resolves in its value form's domain: a bare-shorthand key names an instant-carrying structural column of the `records` category the render emits (reader-sourced, never a private list; `last_mutation_sim_time` outside the domain, the mode's existing `rename` exclusion); a typed-form key names a `prop__<p>` payload column ([`temporal-elections.md`](temporal-elections.md); [`value-rendering-elections.md`](value-rendering-elections.md)) |
+| `DateParseSourceColumn` | Every `{date_parse: …}` key names a declared VARCHAR `prop__<p>` column, read from the sidecar type directly, and not `slice_only` ([`temporal-elections.md`](temporal-elections.md)) |
+| `DecimalSourceIsDouble` / `InstantSourceIsBigint` / `JsonPrecisionSourceIsVarchar` | Each typed value election's source column carries its admitted declared type ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) |
+| `TemporalRenderRequiresAnchor` | Every elected instant rendering — bare shorthand and payload `instant` alike — has a resolved effective anchor ([`temporal-elections.md`](temporal-elections.md)) |
 | Single-branch guard (`derivations/guard.py`, cross-mode) | Exactly one branch |
 
 Every business rule is evaluated over every export — full, sliced, and windowed alike —
@@ -510,7 +516,8 @@ gating are owned by [`declared-keys.md`](declared-keys.md).
 | [`slice-only.md`](slice-only.md) · [`notices.md`](notices.md) | The reused omission policy and the channel its notices flow through |
 | [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — declared primary-key / uniqueness constraints on base's flat tables |
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — the elective id-space value surface beside the always-on index keys, and the gates base's plan runs |
-| [`temporal-elections.md`](temporal-elections.md) | The cross-mode election vocabulary the `base.render` declaration list renders through |
+| [`temporal-elections.md`](temporal-elections.md) | The cross-mode temporal election vocabulary the `base.render` declaration list's temporal spellings render through |
+| [`value-rendering-elections.md`](value-rendering-elections.md) | The unified `render` map's grammar and the typed value elections (`instant` / `decimal` / `json_precision`) the `base.render` entries carry |
 | [`playback.md`](playback.md) | Shaped state and the bridging theorem that make direct-horizon equivalent |
 | [`anchor.md`](anchor.md) · [`incremental.md`](incremental.md) | The shared wallclock renderer and the window/cursor/fingerprint driver base wires into |
 | [`corrupters.md`](corrupters.md) | The corrupt → base composition — a base export over a corrupted emit surfaces declared defects unchanged |

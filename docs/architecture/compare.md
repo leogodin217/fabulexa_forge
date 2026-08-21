@@ -117,20 +117,25 @@ row comparison.
 | time | `TIME` (any precision) | any `TIME` precision (compared at microsecond precision) |
 | timestamptz | `TIMESTAMPTZ` (any precision) | any `TIMESTAMPTZ` precision (compared at microsecond precision) |
 | interval | `INTERVAL` | `INTERVAL` |
+| decimal | `DECIMAL` (any precision/scale) | any `DECIMAL` (compared as exact decimal values) |
 | blob | `BLOB` | `BLOB` |
 
 The timestamp, date, time, timestamptz, and interval families cover every
 temporal type a forge render carries by default or by election
-([`temporal-elections.md`](temporal-elections.md)). `DECIMAL` belongs to no
-family — deliberately: absorbing a fixed-point round-trip into the float or
-integer family would require exactly the lossiness judgment this surface
-refuses to make. A `DECIMAL` actual column is `column-incompatible`; producers
-extract toward the reference types instead.
+([`temporal-elections.md`](temporal-elections.md)); the decimal family covers
+the `decimal` value election's `DECIMAL(p, s)`
+([`value-rendering-elections.md`](value-rendering-elections.md)), so a
+decimal-elected render stays inside the shape this surface defines equality
+for. The family compares exact decimal values and never crosses into the
+float or integer families — absorbing a fixed-point ↔ floating round-trip
+would require exactly the lossiness judgment this surface refuses to make. A
+`DECIMAL` actual against a non-`DECIMAL` expected (or vice versa) is
+`column-incompatible`.
 
 The family table is a scope boundary, not an exhaustiveness claim about forge
 renders. A render *can* carry an out-of-family data column — base mode casts
 data columns back to their declared sidecar types, and the contract admits
-producer-chosen types (`DECIMAL` among them) — and such a render is outside
+producer-chosen types — and such a render is outside
 the shape this surface defines equality for. The refusal is whole-comparison,
 at argument-validation time, and scoped to the comparison universe: an
 out-of-family column in a table outside the `tables` selection does not error,
@@ -175,6 +180,7 @@ never by shared import (§ Rationale).
 | time | `HH:MM:SS.ffffff` at microsecond precision — the writers' pinned CSV text form |
 | timestamptz | the absolute instant normalized to UTC, `YYYY-MM-DD HH:MM:SS.ffffff+00:00` at microsecond precision — equality is instant equality, so the representation zone either side stored or displayed is irrelevant |
 | interval | the signed microsecond delta as `[-]H:MM:SS.ffffff` — unbounded hours, fixed six-digit µs field, no calendar components (the writers' pinned CSV text form) |
+| decimal | the exact decimal value, scale-normalized — trailing fractional zeros strip — so equal values at different declared scales encode identically |
 | blob | lowercase hex of the bytes |
 
 The interval family carries a storage rule: DuckDB stores an `INTERVAL` as a
@@ -354,5 +360,6 @@ separators) — the grading consumer's wire format.
 | [`writers.md`](writers.md) | The pinned temporal CSV text forms the time/interval encodings reuse; the DuckDB/CSV serialization the inputs contract mirrors |
 | [`reader.md`](reader.md) | The session-zone pin whose machine-independence obligation the compare session's UTC pin discharges on the compare side |
 | [`temporal-elections.md`](temporal-elections.md) | The elected temporal renderings the five temporal families cover |
+| [`value-rendering-elections.md`](value-rendering-elections.md) | The `decimal` value election the decimal family keeps comparable |
 | [`incremental.md`](incremental.md) | An internal agreement consumer: incremental-vs-full-refresh equivalence |
 | [`playback.md`](playback.md) | An internal agreement consumer: playback-window-vs-full-export equivalence |

@@ -548,6 +548,17 @@ The pin is the mechanism that makes zone-bearing serialization — the
 locale and session zone: the anchor zone, never the session zone, governs
 every zone-bearing text form the writers produce.
 
+The pin has one sibling of the same species — connection-scoped session
+setup that changes no read: at open, the reader calls the shared SQL
+utilities' `register_render_functions` to register the value-rendering
+scalar function (`forge_json_precision`) on the emit's connection
+([`value-rendering-elections.md`](value-rendering-elections.md)). The
+registration installs capability, not transformation: every registered
+function is a pure function of its arguments, no read surface, sidecar
+accessor, or query API is election-aware, and no consumer below the modes
+calls the registered function — only expressions the modes' compiled
+elections emit invoke it.
+
 ## Invariants
 
 1. **Determinism.** The reader is a pure, read-only function of the emit files: the
@@ -770,6 +781,7 @@ What the reader deliberately does not own:
 | [`corrupters.md`](corrupters.md) | The base-emit-writing consumer — materializes every table via `query_arrow`, reads column metadata and reference targets from the `Sidecar`, and reuses the single-branch guard |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability — the consumer the strict `presentation_keys` accessor and the union-safety algebra exist for |
 | [`temporal-elections.md`](temporal-elections.md) | The session-zone pin's consumer — the elected temporal renderings whose zone-bearing serialization the pin makes machine-independent |
+| [`value-rendering-elections.md`](value-rendering-elections.md) | The value-election surface whose rendering scalar the reader registers at open — the session-zone pin's sibling species of connection-scoped setup |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored input contract the reader adapts to (sidecar shape, table categories, type mapping) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |
