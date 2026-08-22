@@ -11,7 +11,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Per-version value renderings on type2"
     demo: "docs/sprints/scd2-per-version-renderings/demos/phase_1_per_version_renderings.py"
     steps:

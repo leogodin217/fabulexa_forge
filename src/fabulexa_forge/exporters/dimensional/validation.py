@@ -945,13 +945,14 @@ def check_scd2_column_mode_supported(
 ) -> None:
     """Enforce Scd2ColumnModeSupported: type2 columns use supported modes.
 
-    The type2 surface admits from, null, derived: scd_window, and the
-    per-record derived modes timestamp / date_parse / value_map. It refuses
-    fk, correlation, derived: ordinal, derived: elapsed, derived: decimal,
-    and derived: json_precision — cross-row, per-version, or grain-surface
-    semantics the type2 build does not define. (lookup is gated separately
-    by LookupColumnSafety; derived sources are additionally gated by
-    Scd2DerivedSourceConstant.)
+    The type2 surface admits from, null, derived: scd_window, and the pure
+    per-row value renderings derived: timestamp / date_parse / value_map /
+    decimal / json_precision — each a pure function of one row's source
+    value, evaluated per record for constant sources and per version for
+    tracked sources. It refuses fk, correlation, derived: ordinal, and
+    derived: elapsed — cross-row or grain-surface semantics the type2 build
+    does not define. (lookup is gated separately by LookupColumnSafety;
+    slice_only sources by the export-wide slice-only surface.)
 
     Args:
         col_decl: The column declaration.
@@ -975,78 +976,14 @@ def check_scd2_column_mode_supported(
             mode = "derived: ordinal"
         elif col_decl.derived.elapsed is not None:
             mode = "derived: elapsed"
-        elif col_decl.derived.decimal is not None:
-            mode = "derived: decimal"
-        elif col_decl.derived.json_precision is not None:
-            mode = "derived: json_precision"
 
     if mode is not None:
         raise ExportError(
             f"column '{col_decl.name}' on table '{table_decl.name}':"
             f" {mode} is not supported on an scd: type2 table; type2 columns"
-            " support only from, null, derived: scd_window, derived:"
-            " timestamp, derived: date_parse, and derived: value_map"
-        )
-
-
-def check_scd2_derived_source_constant(
-    col_decl: "ColumnDecl",
-    table_decl: "TableDecl",
-    sidecar: "Sidecar",
-    source_table_name: str,
-) -> None:
-    """Enforce Scd2DerivedSourceConstant: type2 derived sources are static.
-
-    A derived timestamp / date_parse / value_map column on an scd: type2
-    table must source a temporal_class: constant column: the spec's source
-    (timestamp.source / date_parse.from / value_map.from), when it names a
-    prop__ column, resolves through Sidecar.temporal_class and must be
-    constant. Structural and projection-introduced sources carry no temporal
-    class and always pass.
-
-    The class, not history_tracked, is the question. A presentation property
-    is history_tracked: true by construction (base-format.md § Column
-    temporal semantics) yet is constant whenever its bound source is —
-    holding exactly its genesis row. Keying on the flag refused every such
-    column though its value is provably static; keying on the class admits
-    it, as LookupColumnSafety's own class clause already does.
-
-    Args:
-        col_decl: The column declaration (no-op unless it carries one of
-            the three derived specs and the table is scd: type2).
-        table_decl: The output table declaration.
-        sidecar: The emit's typed sidecar.
-        source_table_name: The dim's source records table.
-
-    Raises:
-        ExportError: The derived spec sources a non-constant property.
-        TemporalClassUnavailableError: Propagated.
-    """
-    if table_decl.scd != "type2" or col_decl.derived is None:
-        return
-
-    source: str | None = None
-    if col_decl.derived.timestamp is not None:
-        source = col_decl.derived.timestamp.source
-    elif col_decl.derived.date_parse is not None:
-        source = col_decl.derived.date_parse.from_
-    elif col_decl.derived.value_map is not None:
-        source = col_decl.derived.value_map.from_
-
-    if source is None or not source.startswith("prop__"):
-        return
-    if not any(c.name == source for c in sidecar.columns(source_table_name)):
-        # Existence is ProjectionColumnExists / DateParseSourceColumn's gate;
-        # it reports an absent source better than a bare column lookup would.
-        return
-
-    cls = sidecar.temporal_class(source_table_name, source)
-    if cls != "constant":
-        raise ExportError(
-            f"column '{col_decl.name}' on scd: type2 table"
-            f" '{table_decl.name}': derived source '{source}' is"
-            f" temporal_class: {cls}; derived columns on a type2 table read"
-            " constant values only"
+            " support only from, null, derived: scd_window, and the value"
+            " renderings derived: timestamp, derived: date_parse, derived:"
+            " value_map, derived: decimal, and derived: json_precision"
         )
 
 
@@ -1711,9 +1648,6 @@ def validate_table(
 
     for col_decl in table_decl.columns:
         check_scd2_column_mode_supported(col_decl, table_decl)
-        check_scd2_derived_source_constant(
-            col_decl, table_decl, sidecar, source_table_name
-        )
         check_projection_column_exists(col_decl, table_decl, surface)
         check_ordinal_refs_siblings(col_decl, table_decl)
         check_timestamp_source_available(col_decl, table_decl, source, surface)

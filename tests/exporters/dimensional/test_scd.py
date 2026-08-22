@@ -31,7 +31,6 @@ from fabulexa_forge.config.models import (
     DateParseSpec,
     DerivedSpec,
     DimensionalConfig,
-    OrdinalSpec,
     ScdWindowSpec,
     SourceDecl,
     TableDecl,
@@ -800,7 +799,7 @@ def test_build_scd2_column_expr_flag_scd_window_object_form_date() -> None:
         start_instant=datetime.fromisoformat("2024-01-01T00:00:00+00:00"),
         timezone=ZoneInfo("UTC"),
     )
-    expr = _flag_expr(col, False, anchor, _scd2_column_expr_sidecar())
+    expr = _flag_expr(col, frozenset(), anchor, _scd2_column_expr_sidecar())
     assert "CAST(" in expr
     assert "AS DATE)" in expr
     assert "version_start" in expr
@@ -853,30 +852,20 @@ def _make_col_decl_null(name: str) -> ColumnDecl:
     return ColumnDecl(name=name, null=True)
 
 
-def _make_col_decl_ordinal(name: str) -> ColumnDecl:
-    """Return a ColumnDecl with a non-scd_window derived (ordinal), so from_ is None."""
-    return ColumnDecl(
-        name=name,
-        derived=DerivedSpec(
-            ordinal=OrdinalSpec(partition_by="record_id", order_by="record_id")
-        ),
-    )
-
-
 def _flag_expr(
     col: ColumnDecl,
-    is_tracked: bool,
+    tracked_props: frozenset[str],
     anchor: EffectiveAnchor | None,
     sidecar: Sidecar,
 ) -> str:
     """Call build_scd2_column_expr_flag with the standard unit-test source
     binding (_SCD2_SOURCE_TABLE / _SCD2_TABLE_LABEL), varying only the
-    per-test column/tracked-flag/anchor/sidecar."""
+    per-test column/tracked-props/anchor/sidecar."""
     return build_scd2_column_expr_flag(
         col,
         "_versions",
         "_records",
-        is_tracked,
+        tracked_props,
         anchor,
         sidecar,
         _SCD2_SOURCE_TABLE,
@@ -891,7 +880,7 @@ def test_build_scd2_column_expr_flag_with_anchor() -> None:
         start_instant=datetime.fromisoformat("2024-01-01T00:00:00+00:00"),
         timezone=ZoneInfo("UTC"),
     )
-    expr = _flag_expr(col, False, anchor, _scd2_column_expr_sidecar())
+    expr = _flag_expr(col, frozenset(), anchor, _scd2_column_expr_sidecar())
     # Expression must include the anchor timestamp and microsecond offset
     assert "TIMESTAMPTZ '2024-01-01T00:00:00+00:00'" in expr
     assert "to_microseconds" in expr
@@ -901,7 +890,7 @@ def test_build_scd2_column_expr_flag_with_anchor() -> None:
 def test_build_scd2_column_expr_flag_scd_window_no_runtime() -> None:
     """scd_window column without runtime anchor produces direct column alias."""
     col = _make_col_decl_scd_window("valid_to", "valid_to")
-    expr = _flag_expr(col, False, None, _scd2_column_expr_sidecar())
+    expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
     assert "version_end" in expr
     assert 'AS "valid_to"' in expr
     assert "TIMESTAMP" not in expr
@@ -910,18 +899,9 @@ def test_build_scd2_column_expr_flag_scd_window_no_runtime() -> None:
 def test_build_scd2_column_expr_flag_null_column() -> None:
     """null column produces CAST(NULL AS VARCHAR) expression."""
     col = _make_col_decl_null("placeholder")
-    expr = _flag_expr(col, False, None, _scd2_column_expr_sidecar())
+    expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
     assert "CAST(NULL AS VARCHAR)" in expr
     assert 'AS "placeholder"' in expr
-
-
-def test_build_scd2_column_expr_flag_from_none() -> None:
-    """Column with from_=None (non-scd_window derived) produces bare NULL expression."""
-    # An ordinal-derived column has scd_window=None and from_=None; the flag
-    # builder falls through to the `if col_decl.from_ is None` branch.
-    col = _make_col_decl_ordinal("row_num")
-    expr = _flag_expr(col, False, None, _scd2_column_expr_sidecar())
-    assert expr == 'NULL AS "row_num"'
 
 
 # ---------------------------------------------------------------------------
@@ -932,7 +912,9 @@ def test_build_scd2_column_expr_flag_from_none() -> None:
 def test_build_scd2_column_expr_flag_bigint_wraps_cast() -> None:
     """Tracked flag path wraps correlated subquery in CAST(... AS BIGINT)."""
     col = ColumnDecl(name="admission_count", **{"from": "prop__admission_count"})
-    expr = _flag_expr(col, True, None, _scd2_column_expr_sidecar())
+    expr = _flag_expr(
+        col, frozenset({"admission_count"}), None, _scd2_column_expr_sidecar()
+    )
     # Must start with CAST( and contain AS BIGINT)
     assert expr.startswith("CAST(")
     assert "AS BIGINT)" in expr
@@ -945,7 +927,7 @@ def test_build_scd2_column_expr_flag_bigint_wraps_cast() -> None:
 def test_build_scd2_column_expr_flag_varchar_no_regression() -> None:
     """Tracked flag path with VARCHAR source includes CAST(... AS VARCHAR)."""
     col = ColumnDecl(name="status", **{"from": "prop__status"})
-    expr = _flag_expr(col, True, None, _scd2_column_expr_sidecar())
+    expr = _flag_expr(col, frozenset({"status"}), None, _scd2_column_expr_sidecar())
     assert expr.startswith("CAST(")
     assert "AS VARCHAR)" in expr
     assert 'AS "status"' in expr
@@ -954,7 +936,9 @@ def test_build_scd2_column_expr_flag_varchar_no_regression() -> None:
 def test_build_scd2_column_expr_flag_boolean_wraps_cast() -> None:
     """Tracked flag path wraps correlated subquery in CAST(... AS BOOLEAN)."""
     col = ColumnDecl(name="referred", **{"from": "prop__surgical_referred"})
-    expr = _flag_expr(col, True, None, _scd2_column_expr_sidecar())
+    expr = _flag_expr(
+        col, frozenset({"surgical_referred"}), None, _scd2_column_expr_sidecar()
+    )
     assert expr.startswith("CAST(")
     assert "AS BOOLEAN)" in expr
 
@@ -962,7 +946,7 @@ def test_build_scd2_column_expr_flag_boolean_wraps_cast() -> None:
 def test_build_scd2_column_expr_flag_static_unchanged() -> None:
     """Static (not tracked) flag path reads from the reader records relation."""
     col = ColumnDecl(name="name", **{"from": "prop__name"})
-    expr = _flag_expr(col, False, None, _scd2_column_expr_sidecar())
+    expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
     # Static: direct projection from reader records relation, no tracked subquery
     assert "SELECT h.value" not in expr
     assert "_records" in expr
@@ -1264,8 +1248,8 @@ def test_derived_timestamp_expression_identical_to_records_grain_builder() -> No
         start_instant=datetime.fromisoformat("2024-06-01T00:00:00+00:00"),
         timezone=ZoneInfo("UTC"),
     )
-    scd2_expr = _flag_expr(col, False, anchor, _scd2_column_expr_sidecar())
-    records_expr = build_timestamp_expr(col, anchor, grain_alias="_records")
+    scd2_expr = _flag_expr(col, frozenset(), anchor, _scd2_column_expr_sidecar())
+    records_expr = build_timestamp_expr(col, anchor, '"_records"."created_sim_time"')
     assert scd2_expr == records_expr
 
 
@@ -1281,8 +1265,10 @@ def test_derived_date_parse_expression_identical_to_records_grain_builder() -> N
         ),
     )
     table_decl = _make_scd2_table_decl()
-    scd2_expr = _flag_expr(col, False, None, _scd2_column_expr_sidecar())
-    records_expr = build_date_parse_expr(col, table_decl, grain_alias="_records")
+    scd2_expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
+    records_expr = build_date_parse_expr(
+        col, '"_records"."prop__birth_date"', table_decl.name
+    )
     assert scd2_expr == records_expr
 
 
@@ -1297,9 +1283,9 @@ def test_derived_value_map_expression_identical_to_records_grain_builder() -> No
             )
         ),
     )
-    scd2_expr = _flag_expr(col, False, None, _scd2_column_expr_sidecar())
+    scd2_expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
     records_expr = build_value_map_expr(
-        col, grain_alias="_records", source_col_type="VARCHAR"
+        col, '"_records"."prop__region"', source_col_type="VARCHAR"
     )
     assert scd2_expr == records_expr
 

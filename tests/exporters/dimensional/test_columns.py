@@ -187,7 +187,7 @@ def test_build_value_map_expr_maps_known_values() -> None:
             value_map=ValueMapSpec(**{"from": "value", "map": {"a": 1, "b": 2}})
         ),
     )
-    expr = build_value_map_expr(col)
+    expr = build_value_map_expr(col, '"_grain"."value"', "VARCHAR")
     assert "CASE" in expr
     assert "WHEN" in expr
     assert "CAST(NULL AS BIGINT)" in expr
@@ -202,7 +202,7 @@ def test_build_value_map_expr_unmapped_to_null() -> None:
             value_map=ValueMapSpec(**{"from": "value", "map": {"active": 1}})
         ),
     )
-    expr = build_value_map_expr(col)
+    expr = build_value_map_expr(col, '"_grain"."value"', "VARCHAR")
     assert "ELSE CAST(NULL AS BIGINT)" in expr
 
 
@@ -214,7 +214,7 @@ def test_build_value_map_expr_varchar_map() -> None:
             value_map=ValueMapSpec(**{"from": "value", "map": {"x": "yes", "y": "no"}})
         ),
     )
-    expr = build_value_map_expr(col)
+    expr = build_value_map_expr(col, '"_grain"."value"', "VARCHAR")
     assert "CAST(NULL AS VARCHAR)" in expr
 
 
@@ -229,7 +229,7 @@ def test_build_timestamp_expr_with_anchor() -> None:
         name="admitted_at",
         derived=DerivedSpec(timestamp=TimestampSpec(source="last_mutation_sim_time")),
     )
-    expr = build_timestamp_expr(col, _anchor())
+    expr = build_timestamp_expr(col, _anchor(), '"_grain"."last_mutation_sim_time"')
     assert "timezone('UTC', TIMESTAMPTZ '2024-01-01T00:00:00+00:00'" in expr
     assert "to_microseconds" in expr
     assert "last_mutation_sim_time" in expr
@@ -242,7 +242,7 @@ def test_build_timestamp_expr_without_runtime() -> None:
         name="admitted_at",
         derived=DerivedSpec(timestamp=TimestampSpec(source="last_mutation_sim_time")),
     )
-    expr = build_timestamp_expr(col, None)
+    expr = build_timestamp_expr(col, None, '"_grain"."last_mutation_sim_time"')
     assert expr == '"_grain"."last_mutation_sim_time" AS "admitted_at"'
 
 
@@ -283,7 +283,9 @@ def test_build_timestamp_expr_as_election_output_type(
 ) -> None:
     """Each `as` election (and the absent-`as` default) renders the correct
     DuckDB output type when executed."""
-    expr = build_timestamp_expr(_timestamp_col(as_value), _anchor())
+    expr = build_timestamp_expr(
+        _timestamp_col(as_value), _anchor(), '"_grain"."created_sim_time"'
+    )
     assert _describe_expr_type(expr) == expected_duck_type
 
 
@@ -300,9 +302,10 @@ def test_build_timestamp_expr_no_as_byte_identical_to_default() -> None:
             timestamp=TimestampSpec(source="created_sim_time", **{"as": "timestamp"})
         ),
     )
-    assert build_timestamp_expr(col_absent, _anchor()) == build_timestamp_expr(
-        col_explicit, _anchor()
-    )
+    source_expr = '"_grain"."created_sim_time"'
+    assert build_timestamp_expr(
+        col_absent, _anchor(), source_expr
+    ) == build_timestamp_expr(col_explicit, _anchor(), source_expr)
 
 
 # ---------------------------------------------------------------------------
@@ -452,8 +455,7 @@ def test_build_date_parse_expr_end_to_end_prop_varchar() -> None:
             date_parse=DateParseSpec(**{"from": "prop__dob", "format": "%Y-%m-%d"})
         ),
     )
-    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
-    expr = build_date_parse_expr(col, tbl)
+    expr = build_date_parse_expr(col, '"_grain"."prop__dob"', "visits")
 
     conn = duckdb.connect(":memory:")
     conn.execute('CREATE TABLE "_grain" ("prop__dob" VARCHAR)')
@@ -476,8 +478,7 @@ def test_build_date_parse_expr_end_to_end_datetime_format_denotes_timestamp() ->
             )
         ),
     )
-    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
-    expr = build_date_parse_expr(col, tbl)
+    expr = build_date_parse_expr(col, '"_grain"."prop__registered_at"', "visits")
 
     conn = duckdb.connect(":memory:")
     conn.execute('CREATE TABLE "_grain" ("prop__registered_at" VARCHAR)')
@@ -502,8 +503,7 @@ def test_build_date_parse_expr_end_to_end_membership_elem_field() -> None:
             )
         ),
     )
-    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
-    expr = build_date_parse_expr(col, tbl)
+    expr = build_date_parse_expr(col, '"_grain"."elem__joined_date_str"', "visits")
 
     conn = duckdb.connect(":memory:")
     conn.execute('CREATE TABLE "_grain" ("elem__joined_date_str" VARCHAR)')
@@ -529,8 +529,7 @@ def test_build_decimal_expr_end_to_end_rounds_to_declared_scale() -> None:
             decimal=DecimalSpec(**{"from": "prop__amount", "as": [4, 3]})
         ),
     )
-    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
-    expr = build_decimal_expr(col, tbl)
+    expr = build_decimal_expr(col, '"_grain"."prop__amount"', "visits")
 
     conn = duckdb.connect(":memory:")
     conn.execute('CREATE TABLE "_grain" ("prop__amount" DOUBLE)')
@@ -550,8 +549,7 @@ def test_build_decimal_expr_end_to_end_null_source_is_null() -> None:
             decimal=DecimalSpec(**{"from": "prop__amount", "as": [4, 3]})
         ),
     )
-    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
-    expr = build_decimal_expr(col, tbl)
+    expr = build_decimal_expr(col, '"_grain"."prop__amount"', "visits")
 
     conn = duckdb.connect(":memory:")
     conn.execute('CREATE TABLE "_grain" ("prop__amount" DOUBLE)')
@@ -572,8 +570,7 @@ def test_build_decimal_expr_end_to_end_overflow_raises_naming_table_column() -> 
             decimal=DecimalSpec(**{"from": "prop__amount", "as": [4, 3]})
         ),
     )
-    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
-    expr = build_decimal_expr(col, tbl)
+    expr = build_decimal_expr(col, '"_grain"."prop__amount"', "visits")
 
     conn = duckdb.connect(":memory:")
     conn.execute('CREATE TABLE "_grain" ("prop__amount" DOUBLE)')
@@ -600,8 +597,7 @@ def test_build_json_precision_expr_end_to_end_rounds_leaf_in_place() -> None:
             )
         ),
     )
-    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
-    expr = build_json_precision_expr(col, tbl)
+    expr = build_json_precision_expr(col, '"_grain"."prop__payload"', "visits")
 
     conn = duckdb.connect(":memory:")
     register_render_functions(conn)
@@ -626,8 +622,7 @@ def test_build_json_precision_expr_end_to_end_null_payload_is_null() -> None:
             )
         ),
     )
-    tbl = _table_with_columns([ColumnDecl(name="id", **{"from": "record_id"}), col])
-    expr = build_json_precision_expr(col, tbl)
+    expr = build_json_precision_expr(col, '"_grain"."prop__payload"', "visits")
 
     conn = duckdb.connect(":memory:")
     register_render_functions(conn)
@@ -790,7 +785,7 @@ def test_build_value_map_expr_varchar_source_predicate_quoted() -> None:
             value_map=ValueMapSpec(**{"from": "value", "map": {"admitted": 1}})
         ),
     )
-    expr = build_value_map_expr(col, source_col_type="VARCHAR")
+    expr = build_value_map_expr(col, '"_grain"."value"', source_col_type="VARCHAR")
     # WHEN side must be single-quoted for VARCHAR
     assert "= 'admitted'" in expr
 
@@ -803,7 +798,7 @@ def test_build_value_map_expr_bigint_source_predicate_cast() -> None:
             value_map=ValueMapSpec(**{"from": "prop__count", "map": {"5": 1}})
         ),
     )
-    expr = build_value_map_expr(col, source_col_type="BIGINT")
+    expr = build_value_map_expr(col, '"_grain"."prop__count"', source_col_type="BIGINT")
     # WHEN side must use CAST for BIGINT
     assert "CAST('5' AS BIGINT)" in expr
 

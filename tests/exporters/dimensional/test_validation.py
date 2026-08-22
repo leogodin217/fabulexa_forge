@@ -28,7 +28,6 @@ from fabulexa_forge.config.models import (
     SourceDecl,
     TableDecl,
     TimestampSpec,
-    ValueMapSpec,
 )
 from fabulexa_forge.errors import (
     DateParseSourceColumn,
@@ -47,7 +46,6 @@ from fabulexa_forge.exporters.dimensional.validation import (
     check_key_columns_declared,
     check_ordinal_refs_siblings,
     check_projection_column_exists,
-    check_scd2_derived_source_constant,
     check_scd2_needs_history,
     check_slice_only_column_reads,
     check_slice_only_filter_keys,
@@ -909,18 +907,18 @@ def test_scd2_needs_history_refuses_flag_absent_emit() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scd2DerivedSourceConstant
+# Scd2ColumnModeSupported admits per-version renderings over tracked sources
 # ---------------------------------------------------------------------------
 
 
 def _scd2_derived_source_sidecar() -> Sidecar:
-    """A records__actor sidecar spanning every source surface
-    Scd2DerivedSourceConstant distinguishes: a tracked prop__status, an
-    untracked-and-constant prop__birth_date, a presentation-shaped
+    """A records__actor sidecar spanning the source surfaces the type2 mode
+    gate and records-grain column gates distinguish: a tracked prop__status,
+    an untracked-and-constant prop__birth_date, a presentation-shaped
     prop__minted_on (history_tracked with temporal_class constant — the
     combination the contract mints for a presentation property bound to a
-    constant source), a slice_only prop__last_seen, and a structural
-    created_sim_time."""
+    constant source), a tracked non-VARCHAR prop__score, a slice_only
+    prop__last_seen, and a structural created_sim_time."""
     return _bare_sidecar(
         [
             {
@@ -949,6 +947,12 @@ def _scd2_derived_source_sidecar() -> Sidecar:
                         temporal_class="constant",
                     ),
                     prop_column(
+                        "prop__score",
+                        "BIGINT",
+                        history_tracked=True,
+                        temporal_class="tracked",
+                    ),
+                    prop_column(
                         "prop__last_seen",
                         "VARCHAR",
                         history_tracked=False,
@@ -961,151 +965,10 @@ def _scd2_derived_source_sidecar() -> Sidecar:
     )
 
 
-def _scd2_type2_decl_with(col_decl: ColumnDecl) -> TableDecl:
-    """A minimal scd: type2 dim_patient decl carrying only the given column
-    (plus id/valid_from) — Scd2DerivedSourceConstant's fixture."""
-    return TableDecl(
-        name="dim_patient",
-        role="dim",
-        scd="type2",
-        source=SourceDecl(grain="records", kind="actor"),
-        key=["id", "valid_from"],
-        columns=[
-            ColumnDecl(name="id", **{"from": "record_id"}),
-            ColumnDecl(name="valid_from", derived=DerivedSpec(scd_window="valid_from")),
-            col_decl,
-        ],
-    )
-
-
-@pytest.mark.parametrize(
-    "col_decl",
-    [
-        ColumnDecl(
-            name="status_ts",
-            derived=DerivedSpec(timestamp=TimestampSpec(source="prop__status")),
-        ),
-        ColumnDecl(
-            name="status_date",
-            derived=DerivedSpec(
-                date_parse=DateParseSpec(
-                    **{"from": "prop__status", "format": "%Y-%m-%d"}
-                )
-            ),
-        ),
-        ColumnDecl(
-            name="status_code",
-            derived=DerivedSpec(
-                value_map=ValueMapSpec(**{"from": "prop__status"}, map={"admitted": 1})
-            ),
-        ),
-    ],
-    ids=["timestamp", "date_parse", "value_map"],
-)
-def test_scd2_derived_source_constant_raises_for_tracked_source(
-    col_decl: ColumnDecl,
-) -> None:
-    """A derived spec sourcing a temporal_class: tracked prop__ column raises,
-    naming the column, the source, its class, and the constant-values-only
-    rule."""
-    sidecar = _scd2_derived_source_sidecar()
-    tbl = _scd2_type2_decl_with(col_decl)
-    with pytest.raises(ExportError, match="constant values only") as exc_info:
-        check_scd2_derived_source_constant(col_decl, tbl, sidecar, "records__actor")
-    assert col_decl.name in str(exc_info.value)
-    assert "prop__status" in str(exc_info.value)
-    assert "tracked" in str(exc_info.value)
-
-
-def test_scd2_derived_source_constant_raises_for_slice_only_source() -> None:
-    """A slice_only prop__ source raises: its past is unknowable, so it is no
-    more derivable on a type2 table than a tracked one."""
-    sidecar = _scd2_derived_source_sidecar()
-    col = ColumnDecl(
-        name="last_seen",
-        derived=DerivedSpec(
-            date_parse=DateParseSpec(
-                **{"from": "prop__last_seen", "format": "%Y-%m-%d"}
-            )
-        ),
-    )
-    tbl = _scd2_type2_decl_with(col)
-    with pytest.raises(ExportError, match="constant values only") as exc_info:
-        check_scd2_derived_source_constant(col, tbl, sidecar, "records__actor")
-    assert "slice_only" in str(exc_info.value)
-
-
-def test_scd2_derived_source_constant_passes_for_untracked_source() -> None:
-    """An untracked, temporal_class: constant prop__ source passes."""
-    sidecar = _scd2_derived_source_sidecar()
-    col = ColumnDecl(
-        name="birth_date",
-        derived=DerivedSpec(
-            date_parse=DateParseSpec(
-                **{"from": "prop__birth_date", "format": "%Y-%m-%d"}
-            )
-        ),
-    )
-    tbl = _scd2_type2_decl_with(col)
-    check_scd2_derived_source_constant(
-        col, tbl, sidecar, "records__actor"
-    )  # must not raise
-
-
-def test_scd2_derived_source_constant_passes_for_tracked_but_constant_source() -> None:
-    """A history_tracked prop__ column whose temporal_class is constant passes.
-
-    The presentation-property shape: the contract mints history_tracked: true
-    on every presentation property, so the flag alone would refuse a column
-    holding exactly its genesis row. The class is the question, and it says
-    constant.
-    """
-    sidecar = _scd2_derived_source_sidecar()
-    col = ColumnDecl(
-        name="minted_on",
-        derived=DerivedSpec(
-            date_parse=DateParseSpec(
-                **{"from": "prop__minted_on", "format": "%Y-%m-%d"}
-            )
-        ),
-    )
-    tbl = _scd2_type2_decl_with(col)
-    check_scd2_derived_source_constant(
-        col, tbl, sidecar, "records__actor"
-    )  # must not raise
-
-
-def test_scd2_derived_source_constant_defers_absent_source_to_existence_gate() -> None:
-    """An absent prop__ source is a no-op here — ProjectionColumnExists /
-    DateParseSourceColumn reports it, and both run after this gate."""
-    sidecar = _scd2_derived_source_sidecar()
-    col = ColumnDecl(
-        name="typo",
-        derived=DerivedSpec(
-            date_parse=DateParseSpec(**{"from": "prop__nope", "format": "%Y-%m-%d"})
-        ),
-    )
-    tbl = _scd2_type2_decl_with(col)
-    check_scd2_derived_source_constant(
-        col, tbl, sidecar, "records__actor"
-    )  # must not raise
-
-
-def test_scd2_derived_source_constant_passes_for_structural_source() -> None:
-    """A structural source (never tracked) passes."""
-    sidecar = _scd2_derived_source_sidecar()
-    col = ColumnDecl(
-        name="created_at",
-        derived=DerivedSpec(timestamp=TimestampSpec(source="created_sim_time")),
-    )
-    tbl = _scd2_type2_decl_with(col)
-    check_scd2_derived_source_constant(
-        col, tbl, sidecar, "records__actor"
-    )  # must not raise
-
-
-def test_scd2_derived_source_constant_noop_for_non_type2_table() -> None:
-    """A non-type2 table is a no-op, even with a tracked derived source."""
+def test_validate_table_type2_derived_date_parse_tracked_source_passes() -> None:
+    """A derived: date_parse over a tracked prop__ source now passes
+    validate_table on a type2 table — the deleted Scd2DerivedSourceConstant
+    gate no longer restricts type2 renderings to constant sources."""
     sidecar = _scd2_derived_source_sidecar()
     col = ColumnDecl(
         name="status_date",
@@ -1113,16 +976,29 @@ def test_scd2_derived_source_constant_noop_for_non_type2_table() -> None:
             date_parse=DateParseSpec(**{"from": "prop__status", "format": "%Y-%m-%d"})
         ),
     )
-    fact_decl = TableDecl(
-        name="fact_actor",
-        role="fact",
-        source=SourceDecl(grain="records", kind="actor"),
-        key=["id"],
-        columns=[ColumnDecl(name="id", **{"from": "record_id"}), col],
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    validate_table(tbl, config, sidecar, None, discard_notice_sink)  # must not raise
+
+
+def test_validate_table_type2_derived_slice_only_source_still_refused() -> None:
+    """A non-exempt slice_only derived source on a type2 table is still
+    refused — by the slice-only surface (check_slice_only_column_reads), not
+    a type2-specific gate."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="last_seen_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(
+                **{"from": "prop__last_seen", "format": "%Y-%m-%d"}
+            )
+        ),
     )
-    check_scd2_derived_source_constant(
-        col, fact_decl, sidecar, "records__actor"
-    )  # must not raise
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(ExportError) as exc_info:
+        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+    _assert_slice_only_message(str(exc_info.value), column="prop__last_seen")
 
 
 # ---------------------------------------------------------------------------
@@ -1214,6 +1090,43 @@ def test_validate_table_type2_derived_date_parse_untracked_source_passes() -> No
     validate_table(tbl, config, sidecar, None, discard_notice_sink)  # must not raise
 
 
+def test_validate_table_type2_derived_decimal_non_double_tracked_source_raises() -> (
+    None
+):
+    """DecimalSourceIsDouble fires on a type2 derived: decimal column reading
+    a non-DOUBLE tracked source, exactly as on the records grain."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="status_amount",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "prop__status"}, **{"as": (10, 2)})
+        ),
+    )
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(DecimalSourceIsDouble, match="got VARCHAR"):
+        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+
+
+def test_validate_table_type2_derived_json_precision_non_varchar_raises() -> None:
+    """JsonPrecisionSourceIsVarchar fires on a type2 derived: json_precision
+    column reading a non-VARCHAR tracked source, exactly as on the records
+    grain."""
+    sidecar = _scd2_derived_source_sidecar()
+    col = ColumnDecl(
+        name="score_precision",
+        derived=DerivedSpec(
+            json_precision=JsonPrecisionSpec(
+                **{"from": "prop__score"}, leaves={"amount": 2}
+            )
+        ),
+    )
+    tbl = _scd2_derived_validate_table_decl(col)
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(JsonPrecisionSourceIsVarchar, match="got BIGINT"):
+        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+
+
 # ---------------------------------------------------------------------------
 # validate_table integration
 # ---------------------------------------------------------------------------
@@ -1290,10 +1203,10 @@ def _slice_only_actor_sidecar(
     )
 
 
-def _assert_slice_only_message(message: str) -> None:
+def _assert_slice_only_message(message: str, column: str = "prop__tier") -> None:
     """Assert a SliceOnlyColumnRefused message names the base column, class,
     and slice-fact contract clause (design doc § Error-message shapes)."""
-    assert "records__actor.prop__tier" in message
+    assert f"records__actor.{column}" in message
     assert "temporal_class: slice_only" in message
     assert "known only at the emit's slice" in message
 

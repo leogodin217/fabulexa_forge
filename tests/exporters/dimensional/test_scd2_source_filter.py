@@ -4,10 +4,10 @@
    scd: type2 dim contains only the filtered sub-type's rows (full export and
    windowed __rows).
 2. Scd2ColumnModeSupported: validate_table rejects column modes the type2
-   builder does not implement (fk, correlation, derived: ordinal / elapsed /
-   decimal / json_precision) instead of rendering them as silent NULLs,
-   while admitting the per-record derived modes timestamp / date_parse /
-   value_map (Phase 2).
+   build does not define (fk, correlation, derived: ordinal / elapsed)
+   instead of rendering them as silent NULLs, while admitting the pure
+   per-version value renderings timestamp / date_parse / value_map / decimal
+   / json_precision.
 3. Windowed fact export fails fast when no output column projects the grain's
    window key, instead of falling back to the raw key name.
 """
@@ -336,27 +336,13 @@ _UNSUPPORTED_MODE_COLUMNS: list[ColumnDecl] = [
             )
         ),
     ),
-    ColumnDecl(
-        name="score",
-        derived=DerivedSpec(
-            decimal=DecimalSpec(**{"from": "prop__score"}, **{"as": (4, 3)})
-        ),
-    ),
-    ColumnDecl(
-        name="payload",
-        derived=DerivedSpec(
-            json_precision=JsonPrecisionSpec(
-                **{"from": "prop__payload"}, leaves={"amount": 2}
-            )
-        ),
-    ),
 ]
 
 
 @pytest.mark.parametrize(
     "col_decl",
     _UNSUPPORTED_MODE_COLUMNS,
-    ids=["fk", "correlation", "ordinal", "elapsed", "decimal", "json_precision"],
+    ids=["fk", "correlation", "ordinal", "elapsed"],
 )
 def test_scd2_unsupported_column_mode_raises(col_decl: ColumnDecl) -> None:
     """Every mode the type2 builder does not implement raises at validate time."""
@@ -385,18 +371,43 @@ _SUPPORTED_MODE_COLUMNS: list[ColumnDecl] = [
             value_map=ValueMapSpec(**{"from": "prop__status"}, map={"admitted": 1})
         ),
     ),
+    ColumnDecl(
+        name="score",
+        derived=DerivedSpec(
+            decimal=DecimalSpec(**{"from": "prop__score"}, **{"as": (4, 3)})
+        ),
+    ),
+    ColumnDecl(
+        name="payload",
+        derived=DerivedSpec(
+            json_precision=JsonPrecisionSpec(
+                **{"from": "prop__payload"}, leaves={"amount": 2}
+            )
+        ),
+    ),
 ]
 
 
 @pytest.mark.parametrize(
     "col_decl",
     _SUPPORTED_MODE_COLUMNS,
-    ids=["from", "null", "scd_window", "timestamp", "date_parse", "value_map"],
+    ids=[
+        "from",
+        "null",
+        "scd_window",
+        "timestamp",
+        "date_parse",
+        "value_map",
+        "decimal",
+        "json_precision",
+    ],
 )
 def test_scd2_supported_column_modes_pass(col_decl: ColumnDecl) -> None:
-    """from/null/derived: scd_window/timestamp/date_parse/value_map stay
-    supported on type2 — mode-gate only; source-tracked-ness is
-    Scd2DerivedSourceConstant's separate concern."""
+    """from/null/derived: scd_window and every value rendering
+    (timestamp/date_parse/value_map/decimal/json_precision) stay supported
+    on type2 — mode-gate only; the source-column-type gates
+    (DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar, ...) are separate
+    checks run by validate_table."""
     check_scd2_column_mode_supported(col_decl, _type2_decl_with(col_decl))
 
 
