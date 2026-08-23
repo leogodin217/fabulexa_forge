@@ -1016,6 +1016,20 @@ def _require_nonempty_str(value: str, field_name: str) -> None:
         raise ValueError(f"{field_name} must be non-empty")
 
 
+def _require_nonblank_str(value: str | None, field_name: str) -> None:
+    """Reject a present-but-blank author-supplied optional string field.
+
+    Args:
+        value: The field's value, or None when absent (legal, not checked).
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is present and empty or whitespace-only.
+    """
+    if value is not None and not value.strip():
+        raise ValueError(f"{field_name} must be non-empty when present")
+
+
 def _require_distinct_nonempty_tuple(
     value: tuple[str, ...] | None, field_name: str
 ) -> None:
@@ -1629,6 +1643,21 @@ class ExportConfig(StrictBaseModel):
     today. Kind/sub-type existence, registry declaration, and union safety
     are export-time gates against the sidecar, not parse-time checks (the
     config is emit-independent)."""
+    readme_overlay: str | None = None
+    """Path to the author's README overlay markdown, resolved against the
+    config file's directory by whoever loaded the config — the model never
+    touches the filesystem. Absent: the README renders from the mode template
+    and derived facts alone."""
+
+    @model_validator(mode="after")
+    def readme_overlay_nonempty(self) -> Self:
+        """A present `readme_overlay` is a non-empty, non-whitespace string.
+
+        Raises:
+            ValueError: `readme_overlay` is present and empty or whitespace-only.
+        """
+        _require_nonblank_str(self.readme_overlay, "readme_overlay")
+        return self
 
     @model_validator(mode="after")
     def keys_well_formed(self) -> Self:

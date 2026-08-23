@@ -20,9 +20,21 @@ class ConfigError(ExporterError):
     validation (unknown / missing field, or a model validator)."""
 
 
+class ReadmeOverlayInvalid(ConfigError):
+    """The `readme_overlay` file is unreadable, is not UTF-8, or violates the
+    slot grammar — content before the first H2, a heading matching neither
+    slot form, or a duplicate slot key. Names the offending heading or key."""
+
+
 class ExportError(ExporterError):
     """Engine: the config is well-formed but does not fit the emit — the
     multi-branch guard or any business rule fails."""
+
+
+class ReadmeOverlayUnknownTable(ExportError):
+    """An overlay `table:` slot names a table the compiled plan does not
+    produce. Raised post-compile, before any data or artifact is written.
+    Names the slot and lists the plan's output tables."""
 
 
 class ExportRuntimeError(ExporterError):
