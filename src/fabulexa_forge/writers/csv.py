@@ -19,6 +19,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
 
 from fabulexa_forge.errors import ExportRuntimeError
+from fabulexa_forge.writers.relation import WrittenRelation, describe_arrow_table
 
 
 def write_csv(
@@ -26,7 +27,7 @@ def write_csv(
     table_name: str,
     query: str,
     output_dir: Path,
-) -> int:
+) -> WrittenRelation:
     """Materialize one query and write it as a CSV file with a header row.
 
     `emit.query_arrow(query, ())` yields a typed Arrow table rendered to
@@ -41,7 +42,8 @@ def write_csv(
         output_dir: Directory for the CSV.
 
     Returns:
-        Row count written (0 for a header-only file).
+        The written relation: row count (0 for a header-only file) and its
+        (column, type-text) pairs, transcribed via `describe_arrow_table`.
 
     Raises:
         ExportRuntimeError: Query execution or file write fails.
@@ -65,7 +67,10 @@ def write_csv(
             f"failed to write CSV for table '{table_name}' to {out_path}: {exc}"
         ) from exc
 
-    return cast(int, arrow_table.num_rows)
+    return WrittenRelation(
+        row_count=cast(int, arrow_table.num_rows),
+        columns=describe_arrow_table(arrow_table),
+    )
 
 
 def _format_date(value: "_datetime.date") -> str:

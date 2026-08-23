@@ -39,9 +39,10 @@ def test_write_query_specs_duckdb_arm_lands_keyed_constraints(tmp_path: Path) ->
     ]
 
     with open_emit(emit_dir) as emit:
-        result = write_query_specs(emit, specs, out_path, "duckdb")
+        report = write_query_specs(emit, specs, out_path, "duckdb")
 
-    assert result == {"dim_entity": 2, "dim_history": 3}
+    row_counts = {table.name: table.row_count for table in report.tables}
+    assert row_counts == {"dim_entity": 2, "dim_history": 3}
     assert "PRIMARY KEY" in constraint_types(out_path, "dim_entity")
     assert constraint_types(out_path, "dim_history") == []
 
@@ -65,7 +66,8 @@ def test_write_query_specs_csv_arm_ignores_keys(tmp_path: Path) -> None:
     ]
 
     with open_emit(emit_dir) as emit:
-        result = write_query_specs(emit, specs, out_dir, "csv")
+        report = write_query_specs(emit, specs, out_dir, "csv")
 
-    assert result == {"dim_entity": 2}
+    row_counts = {table.name: table.row_count for table in report.tables}
+    assert row_counts == {"dim_entity": 2}
     assert (out_dir / "dim_entity.csv").exists()

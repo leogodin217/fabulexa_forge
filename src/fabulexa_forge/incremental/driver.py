@@ -300,8 +300,8 @@ def _write_csv_specs(
     row_counts: dict[str, int] = {}
     for spec in specs:
         author_name = query_spec_output_name(spec)
-        rows = write_csv(emit, author_name, spec.sql, target_dir)
-        row_counts[author_name] = rows
+        written = write_csv(emit, author_name, spec.sql, target_dir)
+        row_counts[author_name] = written.row_count
     return row_counts
 
 

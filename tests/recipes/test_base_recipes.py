@@ -85,6 +85,7 @@ def test_base_recipe_run_and_assert(
             "duckdb",
             anchor,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     assert_recipe_output(expectation, out_path)

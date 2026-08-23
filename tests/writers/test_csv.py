@@ -25,9 +25,9 @@ def test_write_csv_writes_header_and_rows(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         sql = 'SELECT fork_path, record_id FROM "records__entity" ORDER BY record_id'
-        count = write_csv(emit, "dim_entity", sql, out_dir)
+        written = write_csv(emit, "dim_entity", sql, out_dir)
 
-    assert count == 2
+    assert written.row_count == 2
     csv_path = out_dir / "dim_entity.csv"
     assert csv_path.exists()
     rows = list(csv.reader(csv_path.read_text(encoding="utf-8").splitlines()))
@@ -44,9 +44,9 @@ def test_write_csv_zero_row_yields_header_only(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         sql = 'SELECT record_id FROM "records__entity" WHERE 1=0'
-        count = write_csv(emit, "empty_table", sql, out_dir)
+        written = write_csv(emit, "empty_table", sql, out_dir)
 
-    assert count == 0
+    assert written.row_count == 0
     csv_path = out_dir / "empty_table.csv"
     assert csv_path.exists()
     rows = list(csv.reader(csv_path.read_text(encoding="utf-8").splitlines()))
@@ -62,9 +62,9 @@ def test_write_csv_returns_row_count(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         sql = 'SELECT record_id FROM "history" ORDER BY record_id'
-        count = write_csv(emit, "history_table", sql, out_dir)
+        written = write_csv(emit, "history_table", sql, out_dir)
 
-    assert count == 3
+    assert written.row_count == 3
 
 
 def test_write_csv_filename_is_table_name_dot_csv(tmp_path: Path) -> None:
@@ -103,9 +103,9 @@ def test_write_csv_null_value_renders_empty_field(tmp_path: Path) -> None:
             "SELECT record_id, CAST(NULL AS VARCHAR) AS null_col"
             ' FROM "records__entity" ORDER BY record_id'
         )
-        count = write_csv(emit, "null_table", sql, out_dir)
+        written = write_csv(emit, "null_table", sql, out_dir)
 
-    assert count == 2
+    assert written.row_count == 2
     csv_path = out_dir / "null_table.csv"
     rows = list(csv.reader(csv_path.read_text(encoding="utf-8").splitlines()))
     assert rows[0] == ["record_id", "null_col"]

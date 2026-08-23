@@ -54,7 +54,9 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.corrupters.state import CorruptReport
+    from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
     from fabulexa_forge.exporters.notices import NoticeSink
+    from fabulexa_forge.exporters.query_spec import ExportReport
     from fabulexa_forge.reader.conformance import CheckResult
     from fabulexa_forge.reader.emit import Emit
 
@@ -138,14 +140,38 @@ def _print_window_counts(window_label: str, counts: dict[str, int]) -> None:
         print(f"  [{window_label}] {table_name}: {row_count} rows")
 
 
-def _print_full_counts(counts: dict[str, int]) -> None:
+def _print_full_counts(report: "ExportReport") -> None:
     """Print per-table row counts for a full (non-windowed) export.
 
     Args:
-        counts: Mapping of table name to row count.
+        report: The invocation's per-table report.
     """
-    for table_name, row_count in counts.items():
-        print(f"  {table_name}: {row_count} rows")
+    for table in report.tables:
+        print(f"  {table.name}: {table.row_count} rows")
+
+
+def _resolve_readme_overlay(
+    config: "ExportConfig", config_path: Path
+) -> "ReadmeOverlay | None":
+    """Load `config.readme_overlay`, resolved against the config file's directory.
+
+    Args:
+        config: The validated export config.
+        config_path: The export-config YAML path, as given on the command line.
+
+    Returns:
+        The parsed overlay, or None when `config.readme_overlay` is absent.
+
+    Raises:
+        ReadmeOverlayInvalid: The resolved overlay file is missing, unreadable,
+            not UTF-8, or violates the slot grammar.
+    """
+    if config.readme_overlay is None:
+        return None
+    from fabulexa_forge.exporters.companion import load_readme_overlay
+
+    overlay_path = config_path.parent / config.readme_overlay
+    return load_readme_overlay(overlay_path)
 
 
 def _dispatch_export(
@@ -158,12 +184,15 @@ def _dispatch_export(
     range_from: str | None,
     range_to: str | None,
     notice_sink: "NoticeSink",
+    overlay: "ReadmeOverlay | None",
 ) -> int:
     """Run the full, next-window, or explicit-range export for any mode.
 
     The `--next` / `--from`/`--to` leaves call the incremental driver, which
     dispatches on `config.mode` internally (dimensional vs. source vs. base
-    engine compile). The full-export leaf dispatches here on `config.mode`.
+    engine compile); `overlay` is not yet threaded to those leaves (Phase 4).
+    The full-export leaf dispatches here on `config.mode`, threading `overlay`
+    to the matching engine and printing counts from its returned report.
 
     Args:
         emit: The open emit.
@@ -175,6 +204,7 @@ def _dispatch_export(
         range_from: Inclusive start for an explicit range (--from), or None.
         range_to: Exclusive end for an explicit range (--to), or None.
         notice_sink: Receiver for plan notices.
+        overlay: The parsed README overlay, or None.
 
     Returns:
         0 on a written window/range/full export (per-table counts printed,
@@ -206,16 +236,18 @@ def _dispatch_export(
     if config.mode == "source":
         from fabulexa_forge.exporters.source.engine import export_source
 
-        full_counts = export_source(emit, config, out, fmt, anchor, notice_sink)
+        report = export_source(emit, config, out, fmt, anchor, notice_sink, overlay)
     elif config.mode == "base":
         from fabulexa_forge.exporters.base.engine import export_base
 
-        full_counts = export_base(emit, config, out, fmt, anchor, notice_sink)
+        report = export_base(emit, config, out, fmt, anchor, notice_sink, overlay)
     else:
         from fabulexa_forge.exporters.dimensional.engine import export_dimensional
 
-        full_counts = export_dimensional(emit, config, out, fmt, anchor, notice_sink)
-    _print_full_counts(full_counts)
+        report = export_dimensional(
+            emit, config, out, fmt, anchor, notice_sink, overlay
+        )
+    _print_full_counts(report)
     return 0
 
 
@@ -283,6 +315,7 @@ def cmd_export(
 
     try:
         config = load_export_config(config_path)
+        overlay = _resolve_readme_overlay(config, config_path)
 
         with open_emit(emit_dir) as emit:
             sidecar_runtime = emit.sidecar.runtime()
@@ -303,6 +336,7 @@ def cmd_export(
                 range_from,
                 range_to,
                 render_notice_stderr,
+                overlay,
             )
 
     except (ReaderError, ExporterError) as exc:

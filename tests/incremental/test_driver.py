@@ -43,6 +43,7 @@ from fabulexa_forge.incremental.driver import (
 )
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.reader.emit import Emit, open_emit
+from fabulexa_forge.writers.relation import WrittenRelation
 
 # ---------------------------------------------------------------------------
 # Emit + config builders
@@ -779,7 +780,9 @@ def test_next_against_range_artifact_raises(tmp_path: Path) -> None:
 def _patch_write_csv_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     """Make every write_csv call fail (the driver imports it at call time)."""
 
-    def _boom(emit: Emit, table_name: str, query: str, output_dir: Path) -> int:
+    def _boom(
+        emit: Emit, table_name: str, query: str, output_dir: Path
+    ) -> WrittenRelation:
         raise ExportRuntimeError("simulated CSV write failure")
 
     monkeypatch.setattr("fabulexa_forge.writers.csv.write_csv", _boom)
@@ -928,6 +931,7 @@ def test_duckdb_drip_equals_full_export(tmp_path: Path) -> None:
             "duckdb",
             None,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     # Drip to drained
@@ -978,7 +982,13 @@ def test_csv_drip_equals_full_export(tmp_path: Path) -> None:
     # Full export
     with open_emit(emit_dir) as emit:
         export_dimensional(
-            emit, config_no_inc, full_csv, "csv", None, notice_sink=discard_notice_sink
+            emit,
+            config_no_inc,
+            full_csv,
+            "csv",
+            None,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     # Drip to drained

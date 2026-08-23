@@ -2,7 +2,7 @@ sprint: companion-artifacts
 parent_branch: prepare_for_classroom_env
 baseline_sha: 98d28604ac564e3848f8dd0bf58113cd36797a3f
 started: 2026-08-23
-current_phase: 3
+current_phase: 4
 capabilities:
   - export-companion-artifacts:
       [overlay-surface, companion-writer, full-export-threading, incremental-threading]
@@ -28,7 +28,7 @@ phases:
           - "tests/exporters/companion/test_manifest.py"
           - "tests/exporters/companion/test_readme.py"
   3:
-    status: pending
+    status: complete
     name: "Full-export threading — writers, dispatch, engines, CLI"
     demo: "docs/sprints/companion-artifacts/demos/phase_3_full_export_artifacts.py"
     steps:

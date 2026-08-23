@@ -69,16 +69,17 @@ def test_export_base_anchor_none_succeeds(tmp_path: Path) -> None:
     emit_dir = build_base_test_emit(tmp_path)
     out_path = tmp_path / "out.duckdb"
     with open_emit(emit_dir) as emit:
-        row_counts = export_base(
+        report = export_base(
             emit,
             _BASE_CONFIG,
             out_path,
             "duckdb",
             None,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
-    assert row_counts == {"patient": 3}
+    assert {t.name: t.row_count for t in report.tables} == {"patient": 3}
 
 
 # ---------------------------------------------------------------------------
@@ -161,20 +162,33 @@ def test_export_base_zero_row_kind_still_emitted(tmp_path: Path) -> None:
     csv_out = tmp_path / "csv_out"
     csv_out.mkdir()
     with open_emit(emit_dir) as emit:
-        duckdb_counts = export_base(
+        duckdb_report = export_base(
             emit,
             _BASE_CONFIG,
             duckdb_out,
             "duckdb",
             None,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
-        csv_counts = export_base(
-            emit, _BASE_CONFIG, csv_out, "csv", None, notice_sink=discard_notice_sink
+        csv_report = export_base(
+            emit,
+            _BASE_CONFIG,
+            csv_out,
+            "csv",
+            None,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
-    assert duckdb_counts == {"patient": 1, "doctor": 0}
-    assert csv_counts == {"patient": 1, "doctor": 0}
+    assert {t.name: t.row_count for t in duckdb_report.tables} == {
+        "patient": 1,
+        "doctor": 0,
+    }
+    assert {t.name: t.row_count for t in csv_report.tables} == {
+        "patient": 1,
+        "doctor": 0,
+    }
 
     out_conn = duckdb.connect(str(duckdb_out), read_only=True)
     try:
@@ -199,16 +213,17 @@ def test_export_base_duckdb_writes_one_table_per_kind(tmp_path: Path) -> None:
     emit_dir = build_base_test_emit(tmp_path)
     out_path = tmp_path / "out.duckdb"
     with open_emit(emit_dir) as emit:
-        row_counts = export_base(
+        report = export_base(
             emit,
             _BASE_CONFIG,
             out_path,
             "duckdb",
             None,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
-    assert row_counts == {"patient": 3}
+    assert {t.name: t.row_count for t in report.tables} == {"patient": 3}
     out_conn = duckdb.connect(str(out_path), read_only=True)
     try:
         actual = out_conn.execute('SELECT COUNT(*) FROM "patient"').fetchone()
@@ -224,11 +239,17 @@ def test_export_base_csv_writes_one_file_per_kind(tmp_path: Path) -> None:
     out_dir = tmp_path / "csv_out"
     out_dir.mkdir()
     with open_emit(emit_dir) as emit:
-        row_counts = export_base(
-            emit, _BASE_CONFIG, out_dir, "csv", None, notice_sink=discard_notice_sink
+        report = export_base(
+            emit,
+            _BASE_CONFIG,
+            out_dir,
+            "csv",
+            None,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
-    assert row_counts == {"patient": 3}
+    assert {t.name: t.row_count for t in report.tables} == {"patient": 3}
     csv_path = out_dir / "patient.csv"
     assert csv_path.exists()
     with csv_path.open(newline="", encoding="utf-8") as fh:
@@ -330,9 +351,11 @@ def test_export_base_csv_declare_keys_emits_one_notice_before_data(
     config = ExportConfig(mode="base", base=BaseConfig(declare_keys=True))
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
-        row_counts = export_base(emit, config, out_dir, "csv", None, notice_sink=sink)
+        report = export_base(
+            emit, config, out_dir, "csv", None, notice_sink=sink, overlay=None
+        )
 
-    assert row_counts == {"patient": 1, "doctor": 1}
+    assert {t.name: t.row_count for t in report.tables} == {"patient": 1, "doctor": 1}
     codes = [n.code for n in sink.notices]
     assert codes.count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
     assert (out_dir / "patient.csv").exists()
@@ -346,7 +369,9 @@ def test_export_base_duckdb_declare_keys_emits_no_csv_notice(tmp_path: Path) -> 
     config = ExportConfig(mode="base", base=BaseConfig(declare_keys=True))
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
-        export_base(emit, config, out_path, "duckdb", None, notice_sink=sink)
+        export_base(
+            emit, config, out_path, "duckdb", None, notice_sink=sink, overlay=None
+        )
 
     codes = [n.code for n in sink.notices]
     assert NOTICE_KEYS_NOT_DECLARABLE_CSV not in codes
@@ -376,7 +401,13 @@ def test_export_base_duckdb_declare_keys_carries_constraints(tmp_path: Path) -> 
     config = ExportConfig(mode="base", base=BaseConfig(declare_keys=True))
     with open_emit(emit_dir) as emit:
         export_base(
-            emit, config, out_path, "duckdb", None, notice_sink=discard_notice_sink
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            None,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     assert "PRIMARY KEY" in constraint_types(out_path, "patient")
