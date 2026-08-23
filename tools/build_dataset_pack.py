@@ -190,9 +190,9 @@ def build_pack(entry: "DatasetEntry", example_dir: Path, out_path: Path) -> Pack
     all member paths relative, no wrapper directory.
 
     Deterministic means byte-identical: members added in sorted-path order;
-    member mtime 0, uid/gid 0, uname/gname empty; mode 0644 for files, 0755
-    for directories; gzip stream with mtime 0 and an empty original-filename
-    field.
+    member mtime 0, uid/gid 0, uname/gname empty, mode 0644 (files only — the
+    archive has no directory members); gzip stream with mtime 0 and an empty
+    original-filename field.
 
     Args:
         entry: The authored manifest entry driving the build.

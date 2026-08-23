@@ -273,6 +273,28 @@ def test_occupied_target_with_force_removed_and_recreated(
     assert _tree_snapshot(target) == _PACK_CONTENT
 
 
+def test_occupied_non_directory_target_with_force_removed_and_recreated(
+    tmp_path: Path, temp_dir: Path
+) -> None:
+    """--force removes and recreates a non-directory occupied target."""
+    archive_bytes = _make_archive(_PACK_CONTENT)
+    entry = _make_entry(archive_bytes=archive_bytes)
+    manifest = _manifest_with(entry)
+    target = tmp_path / "out"
+    target.write_text("i am a file")
+    result = get_dataset(
+        manifest,
+        entry.name,
+        target,
+        True,
+        functools.partial(_open_bytes, archive_bytes),
+        None,
+    )
+    assert result.target_dir == target
+    assert target.is_dir()
+    assert _tree_snapshot(target) == _PACK_CONTENT
+
+
 def test_occupied_target_with_force_survives_sha_mismatch(
     tmp_path: Path, temp_dir: Path
 ) -> None:

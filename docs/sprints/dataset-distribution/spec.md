@@ -304,9 +304,9 @@ def build_pack(entry: DatasetEntry, example_dir: Path, out_path: Path) -> PackSt
     all member paths relative, no wrapper directory.
 
     Deterministic means byte-identical: members added in sorted-path order;
-    member mtime 0, uid/gid 0, uname/gname empty; mode 0644 for files, 0755
-    for directories; gzip stream with mtime 0 and an empty original-filename
-    field.
+    member mtime 0, uid/gid 0, uname/gname empty, mode 0644 (files only — the
+    archive has no directory members); gzip stream with mtime 0 and an empty
+    original-filename field.
 
     Args:
         entry: The authored manifest entry driving the build.
@@ -516,8 +516,8 @@ emits come from the existing `tests/_support` / reader emit helpers)
   absent from `configs`).
 - Determinism: building the same tree twice → byte-identical archives
   (same sha256). Normalization pinned: member mtime 0, uid/gid 0,
-  uname/gname empty, file mode 0644, dir mode 0755, sorted member order,
-  gzip mtime 0.
+  uname/gname empty, file mode 0644 (no directory members), sorted member
+  order, gzip mtime 0.
 - Stamp: `PackStamp.sha256`/`size_bytes` match the written file;
   `base_format_version` equals the fixture emit's sidecar version (read via
   `open_emit`); the entry's authored stamped-field values are ignored on

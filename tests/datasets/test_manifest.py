@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.datasets.manifest import load_manifest, render_dataset_listing
 from fabulexa_forge.datasets.models import DatasetEntry, DatasetManifest
@@ -95,3 +97,10 @@ def test_json_render_is_deterministic_across_calls() -> None:
     first = render_dataset_listing(manifest, "json")
     second = render_dataset_listing(manifest, "json")
     assert first == second
+
+
+def test_unknown_format_rejected() -> None:
+    """An fmt other than 'text' or 'json' raises ValueError."""
+    manifest = DatasetManifest.model_validate({"datasets": []})
+    with pytest.raises(ValueError, match="unknown listing format"):
+        render_dataset_listing(manifest, "xml")

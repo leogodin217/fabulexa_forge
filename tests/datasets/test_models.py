@@ -30,6 +30,9 @@ def _entry(**overrides: Any) -> dict[str, Any]:
     return {**VALID_ENTRY, **overrides}
 
 
+_NON_POSITIVE_VERSION = SUPPORTED_BASE_FORMAT_VERSION - SUPPORTED_BASE_FORMAT_VERSION
+
+
 def test_valid_entry_passes() -> None:
     """A fully well-formed entry passes validation."""
     entry = DatasetEntry.model_validate(VALID_ENTRY)
@@ -45,53 +48,35 @@ def test_bad_name_rejected(name: str) -> None:
         DatasetEntry.model_validate(_entry(name=name))
 
 
-def test_non_https_url_rejected() -> None:
-    """A non-https url is rejected."""
+@pytest.mark.parametrize(
+    "override",
+    [
+        pytest.param({"url": "http://example.com/x.tar.gz"}, id="non_https_url"),
+        pytest.param({"sha256": "a" * 63}, id="sha256_wrong_length"),
+        pytest.param({"sha256": "A" * 64}, id="sha256_uppercase"),
+        pytest.param({"size_bytes": 0}, id="size_bytes_zero"),
+        pytest.param({"size_bytes": -1}, id="size_bytes_negative"),
+        pytest.param(
+            {"base_format_version": _NON_POSITIVE_VERSION},
+            id="base_format_version_zero",
+        ),
+        pytest.param({"configs": []}, id="empty_configs"),
+        pytest.param({"commands": []}, id="empty_commands"),
+        pytest.param({"configs": ["dimensional.yml"]}, id="configs_not_yaml_suffix"),
+        pytest.param(
+            {"commands": ["fabulexa-forge export x.yaml"]},
+            id="command_without_dir_placeholder",
+        ),
+        pytest.param(
+            {"commands": ["fabulexa-forge export {dir}/x.yaml --out {out}"]},
+            id="command_with_foreign_placeholder",
+        ),
+    ],
+)
+def test_bad_field_rejected(override: dict[str, Any]) -> None:
+    """One field broken (all others valid) is rejected, one rule per case."""
     with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(url="http://example.com/x.tar.gz"))
-
-
-def test_sha256_wrong_length_rejected() -> None:
-    """A sha256 not 64 hex chars is rejected."""
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(sha256="a" * 63))
-
-
-def test_sha256_uppercase_rejected() -> None:
-    """An uppercase sha256 is rejected."""
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(sha256="A" * 64))
-
-
-def test_size_bytes_zero_rejected() -> None:
-    """size_bytes of 0 is rejected."""
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(size_bytes=0))
-
-
-def test_size_bytes_negative_rejected() -> None:
-    """A negative size_bytes is rejected."""
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(size_bytes=-1))
-
-
-def test_base_format_version_zero_rejected() -> None:
-    """A non-positive base_format_version is rejected."""
-    non_positive = 0
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(base_format_version=non_positive))
-
-
-def test_empty_configs_rejected() -> None:
-    """An empty configs list is rejected."""
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(configs=[]))
-
-
-def test_empty_commands_rejected() -> None:
-    """An empty commands list is rejected."""
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(commands=[]))
+        DatasetEntry.model_validate(_entry(**override))
 
 
 @pytest.mark.parametrize(
@@ -101,26 +86,6 @@ def test_configs_path_separator_rejected(bad_config: str) -> None:
     """A configs entry with a path separator is rejected."""
     with pytest.raises(ValidationError):
         DatasetEntry.model_validate(_entry(configs=[bad_config]))
-
-
-def test_configs_not_yaml_suffix_rejected() -> None:
-    """A configs entry not ending '.yaml' is rejected."""
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(configs=["dimensional.yml"]))
-
-
-def test_command_without_dir_placeholder_rejected() -> None:
-    """A command missing the {dir} placeholder is rejected."""
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(_entry(commands=["fabulexa-forge export x.yaml"]))
-
-
-def test_command_with_foreign_placeholder_rejected() -> None:
-    """A command with a placeholder other than {dir} is rejected."""
-    with pytest.raises(ValidationError):
-        DatasetEntry.model_validate(
-            _entry(commands=["fabulexa-forge export {dir}/x.yaml --out {out}"])
-        )
 
 
 def test_duplicate_entry_names_rejected() -> None:
