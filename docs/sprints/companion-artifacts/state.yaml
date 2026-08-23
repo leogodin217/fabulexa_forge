@@ -1,0 +1,84 @@
+sprint: companion-artifacts
+parent_branch: prepare_for_classroom_env
+baseline_sha: 98d28604ac564e3848f8dd0bf58113cd36797a3f
+started: 2026-08-23
+current_phase: 1
+capabilities:
+  - export-companion-artifacts:
+      [overlay-surface, companion-writer, full-export-threading, incremental-threading]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "Overlay surface + config field"
+    demo: "docs/sprints/companion-artifacts/demos/phase_1_overlay.py"
+  2:
+    status: pending
+    name: "Companion writer — report types, templates, README + manifest"
+    demo: "docs/sprints/companion-artifacts/demos/phase_2_companion_writer.py"
+    steps:
+      - kind: source
+        summary: "TableReport/ExportReport in query_spec.py; companion artifacts/readme/manifest modules + three mode templates; demo"
+      - kind: author
+        summary: "Unit suites for placement/prefix, manifest field set + pinned byte form, README ordering contract, template smoke"
+        files:
+          - "tests/exporters/companion/test_artifacts.py"
+          - "tests/exporters/companion/test_manifest.py"
+          - "tests/exporters/companion/test_readme.py"
+  3:
+    status: pending
+    name: "Full-export threading — writers, dispatch, engines, CLI"
+    demo: "docs/sprints/companion-artifacts/demos/phase_3_full_export_artifacts.py"
+    steps:
+      - kind: source
+        summary: "writers/relation.py + WrittenRelation returns (write_csv/write_duckdb), write_query_specs -> ExportReport, engines gain overlay/validate/artifact-write/report, driver _write_csv_specs unpack, CLI overlay load + report printing; demo"
+      - kind: migrate
+        tactic: fan-out
+        change: "Engine entry points gain required trailing overlay=None arg and return ExportReport (row counts read via report.tables); write_csv returns WrittenRelation, write_duckdb returns dict[str, WrittenRelation], write_query_specs returns ExportReport — adapt call sites and return-value asserts, intent preserved"
+        files:
+          - "tests/writers/test_csv.py"
+          - "tests/writers/test_duckdb.py"
+          - "tests/exporters/test_query_spec.py"
+          - "tests/exporters/dimensional/test_export_dimensional.py"
+          - "tests/exporters/dimensional/test_rebasing.py"
+          - "tests/exporters/source/test_engine.py"
+          - "tests/exporters/source/test_election_renders.py"
+          - "tests/exporters/base/test_engine.py"
+          - "tests/exporters/base/test_election_renders.py"
+          - "tests/exporters/test_notices.py"
+          - "tests/recipes/test_recipes.py"
+          - "tests/recipes/test_source_recipes.py"
+          - "tests/recipes/test_base_recipes.py"
+          - "tests/recipes/test_determinism.py"
+          - "tests/integration/test_corrupt_source.py"
+          - "tests/integration/test_corrupt_base.py"
+          - "tests/incremental/test_driver.py"
+      - kind: author
+        summary: "Cross-mode full-export artifact integration tests, CLI overlay-resolution tests, transcription-authority test"
+        files:
+          - "tests/exporters/test_companion_integration.py"
+          - "tests/test_cli_readme_overlay.py"
+          - "tests/writers/test_relation.py"
+  4:
+    status: pending
+    name: "Incremental threading — windowed artifacts, census, fingerprint"
+    demo: "docs/sprints/companion-artifacts/demos/phase_4_incremental_artifacts.py"
+    steps:
+      - kind: source
+        summary: "write_duckdb_window -> dict[str, WrittenRelation]; export_window/export_incremental_next gain overlay and return ExportReport / IncrementalOutcome.report; whole-state artifact rewrite after data+cursor; census + fingerprint exclusions; CLI windowed path; demo"
+      - kind: migrate
+        tactic: fan-out
+        change: "export_window/export_incremental_next gain required trailing overlay=None arg; export_window returns ExportReport, IncrementalOutcome.row_counts becomes report: ExportReport | None (None iff drained); write_duckdb_window returns dict[str, WrittenRelation] — adapt call sites and asserts, intent preserved"
+        files:
+          - "tests/incremental/test_driver.py"
+          - "tests/writers/test_duckdb_window.py"
+          - "tests/exporters/dimensional/test_election_fk.py"
+          - "tests/exporters/test_notices.py"
+      - kind: author
+        summary: "Windowed artifact semantics (rewrite/drained/range/empty/SCD-2 view naming), census exclusion, fingerprint exclusion tests"
+        files:
+          - "tests/incremental/test_companion_artifacts.py"
+          - "tests/incremental/test_fingerprint.py"
+          - "tests/incremental/test_cursor.py"
