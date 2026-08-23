@@ -16,6 +16,8 @@ Usage:
     fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>
     fabulexa-forge compare <expected> <actual> [--tables NAME [NAME ...]]
         [--max-row-diffs <n>] [--format text|json]
+    fabulexa-forge datasets list [--format text|json]
+    fabulexa-forge datasets get <name> [--dir <dir>] [--force]
 
 Exit codes:
     0  — success
@@ -36,17 +38,29 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.datasets import (
+    DatasetError,
+    get_dataset,
+    load_manifest,
+    render_dataset_listing,
+)
 from fabulexa_forge.errors import ExporterError
 from fabulexa_forge.reader import open_emit, pin_session_timezone, validate
 from fabulexa_forge.reader.errors import ReaderError
 
 if TYPE_CHECKING:
+    from typing import BinaryIO
+
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.corrupters.state import CorruptReport
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.conformance import CheckResult
     from fabulexa_forge.reader.emit import Emit
+
+_DATASETS_GET_TIMEOUT_SECONDS: Final = 30.0
+"""Network timeout for `datasets get`'s urllib transport — CLI presentation,
+not an author-configured value."""
 
 
 def _print_check_result(result: "CheckResult") -> None:
@@ -1111,6 +1125,135 @@ def _cmd_compare(args: list[str]) -> int:
     )
 
 
+def _urllib_transport(url: str) -> "BinaryIO":
+    """Open a URL over HTTPS for `datasets get`, with a network timeout.
+
+    The stdlib urllib opener; a monkeypatchable module-level seam so tests
+    never touch the network.
+
+    Args:
+        url: The dataset entry's URL (https, per DatasetEntry validation).
+
+    Returns:
+        A readable, context-managed binary stream.
+    """
+    import urllib.request
+
+    return cast(
+        "BinaryIO", urllib.request.urlopen(url, timeout=_DATASETS_GET_TIMEOUT_SECONDS)
+    )
+
+
+def _print_download_progress(received: int, size_bytes: int) -> None:
+    """Print download progress to stderr.
+
+    Args:
+        received: Bytes received so far.
+        size_bytes: The entry's expected total size.
+    """
+    print(f"  downloaded {received}/{size_bytes} bytes", file=sys.stderr)
+
+
+def cmd_datasets_list(fmt: str) -> int:
+    """`fabulexa-forge datasets list` — render the published dataset catalog.
+
+    Performs no network I/O: loads the manifest and renders the listing
+    straight to stdout.
+
+    Args:
+        fmt: 'text' or 'json' (argparse enforces the choice).
+
+    Returns:
+        0.
+    """
+    manifest = load_manifest()
+    print(render_dataset_listing(manifest, fmt))
+    return 0
+
+
+def cmd_datasets_get(name: str, target_dir: Path | None, force: bool) -> int:
+    """`fabulexa-forge datasets get <name>` — download, verify, and extract a
+    published dataset pack.
+
+    Args:
+        name: Dataset name to fetch; must match a manifest entry.
+        target_dir: `--dir` value, or None for `./<name>`.
+        force: `--force` value.
+
+    Returns:
+        0 on success (the entry's example commands printed to stdout,
+        progress on stderr); 1 on a DatasetError (its message to stderr).
+    """
+    manifest = load_manifest()
+    try:
+        result = get_dataset(
+            manifest,
+            name,
+            target_dir,
+            force,
+            _urllib_transport,
+            _print_download_progress,
+        )
+    except DatasetError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    for command in result.commands:
+        print(command)
+    return 0
+
+
+def _cmd_datasets(args: list[str]) -> int:
+    """Handle the `datasets` verb: sub-verbs `list` and `get`.
+
+    Follows the existing Verb registry shape: one entry in VERBS; the
+    sub-verb split is parsed inside this handler via argparse subparsers
+    (prog="fabulexa-forge datasets", so --help/-h satisfy the parametrized
+    help tests). A missing or unknown sub-verb is an argparse usage error —
+    usage text to stderr, exit 2. Payload (listing, next-step commands) to
+    stdout; progress and diagnostics to stderr.
+
+    `list [--format {text,json}]`: load_manifest → render_dataset_listing →
+    stdout. No network I/O, ever. `--format` is a required-choice flag whose
+    absence means text — argparse surface, not config (CLI presentation
+    mirrors the existing `compare --format` flag).
+
+    `get <name> [--dir DIR] [--force]`: load_manifest → get_dataset with the
+    stdlib urllib transport (network timeout applied — value is CLI
+    presentation) and a stderr progress callback → print the GetResult
+    commands to stdout. DatasetError → its message to stderr, exit 1.
+
+    Args:
+        args: Remaining arguments after the 'datasets' verb.
+
+    Returns:
+        Exit code.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="fabulexa-forge datasets",
+        description="List or fetch published example dataset packs.",
+    )
+    subparsers = parser.add_subparsers(dest="subverb", required=True)
+
+    list_parser = subparsers.add_parser("list", help="List published datasets.")
+    list_parser.add_argument("--format", choices=("text", "json"), default="text")
+
+    get_parser = subparsers.add_parser(
+        "get", help="Download, verify, and extract a dataset pack."
+    )
+    get_parser.add_argument("name")
+    get_parser.add_argument("--dir", dest="target_dir", type=Path, default=None)
+    get_parser.add_argument("--force", action="store_true", default=False)
+
+    parsed = parser.parse_args(args)
+
+    if parsed.subverb == "list":
+        return cmd_datasets_list(parsed.format)
+    return cmd_datasets_get(parsed.name, parsed.target_dir, parsed.force)
+
+
 @dataclass(frozen=True)
 class Verb:
     """A dispatchable fabulexa-forge verb.
@@ -1146,6 +1289,11 @@ VERBS: Final[tuple[Verb, ...]] = (
         "compare",
         "Compare two materialized datasets for exact equality.",
         _cmd_compare,
+    ),
+    Verb(
+        "datasets",
+        "List or fetch published example dataset packs.",
+        _cmd_datasets,
     ),
 )
 """The verb registry. The sole source of the verb list -- never a literal."""
