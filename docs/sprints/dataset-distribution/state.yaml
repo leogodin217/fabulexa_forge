@@ -25,6 +25,6 @@ phases:
     name: "CLI verb datasets"
     demo: "docs/sprints/dataset-distribution/demos/phase_3_cli_datasets.py"
   4:
-    status: pending
+    status: complete
     name: "Pack builder"
     demo: "docs/sprints/dataset-distribution/demos/phase_4_pack_builder.py"
