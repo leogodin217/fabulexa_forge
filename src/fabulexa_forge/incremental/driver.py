@@ -53,11 +53,34 @@ from fabulexa_forge.reader.emit import compute_sidecar_sha256
 
 @dataclass(frozen=True)
 class IncrementalOutcome:
-    """Result of a --next invocation."""
+    """Result of a --next invocation.
+
+    `row_counts` -- author-facing output name -> real written row count --
+    mirrors `report`'s None-iff-drained rule; it is never carried by
+    `report`'s own `TableReport.row_count`, which stays None on every
+    windowed invocation.
+    """
 
     status: Literal["emitted", "drained"]
     window: Window | None  # None when drained
     report: "ExportReport | None"  # None iff drained
+    row_counts: "Mapping[str, int] | None"  # None iff drained
+
+
+@dataclass(frozen=True)
+class WindowedExport:
+    """One windowed export's outcome: the manifest-bound report, plus
+    per-table row counts for CLI stdout.
+
+    `report.tables[*].row_count` stays None on every windowed invocation (the
+    manifest contract windowed exports keep); `row_counts` — keyed by each
+    table's author-facing output name, matching `report.tables[*].name` — is
+    the real count `write_duckdb_window` / `_write_csv_specs` observed, kept
+    only for presentation and never written into a companion artifact.
+    """
+
+    report: "ExportReport"
+    row_counts: "Mapping[str, int]"
 
 
 def _get_fork_path(emit: "Emit") -> str:
@@ -193,17 +216,17 @@ def _build_windowed_report(
     written: "Mapping[str, WrittenRelation]",
     *,
     include_keys: bool,
-) -> ExportReport:
-    """Assemble a windowed invocation's `ExportReport` from its written relations.
+) -> WindowedExport:
+    """Assemble a windowed invocation's `WindowedExport` from its written relations.
 
     `written` is keyed by each spec's physical `table_name` (the writers'
-    own dict shape); a table's report entry is named for its author-facing
-    output name (the SCD-2 view name where one exists). `row_count` is
-    always None — a windowed row count is a report-assembly decision, not a
-    writer fact (the writer's `WrittenRelation.row_count` still carries the
-    real count for whoever needs it). `keys` follows the CSV/DuckDB
-    constraint-surface split `write_query_specs` uses for full exports:
-    DuckDB carries the spec's declared keys, CSV always None.
+    own dict shape); a table's report entry — and its `row_counts` entry —
+    are named for its author-facing output name (the SCD-2 view name where
+    one exists). The report's `row_count` is always None — a windowed row
+    count is never a manifest fact — while `row_counts` carries the writer's
+    real `WrittenRelation.row_count` for CLI presentation. `keys` follows
+    the CSV/DuckDB constraint-surface split `write_query_specs` uses for
+    full exports: DuckDB carries the spec's declared keys, CSV always None.
 
     Args:
         specs: The compiled windowed QuerySpecs, in plan iteration order.
@@ -211,18 +234,25 @@ def _build_windowed_report(
         include_keys: True for a DuckDB target, False for CSV.
 
     Returns:
-        One `TableReport` per spec, in plan iteration order.
+        One `TableReport` and one row-count entry per spec, in plan
+        iteration order.
     """
-    return ExportReport(
-        tables=tuple(
-            TableReport(
-                name=query_spec_output_name(spec),
-                columns=written[spec.table_name].columns,
-                row_count=None,
-                keys=spec.keys if include_keys else None,
+    return WindowedExport(
+        report=ExportReport(
+            tables=tuple(
+                TableReport(
+                    name=query_spec_output_name(spec),
+                    columns=written[spec.table_name].columns,
+                    row_count=None,
+                    keys=spec.keys if include_keys else None,
+                )
+                for spec in specs
             )
+        ),
+        row_counts={
+            query_spec_output_name(spec): written[spec.table_name].row_count
             for spec in specs
-        )
+        },
     )
 
 
@@ -236,7 +266,7 @@ def export_window(
     fingerprint: str | None,
     notice_sink: "NoticeSink",
     overlay: "ReadmeOverlay | None",
-) -> ExportReport:
+) -> WindowedExport:
     """Run one pure windowed export (the body --next wraps; also --from/--to).
 
     The compile step dispatches on `config.mode`: `source` resolves the
@@ -282,8 +312,10 @@ def export_window(
         overlay: The parsed README overlay, or None.
 
     Returns:
-        The invocation's `ExportReport`: one `TableReport` per declared
-        table, author-facing output name, `row_count` always None.
+        The invocation's `WindowedExport`: an `ExportReport` with one
+        `TableReport` per declared table (`row_count` always None), plus a
+        `row_counts` mapping of the same tables' real written counts for
+        CLI presentation.
 
     Raises:
         IncrementalRangeTargetExists: window.index is None and out already
@@ -354,12 +386,14 @@ def export_window(
 
     if fmt == "duckdb":
         written_relations = write_duckdb_window(emit, specs, out, window, fingerprint)
-        report = _build_windowed_report(specs, written_relations, include_keys=True)
+        windowed_export = _build_windowed_report(
+            specs, written_relations, include_keys=True
+        )
         if is_range:
             _write_windowed_artifacts(
-                emit, config, fmt, anchor, report, overlay, out, window
+                emit, config, fmt, anchor, windowed_export.report, overlay, out, window
             )
-        return report
+        return windowed_export
 
     # CSV path
     if is_range:
@@ -383,11 +417,11 @@ def export_window(
                 f"failed to rename staging dir {staging_dir} to {out}: {exc}"
             ) from exc
 
-        report = _build_windowed_report(specs, written, include_keys=False)
+        windowed_export = _build_windowed_report(specs, written, include_keys=False)
         _write_windowed_artifacts(
-            emit, config, fmt, anchor, report, overlay, out, window
+            emit, config, fmt, anchor, windowed_export.report, overlay, out, window
         )
-        return report
+        return windowed_export
 
     # --next CSV: stage into out/.tmp_<label>; the caller commits the cursor
     # and then the artifacts once staging is renamed.
@@ -539,10 +573,11 @@ def export_incremental_next(
             status="drained",
             window=None,
             report=None,
+            row_counts=None,
         )
 
     # Run the windowed export
-    report = export_window(
+    windowed_export = export_window(
         emit, config, out, fmt, anchor, window, fingerprint, notice_sink, overlay
     )
 
@@ -557,10 +592,13 @@ def export_incremental_next(
 
     # Data (and, for csv, the cursor) are now durably committed: rewrite
     # both companion artifacts whole-state from this window's report.
-    _write_windowed_artifacts(emit, config, fmt, anchor, report, overlay, out, window)
+    _write_windowed_artifacts(
+        emit, config, fmt, anchor, windowed_export.report, overlay, out, window
+    )
 
     return IncrementalOutcome(
         status="emitted",
         window=window,
-        report=report,
+        report=windowed_export.report,
+        row_counts=windowed_export.row_counts,
     )

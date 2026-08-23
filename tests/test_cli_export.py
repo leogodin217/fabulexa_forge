@@ -847,7 +847,7 @@ def test_next_without_incremental_block_exit_1(
 def test_next_drip_duckdb_to_drained(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--next drip exits 0 each window (label-prefixed counts), exits 3 when drained."""
+    """--next drip exits 0 each window (label-prefixed row counts), exits 3 when drained."""
     emit_dir = build_incremental_emit(tmp_path, slice_at=250)
     config_path = tmp_path / "config.yaml"
     write_incremental_config(config_path)
@@ -868,9 +868,12 @@ def test_next_drip_duckdb_to_drained(
         f"Expected 0 before drain, got {exit_codes}"
     )
 
-    # Each 0-exit window printed a label-prefixed count line
+    # Each 0-exit window printed a label-prefixed row-count line: the
+    # windowed manifest's own row_count stays None, but stdout restores the
+    # real per-table count (sourced from the writer's WrittenRelation).
     for stdout in all_stdout[:-1]:
         assert "[w" in stdout, f"Expected label-prefix in: {stdout!r}"
+        assert " rows" in stdout, f"Expected row count in: {stdout!r}"
 
     # Drained message on stdout
     last_stdout = all_stdout[-1]
@@ -938,7 +941,7 @@ def test_main_next_drip_duckdb(
 def test_from_to_fresh_target_exit_0(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--from/--to to a fresh target exits 0 with label-prefixed counts."""
+    """--from/--to to a fresh target exits 0 with label-prefixed row counts."""
     emit_dir = build_incremental_emit(tmp_path, slice_at=250)
     config_path = tmp_path / "config.yaml"
     write_incremental_config(config_path)
@@ -956,6 +959,10 @@ def test_from_to_fresh_target_exit_0(
     assert exit_code == 0
     assert out.exists()
     assert "[r_ns0_ns200]" in captured.out
+    # A windowed export restores per-table row counts on stdout (the
+    # windowed manifest's own row_count stays None; this is presentation
+    # only, sourced from the writer's WrittenRelation).
+    assert " rows" in captured.out
 
 
 def test_from_to_existing_target_exit_1(

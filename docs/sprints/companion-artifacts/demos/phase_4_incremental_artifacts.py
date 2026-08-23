@@ -176,10 +176,15 @@ def demo_range(emit_dir: Path, out: Path) -> None:
     config = ExportConfig(mode="base")
     window = parse_range("0", str(2 * _SIM_PERIOD_NS), None)
     with open_emit(emit_dir) as emit:
-        report = export_window(
+        windowed_export = export_window(
             emit, config, out, "csv", None, window, None, render_notice_stderr, None
         )
-    print("window label:", window.label, "tables:", [t.name for t in report.tables])
+    print(
+        "window label:",
+        window.label,
+        "tables:",
+        [t.name for t in windowed_export.report.tables],
+    )
     manifest = _read_manifest(out)
     print("manifest incremental block:", manifest["incremental"])
     assert manifest["incremental"]["next_window_index"] is None

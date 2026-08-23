@@ -389,7 +389,7 @@ def test_range_writes_null_next_window_index(tmp_path: Path) -> None:
     window = Window(index=None, start_ns=0, end_ns=DAY_NS, label="r_ns0_dayNS")
 
     with open_emit(emit_dir) as emit:
-        report = export_window(
+        windowed_export = export_window(
             emit,
             config,
             out,
@@ -401,7 +401,7 @@ def test_range_writes_null_next_window_index(tmp_path: Path) -> None:
             overlay=None,
         )
 
-    assert "patient" in {t.name for t in report.tables}
+    assert "patient" in {t.name for t in windowed_export.report.tables}
     manifest = _read_json(out / "base-manifest.json")
     assert manifest["incremental"] == {
         "regime": "sim_time",

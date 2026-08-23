@@ -839,7 +839,7 @@ def test_range_duckdb_fresh_creates_standalone_artifact(tmp_path: Path) -> None:
     window = Window(index=None, start_ns=0, end_ns=100, label="r_ns0_ns100")
 
     with open_emit(emit_dir) as emit:
-        report = export_window(
+        windowed_export = export_window(
             emit,
             config,
             out,
@@ -852,7 +852,7 @@ def test_range_duckdb_fresh_creates_standalone_artifact(tmp_path: Path) -> None:
         )
 
     assert out.exists()
-    assert "dim_entity" in {t.name for t in report.tables}
+    assert "dim_entity" in {t.name for t in windowed_export.report.tables}
 
     # No bookkeeping tables
     conn = duckdb.connect(str(out))
@@ -876,7 +876,7 @@ def test_range_csv_fresh_creates_standalone_artifact(tmp_path: Path) -> None:
     window = Window(index=None, start_ns=0, end_ns=100, label="r_ns0_ns100")
 
     with open_emit(emit_dir) as emit:
-        report = export_window(
+        windowed_export = export_window(
             emit,
             config,
             out,
@@ -889,7 +889,7 @@ def test_range_csv_fresh_creates_standalone_artifact(tmp_path: Path) -> None:
         )
 
     assert out.exists()
-    assert "dim_entity" in {t.name for t in report.tables}
+    assert "dim_entity" in {t.name for t in windowed_export.report.tables}
     # No cursor file
     assert not (out / ".fabulexa-forge-cursor.json").exists()
 
@@ -1443,7 +1443,7 @@ def test_source_mode_export_window_explicit_range_dispatches_to_source_engine(
 
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        report = export_window(
+        windowed_export = export_window(
             emit,
             config,
             out,
@@ -1455,7 +1455,7 @@ def test_source_mode_export_window_explicit_range_dispatches_to_source_engine(
             overlay=None,
         )
 
-    assert {t.name for t in report.tables} == {
+    assert {t.name for t in windowed_export.report.tables} == {
         "visit",
         "order",
         "location",

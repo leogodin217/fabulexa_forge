@@ -11,10 +11,46 @@ import pytest
 
 from exporters.companion._fixtures import write_minimal_emit
 from fabulexa_forge.anchor import EffectiveAnchor
+from fabulexa_forge.exporters.companion import readme as readme_module
 from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
 from fabulexa_forge.exporters.companion.readme import render_readme
 from fabulexa_forge.exporters.query_spec import ExportReport, TableKeys, TableReport
 from fabulexa_forge.reader.emit import open_emit
+
+# ---------------------------------------------------------------------------
+# Fakes -- mirrors tests/reader/test_schema_loader.py's convention
+# ---------------------------------------------------------------------------
+
+
+class _UnreadableRef:
+    """A traversable-like ref whose read_text always raises."""
+
+    def __init__(self, exc_type: type[Exception]) -> None:
+        self._exc_type = exc_type
+
+    def __truediv__(self, other: str) -> "_UnreadableRef":
+        return self
+
+    def read_text(self, encoding: str = "utf-8") -> str:
+        raise self._exc_type("resource not readable")
+
+
+class _NowherePath:
+    """A Path-like whose parent/joins resolve to itself and which never exists."""
+
+    def __init__(self, _path: str) -> None:
+        pass
+
+    @property
+    def parent(self) -> "_NowherePath":
+        return self
+
+    def __truediv__(self, other: str) -> "_NowherePath":
+        return self
+
+    def exists(self) -> bool:
+        return False
+
 
 _ANCHOR = EffectiveAnchor(
     start_instant=datetime(2024, 1, 1, tzinfo=timezone.utc), timezone=ZoneInfo("UTC")
@@ -174,6 +210,51 @@ def test_overview_absent_when_overlay_is_none(tmp_path: Path) -> None:
     """No overlay at all renders no '## Overview' section."""
     text = _render(tmp_path, overlay=None, anchor=None)
     assert "## Overview" not in text
+
+
+# ---------------------------------------------------------------------------
+# _load_mode_template resolution paths
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "exc_type",
+    [
+        pytest.param(FileNotFoundError, id="file-not-found"),
+        pytest.param(TypeError, id="type-error"),
+    ],
+)
+def test_load_mode_template_falls_back_when_package_data_unreadable(
+    monkeypatch: pytest.MonkeyPatch, exc_type: type[Exception]
+) -> None:
+    """When importlib.resources fails, the __file__-relative fallback resolves.
+
+    Both documented failure modes of the package-data read (FileNotFoundError
+    and TypeError) route to the fallback, which finds the in-tree templates/
+    copy in this editable checkout.
+    """
+    monkeypatch.setattr(
+        "importlib.resources.files", lambda package: _UnreadableRef(exc_type)
+    )
+    text = readme_module._load_mode_template("base")
+    assert "State-at-horizon" in text
+
+
+def test_load_mode_template_both_paths_fail_raises_file_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When package data AND the fallback path fail, FileNotFoundError surfaces.
+
+    This is the explicit packaging-defect signal: never swallowed, never
+    reported as an export failure.
+    """
+    monkeypatch.setattr(
+        "importlib.resources.files",
+        lambda package: _UnreadableRef(FileNotFoundError),
+    )
+    monkeypatch.setattr(readme_module, "Path", _NowherePath)
+    with pytest.raises(FileNotFoundError, match="packaging defect"):
+        readme_module._load_mode_template("base")
 
 
 # ---------------------------------------------------------------------------

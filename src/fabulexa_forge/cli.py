@@ -49,6 +49,7 @@ from fabulexa_forge.reader import open_emit, pin_session_timezone, validate
 from fabulexa_forge.reader.errors import ReaderError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from typing import BinaryIO
 
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -129,19 +130,23 @@ def _cmd_validate(args: list[str]) -> int:
     return _run_validate(str(parsed.emit_dir))
 
 
-def _print_windowed_report(window_label: str, report: "ExportReport") -> None:
-    """Print each table name written for one window, prefixed by its label.
+def _print_windowed_report(
+    window_label: str, report: "ExportReport", row_counts: "Mapping[str, int]"
+) -> None:
+    """Print each table's row count written for one window, prefixed by its label.
 
     Windowed `TableReport` entries carry no row count (an `ExportReport`
-    report-assembly rule for windowed invocations); stdout lists the tables
-    written this window by name only.
+    report-assembly rule for windowed invocations, preserved in the
+    manifest); `row_counts` -- keyed by the same author-facing output names
+    as `report.tables` -- carries the real counts for stdout.
 
     Args:
         window_label: The window's display label.
         report: The window's per-table report.
+        row_counts: Author-facing output name -> real written row count.
     """
     for table in report.tables:
-        print(f"  [{window_label}] {table.name}")
+        print(f"  [{window_label}] {table.name}: {row_counts[table.name]} rows")
 
 
 def _print_full_counts(report: "ExportReport") -> None:
@@ -194,10 +199,10 @@ def _dispatch_export(
 
     The `--next` / `--from`/`--to` leaves call the incremental driver, which
     dispatches on `config.mode` internally (dimensional vs. source vs. base
-    engine compile), threading `overlay` and printing table names from the
-    returned report. The full-export leaf dispatches here on `config.mode`,
-    threading `overlay` to the matching engine and printing counts from its
-    returned report.
+    engine compile), threading `overlay` and printing per-table row counts
+    from the returned outcome. The full-export leaf dispatches here on
+    `config.mode`, threading `overlay` to the matching engine and printing
+    counts from its returned report.
 
     Args:
         emit: The open emit.
@@ -213,8 +218,8 @@ def _dispatch_export(
 
     Returns:
         0 on a written window/range/full export (per-table row counts
-        printed for a full export, per-table names for a windowed export,
-        prefixed by the window label); 3 when --next finds the run drained.
+        printed either way, a windowed export's lines prefixed by the
+        window label); 3 when --next finds the run drained.
     """
     if next_window:
         from fabulexa_forge.incremental.driver import export_incremental_next
@@ -227,7 +232,8 @@ def _dispatch_export(
             return 3
         assert outcome.window is not None
         assert outcome.report is not None
-        _print_windowed_report(outcome.window.label, outcome.report)
+        assert outcome.row_counts is not None
+        _print_windowed_report(outcome.window.label, outcome.report, outcome.row_counts)
         return 0
 
     if range_from is not None and range_to is not None:
@@ -235,10 +241,12 @@ def _dispatch_export(
         from fabulexa_forge.incremental.windows import parse_range
 
         window = parse_range(range_from, range_to, anchor)
-        range_report = export_window(
+        windowed_export = export_window(
             emit, config, out, fmt, anchor, window, None, notice_sink, overlay
         )
-        _print_windowed_report(window.label, range_report)
+        _print_windowed_report(
+            window.label, windowed_export.report, windowed_export.row_counts
+        )
         return 0
 
     if config.mode == "source":
