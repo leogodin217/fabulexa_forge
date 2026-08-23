@@ -255,7 +255,7 @@ def write_duckdb_window(
     output_path: Path,
     window: "Window",
     fingerprint: str | None,
-) -> dict[str, int]:
+) -> dict[str, WrittenRelation]:
     """Apply one window to the warehouse file in a single transaction.
 
     Create-if-missing: a fresh file gets each table created per its spec,
@@ -281,7 +281,8 @@ def write_duckdb_window(
             bookkeeping tables are written.
 
     Returns:
-        Mapping of every table name -> rows written this window.
+        Mapping of every spec's physical table_name -> its written relation
+        (rows written this window, and its column types).
 
     Raises:
         ExportRuntimeError: Connection, write, or commit failure (after
@@ -296,7 +297,7 @@ def write_duckdb_window(
             f"failed to open warehouse DuckDB at {output_path}: {exc}"
         ) from exc
 
-    row_counts: dict[str, int] = {}
+    written_relations: dict[str, WrittenRelation] = {}
     try:
         conn.begin()
         try:
@@ -310,8 +311,7 @@ def write_duckdb_window(
                     )
 
             for spec in specs:
-                written = _apply_spec(conn, emit, spec)
-                row_counts[spec.table_name] = written.row_count
+                written_relations[spec.table_name] = _apply_spec(conn, emit, spec)
                 if spec.view_name is not None and spec.view_sql is not None:
                     _install_view(conn, spec.view_name, spec.view_sql)
 
@@ -336,4 +336,4 @@ def write_duckdb_window(
     finally:
         conn.close()
 
-    return row_counts
+    return written_relations

@@ -339,7 +339,7 @@ def test_export_window_threads_sink_to_dimensional_compile(tmp_path: Path) -> No
     sink = RecordingNoticeSink()
 
     with open_emit(emit_dir) as emit:
-        export_window(emit, config, out, "duckdb", None, window, None, sink)
+        export_window(emit, config, out, "duckdb", None, window, None, sink, None)
 
     assert len(sink.notices) == 1
     assert sink.notices[0].code == "discriminator-value-unobserved"
@@ -356,14 +356,14 @@ def test_export_incremental_next_drip_reemits_notices_each_invocation(
     first_sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         first_outcome = export_incremental_next(
-            emit, config, out, "duckdb", None, first_sink
+            emit, config, out, "duckdb", None, first_sink, None
         )
     assert first_outcome.status == "emitted"
 
     second_sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         second_outcome = export_incremental_next(
-            emit, config, out, "duckdb", None, second_sink
+            emit, config, out, "duckdb", None, second_sink, None
         )
     assert second_outcome.status == "emitted"
 

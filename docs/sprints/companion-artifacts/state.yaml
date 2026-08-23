@@ -62,7 +62,7 @@ phases:
           - "tests/test_cli_readme_overlay.py"
           - "tests/writers/test_relation.py"
   4:
-    status: pending
+    status: complete
     name: "Incremental threading — windowed artifacts, census, fingerprint"
     demo: "docs/sprints/companion-artifacts/demos/phase_4_incremental_artifacts.py"
     steps:

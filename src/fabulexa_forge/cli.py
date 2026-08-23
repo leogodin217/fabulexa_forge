@@ -129,15 +129,19 @@ def _cmd_validate(args: list[str]) -> int:
     return _run_validate(str(parsed.emit_dir))
 
 
-def _print_window_counts(window_label: str, counts: dict[str, int]) -> None:
-    """Print per-table row counts prefixed by the window label.
+def _print_windowed_report(window_label: str, report: "ExportReport") -> None:
+    """Print each table name written for one window, prefixed by its label.
+
+    Windowed `TableReport` entries carry no row count (an `ExportReport`
+    report-assembly rule for windowed invocations); stdout lists the tables
+    written this window by name only.
 
     Args:
         window_label: The window's display label.
-        counts: Mapping of table name to row count.
+        report: The window's per-table report.
     """
-    for table_name, row_count in counts.items():
-        print(f"  [{window_label}] {table_name}: {row_count} rows")
+    for table in report.tables:
+        print(f"  [{window_label}] {table.name}")
 
 
 def _print_full_counts(report: "ExportReport") -> None:
@@ -190,9 +194,10 @@ def _dispatch_export(
 
     The `--next` / `--from`/`--to` leaves call the incremental driver, which
     dispatches on `config.mode` internally (dimensional vs. source vs. base
-    engine compile); `overlay` is not yet threaded to those leaves (Phase 4).
-    The full-export leaf dispatches here on `config.mode`, threading `overlay`
-    to the matching engine and printing counts from its returned report.
+    engine compile), threading `overlay` and printing table names from the
+    returned report. The full-export leaf dispatches here on `config.mode`,
+    threading `overlay` to the matching engine and printing counts from its
+    returned report.
 
     Args:
         emit: The open emit.
@@ -207,19 +212,22 @@ def _dispatch_export(
         overlay: The parsed README overlay, or None.
 
     Returns:
-        0 on a written window/range/full export (per-table counts printed,
-        prefixed by the window label when windowed); 3 when --next finds the
-        run drained.
+        0 on a written window/range/full export (per-table row counts
+        printed for a full export, per-table names for a windowed export,
+        prefixed by the window label); 3 when --next finds the run drained.
     """
     if next_window:
         from fabulexa_forge.incremental.driver import export_incremental_next
 
-        outcome = export_incremental_next(emit, config, out, fmt, anchor, notice_sink)
+        outcome = export_incremental_next(
+            emit, config, out, fmt, anchor, notice_sink, overlay
+        )
         if outcome.status == "drained":
             print("drained: no more windows to emit")
             return 3
         assert outcome.window is not None
-        _print_window_counts(outcome.window.label, outcome.row_counts)
+        assert outcome.report is not None
+        _print_windowed_report(outcome.window.label, outcome.report)
         return 0
 
     if range_from is not None and range_to is not None:
@@ -227,10 +235,10 @@ def _dispatch_export(
         from fabulexa_forge.incremental.windows import parse_range
 
         window = parse_range(range_from, range_to, anchor)
-        range_counts = export_window(
-            emit, config, out, fmt, anchor, window, None, notice_sink
+        range_report = export_window(
+            emit, config, out, fmt, anchor, window, None, notice_sink, overlay
         )
-        _print_window_counts(window.label, range_counts)
+        _print_windowed_report(window.label, range_report)
         return 0
 
     if config.mode == "source":
@@ -283,9 +291,10 @@ def cmd_export(
         range_to: Exclusive end for an explicit range (--to), or None.
 
     Returns:
-        0 on a written window/range/full export (per-table counts printed,
-        prefixed by the window label when windowed); 3 when --next finds the
-        run drained; 1 on any handled error.
+        0 on a written window/range/full export (per-table row counts
+        printed for a full export, per-table names for a windowed export,
+        prefixed by the window label); 3 when --next finds the run drained;
+        1 on any handled error.
     """
     from fabulexa_forge.exporters.notices import render_notice_stderr
 

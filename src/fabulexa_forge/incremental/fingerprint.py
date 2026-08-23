@@ -29,11 +29,13 @@ def compute_fingerprint(
     """SHA-256 hex over the canonical JSON of every drip-identity input.
 
     Canonical JSON: UTF-8 bytes, keys sorted, compact (',', ':') separators,
-    no NaN/Infinity — over the parsed config (model dump), the resolved
-    anchor (start_instant ISO + IANA key, or null), the base.json digest,
-    the sole branch's fork_path, the fmt, and the package version. Any
-    change to any input yields a new fingerprint, halting --next rather
-    than splicing inconsistent windows.
+    no NaN/Infinity — over the parsed config (model dump, `readme_overlay`
+    excluded — a presentation-only field an author may add, change, or
+    remove mid-drip without it counting as a drip-identity change), the
+    resolved anchor (start_instant ISO + IANA key, or null), the base.json
+    digest, the sole branch's fork_path, the fmt, and the package version.
+    Any change to any other input yields a new fingerprint, halting --next
+    rather than splicing inconsistent windows.
 
     Args:
         config: The parsed export config.
@@ -48,7 +50,7 @@ def compute_fingerprint(
     """
     document: dict[str, Any] = {
         "anchor": anchor_to_json(anchor),
-        "config": config.model_dump(mode="json"),
+        "config": config.model_dump(mode="json", exclude={"readme_overlay"}),
         "fmt": fmt,
         "fork_path": fork_path,
         "package_version": package_version,
