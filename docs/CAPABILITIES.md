@@ -466,6 +466,21 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   surface and the shared engine for internal agreement checks. See
   [`architecture/compare.md`](architecture/compare.md).
 
+## Dataset distribution
+
+- ✓ **Published example datasets** — `fabulexa-forge datasets list` / `datasets get
+  <name>`: real producer-emitted example datasets (bundle + authored export /
+  corrupt / stream configs) as self-contained packs on GitHub Releases, named by
+  an authored-allowlist manifest shipped inside the wheel. `list` is fully
+  offline (`--format text|json`, byte-stable JSON); `get` downloads over
+  anonymous HTTPS, verifies (byte count, sha256, archive-member safety) before
+  touching the target path, extracts, and prints the entry's ready-to-run
+  example commands. A hygiene test pins every entry's `base_format_version` to
+  `SUPPORTED_BASE_FORMAT_VERSION`, so an install can only list datasets its own
+  reader opens. Packs are built by a deterministic repo-side builder
+  (`tools/build_dataset_pack.py`). The shipped catalog is currently empty. See
+  [`architecture/datasets.md`](architecture/datasets.md).
+
 ## CLI
 
 - ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C14 against an emit.
@@ -499,6 +514,12 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   report on two materialized datasets; exit codes `0` equal · `1` not equal ·
   `2` input error (its own contract, distinct from the other verbs' `0/1/3`). See
   [`architecture/compare.md`](architecture/compare.md).
+- ✓ `fabulexa-forge datasets` — the first verb with sub-verbs: `datasets list
+  [--format text|json]` (offline catalog of published example datasets) and
+  `datasets get <name> [--dir DIR] [--force]` (download, verify, extract a
+  pack; prints ready-to-run example commands). Exit codes `0` success · `1`
+  failure · `2` usage error. See
+  [`architecture/datasets.md`](architecture/datasets.md).
 
 ---
 
