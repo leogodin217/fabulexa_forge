@@ -43,6 +43,34 @@ class TableKeys:
 
 
 @dataclass(frozen=True)
+class TableReport:
+    """One output table as written.
+
+    `columns` are (output name, type-text) pairs in output order, transcribed
+    from the materialized relation via the writers' DESCRIBE authority.
+    `row_count` is None on windowed invocations. `keys` is the table's
+    declared `TableKeys`, or None when nothing was declared or the
+    declaration was CSV-dropped.
+    """
+
+    name: str
+    columns: tuple[tuple[str, str], ...]
+    row_count: int | None
+    keys: TableKeys | None
+
+
+@dataclass(frozen=True)
+class ExportReport:
+    """Per-table reports for one export invocation, in plan iteration order.
+
+    Returned by every file-writing export entry point in place of the bare
+    table -> row-count mapping.
+    """
+
+    tables: tuple[TableReport, ...]
+
+
+@dataclass(frozen=True)
 class QuerySpec:
     """A compiled output table: name, SELECT, write mode, optional view pair.
 

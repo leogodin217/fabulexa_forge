@@ -6,6 +6,7 @@ read-only DuckDB open) and the Emit handle (query, close, context manager).
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -199,6 +200,23 @@ class Emit:
     def __exit__(self, *exc: object) -> None:
         """Close the connection on context exit."""
         self.close()
+
+
+def compute_sidecar_sha256(emit: Emit) -> str:
+    """SHA-256 hex digest of the emit's base.json bytes.
+
+    The one sidecar-hash authority: every surface identifying an emit by its
+    sidecar's exact bytes (the incremental fingerprint, the companion
+    manifest's emit-identity block) reads through this function.
+
+    Args:
+        emit: The open emit.
+
+    Returns:
+        64-char lowercase hex digest.
+    """
+    data = (emit.emit_dir / _BASE_JSON).read_bytes()
+    return hashlib.sha256(data).hexdigest()
 
 
 def pin_session_timezone(emit: Emit, anchor: "EffectiveAnchor") -> None:

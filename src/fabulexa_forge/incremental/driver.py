@@ -6,7 +6,6 @@ No IO opens occur here other than via the writer and cursor modules.
 
 from __future__ import annotations
 
-import hashlib
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +37,7 @@ from fabulexa_forge.incremental.cursor import (
     write_csv_cursor,
 )
 from fabulexa_forge.incremental.windows import Window, derive_window
+from fabulexa_forge.reader.emit import compute_sidecar_sha256
 
 
 @dataclass(frozen=True)
@@ -47,20 +47,6 @@ class IncrementalOutcome:
     status: Literal["emitted", "drained"]
     window: Window | None  # None when drained
     row_counts: dict[str, int]  # empty when drained
-
-
-def _compute_sidecar_sha256(emit: "Emit") -> str:
-    """Compute the SHA-256 hex digest of the emit's base.json bytes.
-
-    Args:
-        emit: The open emit.
-
-    Returns:
-        64-char lowercase hex digest.
-    """
-    base_json_path = emit.emit_dir / "base.json"
-    data = base_json_path.read_bytes()
-    return hashlib.sha256(data).hexdigest()
 
 
 def _get_fork_path(emit: "Emit") -> str:
@@ -108,7 +94,7 @@ def _build_fingerprint(
     """
     from fabulexa_forge.incremental.fingerprint import compute_fingerprint
 
-    sidecar_sha256 = _compute_sidecar_sha256(emit)
+    sidecar_sha256 = compute_sidecar_sha256(emit)
     fork_path = _get_fork_path(emit)
 
     return compute_fingerprint(

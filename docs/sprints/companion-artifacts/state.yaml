@@ -2,7 +2,7 @@ sprint: companion-artifacts
 parent_branch: prepare_for_classroom_env
 baseline_sha: 98d28604ac564e3848f8dd0bf58113cd36797a3f
 started: 2026-08-23
-current_phase: 2
+current_phase: 3
 capabilities:
   - export-companion-artifacts:
       [overlay-surface, companion-writer, full-export-threading, incremental-threading]
@@ -15,7 +15,7 @@ phases:
     name: "Overlay surface + config field"
     demo: "docs/sprints/companion-artifacts/demos/phase_1_overlay.py"
   2:
-    status: pending
+    status: complete
     name: "Companion writer — report types, templates, README + manifest"
     demo: "docs/sprints/companion-artifacts/demos/phase_2_companion_writer.py"
     steps:

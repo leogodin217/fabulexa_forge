@@ -301,3 +301,25 @@ def render_anchor_temporal_expr(
     if render == "time":
         return f'CAST({local_expr} AS TIME) AS "{out_name}"'
     return f'{local_expr} AS "{out_name}"'
+
+
+def anchor_to_json(anchor: "EffectiveAnchor | None") -> dict[str, str] | None:
+    """Serialize the resolved anchor to its canonical JSON-compatible form.
+
+    The one anchor-serialization authority: every JSON surface that records a
+    resolved anchor (the incremental fingerprint, the companion manifest)
+    reads through this function, so the two documents never disagree on shape.
+
+    Args:
+        anchor: The resolved anchor, or None.
+
+    Returns:
+        `{"start_instant": <ISO-8601>, "timezone": <IANA key>}`, or None when
+        no anchor resolved.
+    """
+    if anchor is None:
+        return None
+    return {
+        "start_instant": anchor.start_instant.isoformat(),
+        "timezone": str(anchor.timezone),
+    }

@@ -11,27 +11,11 @@ import hashlib
 import json
 from typing import TYPE_CHECKING, Any, Literal
 
+from fabulexa_forge.anchor import anchor_to_json
+
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
-
-
-def _anchor_to_json(anchor: "EffectiveAnchor | None") -> Any:
-    """Serialize the anchor to a canonical JSON-compatible value.
-
-    Args:
-        anchor: Resolved anchor, or None.
-
-    Returns:
-        A dict with "start_instant" (ISO string) and "timezone" (IANA key),
-        or None when the anchor is absent.
-    """
-    if anchor is None:
-        return None
-    return {
-        "start_instant": anchor.start_instant.isoformat(),
-        "timezone": str(anchor.timezone),
-    }
 
 
 def compute_fingerprint(
@@ -63,7 +47,7 @@ def compute_fingerprint(
         64-char lowercase hex digest.
     """
     document: dict[str, Any] = {
-        "anchor": _anchor_to_json(anchor),
+        "anchor": anchor_to_json(anchor),
         "config": config.model_dump(mode="json"),
         "fmt": fmt,
         "fork_path": fork_path,
