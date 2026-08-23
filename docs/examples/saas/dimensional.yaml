@@ -63,12 +63,17 @@
 #            every other payload byte is preserved verbatim. Key names
 #            inside it (e.g. `volume`) are this scenario's own authoring,
 #            not a base-format vocabulary — do not assume they generalize.
-#   KNOWN RESIDUAL  entity.prop__engagement_score (a 1-100 score) carries
-#            the same float64 noise, but dim_account is `scd: type2` and the
-#            SCD-2 wide reconstruction refuses `derived: decimal`
-#            (Scd2ColumnModeSupported — see architecture/dimensional.md
-#            § SCD-2 wide reconstruction). The score ships raw DOUBLE here;
-#            the source config's state table DOES elect it DECIMAL(5,2).
+#   ELECTED  entity.prop__engagement_score (a 1-100 score) carries the same
+#            float64 noise, so dim_account elects `derived: decimal` [5, 2] —
+#            the same DECIMAL(5,2) the source config's state table elects for
+#            this kind (per-kind agreement). dim_account is `scd: type2` and
+#            the score is tracked, so the rendering is evaluated per version
+#            off the versioned reconstruction's value (see
+#            architecture/dimensional.md § SCD-2 wide reconstruction).
+#            Versions stay boundary-faithful: adjacent versions whose rounded
+#            values collide (e.g. 4.800000000000001 and 4.804 both render
+#            4.80) remain separate rows — the election changes presentation
+#            only, never version structure.
 #   RENAMED  actor.company -> dim_company, entity.company_hub -> dim_account,
 #            entity.sku -> dim_sku, actor.user -> dim_user, tick_decision ->
 #            fact_usage_event: output names are the domain's, never the
@@ -81,10 +86,9 @@
 #            constraint, not a style choice; the split is the standard
 #            mini-dimension/satellite pattern, not a fidelity loss.
 #   ELECTED  dim_company and dim_account carry `created_at`, a `derived:
-#            timestamp` off the structural `created_sim_time`. A type2 table
-#            admits the per-record derived modes over sources that are
-#            constant, and a structural column carries no temporal class at
-#            all, so it always qualifies. The value is per-record: identical
+#            timestamp` off the structural `created_sim_time`. A structural
+#            column is untracked, so its rendering reads per record from the
+#            records relation. The value is per-record: identical
 #            on every version row, unlike `valid_from`, which moves with each
 #            version. The two answer different questions — when the record was
 #            born vs. when this version began.
@@ -158,7 +162,8 @@ dimensional:
         - name: churn_flag
           from: prop__churn_flag
         - name: engagement_score
-          from: prop__engagement_score
+          derived:
+            decimal: {from: prop__engagement_score, as: [5, 2]}
         - name: created_at
           derived:
             timestamp:

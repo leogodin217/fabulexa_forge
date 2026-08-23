@@ -244,54 +244,70 @@ unaffected), and the open interval's `NULL` `valid_to` stays `NULL` under
 every election.
 
 **The type-2 column-mode surface.** A column mode is legal on a `scd: type2`
-table iff it is a pure per-record function of the static projectable surface
-— no cross-row read, no per-version semantics:
+table iff it is a **pure per-row value function** — a function of one row's
+source value, with no cross-row read and no grain-surface semantics. The row
+surface that supplies the source value follows the source's class: a
+history-tracked `prop__<p>` reads **per version** from the versioned
+reconstruction's cast value; every other source (an untracked property, a
+structural column, a projection-introduced column, the exempt discriminator)
+reads **per record** from the composed records relation — a per-record value
+repeats identically across one record's version rows.
 
 | Column mode on a type2 table | Value semantics |
 |---|---|
-| `from` (tracked property) | Per-version, from the versioned-intervals derivation |
-| `from` (static column), `null` | Per-record, from the composed records relation |
+| `from` | The row surface's value per the source class above |
+| `null` | A typed `NULL` |
 | `derived: scd_window` (bare or object form) | The version bounds, optionally elected |
-| `derived: timestamp` — source a structural instant or a `constant` time-valued property | Per-record, rendered through the shared anchor renderer |
-| `derived: date_parse` — source a `constant` VARCHAR property | Per-record, the format's denoted-type parse |
-| `derived: value_map` — source a `constant` column | Per-record, the typed-from-map `CASE` |
+| `derived: timestamp` / `date_parse` / `value_map` / `decimal` / `json_precision` | The rendering authority's output for the row surface's value — per version for a tracked source, per record otherwise |
 
 `fk`, `correlation`, `derived: ordinal`, and `derived: elapsed` are refused
 (`Scd2ColumnModeSupported`, § Validation Rules), as is `lookup`
-(`LookupColumnSafety`, § Lookup). A derived spec sourcing a non-`constant`
-property is refused separately (`Scd2DerivedSourceConstant`) — a `tracked`
-property's value surface is per-version, so deriving from it asks a question
-the type-2 build does not answer, and a `slice_only` property's past is
-unknowable (§ Boundaries).
+(`LookupColumnSafety`, § Lookup) — each is a cross-row or grain-surface read,
+not a value rendering, and a version-grain answer for it is not defined
+(§ Boundaries). A non-exempt `slice_only` source is refused by the
+export-wide slice-only surface (`SliceOnlyColumnRefused`), on type2 exactly
+as elsewhere; the exempt sub-typed discriminator is untracked, so a
+`value_map` or `date_parse` over it renders per record from the current
+classification value — carried as a classification, never presented as an
+as-of value ([`slice-only.md`](slice-only.md)).
 
-**The class, not the flag, decides staticness.** The gate reads
-`temporal_class`, the contract's point-in-time question, rather than
-`history_tracked`. The two are not interchangeable here: a presentation
-property is `history_tracked: true` by construction
-([`contract/base-format.md`](../../contract/base-format.md) § Column temporal
-semantics) while being `constant` whenever its bound source is — it holds
-exactly its genesis row. Keying on the flag would refuse every
-upstream-minted date, name, or address column though its value is provably
-static, which is the false negative `temporal_class` exists to remove.
-`LookupColumnSafety`'s class clause reads it the same way.
+Per-version rendering is the same election applied per row:
 
-Two properties make the admitted modes sound:
+- **Source-class-blind rendering** (§ Invariants). The derivation serves
+  tracked values as codec `VARCHAR`; the build casts each version's value to
+  the sidecar declared type — the same representation step the tracked
+  `from` path performs — before handing it to the rendering authority, so a
+  tracked value renders byte-identically to the same value at any other
+  attach site (a mode table, a `changes` entry, a streaming after-image).
+- A version whose value is `NULL` (pre-first-assignment versions, including
+  the creation row of a genesis-null property) renders `NULL` of the output
+  type — the NULL rule, applied per version.
+- The export-time guards range over **every version's value**: a decimal
+  overflow, a strict-parse failure, or a JSON payload violation in a
+  historical version fails the export loudly, not only one in current state.
+- Adjacent versions whose rendered values collide (`4.801` / `4.804` →
+  `4.80` under `decimal: [5, 2]`) both emit, values identical — version
+  boundaries derive from raw history change points, so a rendering never
+  merges, suppresses, or renumbers a version row (election-invariant version
+  structure, § Invariants; the posture the `scd_window` date election also
+  takes).
 
-- **Per-version constancy.** Each is a pure per-record function of static
-  values, so its value is constant across one record's version rows. This is
-  what admits the mode without designing per-version semantics for it.
-- **One compiler.** A derived column on a type2 table compiles through the
-  same per-column builders the records grain uses (`build_timestamp_expr` /
-  `render_date_parse_expr` / `build_value_map_expr`), bound to the type2
-  build's composed records-relation alias, so its SQL is identical to the
-  records grain's modulo that alias. The type2 surface introduces no election
-  site of its own — it joins the records grain's, so the anchor requirement,
-  DST posture, precision, and mismatch errors are one contract across both
-  grains rather than two that must be kept in step.
+**One compiler.** A derived column on a type2 table compiles through the
+same per-column builders the records grain uses (`build_timestamp_expr` /
+`build_date_parse_expr` / `build_value_map_expr` / `build_decimal_expr` /
+`build_json_precision_expr`), handed a source expression per the source
+class by `build_scd2_column_expr_flag`
+([`scd.py`](../../src/fabulexa_forge/exporters/dimensional/scd.py)). The
+type2 surface introduces no election site or rendering authority of its own,
+so the anchor requirement, DST posture, precision, tie and overflow rules,
+and mismatch errors are one contract across grains and source classes; for
+an untracked source the rendered SQL is byte-identical to the records
+grain's modulo alias. Examples:
+[`test_scd2_renderings.py`](../../tests/exporters/dimensional/test_scd2_renderings.py).
 
 A type2 dim *is* a records-grain table, so a `derived: timestamp`'s `source`
 domain is the records-grain domain — the records category's instant-carrying
-structural columns plus untracked time-valued properties, with
+structural columns plus time-valued properties, tracked ones included, with
 `TimestampSourceAvailable` applying as it does anywhere else. An unelected
 `derived: timestamp` with no resolved anchor renders the raw ns integer;
 any explicit election without an anchor is refused at validation
@@ -883,6 +899,14 @@ as a clear stderr message with a non-zero exit.
 12. **The `slice_only` posture.** No config-referenced value-read resolves to a
     non-exempt `slice_only` column; the rules run always-on, full export included
     ([`slice-only.md`](slice-only.md)).
+13. **Version structure is election-invariant.** No rendering election creates,
+    merges, suppresses, renumbers, or reorders an SCD-2 version row; `valid_from` /
+    `valid_to` are computed from raw bounds regardless of any value election on
+    the table.
+14. **Source-class-blind rendering.** For the same source value, the rendered
+    output is byte-identical whether the value was read per-record or per-version —
+    an election has one semantics; the source class only selects which rows supply
+    values.
 
 ## Validation Rules
 
@@ -929,8 +953,7 @@ error message. The remaining business rules run against the sidecar in
 | `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering — `derived: timestamp`'s `as`, or the `scd_window` object form — has a resolved effective anchor; naming the column when it does not ([`temporal-elections.md`](temporal-elections.md)) |
 | `DateParseSourceColumn` | Each `derived: date_parse`'s `from` resolves off the grain's projectable surface and carries a declared VARCHAR type (§ Derived columns); not `slice_only` |
 | `DecimalSourceIsDouble` / `JsonPrecisionSourceIsVarchar` | Each `derived: decimal`'s / `derived: json_precision`'s `from` resolves off the grain's projectable surface and carries a declared DOUBLE / VARCHAR type respectively ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) |
-| `Scd2ColumnModeSupported` | Every column of an `scd: type2` table uses an admitted mode — `from`, `null`, `derived: scd_window`, or the per-record `derived: timestamp` / `date_parse` / `value_map` (§ SCD-2 wide reconstruction). `fk`, `correlation`, `derived: ordinal`, `derived: elapsed`, `derived: decimal`, and `derived: json_precision` are refused; the error names the column, the table, and the offending mode |
-| `Scd2DerivedSourceConstant` | An `scd: type2` table's `derived: timestamp` / `date_parse` / `value_map` column sources a constant column — the spec's source (`timestamp.source` / `date_parse.from` / `value_map.from`), when it names a `prop__` column, resolves through `Sidecar.temporal_class` and is `constant`. Structural and projection-introduced sources carry no class and always pass; existence is `ProjectionColumnExists` / `DateParseSourceColumn`'s gate |
+| `Scd2ColumnModeSupported` | Every column of an `scd: type2` table uses an admitted mode — `from`, `null`, `derived: scd_window`, or a pure per-row value rendering (`derived: timestamp` / `date_parse` / `value_map` / `decimal` / `json_precision`), evaluated per record for untracked sources and per version for tracked ones (§ SCD-2 wide reconstruction). `fk`, `correlation`, `derived: ordinal`, and `derived: elapsed` are refused; the error names the column, the table, and the offending mode. The source-type gates (`DecimalSourceIsDouble`, `JsonPrecisionSourceIsVarchar`, `DateParseSourceColumn`, `TimestampSourceAvailable`) and the export-time guards apply to tracked sources through the same sidecar declared-type authority — the declared type is a sidecar fact independent of source class |
 | `Scd2NeedsHistory` | An `scd: type2` table declares a `valid_from` `scd_window` column in `key`, the emit carries the `history_tracked` flag, and the kind has at least one tracked column (flag-authoritative; a tracked-but-unchanged column qualifies). A flag-absent emit is refused — re-emit with `history_tracked` — never reconstructed by `history`-table inference |
 | `LookupColumnSafety` | A `lookup` column resolves and reads only temporally exact data: the terminal `records__<kind>` table and its `prop__<property>` exist; a unique reference path resolves from the anchor kind to `to` (or the `path` hint validates hop-by-hop); the terminal property plus every traversed hop column are `temporal_class: constant` (the exempt discriminator excepted, any class — § Lookup); a zero-hop self lookup is not on a `records` grain (redundant with `from`); and the table is not `scd: type2` (the SCD-2 wide builder does not project lookup columns) |
 | `ExcludedKindNotSourced` | No declared table sources an `exclude.kinds` kind |
@@ -1077,16 +1100,13 @@ What the dimensional exporter deliberately does not own:
   *during* a row's interval — a correlated as-of join over `history`, with its own
   interval-edge and determinism semantics — is not owned here. `lookup` serves only the
   type-1 case and refuses type-2 targets at validation.
-- **Version-grain column semantics.** A type-2 table admits only column modes
-  that are pure per-record functions of static values (§ SCD-2 wide
-  reconstruction). `fk`, `correlation`, `derived: ordinal`, and
-  `derived: elapsed` each raise a genuine semantic question on version rows —
-  which version an edge resolves against, what an ordinal partitions over
-  when one record contributes several rows, which version bound anchors a
-  cross-row delta — and a version-grain answer is not defined here. The same
-  boundary refuses a per-record derived column whose source is history-tracked:
-  a tracked property's value surface is per-version, so the record-level read
-  has no meaning to give.
+- **Version-grain relational semantics.** A type-2 table admits only pure
+  per-row value modes (§ SCD-2 wide reconstruction). `fk`, `correlation`,
+  `derived: ordinal`, and `derived: elapsed` each raise a genuine semantic
+  question on version rows — which version an edge resolves against, what an
+  ordinal partitions over when one record contributes several rows, which
+  version bound anchors a cross-row delta — and a version-grain answer is
+  not defined here.
 - **`lookup` candidate generation in `init`.** `init` proposes no `lookup` columns: an
   unfillable type-1 history- or membership-grain attribute is not auto-surfaced as a
   candidate, and the `init` inference contract carries no `lookup` proposal. The author

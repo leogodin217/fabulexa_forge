@@ -5,7 +5,7 @@ SourceTableExists, KeyColumnsDeclared, ProjectionColumnExists,
 OrdinalRefsSiblings, TimestampSourceAvailable, DiscriminatorValueObserved,
 ExcludedKindNotSourced, ExcludedTableNotSourced, FkTargetIsDim,
 ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
-Scd2ColumnModeSupported, Scd2DerivedSourceConstant, SliceOnlyColumnRefused
+Scd2ColumnModeSupported, SliceOnlyColumnRefused
 (filter keys, column reads, and fk hops), ReservedPresentationName
 (last_mutation_sim_time — always-on, full export included).
 

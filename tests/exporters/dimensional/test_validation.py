@@ -966,9 +966,9 @@ def _scd2_derived_source_sidecar() -> Sidecar:
 
 
 def test_validate_table_type2_derived_date_parse_tracked_source_passes() -> None:
-    """A derived: date_parse over a tracked prop__ source now passes
-    validate_table on a type2 table — the deleted Scd2DerivedSourceConstant
-    gate no longer restricts type2 renderings to constant sources."""
+    """A derived: date_parse over a tracked prop__ source passes
+    validate_table on a type2 table — tracked sources render per version;
+    no gate restricts type2 renderings to constant sources."""
     sidecar = _scd2_derived_source_sidecar()
     col = ColumnDecl(
         name="status_date",
@@ -982,9 +982,9 @@ def test_validate_table_type2_derived_date_parse_tracked_source_passes() -> None
 
 
 def test_validate_table_type2_derived_slice_only_source_still_refused() -> None:
-    """A non-exempt slice_only derived source on a type2 table is still
-    refused — by the slice-only surface (check_slice_only_column_reads), not
-    a type2-specific gate."""
+    """A non-exempt slice_only derived source on a type2 table is refused —
+    by the slice-only surface (check_slice_only_column_reads), not a
+    type2-specific gate."""
     sidecar = _scd2_derived_source_sidecar()
     col = ColumnDecl(
         name="last_seen_date",

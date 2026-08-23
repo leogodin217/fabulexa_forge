@@ -231,10 +231,10 @@ Each mode reads the same emit and writes a different target shape.
 - ◐ **Output transforms** — `derived` columns ship (ordinal, value-map, anchored
   timestamp, SCD window, elapsed, declared temporal parse, decimal precision,
   JSON leaf rounding); arbitrary per-table transforms beyond these are not. On
-  an `scd: type2` dim the per-record modes (`timestamp`, `date_parse`,
-  `value_map`) apply over `temporal_class: constant` sources; `fk`,
-  `correlation`, `ordinal`, `elapsed`, `decimal`, and `json_precision` are
-  refused there.
+  an `scd: type2` dim the pure per-row value renderings (`timestamp`,
+  `date_parse`, `value_map`, `decimal`, `json_precision`) apply over both
+  source classes — per record for untracked sources, per version for tracked
+  ones; `fk`, `correlation`, `ordinal`, and `elapsed` are refused there.
 - ✓ **`init`** — generate a commented candidate config from the sidecar; `--mode`
   selects the target (`dimensional`, the default, `source`, or `streaming`). Dimensional
   reads `record_roles` for warehouse role, kinds, discriminators, membership tables,
