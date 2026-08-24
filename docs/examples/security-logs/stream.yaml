@@ -39,13 +39,11 @@
 #     never `role_name` (dest_stale / probe_target / victim_account are
 #     labels).
 #
-# KNOWN NAMING LEAK (verified on the wire): after-image fields ship
-#   prop__-prefixed raw property names (prop__journey_instance — the
-#   correlation id the batch exports call session_id — prop__decision_type,
-#   prop__context), and the envelope's `kind` field carries the engine kind
-#   (tick_decision / entity). StreamConfig has no per-stream field rename
-#   surface today (vault feature note:
-#   streaming-per-stream-field-rename-payload-fields-ship-raw-property-names).
+# NAMING: after-image fields carry bare property names; per-stream `rename`
+#   aligns them with the source export's vocabulary (journey_instance ->
+#   session_id, decision_type -> event_type — same names, same raw values as
+#   the app database). `kind_label` sets each envelope's `kind` to domain
+#   vocabulary (security_event / server) instead of the engine kind names.
 #
 # No `keys:` block — identities render as verbatim record ids, matching the
 # correlation ids the payloads carry. Anchor resolves from the sidecar
@@ -53,11 +51,30 @@
 
 content: state-changes
 
+# the Debezium source identity --fmt debezium stamps into each envelope's
+# `source` struct and value-schema names; inert under jsonl.
+# table_identity: topic — source.table and the value-schema name report the
+# stream name (siem.security_events.Value), not the engine kind; the
+# canonical-Debezium `source_table` default would say tick_decision.
+debezium:
+  table_identity: topic
+  source:
+    connector: postgresql
+    name: siem
+    db: siem
+    schema: public
+    version: 2.5.0.Final
+
 streams:
   - name: security_events
     kind: tick_decision
     properties: [decision_type, journey_instance, context]
+    rename:
+      journey_instance: session_id
+      decision_type: event_type
+    kind_label: security_event
   - name: server_inventory
     kind: entity
     sub_types: [server]
     properties: [port]
+    kind_label: server
