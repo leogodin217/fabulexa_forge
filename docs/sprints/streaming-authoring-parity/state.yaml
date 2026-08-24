@@ -86,6 +86,6 @@ phases:
         files:
           - "tests/exporters/streaming/test_selection.py"
   5:
-    status: pending
+    status: complete
     name: "Change scope — only/ignore + init trailing comment"
     demo: "docs/sprints/streaming-authoring-parity/demos/phase_5_change_scope.py"

@@ -39,6 +39,12 @@ uniform `record_index`, with a comment naming the forcing gate.
 
 Non-exempt `slice_only` columns are never proposed; one
 'slice-only-column-omitted' notice each.
+
+None of `rename` / `kind_label` / `kind_labels` / `where` / `only` / `ignore`
+/ membership `sub_types` is ever proposed — each is author intent with no
+sidecar-derived value, and proposing one would be invention. The trailing
+comment names them alongside the never-proposed delivery blocks (design doc §
+`init`); proposal output is otherwise unchanged and remains parse-clean.
 """
 
 from __future__ import annotations
@@ -648,6 +654,14 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
         "# knobs, not emit-derived. Add them yourself, e.g. debezium:"
         " {table_identity: source_table, ...}"
     )
+    w(
+        "# rename: / kind_label: / kind_labels: / where: / only: / ignore: /"
+        " sub_types: (membership) --"
+    )
+    w(
+        "# never proposed either; each is author intent with no sidecar-derived"
+        " value (proposing one would be invention). Add them yourself."
+    )
     _write_membership_alternative(w, membership_units)
 
     return buf.getvalue()
@@ -680,7 +694,9 @@ def generate_stream_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     Returns:
         The candidate config YAML, commented, ending in a trailing block
         naming the never-proposed delivery blocks (rebase / debezium / clock
-        / kafka) and the fully-commented membership-events alternative.
+        / kafka) and authoring fields (rename / kind_label / kind_labels /
+        where / only / ignore / membership sub_types), followed by the
+        fully-commented membership-events alternative.
 
     Raises:
         StreamInitNothingToStream: The emit carries no records kind, or no

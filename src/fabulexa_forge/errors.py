@@ -537,3 +537,10 @@ class StreamWhereValueUncastable(ExportError):
     sidecar-declared DuckDB type — constant-evaluated at plan time, before
     any fold materializes. Message: `"stream '{name}': where value '{value}'
     does not cast to {type} for '{key}'"`."""
+
+
+class StreamChangeScopeUnresolvable(ExportError):
+    """An `only` / `ignore` entry names no `prop__` column of the stream's
+    kind. Message: `"stream '{name}': {field} entry '{property}' has no
+    prop__{property} column on kind '{kind}'"` (`field` is `only` or
+    `ignore`)."""

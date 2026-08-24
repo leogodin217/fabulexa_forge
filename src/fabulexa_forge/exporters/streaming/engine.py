@@ -3,8 +3,10 @@
 Produces StreamEvent objects in the canonical total order with seq stamped and
 ts rendered from the EffectiveAnchor. Materializes one fold per declared
 stream (not per kind/table): a kind-shaped stream's event set is
-payload-independent (change scope = the kind's full property set, projection
-= the stream's declared properties), and every stream's rows merge under a
+payload-independent (change scope = its `only` / audited-minus-`ignore` /
+audited property set — the audited default, unset, is byte-identical to the
+shipped full-property-set invocation; projection = the stream's declared
+properties), and every stream's rows merge under a
 canonical key whose source-identity component is the declared stream name.
 Also resolves the message-key election (`exporters.election`) and renders the
 elected key and after-image identity through it (design doc § Message-key
@@ -59,6 +61,7 @@ from fabulexa_forge.errors import (
     ExportError,
     JsonPrecisionSourceIsVarchar,
     RenderKeyResolves,
+    StreamChangeScopeUnresolvable,
     StreamOutputNameCollision,
     StreamRenameUnresolvable,
 )
@@ -116,17 +119,22 @@ def _check_stream_properties_slice_only(
     name: str,
     kind: str,
     properties: Sequence[str],
+    noun: str = "property",
 ) -> None:
-    """Enforce StreamPropertySliceOnly over one kind-shaped stream's properties.
+    """Enforce StreamPropertySliceOnly over one kind-shaped stream's entries.
 
-    No `properties` entry may resolve to a non-exempt slice_only prop__<p>
-    column of records__<kind>. Refuse-only; emits nothing.
+    No entry may resolve to a non-exempt slice_only prop__<p> column of
+    records__<kind>. Refuse-only; emits nothing. Shared by the `properties`
+    projection check and the `only` / `ignore` change-scope check
+    (`noun` names which surface, for the message).
 
     Args:
         sidecar: The open emit's sidecar.
         name: The declaring stream's name.
         kind: The record kind owning the selected properties.
         properties: The selected property names (bare, prop__ stripped).
+        noun: The message's noun for one entry — 'property', or 'only
+            entry' / 'ignore entry' for the change-scope surface.
 
     Raises:
         ExportError: A selected property resolves to a non-exempt slice_only
@@ -137,10 +145,51 @@ def _check_stream_properties_slice_only(
         column_name = f"prop__{prop}"
         if is_non_exempt_slice_only(sidecar, kind, column_name):
             raise ExportError(
-                f"stream '{name}': stream kind '{kind}': property '{prop}'"
+                f"stream '{name}': stream kind '{kind}': {noun} '{prop}'"
                 " is temporal_class: slice_only; it cannot ride the"
                 " state-changes after-image"
             )
+
+
+def _check_stream_change_scope(
+    sidecar: "Sidecar",
+    name: str,
+    kind: str,
+    sidecar_prop_names: "set[str]",
+    only: "Sequence[str] | None",
+    ignore: "Sequence[str] | None",
+) -> None:
+    """Enforce StreamChangeScopeUnresolvable and the slice_only refusal over
+    one kind-shaped stream's `only` / `ignore` change-scope narrowing.
+
+    Args:
+        sidecar: The open emit's sidecar.
+        name: The declaring stream's name.
+        kind: The record kind owning the audited property set.
+        sidecar_prop_names: Every bare prop__ name declared on
+            records__<kind> (the stream's already-resolved column set).
+        only: The stream's declared `only` entries, or None.
+        ignore: The stream's declared `ignore` entries, or None.
+
+    Raises:
+        StreamChangeScopeUnresolvable: An entry names no prop__ column of
+            kind.
+        ExportError: An entry names a non-exempt slice_only column
+            (StreamPropertySliceOnly's extended shape).
+        TemporalClassUnavailableError: Propagated.
+    """
+    entries, field = (only, "only") if only is not None else (ignore, "ignore")
+    if entries is None:
+        return
+    for prop in entries:
+        if prop not in sidecar_prop_names:
+            raise StreamChangeScopeUnresolvable(
+                f"stream '{name}': {field} entry '{prop}' has no"
+                f" prop__{prop} column on kind '{kind}'"
+            )
+    _check_stream_properties_slice_only(
+        sidecar, name, kind, entries, noun=f"{field} entry"
+    )
 
 
 #: Per numeric-only streaming election kind: the required declared source
@@ -275,7 +324,7 @@ def _validate_membership_stream_render(
 
 
 def _validate_kind_stream(sidecar: "Sidecar", stream: "KindStream") -> None:
-    """Run StreamKindResolvable through StreamPropertySliceOnly for one stream.
+    """Run StreamKindResolvable through the change-scope gates for one stream.
 
     Args:
         sidecar: The open emit's sidecar view.
@@ -284,7 +333,10 @@ def _validate_kind_stream(sidecar: "Sidecar", stream: "KindStream") -> None:
     Raises:
         ExportError: StreamKindResolvable, StreamSubTypesRequireSubtyping,
             StreamSubTypesDeclared, StreamPropertyResolvable, or
-            StreamPropertySliceOnly fails. Message leads with the stream name.
+            StreamPropertySliceOnly (over `properties` or an `only` /
+            `ignore` entry) fails. Message leads with the stream name.
+        StreamChangeScopeUnresolvable: An `only` / `ignore` entry names no
+            prop__ column of the stream's kind.
         RenderKeyResolves: A `render` key is not a member of
             `stream.properties`.
         DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: A `render`
@@ -328,6 +380,9 @@ def _validate_kind_stream(sidecar: "Sidecar", stream: "KindStream") -> None:
             )
 
     _check_stream_properties_slice_only(sidecar, stream.name, kind, stream.properties)
+    _check_stream_change_scope(
+        sidecar, stream.name, kind, sidecar_prop_names, stream.only, stream.ignore
+    )
     col_types = {c.name: c.type for c in cols}
     _validate_kind_stream_render(stream, col_types)
 
@@ -894,7 +949,8 @@ def _validate_streams(
     Checks the single-branch guard, then each stream's rules, in declaration
     order: kind-shaped streams run StreamKindResolvable /
     StreamSubTypesRequireSubtyping / StreamSubTypesDeclared /
-    StreamPropertyResolvable / StreamPropertySliceOnly; membership-shaped
+    StreamPropertyResolvable / StreamPropertySliceOnly /
+    StreamChangeScopeUnresolvable (`only` / `ignore`); membership-shaped
     streams run MembershipResolvable / MembershipFieldResolvable / the owner
     `sub_types` gate; then every stream resolves its row selection
     (`resolve_stream_selection`, the `StreamWhere*` gates, the per-element
@@ -924,6 +980,8 @@ def _validate_streams(
         StreamWhereNotConstant, StreamWhereOnDiscriminator,
             StreamWhereColumnUnresolved, StreamWhereValueUncastable: A
             stream's `where` resolution fails.
+        StreamChangeScopeUnresolvable: A stream's `only` / `ignore` entry
+            names no prop__ column of the stream's kind.
         ElectionKindUnknown: A `keys` entry names no declared records kind.
         ElectionSubTypeUnknown: A `keys` map key is outside the kind's
             discriminator domain, or addresses a flat kind.
@@ -976,29 +1034,62 @@ def _is_kind_subtyped(kind: str, sidecar: "Sidecar") -> bool:
     return bool(sidecar.subtype_values(kind))
 
 
-def _kind_property_names(sidecar: "Sidecar", kind: str) -> frozenset[str]:
-    """Every bare property name declared on kind's records table.
+def _kind_audited_property_names(sidecar: "Sidecar", kind: str) -> frozenset[str]:
+    """Every audited (tracked- or constant-class) property name on kind's
+    records table.
 
-    The change-scope set for a kind-shaped stream's fold (design doc § Per-
-    stream folds and after-images): the event set is a fact of the
-    population, independent of the stream's own `properties` selection. Read
-    directly off the sidecar — a full-population fact, not an author-declared
-    value.
+    The default change-scope set for a kind-shaped stream's fold (design doc
+    § Change scope): every `prop__` column minus the non-exempt slice_only
+    population — history-untracked, contributing no change points, so
+    excluding it leaves the narrowed default's event set byte-identical to
+    the shipped full-property-set invocation. Read directly off the sidecar
+    — a full-population fact, not an author-declared value; `only` / `ignore`
+    narrow it further per the declaring stream.
 
     Args:
         sidecar: The open emit's sidecar view.
         kind: The record kind.
 
     Returns:
-        Every prop__<p> column's bare name on records__<kind>.
+        Every prop__<p> column's bare name on records__<kind> whose class is
+        not non-exempt slice_only.
 
     Raises:
         TableNotFoundError: records__<kind> is not in the sidecar.
+        TemporalClassUnavailableError: Propagated from the slice_only check.
     """
     cols = sidecar.columns(f"records__{kind}")
     return frozenset(
-        col.name[len("prop__") :] for col in cols if col.name.startswith("prop__")
+        col.name[len("prop__") :]
+        for col in cols
+        if col.name.startswith("prop__")
+        and not is_non_exempt_slice_only(sidecar, kind, col.name)
     )
+
+
+def _resolve_kind_change_scope(
+    audited: "frozenset[str]",
+    only: "Sequence[str] | None",
+    ignore: "Sequence[str] | None",
+) -> frozenset[str]:
+    """Narrow a kind-shaped stream's audited change scope by `only` / `ignore`.
+
+    Args:
+        audited: The kind's audited property set
+            (`_kind_audited_property_names`).
+        only: The stream's declared `only` entries, or None.
+        ignore: The stream's declared `ignore` entries, or None.
+
+    Returns:
+        `only` verbatim (as a set) when declared; `audited` minus `ignore`
+        when declared; `audited` otherwise — today's byte-identical default
+        (design doc § Change scope).
+    """
+    if only is not None:
+        return frozenset(only)
+    if ignore is not None:
+        return audited - frozenset(ignore)
+    return audited
 
 
 def _build_subtype_indexes(
@@ -1232,8 +1323,10 @@ def _iter_kind_streams_inner(
 
     Called only after the eager validation pass in iter_stream_events has
     succeeded, for content='state-changes'. Each stream's fold runs with
-    change_scope = the kind's full property set (payload-independent event
-    set) and projection = the stream's declared properties; a stream that
+    change_scope = its `only` / audited-minus-`ignore` / audited change
+    scope (§ Change scope — payload-independent of the stream's own
+    `properties` selection, `properties` remains the fold's projection) and
+    projection = the stream's declared properties; a stream that
     scopes an explicit sub_types subset is filtered post-fold via the
     discriminator index, and a stream with a `where` selection is further
     filtered post-fold via `selection_by_stream` (§ Row selection) — the two
@@ -1275,7 +1368,8 @@ def _iter_kind_streams_inner(
         assert isinstance(stream, KindStream)
         kind = stream.kind
         properties = frozenset(stream.properties)
-        change_scope = _kind_property_names(sidecar, kind)
+        audited = _kind_audited_property_names(sidecar, kind)
+        change_scope = _resolve_kind_change_scope(audited, stream.only, stream.ignore)
 
         col_names = record_fold_row_column_names(sidecar, kind, properties)
         sql = build_row_state_events_sql(

@@ -879,6 +879,36 @@ def test_delivery_blocks_never_proposed_trailing_comment(tmp_path: Path) -> None
     )
 
 
+def test_authoring_fields_never_proposed_trailing_comment(tmp_path: Path) -> None:
+    """`rename`/`kind_label`/`kind_labels`/`where`/`only`/`ignore`/membership
+    `sub_types` are never proposed; the trailing comment names them alongside
+    the delivery blocks, and the proposal is otherwise unchanged and
+    parse-clean."""
+    build_source_test_emit(tmp_path)
+    content = _generate(tmp_path)
+    live_lines = [
+        line for line in content.splitlines() if not line.strip().startswith("#")
+    ]
+    for field in (
+        "rename:",
+        "kind_label:",
+        "kind_labels:",
+        "where:",
+        "only:",
+        "ignore:",
+    ):
+        assert not any(line.strip().startswith(field) for line in live_lines)
+    membership_block = content.split("# Alternative")[1]
+    assert "sub_types:" not in membership_block
+    assert (
+        "# rename: / kind_label: / kind_labels: / where: / only: / ignore: /"
+        " sub_types: (membership) --\n"
+        "# never proposed either; each is author intent with no sidecar-derived"
+        " value (proposing one would be invention). Add them yourself.\n" in content
+    )
+    _assert_round_trip_streams_clean(tmp_path, content, tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # Round-trip
 # ---------------------------------------------------------------------------
