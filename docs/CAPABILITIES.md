@@ -216,7 +216,24 @@ Each mode reads the same emit and writes a different target shape.
   insert-only with the domain op as a leading `event` column). Full-row after-images,
   anchored timestamps; composes the row-state-events (two-scope) and membership-events
   derivations. A configurable clock paces emission — `realtime × speed` with an idle
-  cap, or as-fast-as-possible (`--speed` / `--idle-cap` / `--fast`). *Gaps:* the Debezium
+  cap, or as-fast-as-possible (`--speed` / `--idle-cap` / `--fast`). Each stream carries
+  the same three author surfaces the batch modes carry. **Output vocabulary:** after-image
+  keys are bare property / field names (a reference field expands to a `<f>_kind` /
+  `<f>_id` pair), renamable per stream with `rename`, while `kind_labels` maps engine kind
+  → domain label wherever a kind name renders as a *value* (the envelope `kind` default,
+  member-kind payload entries; identity fall-through for anything unmapped) and a
+  per-stream `kind_label` names the concept that feed represents. Identity columns are
+  never rename-addressable, and one naming authority feeds both the rendered rows and the
+  Debezium value schema, so the two cannot disagree. **Row selection:** `where` — the same
+  scalar-or-list predicate gated to `temporal_class: constant` payload properties, so a
+  stream's event set is identical at every instant of the tape — on both stream shapes,
+  plus owner `sub_types` on a membership stream, read through the shared fan-out-free
+  parent lookup; a selection matching nothing yields a declared-but-empty topic, and an
+  unobserved predicate value draws a notice rather than an error. **Change scope:**
+  `only` / `ignore` narrow which properties' changes fire a `u`, independently of what the
+  stream projects — so a notification-shaped feed and a lifecycle-only feed are both
+  expressible. `init` proposes none of the three: each is author intent with no
+  sidecar-derived value. *Gaps:* the Debezium
   value message only (no separate key message or compaction tombstone), and whole-stream
   (not windowed). See
   [`architecture/streaming.md`](architecture/streaming.md).
@@ -227,7 +244,11 @@ Each mode reads the same emit and writes a different target shape.
 - ✓ **Type / table exclusion** — `exclude.kinds` / `exclude.tables` drop kinds or
   sidecar tables before export (validated so no declared table sources an excluded one).
 - ✓ **Table / column rename** — every output `name` is author-verbatim; `init` proposes
-  prefix-stripped names with a structural-column collision check.
+  prefix-stripped names with a structural-column collision check. Every output mode can
+  name its payload columns: the dimensional grammar names each column outright, source
+  and base carry per-table `rename`, and streaming carries per-stream `rename` over bare
+  after-image keys. Identity columns are reserved everywhere — a rename resolving onto one,
+  or onto another output key, is refused rather than silently collided.
 - ◐ **Output transforms** — `derived` columns ship (ordinal, value-map, anchored
   timestamp, SCD window, elapsed, declared temporal parse, decimal precision,
   JSON leaf rounding); arbitrary per-table transforms beyond these are not. On
@@ -255,10 +276,12 @@ Each mode reads the same emit and writes a different target shape.
   alternative fully commented, name-collision losers and topic-illegal names commented
   out, and the self-gated `keys` block; the emitted config always parses and streams
   clean, and a recordless emit is refused rather than proposed.
-- ✓ **List-valued row predicates** *(dimensional, source)* — every predicate value in
+- ✓ **List-valued row predicates** *(dimensional, source, streaming)* — every predicate
+  value in
   the dimensional grammar (`source.filter`, `source.where`, `source.value`, a membership
-  `fk.where`, `derived.elapsed.other_where`) and in source's two selection surfaces
-  (`tables[].where`, `events.sources[].where`) is a scalar or a non-empty list of
+  `fk.where`, `derived.elapsed.other_where`), in source's two selection surfaces
+  (`tables[].where`, `events.sources[].where`), and in streaming's two
+  (`streams[].where` on either stream shape) is a scalar or a non-empty list of
   alternatives, compiling to `=` or `IN` through one rendering authority. A list is
   what groups several discriminator values into one named table — the domain's own
   shape (an NHS "Emergency Care" dataset spanning several decision types) instead of

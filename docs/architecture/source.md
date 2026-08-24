@@ -57,7 +57,8 @@ writers (CSV | DuckDB — both via Emit.query_arrow)
 | [`exporters/populations.py`](../../src/fabulexa_forge/exporters/populations.py) | `Population` (the sub-type atom) and `resolve_populations` — the shared-layer resolver from a config population address to its atoms. Shared because it resolves the same atoms key election addresses; source mode is its consumer. Election resolution keeps its own resolution gates (`ElectionKindUnknown` / `ElectionSubTypeUnknown`) and is not routed through it |
 | [`exporters/source/plan.py`](../../src/fabulexa_forge/exporters/source/plan.py) | `SourceStateTablePlan`, `SourceJunctionTablePlan`, `SourcePlan`; `build_source_plan` — declaration resolution, column classification through the records-column taxonomy, `columns` / `rename` resolution, the identity and edge gates, the row-selection gates and their plan-time predicate-literal casts, the audited-set resolution, the collision and reserved-name checks |
 | [`exporters/source/columns.py`](../../src/fabulexa_forge/exporters/source/columns.py) | The shared `prop__<p>` scalar-property lookup `plan.py` and the renders both need, so neither duplicates it |
-| [`exporters/source/renders.py`](../../src/fabulexa_forge/exporters/source/renders.py) | `build_state_render_sql` / `build_junction_render_sql` — the thing-table renders, each carrying its total `ORDER BY` and wallclock rendering through the shared anchor renderer; `build_selection_spine_sql` — the parent lookup every owner-keyed narrowing composes (§ Row selection) |
+| [`exporters/source/renders.py`](../../src/fabulexa_forge/exporters/source/renders.py) | `build_state_render_sql` / `build_junction_render_sql` — the thing-table renders, each carrying its total `ORDER BY` and wallclock rendering through the shared anchor renderer |
+| [`exporters/selection_spine.py`](../../src/fabulexa_forge/exporters/selection_spine.py) | The mode-neutral row-selection spine source composes — `WhereEntry`, `build_selection_spine_sql` (the parent lookup every owner-keyed narrowing reads through), `needs_population_filter`, `where_predicate_elements`, `check_where_values_observed`. Shared with streaming; its contract is owned by [`selection-spine.md`](selection-spine.md) |
 | [`exporters/source/events.py`](../../src/fabulexa_forge/exporters/source/events.py) | `SourceEventSourcePlan`, `SourceEventLogPlan`, `build_event_log_sql` — the event-log render: the row-state-events and membership-events folds composed with the previous-after-image diff and the deterministic JSON `changes` assembly, all rendered in SQL |
 | [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `export_source`, `build_source_query_specs` — plan → per-table render → optional windowing → dispatch to the shared writer. The compile is connection-free and pure; it carries no `base_relations` parameter — the playback seam applies its truncated-relation mapping as a post-compile SQL rewrite ([`playback.md`](playback.md) § The compile indirection) |
 | [`exporters/source/init.py`](../../src/fabulexa_forge/exporters/source/init.py) | `generate_source_init_config` — the `init --mode source` proposal engine |
@@ -293,14 +294,16 @@ results.
 **The parent lookup.** A membership unit's rows carry no owner attributes, so its
 selection evaluates against the owner: an identity join from the membership rows'
 owner column (`record_id`) to the owner kind's records spine, where the
-discriminator and the predicate columns live
-([`build_selection_spine_sql`](../../src/fabulexa_forge/exporters/source/renders.py)).
-The join is fan-out-free (`record_id` is unique on the spine) and horizon-free
+discriminator and the predicate columns live. The join is fan-out-free
+(`record_id` is unique on the spine) and horizon-free
 (the discriminator is creation-constant, `where` columns are constant-gated), so
 it is exactly the per-row records-spine device a records-source `sub_types`
 narrowing composes, applied from the membership side. It is a read for selection
 only: no owner attribute is projected into the unit's columns, and the membership
-surface — interval columns, element fields, member pairs — is untouched.
+surface — interval columns, element fields, member pairs — is untouched. The
+relation is mode-neutral and shared with the streaming exporter, which resolves
+its own row scope through it; its contract lives in
+[`selection-spine.md`](selection-spine.md).
 
 Owner `sub_types` narrows the unit's **addressed owner population set**: the
 membership unit addresses exactly those `(kind, sub_type)` populations, as a
@@ -1259,7 +1262,8 @@ writer semantics, CSV posture, and incremental gating are owned by
 | [`temporal-elections.md`](temporal-elections.md) | The cross-mode temporal election vocabulary the unified `render` map's temporal spellings render through |
 | [`value-rendering-elections.md`](value-rendering-elections.md) | The unified `render` map's grammar, the typed value elections (`instant` / `decimal` / `json_precision`), and the event-log election-reach rule |
 | [`slice-only.md`](slice-only.md) | The export-wide `slice_only` policy source's omit-with-notice, `SourceSliceOnlyRead` refusal, and row-selection class gate instantiate |
-| [`row-predicates.md`](row-predicates.md) | The scalar-or-list grammar, `PredicateValue` well-formedness rule, and rendering authority the mode's `where` surfaces share with dimensional's five |
+| [`row-predicates.md`](row-predicates.md) | The scalar-or-list grammar, `PredicateValue` well-formedness rule, and rendering authority the mode's `where` surfaces share with dimensional's five and streaming's two |
+| [`selection-spine.md`](selection-spine.md) | The mode-neutral parent-lookup relation the mode's owner-keyed narrowing composes, shared with streaming |
 | [`config-docstrings.md`](config-docstrings.md) | The docstring convention the `SourceConfig` family follows |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Source-mode feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |

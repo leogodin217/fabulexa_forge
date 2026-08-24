@@ -1,13 +1,16 @@
 # Config Row Predicates
 
-Seven surfaces across two export modes select rows with a predicate. Five belong
+Nine surfaces across three export modes select rows with a predicate. Five belong
 to the dimensional grammar: `source.filter` (records-grain rows), `source.where`
 (membership-grain rows), `source.value` (history-point rows), `fk.where` (the
 membership interval a foreign key resolves through), and
 `derived.elapsed.other_where` (the counterpart row of an elapsed correlation).
 Two belong to the source grammar: `tables[].where` and `events.sources[].where`,
 each gated to the declaring unit's `constant`-class payload properties
-([`source.md`](source.md) § Row selection). All seven share one grammar — **a
+([`source.md`](source.md) § Row selection). Two belong to the streaming grammar:
+`streams[].where` on each of the two stream shapes, under the same constant-class
+gate over the stream's subject kind ([`streaming.md`](streaming.md) § Row
+selection). All nine share one grammar — **a
 predicate value is either a scalar or a non-empty list; a scalar compiles to `=`,
 a list compiles to `IN`; predicates over distinct columns are AND-joined** — and
 one rendering authority. This doc owns that grammar: its well-formedness rule,
@@ -21,8 +24,9 @@ carrying the well-formedness rule). Tests:
 [`tests/test_sql.py`](../../tests/test_sql.py) for rendering,
 [`tests/config/test_models.py`](../../tests/config/test_models.py) for the parse
 rule, and the per-surface suites under
-[`tests/exporters/dimensional/`](../../tests/exporters/dimensional/) and
-[`tests/exporters/source/test_where_plan.py`](../../tests/exporters/source/test_where_plan.py).
+[`tests/exporters/dimensional/`](../../tests/exporters/dimensional/),
+[`tests/exporters/source/test_where_plan.py`](../../tests/exporters/source/test_where_plan.py),
+and [`tests/exporters/streaming/test_selection.py`](../../tests/exporters/streaming/test_selection.py).
 
 ## Boundary
 
@@ -95,8 +99,10 @@ sidecar-supplied type string cannot close the `CAST` and append SQL.
 Every condition compiled from a config predicate value is rendered by
 `render_predicate_condition`, in the reader's faithful-read builders, the
 derivations layer's membership edge, the dimensional exporter's foreign-key and
-elapsed compilation, and the source exporter's state, junction, and event-log
-narrowing alike. No surface renders `=` or `IN` over a config predicate itself,
+elapsed compilation, the source exporter's state, junction, and event-log
+narrowing, and the shared selection spine both source and streaming resolve their
+row scope through ([`selection-spine.md`](selection-spine.md)) alike. No surface
+renders `=` or `IN` over a config predicate itself,
 and there is no second implementation of the scalar/list rule to drift.
 
 The invariant is scoped to *config* predicates. Engine-internal scoping conditions
@@ -114,12 +120,15 @@ predicates and the history-point `value` are outside it by construction, because
 column's class and never its value, the predicate value's form is irrelevant to
 it, and the sub-typed discriminator's carve-out applies in both forms.
 
-Source's two surfaces are inside the population and are refused by a stricter
-rule that subsumes it: a `where` key must name a `constant`-class property, so
-`slice_only` and `tracked` keys alike are `SourceWhereNotConstant` with a message
-naming the class ([`source.md`](source.md) § Row selection). The stricter gate is
+The source and streaming surfaces are inside the population and are refused by a
+stricter rule that subsumes it: a `where` key must name a `constant`-class
+property, so `slice_only` and `tracked` keys alike are refused with a message
+naming the class — `SourceWhereNotConstant` in source
+([`source.md`](source.md) § Row selection), `StreamWhereNotConstant` in streaming
+([`streaming.md`](streaming.md) § Row selection). The stricter gate is
 what makes row membership horizon-invariant under a mode that reconstructs state
-at a horizon; the dimensional records grain, current state by construction, needs
+at a horizon, and time-invariant under a mode that replays every instant of the
+tape; the dimensional records grain, current state by construction, needs
 only the `slice_only` refusal.
 
 ### Fan-out
@@ -134,8 +143,9 @@ deduplicates nor refuses (§ Rationale).
 ## Invariants
 
 1. **One rendering authority.** Every condition compiled from a config predicate
-   value — dimensional's `filter`, `where`, `value`, `fk.where`, `other_where`
-   and source's `tables[].where` / `events.sources[].where` — is rendered by
+   value — dimensional's `filter`, `where`, `value`, `fk.where`, `other_where`,
+   source's `tables[].where` / `events.sources[].where`, and streaming's
+   `streams[].where` on both stream shapes — is rendered by
    `render_predicate_condition`. No other module renders `=` or `IN` over a config
    predicate.
 2. **One well-formedness rule, carried by the type.** The non-empty and
@@ -182,8 +192,11 @@ source population set's declared-domain refusal
 ([`dimensional.md`](dimensional.md)); source's constant-class, discriminator,
 castability, and selection-aware disjointness gates plus its reuse of the
 per-element unobserved-value notice ([`source.md`](source.md) § Validation
-Rules). The rules that evaluate per element are the notices and source's
-castability check; the rules that validate predicate *columns*
+Rules); and streaming's constant-class, discriminator, resolvability, and
+castability gates over the same shared notice
+([`streaming.md`](streaming.md) § Validation Rules). The rules that evaluate per
+element are the notices and the source and streaming
+castability checks; the rules that validate predicate *columns*
 (`ProjectionColumnExists`, `MembershipEdgeResolvable`, the elapsed-column check,
 source's key resolution) are indifferent to the value's form.
 
@@ -198,7 +211,7 @@ source's key resolution) are indifferent to the value's form.
   predicate surface adds a *gate* on which columns are addressable, never a
   second value grammar.
 - **Sub-type selection is a separate surface with a separate guarantee.** Source's
-  `sub_types` and streaming's `types` are multi-valued fields of their own, and
+  and streaming's `sub_types` are multi-valued fields of their own, and
   they sit outside this grammar. The sub-typed discriminator is exempt from the
   rule that no exported row's membership may derive from a column whose past is
   unknowable, because it is a structural tag saying what a row *is* rather than a
@@ -259,7 +272,8 @@ source's key resolution) are indifferent to the value's form.
   other constant enum property, so proposing a `where` from observed values would
   be invention ([`source.md`](source.md) § `init --mode source` inference
   contract).
-- **Streaming, the writers, and the mixer read none of these fields.** Tier-2
+- **The writers and the mixer read none of these fields.** A predicate is resolved
+  and compiled before either sees a row. Tier-2
   shaped playback compiles a declared `ExportConfig` through the dimensional
   compile surface, so a predicate transits it verbatim — a consumer of this
   grammar, not a surface of it ([`playback.md`](playback.md)).
@@ -270,6 +284,8 @@ source's key resolution) are indifferent to the value's form.
 |---|---|
 | [`dimensional.md`](dimensional.md) | The five dimensional surfaces' grain semantics, the business rules that read predicates, and the dim source population set |
 | [`source.md`](source.md) | The two source surfaces — the constant-column gate, the parent lookup, and the selection-aware event-source disjointness rule |
+| [`streaming.md`](streaming.md) | The two streaming surfaces — the same constant-column gate over a stream's subject kind, and the satisfying-record-set row scoping it feeds |
+| [`selection-spine.md`](selection-spine.md) | The mode-neutral relation source and streaming compile these conditions against |
 | [`reader.md`](reader.md) | The faithful-read builders that resolve each predicate column's type and compose the authority |
 | [`derivations.md`](derivations.md) | The membership edge and versioned-intervals relations on the predicate's path |
 | [`slice-only.md`](slice-only.md) | The per-column unknowable-past refusal over predicate keys |
