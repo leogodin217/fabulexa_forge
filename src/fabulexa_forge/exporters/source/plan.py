@@ -27,19 +27,23 @@ Layer-direction invariant: imports the reader, the derivations layer only
 via the mode-neutral `election` module, `fabulexa_forge.errors`,
 `fabulexa_forge._sql` (`cast_predicate_element`, the `where` constant-cast
 seam), the mode-neutral `reserved_names` / `slice_only` / `query_spec`
-(`TableKeys`) / `populations` modules, the sibling `source.columns`
-(`_PROP_PREFIX`) and `source.events` (`SourceEventSourcePlan`,
-`SourceEventLogPlan`) modules, `notices`, `derivations.guard`
-(`require_single_branch`), config.models (the `RenderElection` typed-election
-classes — `DateParseElection` / `InstantElection` / `DecimalElection` /
-`JsonPrecisionElection` — imported at runtime for the render-map form
-dispatch; TYPE_CHECKING only otherwise, except `KeySurface`), and stdlib.
-Never imports exporters.dimensional.* or exporters.streaming.*.
+(`TableKeys`) / `populations` / `selection_spine` (`WhereEntry`,
+`check_where_values_observed`, `where_predicate_elements` — the promoted
+`where`-resolution primitives streaming now shares) modules, the sibling
+`source.columns` (`_PROP_PREFIX`) and `source.events`
+(`SourceEventSourcePlan`, `SourceEventLogPlan`) modules, `notices`,
+`derivations.guard` (`require_single_branch`), config.models (the
+`RenderElection` typed-election classes — `DateParseElection` /
+`InstantElection` / `DecimalElection` / `JsonPrecisionElection` — imported at
+runtime for the render-map form dispatch; TYPE_CHECKING only otherwise,
+except `KeySurface`), and stdlib. Never imports exporters.dimensional.* or
+exporters.streaming.*.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import partial
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 if TYPE_CHECKING:
@@ -107,6 +111,11 @@ from fabulexa_forge.exporters.reserved_names import (
     RESERVED_PRESENTATION_COLUMN_NAME,
     is_reserved_column_name,
     is_reserved_table_name,
+)
+from fabulexa_forge.exporters.selection_spine import (
+    WhereEntry,
+    check_where_values_observed,
+    where_predicate_elements,
 )
 from fabulexa_forge.exporters.slice_only import (
     is_non_exempt_slice_only,
@@ -194,24 +203,6 @@ class SourceEdgeSurface:
 
 
 @dataclass(frozen=True)
-class SourceWhereEntry:
-    """One resolved `where` entry: gate-passed and plan-time-typed."""
-
-    key: str
-    """The key as written (source-column or bare form)."""
-    source_column: str
-    """The base-table column identity (`prop__<p>`) on the subject kind's
-    records table."""
-    sql_type: str
-    """The column's sidecar-declared DuckDB type."""
-    value: "str | list[str]"
-    """The config value, verbatim — what the rendering authority compiles."""
-    typed_values: tuple[object, ...]
-    """Per-element `cast_predicate_element` results, config element order —
-    the disjointness gate's comparison set (doc § Event-source disjointness)."""
-
-
-@dataclass(frozen=True)
 class SourceStateTablePlan:
     """One resolved `state` table: a declared thing-table over the
     populations of exactly one kind.
@@ -249,7 +240,7 @@ class SourceStateTablePlan:
     keys: TableKeys | None
     """The table's declared keys (§ 4), resolved at plan time; None when
     `declare_keys` is off."""
-    where: tuple[SourceWhereEntry, ...] = ()
+    where: "tuple[WhereEntry, ...]" = ()
     """The table's resolved row predicate, `where` declaration order; empty
     when `where` is absent — config absence is already detected at the
     decl. Defaults to empty so existing construction call sites (a table
@@ -311,7 +302,7 @@ class SourceJunctionTablePlan:
     semi-join. Defaults to empty so a unit built for pure type
     discrimination (never compiled) needs no change; `_build_junction_table_plan`
     always passes it explicitly."""
-    where: "tuple[SourceWhereEntry, ...]" = ()
+    where: "tuple[WhereEntry, ...]" = ()
     """The unit's resolved owner row predicate (doc § The parent lookup),
     `where` declaration order; empty when `where` is absent. Defaults to
     empty for the same reason as `owner_populations`."""
@@ -1540,25 +1531,13 @@ def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:
     return {col.name: col.type for col in sidecar.columns(table_name)}
 
 
-def _where_predicate_elements(value: "str | list[str]") -> list[str]:
-    """Normalize a `where` value to its element list, in config order.
-
-    Args:
-        value: A scalar (treated as a one-element list) or a list.
-
-    Returns:
-        The value's elements, in order.
-    """
-    return [value] if isinstance(value, str) else list(value)
-
-
 def _resolve_where_selection(
     sidecar: "Sidecar",
     where: "dict[str, PredicateValue]",
     subject_kind: str,
     key_form: Literal["source_column", "bare"],
     label: str,
-) -> tuple[SourceWhereEntry, ...]:
+) -> tuple[WhereEntry, ...]:
     """The constant-column gate (doc § The constant-column gate): resolve
     every `where` key against the subject kind's payload-property set in the
     unit's key form, gate class and discriminator, and constant-evaluate
@@ -1596,7 +1575,7 @@ def _resolve_where_selection(
     )
     col_types = _column_types(sidecar, source_table)
 
-    entries: list[SourceWhereEntry] = []
+    entries: list[WhereEntry] = []
     for key, value in where.items():
         if key_form == "source_column":
             if not key.startswith(_PROP_PREFIX):
@@ -1636,7 +1615,7 @@ def _resolve_where_selection(
             )
 
         sql_type = col_types[source_column]
-        elements = _where_predicate_elements(value)
+        elements = where_predicate_elements(value)
         typed_values: list[object] = []
         for element in elements:
             try:
@@ -1648,7 +1627,7 @@ def _resolve_where_selection(
                 ) from exc
 
         entries.append(
-            SourceWhereEntry(
+            WhereEntry(
                 key=key,
                 source_column=source_column,
                 sql_type=sql_type,
@@ -1688,50 +1667,6 @@ def _where_value_unobserved_message(
         f"{label}: where value '{element}' for '{key}' not observed;"
         " it contributes no rows"
     )
-
-
-def _check_where_values_observed(
-    sidecar: "Sidecar",
-    entries: "tuple[SourceWhereEntry, ...]",
-    subject_kind: str,
-    label: str,
-    notice_sink: "NoticeSink",
-) -> None:
-    """Emit dimensional's `discriminator-value-unobserved` notice per
-    out-of-domain `where` element — shipped code, message granularity, and
-    element order reused (doc § The constant-column gate; dimensional's
-    `check_discriminator_value_observed`). A column with no `enum_domains`
-    entry is unchecked. Never an error.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        entries: The unit's resolved `where` entries.
-        subject_kind: The `enum_domains` key.
-        label: The declaring unit's message label.
-        notice_sink: Receiver for the notices.
-    """
-    kind_domains = sidecar.enum_domains().get(subject_kind, {})
-    for entry in entries:
-        bare_prop = entry.source_column[len(_PROP_PREFIX) :]
-        observed_values = kind_domains.get(bare_prop, ())
-        if not observed_values:
-            continue
-
-        elements = _where_predicate_elements(entry.value)
-        unobserved = [e for e in elements if e not in observed_values]
-        if not unobserved:
-            continue
-
-        wholly_unobserved = len(unobserved) == len(elements)
-        for element in unobserved:
-            notice_sink(
-                Notice(
-                    code="discriminator-value-unobserved",
-                    message=_where_value_unobserved_message(
-                        label, entry.key, element, wholly_unobserved
-                    ),
-                )
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -1855,8 +1790,12 @@ def _build_state_table_plan(
         if decl.where is not None
         else ()
     )
-    _check_where_values_observed(
-        sidecar, where, kind, f"table '{decl.name}'", notice_sink
+    check_where_values_observed(
+        sidecar,
+        where,
+        kind,
+        notice_sink,
+        partial(_where_value_unobserved_message, f"table '{decl.name}'"),
     )
 
     return SourceStateTablePlan(
@@ -1968,7 +1907,13 @@ def _build_junction_table_plan(
         if decl.where is not None
         else ()
     )
-    _check_where_values_observed(sidecar, where, owner_kind, label, notice_sink)
+    check_where_values_observed(
+        sidecar,
+        where,
+        owner_kind,
+        notice_sink,
+        partial(_where_value_unobserved_message, label),
+    )
 
     return SourceJunctionTablePlan(
         name=decl.name,
@@ -2518,7 +2463,13 @@ def _build_event_source_plan(
             if decl.where is not None
             else ()
         )
-        _check_where_values_observed(sidecar, where, kind, owner, notice_sink)
+        check_where_values_observed(
+            sidecar,
+            where,
+            kind,
+            notice_sink,
+            partial(_where_value_unobserved_message, owner),
+        )
         return SourceEventSourcePlan(
             item_type=item_type,
             kind=kind,
@@ -2564,7 +2515,13 @@ def _build_event_source_plan(
         if decl.where is not None
         else ()
     )
-    _check_where_values_observed(sidecar, where, owner_kind, owner, notice_sink)
+    check_where_values_observed(
+        sidecar,
+        where,
+        owner_kind,
+        notice_sink,
+        partial(_where_value_unobserved_message, owner),
+    )
     return SourceEventSourcePlan(
         item_type=_resolve_event_source_item_type(
             decl, kind_labels_map, owner_kind, property_name

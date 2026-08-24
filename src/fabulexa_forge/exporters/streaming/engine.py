@@ -16,9 +16,15 @@ compose (design doc § Streaming attach). Naming and vocabulary — after-image
 output keys, member-kind values, the envelope `kind` — resolve through
 `presentation.py`, the single naming authority also read by the driver's
 Debezium value-schema builders (design doc § Output-name resolution, § Kind
-vocabulary). Layer-direction invariant: imports derivations, config, reader,
-anchor, `fabulexa_forge._sql`, the mode-neutral election and presentation
-modules, and errors — never writers or CLI.
+vocabulary). Row selection (`where`, membership owner `sub_types`) resolves
+through `selection.py`'s `resolve_stream_selection`, once per stream in the
+eager pass; the engine's own drop device (`_filter_rows_by_selection`)
+narrows each stream's fold rows post-fold, composing independently with the
+shipped `sub_types` discriminator-index drop on a kind stream (design doc §
+Row selection). Layer-direction invariant: imports derivations, config,
+reader, anchor, `fabulexa_forge._sql`, the mode-neutral election module, and
+the sibling presentation / selection modules, and errors — never writers or
+CLI.
 """
 
 from __future__ import annotations
@@ -80,6 +86,7 @@ from fabulexa_forge.exporters.streaming.routing import (
     resolve_subtype_index,
     route_attributes,
 )
+from fabulexa_forge.exporters.streaming.selection import resolve_stream_selection
 from fabulexa_forge.exporters.streaming.types import StreamEvent
 from fabulexa_forge.reader.errors import TableNotFoundError
 
@@ -333,8 +340,10 @@ def _validate_membership_stream(sidecar: "Sidecar", stream: "MembershipStream") 
         stream: The membership-shaped stream declaration.
 
     Raises:
-        ExportError: MembershipResolvable or MembershipFieldResolvable fails.
-            Message leads with the stream name.
+        ExportError: MembershipResolvable or MembershipFieldResolvable
+            fails, or owner `sub_types` addresses a non-sub-typed owner
+            kind or an undeclared owner sub-type. Message leads with the
+            stream name.
         RenderKeyResolves: A `render` key is not a member of `stream.fields`,
             or names a reference field.
         DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar: A `render`
@@ -350,6 +359,21 @@ def _validate_membership_stream(sidecar: "Sidecar", stream: "MembershipStream") 
             f"stream '{stream.name}': membership '{kind}.{property_name}'"
             f" has no {table_name} table"
         ) from None
+
+    if stream.sub_types is not None:
+        owner_domain = sidecar.subtype_values(kind)
+        if not owner_domain:
+            raise ExportError(
+                f"stream '{stream.name}': owner kind '{kind}' is not"
+                " sub-typed; sub_types is not addressable"
+            )
+        declared_set = set(owner_domain)
+        for value in stream.sub_types:
+            if value not in declared_set:
+                raise ExportError(
+                    f"stream '{stream.name}': sub_type '{value}' is not"
+                    f" declared for owner kind '{kind}'"
+                )
 
     col_names = {c.name for c in cols}
     if stream.fields:
@@ -405,8 +429,11 @@ def _resolve_membership_stream_surface(
 ) -> "KeySurface":
     """Gate and resolve one membership-shaped stream's owner elected surface.
 
-    The owner kind's full declared domain always spans a membership stream —
-    its owners span it (design doc § Message-key election).
+    The uniformity gate ranges over the stream's addressed owner population
+    set — the declared owner `sub_types`, or the owner kind's full declared
+    domain when absent (design doc § Message-key election, § Row selection's
+    uniformity-granularity row): a mixed-election owner kind is splittable
+    per sub-type across streams, not unconditionally refused whole-domain.
 
     Args:
         sidecar: The open emit's sidecar view.
@@ -414,12 +441,12 @@ def _resolve_membership_stream_surface(
         stream: The membership-shaped stream declaration.
 
     Returns:
-        The owner kind's uniform elected surface ('record_id' under no
-        election).
+        The addressed owner population set's uniform elected surface
+        ('record_id' under no election).
 
     Raises:
-        ElectionMixedIdentity: The owner kind's full domain elects differing
-            surfaces.
+        ElectionMixedIdentity: The addressed owner population set elects
+            differing surfaces.
         ElectionUnionUnsafe: A uniform presentation_id election whose owner
             key spaces contain a pairwise-unsafe pair.
     """
@@ -427,8 +454,11 @@ def _resolve_membership_stream_surface(
     domain = sidecar.subtype_values(owner_kind)
     if not domain:
         return election.surface_for(owner_kind, None)
-    check_identity_election(election, owner_kind, domain, f"stream '{stream.name}'")
-    return election.surface_for(owner_kind, domain[0])
+    populations = tuple(stream.sub_types) if stream.sub_types is not None else domain
+    check_identity_election(
+        election, owner_kind, populations, f"stream '{stream.name}'"
+    )
+    return election.surface_for(owner_kind, populations[0])
 
 
 def _gate_kind_stream_reference_edges(
@@ -851,32 +881,49 @@ def _validate_stream_naming(
 
 
 def _validate_streams(
-    emit: "Emit", config: "StreamConfig"
-) -> tuple[str, "Election", dict[str, "KeySurface"], "Mapping[str, str]"]:
+    emit: "Emit", config: "StreamConfig", notice_sink: "NoticeSink"
+) -> tuple[
+    str,
+    "Election",
+    dict[str, "KeySurface"],
+    "Mapping[str, str]",
+    dict[str, "frozenset[str] | None"],
+]:
     """Run the eager business-rule validation pass over every declared stream.
 
-    Checks the single-branch guard, then each stream's rules: kind-shaped
-    streams run StreamKindResolvable / StreamSubTypesRequireSubtyping /
-    StreamSubTypesDeclared / StreamPropertyResolvable / StreamPropertySliceOnly;
-    membership-shaped streams run MembershipResolvable /
-    MembershipFieldResolvable. Then resolves the election and runs the
-    identity and edge gates (`resolve_stream_surfaces`), the naming gates
-    (`_validate_stream_naming`), and the kind-vocabulary gates
-    (`resolve_stream_kind_vocabulary`).
+    Checks the single-branch guard, then each stream's rules, in declaration
+    order: kind-shaped streams run StreamKindResolvable /
+    StreamSubTypesRequireSubtyping / StreamSubTypesDeclared /
+    StreamPropertyResolvable / StreamPropertySliceOnly; membership-shaped
+    streams run MembershipResolvable / MembershipFieldResolvable / the owner
+    `sub_types` gate; then every stream resolves its row selection
+    (`resolve_stream_selection`, the `StreamWhere*` gates, the per-element
+    out-of-domain notice through `notice_sink`). Then resolves the election
+    and runs the identity and edge gates (`resolve_stream_surfaces`, ranging
+    a membership stream's uniformity gate over its addressed owner
+    population set), the naming gates (`_validate_stream_naming`), and the
+    kind-vocabulary gates (`resolve_stream_kind_vocabulary`).
 
     Args:
         emit: The open emit (reader + connection).
         config: The validated streaming configuration.
+        notice_sink: The caller-supplied sink the out-of-domain `where`-value
+            notices flow through.
 
     Returns:
-        (fork_path, election, surface_by_stream, kind_vocabulary) — the
-        resolved fork_path, the resolved election, every stream's gated
-        uniform surface, and the resolved config-level kind -> label map.
+        (fork_path, election, surface_by_stream, kind_vocabulary,
+        selection_by_stream) — the resolved fork_path, the resolved
+        election, every stream's gated uniform surface, the resolved
+        config-level kind -> label map, and every stream's resolved
+        selection set (None = no selection this device narrows).
 
     Raises:
         ExportError: The single-branch guard fails, or any per-stream business
             rule fails — message leading with the offending stream's name.
         TemporalClassUnavailableError: Propagated from the slice_only check.
+        StreamWhereNotConstant, StreamWhereOnDiscriminator,
+            StreamWhereColumnUnresolved, StreamWhereValueUncastable: A
+            stream's `where` resolution fails.
         ElectionKindUnknown: A `keys` entry names no declared records kind.
         ElectionSubTypeUnknown: A `keys` map key is outside the kind's
             discriminator domain, or addresses a flat kind.
@@ -897,16 +944,20 @@ def _validate_streams(
     """
     fork_path = require_single_branch(emit.sidecar)
     sidecar = emit.sidecar
+    selection_by_stream: dict[str, "frozenset[str] | None"] = {}
     for stream in config.streams:
         if isinstance(stream, KindStream):
             _validate_kind_stream(sidecar, stream)
         else:
             _validate_membership_stream(sidecar, stream)
+        selection_by_stream[stream.name] = resolve_stream_selection(
+            emit, stream, notice_sink
+        )
     election = resolve_election(sidecar, config.keys)
     surface_by_stream = resolve_stream_surfaces(sidecar, election, config)
     _validate_stream_naming(sidecar, config, surface_by_stream)
     kind_vocabulary = resolve_stream_kind_vocabulary(config, sidecar)
-    return fork_path, election, surface_by_stream, kind_vocabulary
+    return fork_path, election, surface_by_stream, kind_vocabulary, selection_by_stream
 
 
 def _is_kind_subtyped(kind: str, sidecar: "Sidecar") -> bool:
@@ -997,6 +1048,35 @@ def _filter_rows_by_types(
         for row in rows
         if subtype_index.get(str(row[_IDX_RECORD_ID])) in selected_set
     ]
+
+
+def _filter_rows_by_selection(
+    rows: list[tuple[object, ...]],
+    selected_ids: "frozenset[str] | None",
+) -> list[tuple[object, ...]]:
+    """Drop fold rows outside a stream's resolved `where` / owner selection.
+
+    `resolve_stream_selection`'s satisfying record set (owner set, for a
+    membership stream) — a kind stream's `where`-narrowed record set, or a
+    membership stream's `sub_types` + `where`-narrowed owner set (design
+    doc § Row selection). Dropped rows consume no `seq`, exactly as
+    `_filter_rows_by_types`' shipped sub_types drop does; the two devices
+    compose independently on a kind stream.
+
+    Args:
+        rows: Materialized fold rows for one stream (record_id first,
+            owner record_id for a membership fold).
+        selected_ids: The stream's resolved selection set, or None when the
+            stream declares no selection this device narrows (every row
+            stays in scope).
+
+    Returns:
+        `rows` unchanged when `selected_ids` is None; otherwise only the
+        rows whose record_id is a member.
+    """
+    if selected_ids is None:
+        return rows
+    return [row for row in rows if str(row[_IDX_RECORD_ID]) in selected_ids]
 
 
 def _rows_to_keyed(
@@ -1146,6 +1226,7 @@ def _iter_kind_streams_inner(
     election: "Election",
     surface_by_stream: dict[str, "KeySurface"],
     kind_vocabulary: "Mapping[str, str]",
+    selection_by_stream: dict[str, "frozenset[str] | None"],
 ) -> Iterator[StreamEvent]:
     """Materialize one fold per kind-shaped stream, merge, and yield StreamEvents.
 
@@ -1154,12 +1235,15 @@ def _iter_kind_streams_inner(
     change_scope = the kind's full property set (payload-independent event
     set) and projection = the stream's declared properties; a stream that
     scopes an explicit sub_types subset is filtered post-fold via the
-    discriminator index. Renders the elected key and after-image identity
-    through `surface_by_stream` and `election` (§ Message-key election);
-    absent `keys`, every surface is 'record_id' and rendering is unchanged.
-    The after-image's payload keys and the envelope `kind` resolve through
-    `kind_vocabulary` and each stream's own `rename` / `kind_label` (§
-    Output-name resolution, § Kind vocabulary); route_table is unaffected.
+    discriminator index, and a stream with a `where` selection is further
+    filtered post-fold via `selection_by_stream` (§ Row selection) — the two
+    drop devices compose independently. Renders the elected key and
+    after-image identity through `surface_by_stream` and `election` (§
+    Message-key election); absent `keys`, every surface is 'record_id' and
+    rendering is unchanged. The after-image's payload keys and the envelope
+    `kind` resolve through `kind_vocabulary` and each stream's own `rename` /
+    `kind_label` (§ Output-name resolution, § Kind vocabulary); route_table
+    is unaffected.
 
     Args:
         emit: The open emit (reader + connection).
@@ -1172,6 +1256,8 @@ def _iter_kind_streams_inner(
         election: The resolved election.
         surface_by_stream: Every stream's gated uniform elected surface.
         kind_vocabulary: The resolved config-level kind -> label mapping.
+        selection_by_stream: Every stream's resolved `where` selection set
+            (None = no selection this device narrows).
 
     Returns:
         An iterator of StreamEvent in global seq order.
@@ -1202,6 +1288,7 @@ def _iter_kind_streams_inner(
 
         if stream.sub_types is not None and kind in subtype_indexes:
             rows = _filter_rows_by_types(rows, stream.sub_types, subtype_indexes[kind])
+        rows = _filter_rows_by_selection(rows, selection_by_stream[stream.name])
 
         stream_rows.append(_rows_to_keyed(rows, stream.name))
         col_names_by_stream[stream.name] = col_names
@@ -1296,19 +1383,22 @@ def _iter_membership_streams_inner(
     election: "Election",
     surface_by_stream: dict[str, "KeySurface"],
     kind_vocabulary: "Mapping[str, str]",
+    selection_by_stream: dict[str, "frozenset[str] | None"],
 ) -> Iterator[StreamEvent]:
     """Materialize one fold per membership-shaped stream, merge, and yield events.
 
     Called only after the eager validation pass in iter_stream_events has
-    succeeded, for content='membership-events'. Renders the owner's elected
-    key and after-image identity, and translates every reference-valued
-    member field to its member row's own kind's elected surface, through
-    `surface_by_stream` and `election` (§ Message-key election); absent
-    `keys`, every surface is 'record_id' and rendering is unchanged. The
-    after-image's payload keys, its `<f>_kind` values, and the envelope
-    `kind` resolve through `kind_vocabulary` and each stream's own `rename` /
-    `kind_label` (§ Output-name resolution, § Kind vocabulary); route_table
-    is unaffected.
+    succeeded, for content='membership-events'. A stream's owner `sub_types`
+    / `where` selection is filtered post-fold via `selection_by_stream` (§
+    Row selection) — every `join`/`leave` of a non-satisfying owner's
+    collection is dropped. Renders the owner's elected key and after-image
+    identity, and translates every reference-valued member field to its
+    member row's own kind's elected surface, through `surface_by_stream` and
+    `election` (§ Message-key election); absent `keys`, every surface is
+    'record_id' and rendering is unchanged. The after-image's payload keys,
+    its `<f>_kind` values, and the envelope `kind` resolve through
+    `kind_vocabulary` and each stream's own `rename` / `kind_label` (§
+    Output-name resolution, § Kind vocabulary); route_table is unaffected.
 
     Args:
         emit: The open emit (reader + connection).
@@ -1319,6 +1409,8 @@ def _iter_membership_streams_inner(
         election: The resolved election.
         surface_by_stream: Every stream's gated uniform owner elected surface.
         kind_vocabulary: The resolved config-level kind -> label mapping.
+        selection_by_stream: Every stream's resolved owner `sub_types` /
+            `where` selection set (None = no selection this device narrows).
 
     Returns:
         An iterator of StreamEvent in global seq order.
@@ -1348,6 +1440,7 @@ def _iter_membership_streams_inner(
             sql, col_names, stream.render, "elem__", stream.name
         )
         rows = emit.query(sql, ())
+        rows = _filter_rows_by_selection(rows, selection_by_stream[stream.name])
 
         stream_rows.append(_rows_to_keyed(rows, stream.name))
         col_names_by_stream[stream.name] = col_names
@@ -1444,10 +1537,11 @@ def iter_stream_events(
     fold per declared stream (kind-shaped: change scope = the kind's full
     property set, projection = the stream's declared properties;
     membership-shaped: unchanged), drops rows outside the stream's sub_types
-    scope post-fold via the discriminator index, k-way-merges under
-    (event_sim_time, event_class, stream_name, record_id), stamps seq, renders
-    ts, stamps topic = the declaring stream's name and route_table = the
-    per-event leaf, and yields StreamEvents.
+    scope post-fold via the discriminator index, drops rows outside the
+    stream's resolved `where` / owner selection post-fold (§ Row selection),
+    k-way-merges under (event_sim_time, event_class, stream_name, record_id),
+    stamps seq, renders ts, stamps topic = the declaring stream's name and
+    route_table = the per-event leaf, and yields StreamEvents.
 
     See § Ordering and `seq`, § Timestamp rendering, § Business Rules,
     § Message-key election.
@@ -1484,9 +1578,12 @@ def iter_stream_events(
         StreamKindLabelUnknown: A `kind_labels` key names no sidecar kind.
         StreamKindLabelCollision: A label or a per-stream `kind_label`
             equals a different kind's rendered name.
+        StreamWhereNotConstant, StreamWhereOnDiscriminator,
+            StreamWhereColumnUnresolved, StreamWhereValueUncastable: A
+            stream's `where` resolution fails.
     """
-    fork_path, election, surface_by_stream, kind_vocabulary = _validate_streams(
-        emit, config
+    fork_path, election, surface_by_stream, kind_vocabulary, selection_by_stream = (
+        _validate_streams(emit, config, notice_sink)
     )
     sidecar = emit.sidecar
 
@@ -1500,6 +1597,7 @@ def iter_stream_events(
             election,
             surface_by_stream,
             kind_vocabulary,
+            selection_by_stream,
         )
 
     subtype_indexes = _build_subtype_indexes(emit, config, sidecar)
@@ -1513,6 +1611,7 @@ def iter_stream_events(
         election,
         surface_by_stream,
         kind_vocabulary,
+        selection_by_stream,
     )
 
 

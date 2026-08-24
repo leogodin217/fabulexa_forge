@@ -506,3 +506,34 @@ class StreamKindLabelCollision(ExportError):
     Message: `"kind_labels: label '{label}' collides with kind '{kind}'"`
     (config-level) or `"stream '{name}': kind_label '{label}' collides with
     kind '{kind}'"` (per-stream)."""
+
+
+class StreamWhereNotConstant(ExportError):
+    """A `where` key names a resolved payload property of the subject kind
+    (the declared kind for a kind stream, the owner kind for a membership
+    stream) whose `temporal_class` is not `constant` — a stream replays
+    every instant of the tape, so only a value identical at every horizon
+    can select rows without making the event set time-dependent. Message:
+    `"stream '{name}': where key '{key}' is not a constant-class property of
+    kind '{kind}'"`."""
+
+
+class StreamWhereOnDiscriminator(ExportError):
+    """A `where` key names the subject kind's declared discriminator;
+    sub-type selection is `sub_types`' axis (owner `sub_types` on a
+    membership stream). Message: `"stream '{name}': where key '{key}' is the
+    discriminator; use sub_types"`."""
+
+
+class StreamWhereColumnUnresolved(ExportError):
+    """A `where` key names no payload property of the subject kind —
+    structural columns, membership element fields, and unknown columns all
+    land here. Message: `"stream '{name}': where key '{key}' is not a
+    payload property of kind '{kind}'"`."""
+
+
+class StreamWhereValueUncastable(ExportError):
+    """A `where` element does not cast to its resolved column's
+    sidecar-declared DuckDB type — constant-evaluated at plan time, before
+    any fold materializes. Message: `"stream '{name}': where value '{value}'
+    does not cast to {type} for '{key}'"`."""

@@ -15,11 +15,13 @@ plan-builder derives by calling those same functions.
 
 Layer-direction invariant: imports the reader (through the derivations
 layer), the derivations layer's two event folds, the mode-neutral election
-module (`build_identity_translation_sql`), `fabulexa_forge.anchor`,
-`fabulexa_forge._sql` (including the three typed-election rendering
-authorities and `date_parse_denoted_type` — the codec-seam dispatch, § doc
-Event-log and after-image reach), the sibling `source.plan` module
-(`SourceEdgeSurface` / `SourceWhereEntry`, TYPE_CHECKING only), the sibling
+module (`build_identity_translation_sql`), the mode-neutral
+`exporters.selection_spine` (`build_selection_spine_sql`, `WhereEntry` —
+the promoted row-selection device `_narrow_fold_by_spine_sql` composes),
+`fabulexa_forge.anchor`, `fabulexa_forge._sql` (including the three
+typed-election rendering authorities and `date_parse_denoted_type` — the
+codec-seam dispatch, § doc Event-log and after-image reach), the sibling
+`source.plan` module (`SourceEdgeSurface`, TYPE_CHECKING only), the sibling
 `source.columns` module (`build_kind_label_expr` — the one labeling
 authority, also the junction render's call site), `exporters.populations`
 (`Population`, TYPE_CHECKING only), config.models (`KeySurface`,
@@ -28,12 +30,6 @@ typed-election classes — `DateParseElection` / `InstantElection` /
 `DecimalElection` / `JsonPrecisionElection` — imported at runtime for the
 election-form dispatch), and stdlib. Never imports `exporters.dimensional.*`
 or `exporters.streaming.*`.
-One exception to "imports at module top": `_narrow_fold_by_spine_sql` imports
-the sibling `source.renders` module's `build_selection_spine_sql` locally, at
-call time — `renders.py` imports runtime constants from `plan.py`, which
-imports this module at runtime to construct `SourceEventSourcePlan` /
-`SourceEventLogPlan`, so a module-level import here would cycle back through
-`plan.py` mid-initialization.
 """
 
 from __future__ import annotations
@@ -47,7 +43,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import KeySurface, RenderElection
     from fabulexa_forge.exporters.populations import Population
     from fabulexa_forge.exporters.query_spec import TableKeys
-    from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceWhereEntry
+    from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -68,6 +64,10 @@ from fabulexa_forge.config.models import (
 from fabulexa_forge.derivations.membership_events import build_membership_events_sql
 from fabulexa_forge.derivations.row_state_events import build_row_state_events_sql
 from fabulexa_forge.exporters.election import build_identity_translation_sql
+from fabulexa_forge.exporters.selection_spine import (
+    WhereEntry,
+    build_selection_spine_sql,
+)
 from fabulexa_forge.exporters.source.columns import build_kind_label_expr
 
 _PROP_PREFIX = "prop__"
@@ -150,7 +150,7 @@ class SourceEventSourcePlan:
     inside `changes`, gated per audited reference property. `source_column`
     is `prop__<p>` for a records source, `member__<f>__id` for a membership
     source (this module's § docstring convention)."""
-    where: "tuple[SourceWhereEntry, ...]" = ()
+    where: "tuple[WhereEntry, ...]" = ()
     """The source's resolved record predicate (doc § The constant-column
     gate; the parent lookup for a membership source), `where` declaration
     order; empty when `where` is absent — config absence is already
@@ -420,7 +420,7 @@ def _narrow_fold_by_spine_sql(
     fork_path: str,
     kind: str,
     populations: "tuple[Population, ...]",
-    where: "tuple[SourceWhereEntry, ...]",
+    where: "tuple[WhereEntry, ...]",
     fold_sql: str,
 ) -> str:
     """Narrow one arm's own fold rows to `build_selection_spine_sql`'s
@@ -428,12 +428,6 @@ def _narrow_fold_by_spine_sql(
     records arm's own population + `where`, or the membership arm's owner
     population + `where` (the parent lookup). Unchanged when the spine
     applies no restriction. Shared by both arms.
-
-    Local import of `build_selection_spine_sql`: `renders.py` imports
-    runtime constants from this package's `plan.py`, which itself imports
-    this module at runtime to construct `SourceEventSourcePlan` /
-    `SourceEventLogPlan` — a module-level import here would cycle back
-    through `plan.py` mid-initialization.
 
     Args:
         sidecar: The open emit's sidecar.
@@ -446,8 +440,6 @@ def _narrow_fold_by_spine_sql(
     Returns:
         `fold_sql` semi-joined to the spine, or `fold_sql` unchanged.
     """
-    from fabulexa_forge.exporters.source.renders import build_selection_spine_sql
-
     spine_sql = build_selection_spine_sql(sidecar, fork_path, kind, populations, where)
     if spine_sql is None:
         return fold_sql

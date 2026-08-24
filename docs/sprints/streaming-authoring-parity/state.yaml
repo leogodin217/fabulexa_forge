@@ -2,7 +2,7 @@ sprint: streaming-authoring-parity
 parent_branch: prepare_for_classroom_env
 baseline_sha: 3c7352bb36369c3b58ccf7c3b544d42e38e955a9
 started: 2026-08-24
-current_phase: 4
+current_phase: 5
 capabilities:
   - streaming-exporter:
       [wire-vocabulary, row-selection, change-scope, notice-threading]
@@ -75,7 +75,7 @@ phases:
         files:
           - "tests/exporters/streaming/test_presentation.py"
   4:
-    status: pending
+    status: complete
     name: "Row selection — where + membership owner sub_types over the shared spine"
     demo: "docs/sprints/streaming-authoring-parity/demos/phase_4_row_selection.py"
     steps:

@@ -16,9 +16,10 @@ Both renders wrap a faithful reader relation (`build_records_relation_sql`,
 column renders wallclock through the shared anchor renderer
 (`render_anchor_temporal_expr`); every render carries its own total
 `ORDER BY` over raw sim-time keys and identity — never a rendered timestamp
-(§ Ordering and determinism). `build_selection_spine_sql` is the one row-
-selection seam (source-row-selection sprint § The parent lookup): a
-`record_id`-producing SELECT over a kind's records spine, AND-composing a
+(§ Ordering and determinism). `build_selection_spine_sql` (promoted to
+`exporters.selection_spine`, streaming's shared row-selection device too) is
+the one row-selection seam (source-row-selection sprint § The parent lookup):
+a `record_id`-producing SELECT over a kind's records spine, AND-composing a
 population filter with a resolved `where` conjunction — `build_state_render_sql`
 composes its own predicate inline (over its own base relation), while
 `build_junction_render_sql` semi-joins the membership rows' owner `record_id`
@@ -46,19 +47,21 @@ placement), fabulexa_forge.anchor, fabulexa_forge._sql
 (`render_predicate_condition` composes a `where` entry's condition;
 `render_date_parse_expr` / `render_decimal_expr` / `render_json_precision_expr`
 are the three typed-election authorities `_render_elected_column` dispatches
-to — the one dispatch every render composes), the sibling source.columns
-(`_PROP_PREFIX`, and the one labeling authority `build_kind_label_expr` the
-junction render's `member__<f>__kind` column renders through) and source.plan
-modules (`_column_types` and the latter's `_MEMBER_PREFIX` /
-`_MEMBER_ID_SUFFIX` / `_MEMBER_KIND_SUFFIX` / `_RECORDS_TABLE_PREFIX` name
-constants at runtime, mirroring base's runtime import of `_self_identity`;
-`SourceEdgeSurface` / `SourceStateTablePlan` / `SourceJunctionTablePlan` /
-`SourceWhereEntry` TYPE_CHECKING only), `exporters.populations` (`Population`,
-TYPE_CHECKING only), config.models (the `RenderElection` typed-election
-classes — `DateParseElection` / `InstantElection` / `DecimalElection` /
-`JsonPrecisionElection` — imported at runtime for the render-map form
-dispatch; TYPE_CHECKING only otherwise), and stdlib. Never imports
-exporters.dimensional.* or exporters.streaming.*.
+to — the one dispatch every render composes), the mode-neutral
+`exporters.selection_spine` (`build_selection_spine_sql`,
+`needs_population_filter` — the promoted row-selection device), the sibling
+source.columns (`_PROP_PREFIX`, and the
+one labeling authority `build_kind_label_expr` the junction render's
+`member__<f>__kind` column renders through) and source.plan modules
+(`_column_types` and the latter's `_MEMBER_PREFIX` / `_MEMBER_ID_SUFFIX` /
+`_MEMBER_KIND_SUFFIX` / `_RECORDS_TABLE_PREFIX` name constants at runtime,
+mirroring base's runtime import of `_self_identity`; `SourceEdgeSurface` /
+`SourceStateTablePlan` / `SourceJunctionTablePlan` TYPE_CHECKING only),
+`exporters.populations` (`Population`, TYPE_CHECKING only), config.models
+(the `RenderElection` typed-election classes — `DateParseElection` /
+`InstantElection` / `DecimalElection` / `JsonPrecisionElection` — imported
+at runtime for the render-map form dispatch; TYPE_CHECKING only otherwise),
+and stdlib. Never imports exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -70,12 +73,10 @@ if TYPE_CHECKING:
 
     from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
     from fabulexa_forge.config.models import KeySurface, RenderElection
-    from fabulexa_forge.exporters.populations import Population
     from fabulexa_forge.exporters.source.plan import (
         SourceEdgeSurface,
         SourceJunctionTablePlan,
         SourceStateTablePlan,
-        SourceWhereEntry,
     )
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -99,6 +100,10 @@ from fabulexa_forge.exporters.election import (
     _presentation_key_sql,
     _record_index_sql,
     build_identity_translation_sql,
+)
+from fabulexa_forge.exporters.selection_spine import (
+    build_selection_spine_sql,
+    needs_population_filter,
 )
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, build_kind_label_expr
 from fabulexa_forge.exporters.source.plan import (
@@ -446,83 +451,6 @@ def _edge_join_and_expr(
 # ---------------------------------------------------------------------------
 
 
-def _needs_population_filter(
-    sidecar: "Sidecar", kind: str, populations: "tuple[Population, ...]"
-) -> bool:
-    """Whether an addressed population set needs a discriminator filter.
-
-    Shared by the `state` render's own population filter and
-    `build_selection_spine_sql`'s owner-narrowing (doc § The parent lookup):
-    false for a flat kind (single population, `sub_type=None` — no
-    discriminator column exists) or when `populations` addresses the kind's
-    full declared domain (the design doc's no-op-filter-not-composed rule).
-
-    Args:
-        sidecar: The open emit's sidecar.
-        kind: The addressed kind.
-        populations: The resolved population set.
-
-    Returns:
-        True iff a discriminator IN-predicate must be composed.
-    """
-    if populations[0].sub_type is None:
-        return False
-    domain = set(sidecar.subtype_values(kind))
-    return {p.sub_type for p in populations} != domain
-
-
-def build_selection_spine_sql(
-    sidecar: "Sidecar",
-    fork_path: str,
-    kind: str,
-    populations: "tuple[Population, ...]",
-    where: "tuple[SourceWhereEntry, ...]",
-) -> str | None:
-    """The per-row selection spine: a `record_id`-producing SELECT over the
-    kind's records spine of the records satisfying the population set AND
-    the predicate conjunction (each entry via `render_predicate_condition`
-    on its `source_column` / `sql_type`), or None when neither restricts
-    (`populations` covers the declared domain or the kind is flat, and
-    `where` is empty). Fan-out-free (`record_id` is unique on the spine);
-    evaluates current spine values (doc § Invariants #1). One seam for both
-    directions: records-source narrowing, and the parent lookup when callers
-    pass the owner kind of a membership unit.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch.
-        kind: The subject kind (the owner kind for a membership caller).
-        populations: The unit's addressed populations.
-        where: The unit's resolved predicate entries; empty = none.
-
-    Returns:
-        The spine SELECT for an `IN`-semi-join, or None when no restriction
-        applies.
-    """
-    needs_filter = _needs_population_filter(sidecar, kind, populations)
-    if not needs_filter and not where:
-        return None
-
-    relation_sql = build_records_relation_sql(sidecar, fork_path, kind, {})
-    conditions: list[str] = []
-    if needs_filter:
-        values = ", ".join(
-            _sql_literal(p.sub_type) for p in populations if p.sub_type is not None
-        )
-        conditions.append(f'"_spine"."{_PROP_PREFIX}{kind}_type" IN ({values})')
-    conditions.extend(
-        render_predicate_condition(
-            entry.source_column, entry.value, entry.sql_type, "_spine"
-        )
-        for entry in where
-    )
-    return (
-        'SELECT "record_id" FROM ('
-        f"{relation_sql}"
-        f') AS "_spine" WHERE {" AND ".join(conditions)}'
-    )
-
-
 def build_state_render_sql(
     sidecar: "Sidecar",
     fork_path: str,
@@ -581,7 +509,7 @@ def build_state_render_sql(
         The render SELECT.
     """
     kind = table.kind
-    needs_filter = _needs_population_filter(sidecar, kind, table.populations)
+    needs_filter = needs_population_filter(sidecar, kind, table.populations)
 
     horizon_ns: int | None
     if window is None:

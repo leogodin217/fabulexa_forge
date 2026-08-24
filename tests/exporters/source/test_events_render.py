@@ -24,13 +24,14 @@ from fabulexa_forge.anchor import TemporalRender, resolve_effective_anchor
 from fabulexa_forge.config.models import KeySurface
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.exporters.populations import Population
+from fabulexa_forge.exporters.selection_spine import WhereEntry
 from fabulexa_forge.exporters.source.events import (
     SourceEventLogPlan,
     SourceEventSourcePlan,
     build_changes_object_expr,
     build_event_log_sql,
 )
-from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceWhereEntry
+from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
 from fabulexa_forge.reader.emit import open_emit
 
 from ._event_log_helpers import changes_of as _changes
@@ -85,7 +86,7 @@ def _ticket_source(
     item_type: str = "ticket",
     rename: dict[str, str] | None = None,
     kind_labels: tuple[tuple[str, str], ...] = (),
-    where: tuple[SourceWhereEntry, ...] = (),
+    where: tuple[WhereEntry, ...] = (),
 ) -> SourceEventSourcePlan:
     """A records-source unit over `ticket`, addressing `sub_types` (default:
     both bug and feature)."""
@@ -141,9 +142,7 @@ def _visit_source() -> SourceEventSourcePlan:
     )
 
 
-def _worker_ward_source(
-    *, where: tuple[SourceWhereEntry, ...] = ()
-) -> SourceEventSourcePlan:
+def _worker_ward_source(*, where: tuple[WhereEntry, ...] = ()) -> SourceEventSourcePlan:
     """A membership-source unit over `worker.ward`
     (`build_source_junction_selection_emit`): two owners, day/night,
     `prop__region` constant east/west, one interval each — the owner
@@ -325,7 +324,7 @@ class TestWhereNarrowedRecordsSource:
         destroy both included; the excluded records' events (including
         their own destroy) are entirely absent."""
         where = (
-            SourceWhereEntry(
+            WhereEntry(
                 key="assignee_id",
                 source_column="prop__assignee_id",
                 sql_type="VARCHAR",
@@ -352,7 +351,7 @@ class TestWhereNarrowedRecordsSource:
         """`where` is orthogonal to the audited property set: a property may
         be predicated and never appear in `changes`."""
         where = (
-            SourceWhereEntry(
+            WhereEntry(
                 key="assignee_id",
                 source_column="prop__assignee_id",
                 sql_type="VARCHAR",
@@ -380,7 +379,7 @@ class TestWhereNarrowedRecordsSource:
         """`id` is dense and 1-based over the narrowed whole-tape set —
         excluded records reserve no numbers."""
         where = (
-            SourceWhereEntry(
+            WhereEntry(
                 key="assignee_id",
                 source_column="prop__assignee_id",
                 sql_type="VARCHAR",
@@ -413,7 +412,7 @@ class TestWhereNarrowedMembershipSource:
         (region west) collection is excluded wholesale — it never even
         contributes its own join-only row."""
         where = (
-            SourceWhereEntry(
+            WhereEntry(
                 key="region",
                 source_column="prop__region",
                 sql_type="VARCHAR",
