@@ -17,6 +17,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
+from _support.notices import discard_notice_sink
 
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
@@ -110,7 +111,9 @@ class TestDefaultByteIdentity:
         emit_dir = build_election_emit(tmp_path)
         config = _kind_config("widgets", "widget", ["status"])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 4
         for event in events:
@@ -122,7 +125,9 @@ class TestDefaultByteIdentity:
         emit_dir = build_election_emit(tmp_path)
         config = _kind_config("widgets", "widget", ["status"])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         by_op = _events_by_op(events, "w1")
         assert render_jsonl_object(by_op["c"]) == {
@@ -175,7 +180,9 @@ class TestPresentationIdElection:
             "widgets", "widget", ["status"], keys={"widget": "presentation_id"}
         )
         with open_emit(emit_dir) as emit:
-            return list(iter_stream_events(emit, config, None))
+            return list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
     def test_key_map_is_presentation_id_on_every_op(self, tmp_path: Path) -> None:
         """Every op's key map is {"presentation_id": <elected value>}."""
@@ -246,7 +253,13 @@ class TestPresentationIdElection:
         out.mkdir()
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="file", out=out, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         lines = (out / "widgets.jsonl").read_text(encoding="utf-8").splitlines()
@@ -272,7 +285,9 @@ class TestRecordIndexElection:
             "widgets", "widget", ["status"], keys={"widget": "record_index"}
         )
         with open_emit(emit_dir) as emit:
-            return list(iter_stream_events(emit, config, None))
+            return list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
     def test_key_value_is_digit_form_str(self, tmp_path: Path) -> None:
         """The elected key value is the digit-form record_index, as a str."""
@@ -319,7 +334,13 @@ class TestRecordIndexElection:
         out.mkdir()
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="file", out=out, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         lines = (out / "widgets.jsonl").read_text(encoding="utf-8").splitlines()
@@ -346,7 +367,9 @@ class TestReferenceEdgeTranslation:
             "gadgets", "gadget", ["target_id"], keys={"widget": "presentation_id"}
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         by_id = {e.record_id: e for e in events}
         assert by_id["g1"].after is not None
@@ -362,7 +385,9 @@ class TestReferenceEdgeTranslation:
             "gadgets", "gadget", ["target_id"], keys={"widget": "record_index"}
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         by_id = {e.record_id: e for e in events}
         assert by_id["g1"].after["prop__target_id"] == "0"
@@ -378,7 +403,9 @@ class TestReferenceEdgeTranslation:
             "trainers", "trainer", ["pet_id"], keys={"creature": "record_index"}
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         by_id = {e.record_id: e for e in events}
         assert by_id["t1"].after is not None
@@ -415,7 +442,9 @@ class TestMembershipOwnerRekeyAndMemberFieldTranslation:
             keys={"person": "presentation_id", "pet": "record_index"},
         )
         with open_emit(emit_dir) as emit:
-            return list(iter_stream_events(emit, config, None))
+            return list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
     def test_member_reference_field_translates_to_member_kind_surface(
         self, tmp_path: Path
@@ -480,7 +509,9 @@ class TestSubTypedMembershipOwner:
             keys={"creature": "record_index"},
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         joins = {e.record_id: e for e in events if e.op == "join"}
         assert joins["c_cat1"].key_column == "record_index"
@@ -514,7 +545,11 @@ class TestGates:
         )
         with open_emit(emit_dir) as emit:
             with pytest.raises(ElectionMixedIdentity, match="stream 'creatures'"):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
     def test_union_unsafe_uniform_presentation_id_raises(self, tmp_path: Path) -> None:
         """A uniform presentation_id election over union-unsafe key spaces
@@ -525,7 +560,11 @@ class TestGates:
         )
         with open_emit(emit_dir) as emit:
             with pytest.raises(ElectionUnionUnsafe, match="stream 'creatures'"):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
     def test_edge_over_union_unsafe_admitted_domain_raises_naming_stream_and_column(
         self, tmp_path: Path
@@ -541,7 +580,11 @@ class TestGates:
             with pytest.raises(
                 ElectionUnionUnsafe, match=r"stream 'trainers'\.prop__pet_id"
             ):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
     def test_unknown_kind_raises_election_kind_unknown(self, tmp_path: Path) -> None:
         """A `keys` entry naming no declared records kind fails ElectionKindUnknown."""
@@ -551,7 +594,11 @@ class TestGates:
         )
         with open_emit(emit_dir) as emit:
             with pytest.raises(ElectionKindUnknown):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
     def test_unknown_sub_type_raises_election_sub_type_unknown(
         self, tmp_path: Path
@@ -564,7 +611,11 @@ class TestGates:
         )
         with open_emit(emit_dir) as emit:
             with pytest.raises(ElectionSubTypeUnknown):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
     def test_undeclared_registry_raises_election_presentation_undeclared(
         self, tmp_path: Path
@@ -577,7 +628,11 @@ class TestGates:
         )
         with open_emit(emit_dir) as emit:
             with pytest.raises(ElectionPresentationUndeclared):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -599,7 +654,11 @@ class TestElectedKeyDuplicateGuard:
         )
         with open_emit(emit_dir) as emit:
             with pytest.raises(ElectedKeyDuplicate):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -630,9 +689,17 @@ class TestOrderingInvariance:
         )
 
         with open_emit(emit_dir) as emit:
-            plain_events = list(iter_stream_events(emit, no_keys_config, None))
+            plain_events = list(
+                iter_stream_events(
+                    emit, no_keys_config, None, notice_sink=discard_notice_sink
+                )
+            )
         with open_emit(emit_dir) as emit:
-            elected_events = list(iter_stream_events(emit, elected_config, None))
+            elected_events = list(
+                iter_stream_events(
+                    emit, elected_config, None, notice_sink=discard_notice_sink
+                )
+            )
 
         plain_order = [(e.seq, e.topic, e.record_id, e.op) for e in plain_events]
         elected_order = [(e.seq, e.topic, e.record_id, e.op) for e in elected_events]
@@ -660,7 +727,9 @@ class TestNeverSchemaWrapped:
             "widgets", "widget", ["status"], keys={"widget": "presentation_id"}
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
         update = _events_by_op(events, "w1")["u"]
 
         anchor = make_anchor()
@@ -685,7 +754,9 @@ class TestNeverSchemaWrapped:
             "widgets", "widget", ["status"], keys={"widget": "presentation_id"}
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
         update = _events_by_op(events, "w1")["u"]
 
         key_bytes = encode_pinned({update.key_column: update.key_value}).encode("utf-8")

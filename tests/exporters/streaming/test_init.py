@@ -81,7 +81,7 @@ def _assert_round_trip_streams_clean(
     cfg_path.write_text(content, encoding="utf-8")
     config = load_stream_config(cfg_path)
     with open_emit(emit_dir) as emit:
-        list(iter_stream_events(emit, config, None))
+        list(iter_stream_events(emit, config, None, notice_sink=discard_notice_sink))
 
 
 def _uncomment_membership_alternative(content: str) -> str:

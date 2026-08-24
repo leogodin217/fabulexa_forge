@@ -2,7 +2,7 @@ sprint: streaming-authoring-parity
 parent_branch: prepare_for_classroom_env
 baseline_sha: 3c7352bb36369c3b58ccf7c3b544d42e38e955a9
 started: 2026-08-24
-current_phase: 2
+current_phase: 3
 capabilities:
   - streaming-exporter:
       [wire-vocabulary, row-selection, change-scope, notice-threading]
@@ -15,7 +15,7 @@ phases:
     name: "Config surface — stream-declaration fields + parse-time validators"
     demo: "docs/sprints/streaming-authoring-parity/demos/phase_1_config_surface.py"
   2:
-    status: pending
+    status: complete
     name: "Notice-sink threading — required sink on the stream entry points"
     demo: "docs/sprints/streaming-authoring-parity/demos/phase_2_notice_sink.py"
     steps:

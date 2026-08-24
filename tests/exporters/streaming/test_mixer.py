@@ -9,6 +9,7 @@ from typing import Any
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
@@ -852,7 +853,12 @@ def test_seed_buffer_keys_equal_topic_set(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         expected_topics = set(build_topic_set(config))
         buffers, _, _ = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     assert set(buffers.keys()) == expected_topics
@@ -875,7 +881,12 @@ def test_seed_events_partitioned_by_topic(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         buffers, _, _ = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     total = sum(len(buf) for buf in buffers.values())
@@ -902,7 +913,12 @@ def test_seed_buffer_seq_order(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         buffers, _, _ = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     buf = list(buffers["alpha"])
@@ -924,7 +940,12 @@ def test_seed_declared_but_empty_topic_present(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         buffers, _, _ = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     assert "beta" in buffers
@@ -945,7 +966,9 @@ def test_seed_control_transport_preserved(tmp_path: Path) -> None:
     transport = Transport(playing=False, speed=2.5)
 
     with open_emit(emit_dir) as emit:
-        _, control, _ = seed_mixer_run(emit, config, None, emit.sidecar, transport)
+        _, control, _ = seed_mixer_run(
+            emit, config, None, emit.sidecar, transport, notice_sink=discard_notice_sink
+        )
 
     assert control.transport is transport
     assert control.transport.playing is False
@@ -963,7 +986,12 @@ def test_seed_control_topics_one_per_topic_in_order(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         expected = build_topic_set(config)
         _, control, _ = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     assert [d.topic for d in control.topics] == list(expected)
@@ -982,7 +1010,12 @@ def test_seed_topic_dials_neutral(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         _, control, _ = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     for dial in control.topics:
@@ -999,7 +1032,12 @@ def test_seed_topic_dials_content_stamped(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         _, control, _ = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     for dial in control.topics:
@@ -1022,7 +1060,12 @@ def test_seed_frontier_state_fresh(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         expected_topics = list(build_topic_set(config))
         _, _, frontier = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     assert frontier.frontier_sim_time is None
@@ -1045,7 +1088,12 @@ def test_seed_zero_event_emit(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         buffers, control, frontier = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     assert all(len(buf) == 0 for buf in buffers.values())
@@ -1069,7 +1117,14 @@ def test_seed_multi_branch_raises_export_error(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError):
-            seed_mixer_run(emit, config, None, emit.sidecar, _make_transport())
+            seed_mixer_run(
+                emit,
+                config,
+                None,
+                emit.sidecar,
+                _make_transport(),
+                notice_sink=discard_notice_sink,
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -1145,7 +1200,12 @@ def test_seed_membership_events_content_stamped(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         buffers, control, frontier = seed_mixer_run(
-            emit, config, None, emit.sidecar, _make_transport()
+            emit,
+            config,
+            None,
+            emit.sidecar,
+            _make_transport(),
+            notice_sink=discard_notice_sink,
         )
 
     assert len(buffers) > 0

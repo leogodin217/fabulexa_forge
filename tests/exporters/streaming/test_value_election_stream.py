@@ -17,6 +17,7 @@ from typing import Any
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
@@ -289,7 +290,7 @@ class TestKindStreamRenderValidation:
             ]
         )
         with open_emit(emit_dir) as emit, pytest.raises(RenderKeyResolves):
-            iter_stream_events(emit, config, None)
+            iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
     def test_decimal_on_non_double_property_raises(self, tmp_path: Path) -> None:
         """`decimal` elected on a VARCHAR property raises DecimalSourceIsDouble."""
@@ -304,7 +305,7 @@ class TestKindStreamRenderValidation:
             ]
         )
         with open_emit(emit_dir) as emit, pytest.raises(DecimalSourceIsDouble):
-            iter_stream_events(emit, config, None)
+            iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
     def test_json_precision_on_non_varchar_property_raises(
         self, tmp_path: Path
@@ -322,7 +323,7 @@ class TestKindStreamRenderValidation:
             ]
         )
         with open_emit(emit_dir) as emit, pytest.raises(JsonPrecisionSourceIsVarchar):
-            iter_stream_events(emit, config, None)
+            iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +345,7 @@ class TestMembershipStreamRenderValidation:
             ]
         )
         with open_emit(emit_dir) as emit, pytest.raises(RenderKeyResolves):
-            iter_stream_events(emit, config, None)
+            iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
     def test_decimal_on_non_double_field_raises(self, tmp_path: Path) -> None:
         """`decimal` elected on a VARCHAR field raises DecimalSourceIsDouble."""
@@ -359,7 +360,7 @@ class TestMembershipStreamRenderValidation:
             ]
         )
         with open_emit(emit_dir) as emit, pytest.raises(DecimalSourceIsDouble):
-            iter_stream_events(emit, config, None)
+            iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
     def test_json_precision_on_non_varchar_field_raises(self, tmp_path: Path) -> None:
         """`json_precision` elected on a DOUBLE field raises
@@ -375,7 +376,7 @@ class TestMembershipStreamRenderValidation:
             ]
         )
         with open_emit(emit_dir) as emit, pytest.raises(JsonPrecisionSourceIsVarchar):
-            iter_stream_events(emit, config, None)
+            iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
     def test_render_key_naming_reference_field_raises(self, tmp_path: Path) -> None:
         """A render key naming a reference field (member__<key>__kind) is
@@ -395,7 +396,7 @@ class TestMembershipStreamRenderValidation:
             open_emit(emit_dir) as emit,
             pytest.raises(RenderKeyResolves, match="reference field"),
         ):
-            iter_stream_events(emit, config, None)
+            iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -419,7 +420,9 @@ class TestKindStreamRenderEvents:
             ]
         )
         with open_emit(emit_dir) as emit:
-            return list(iter_stream_events(emit, config, None))
+            return list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
     def _silent(self, tmp_path: Path) -> list[StreamEvent]:
         emit_dir = _build_kind_render_emit(_scoped_dir(tmp_path, "silent"))
@@ -427,7 +430,9 @@ class TestKindStreamRenderEvents:
             [_kind_stream_render("widgets", ["volume", "context"])]
         )
         with open_emit(emit_dir) as emit:
-            return list(iter_stream_events(emit, config, None))
+            return list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
     def test_create_after_image_carries_elected_text(self, tmp_path: Path) -> None:
         """The 'c' after-image's elected columns carry the rendered text —
@@ -508,7 +513,9 @@ class TestMembershipStreamRenderEvents:
             ]
         )
         with open_emit(emit_dir) as emit:
-            return list(iter_stream_events(emit, config, None))
+            return list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
     def _silent(self, tmp_path: Path) -> list[StreamEvent]:
         emit_dir = _build_membership_render_emit(_scoped_dir(tmp_path, "silent"))
@@ -516,7 +523,9 @@ class TestMembershipStreamRenderEvents:
             [_membership_stream_render("waiters", ["amount", "payload"])]
         )
         with open_emit(emit_dir) as emit:
-            return list(iter_stream_events(emit, config, None))
+            return list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
     def test_join_and_leave_carry_elected_text(self, tmp_path: Path) -> None:
         """Both the 'join' and 'leave' after-images carry the rendered text —

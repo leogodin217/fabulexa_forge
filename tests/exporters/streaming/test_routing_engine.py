@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
@@ -214,7 +215,13 @@ class TestDeclaredSubTypeMultiplicity:
         out_dir.mkdir()
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         assert (out_dir / "customers.jsonl").exists()
@@ -236,7 +243,13 @@ class TestDeclaredSubTypeMultiplicity:
         out_dir.mkdir()
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         lines = _read_jsonl_lines(out_dir / "customers.jsonl")
@@ -262,7 +275,13 @@ class TestCombinedStream:
         out_dir.mkdir()
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         assert outcome.events_per_topic == {"actors": 3}
@@ -295,7 +314,13 @@ class TestDeclaredButEmptyTopic:
         out_dir.mkdir()
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         customers_file = out_dir / "customers.jsonl"
@@ -316,7 +341,13 @@ class TestDeclaredButEmptyTopic:
         )
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="jsonl", sink="stdout", out=None, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="stdout",
+                out=None,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         assert outcome.events_per_topic["customers"] == 0
@@ -373,7 +404,13 @@ class TestDebeziumTableIdentity:
         out_dir.mkdir()
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out_dir,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         lines = _read_jsonl_lines(out_dir / "actors.jsonl")
@@ -397,7 +434,13 @@ class TestDebeziumTableIdentity:
         out_dir.mkdir()
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out_dir,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         lines = _read_jsonl_lines(out_dir / "actors.jsonl")
@@ -427,7 +470,13 @@ class TestDebeziumPerStreamValueSchema:
         out_dir.mkdir()
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out_dir,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         lines = _read_jsonl_lines(out_dir / "actors.jsonl")
@@ -452,7 +501,13 @@ class TestDebeziumPerStreamValueSchema:
         out_dir.mkdir()
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out_dir,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         lines = _read_jsonl_lines(out_dir / "actors.jsonl")
@@ -474,7 +529,13 @@ class TestDebeziumPerStreamValueSchema:
         out_dir.mkdir()
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out_dir,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         customer_lines = _read_jsonl_lines(out_dir / "customers.jsonl")
@@ -514,11 +575,23 @@ class TestDeterminism:
 
         with open_emit(emit_dir) as emit:
             outcome1 = stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out1, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out1,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
         with open_emit(emit_dir) as emit:
             outcome2 = stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out2, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out2,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         assert outcome1.events_per_topic == outcome2.events_per_topic
@@ -644,7 +717,13 @@ class TestMembershipDeclaredButEmptyTopic:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         assert outcome.events_per_topic["members_feed"] == 0

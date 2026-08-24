@@ -37,6 +37,7 @@ if TYPE_CHECKING:
         KeySurface,
         StreamConfig,
     )
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.streaming.pacer import ResolvedClock
     from fabulexa_forge.exporters.streaming.types import StreamEvent
     from fabulexa_forge.reader.emit import Emit
@@ -67,6 +68,7 @@ def stream_export(
     sink: Literal["stdout", "file", "kafka"],
     out: Path | None,
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
     clock: "ResolvedClock | None" = None,
     bootstrap_servers: str | None = None,
 ) -> StreamOutcome:
@@ -91,6 +93,9 @@ def stream_export(
         sink: 'stdout', 'file', or 'kafka'.
         out: The output directory for the file sink; None for stdout and kafka.
         anchor: The resolved effective anchor, or None.
+        notice_sink: The caller-supplied notice receiver, threaded to every
+            internal iter_stream_events call (required — a caller wanting
+            silence passes a discarding sink).
         clock: The resolved realtime pacing policy, or None for unpaced delivery.
         bootstrap_servers: The resolved bootstrap-servers string; non-None for
             sink='kafka', None (ignored) otherwise.
@@ -126,15 +131,15 @@ def stream_export(
 
     if sink == "kafka":
         return _stream_export_kafka(
-            emit, config, fmt, anchor, topic_set, clock, bootstrap_servers
+            emit, config, fmt, anchor, notice_sink, topic_set, clock, bootstrap_servers
         )
 
     if fmt == "debezium":
         return _stream_export_debezium(
-            emit, config, sink, out, anchor, topic_set, clock
+            emit, config, sink, out, anchor, notice_sink, topic_set, clock
         )
 
-    raw_events = iter_stream_events(emit, config, anchor)
+    raw_events = iter_stream_events(emit, config, anchor, notice_sink)
     paced = clock is not None
     if paced:
         from fabulexa_forge.exporters.streaming.pacer import pace_events
@@ -266,6 +271,7 @@ def _stream_export_kafka(
     config: "StreamConfig",
     fmt: Literal["jsonl", "debezium"],
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
     topic_set: tuple[str, ...],
     clock: "ResolvedClock | None",
     bootstrap_servers: str | None,
@@ -277,6 +283,8 @@ def _stream_export_kafka(
         config: The validated streaming configuration.
         fmt: 'jsonl' or 'debezium'.
         anchor: The resolved effective anchor, or None.
+        notice_sink: The caller-supplied notice receiver, threaded to
+            iter_stream_events.
         topic_set: The full topic set.
         clock: The resolved realtime pacing policy, or None.
         bootstrap_servers: The resolved bootstrap-servers string.
@@ -297,7 +305,7 @@ def _stream_export_kafka(
 
     render_value = build_kafka_render_value(emit, config, fmt, anchor, topic_set)
 
-    raw_events = iter_stream_events(emit, config, anchor)
+    raw_events = iter_stream_events(emit, config, anchor, notice_sink)
     paced = clock is not None
     if paced:
         from fabulexa_forge.exporters.streaming.pacer import pace_events
@@ -326,6 +334,7 @@ def _stream_export_debezium(
     sink: Literal["stdout", "file"],
     out: Path | None,
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
     topic_set: tuple[str, ...],
     clock: "ResolvedClock | None" = None,
 ) -> StreamOutcome:
@@ -337,6 +346,8 @@ def _stream_export_debezium(
         sink: 'stdout' or 'file'.
         out: The output directory for the file sink; None for stdout.
         anchor: The resolved effective anchor, or None.
+        notice_sink: The caller-supplied notice receiver, threaded to
+            iter_stream_events.
         topic_set: The full topic set.
         clock: The resolved realtime pacing policy, or None.
 
@@ -370,7 +381,7 @@ def _stream_export_debezium(
             emit, config, source_identity, table_identity
         )
 
-    raw_events = iter_stream_events(emit, config, anchor)
+    raw_events = iter_stream_events(emit, config, anchor, notice_sink)
     paced = clock is not None
     if paced:
         from fabulexa_forge.exporters.streaming.pacer import pace_events

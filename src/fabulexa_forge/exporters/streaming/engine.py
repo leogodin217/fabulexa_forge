@@ -76,6 +76,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import KeySurface, StreamConfig
     from fabulexa_forge.exporters.election import Election
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -1322,6 +1323,7 @@ def iter_stream_events(
     emit: "Emit",
     config: "StreamConfig",
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
 ) -> Iterator[StreamEvent]:
     """Yield the stream's events in canonical total order with seq stamped.
 
@@ -1342,6 +1344,8 @@ def iter_stream_events(
         emit: The open emit (reader + connection).
         config: The validated streaming configuration.
         anchor: The resolved effective anchor, or None.
+        notice_sink: The caller-supplied notice receiver (required — a caller
+            wanting silence passes a discarding sink).
 
     Returns:
         An iterator of StreamEvent in global seq order.

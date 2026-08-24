@@ -512,6 +512,7 @@ def cmd_stream(
     from typing import Literal, cast
 
     from fabulexa_forge.config.loader import load_stream_config
+    from fabulexa_forge.exporters.notices import render_notice_stderr
     from fabulexa_forge.exporters.streaming.driver import stream_export
     from fabulexa_forge.exporters.streaming.pacer import resolve_clock
 
@@ -605,6 +606,7 @@ def cmd_stream(
                 sink_lit,
                 out,
                 anchor,
+                render_notice_stderr,
                 clock=clock,
                 bootstrap_servers=bootstrap_servers,
             )
@@ -747,6 +749,7 @@ def cmd_mixer(
 
     from fabulexa_forge.config.loader import load_stream_config
     from fabulexa_forge.errors import ExportError
+    from fabulexa_forge.exporters.notices import render_notice_stderr
     from fabulexa_forge.exporters.streaming.driver import build_kafka_render_value
     from fabulexa_forge.exporters.streaming.engine import build_topic_set
     from fabulexa_forge.exporters.streaming.kafka_sink import resolve_bootstrap_servers
@@ -847,7 +850,12 @@ def cmd_mixer(
             launch_transport = Transport(playing=cli_playing, speed=cli_speed)
 
             buffers, control, frontier = seed_mixer_run(
-                emit, config, anchor, emit.sidecar, launch_transport
+                emit,
+                config,
+                anchor,
+                emit.sidecar,
+                launch_transport,
+                render_notice_stderr,
             )
 
         from fabulexa_forge.exporters.streaming.mixer.run_state import MixerRunState

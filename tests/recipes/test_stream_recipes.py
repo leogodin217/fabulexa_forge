@@ -17,6 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from _support.notices import discard_notice_sink
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.loader import load_stream_config
@@ -79,7 +80,15 @@ def test_stream_recipe_run_and_assert(
             None,
             None,
         )
-        stream_export(emit, config, expectation.format, "file", out_dir, anchor)
+        stream_export(
+            emit,
+            config,
+            expectation.format,
+            "file",
+            out_dir,
+            anchor,
+            notice_sink=discard_notice_sink,
+        )
 
     assert_stream_output(expectation, out_dir)
 

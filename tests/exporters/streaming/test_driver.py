@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 import duckdb
 import pytest
+from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from fabulexa_forge.anchor import EffectiveAnchor
@@ -186,6 +187,7 @@ class TestStreamExportPreconditions:
                     sink="stdout",
                     out=None,
                     anchor=None,
+                    notice_sink=discard_notice_sink,
                 )
 
     def test_file_sink_with_out_none_raises_with_message(self, tmp_path: Path) -> None:
@@ -201,6 +203,7 @@ class TestStreamExportPreconditions:
                     sink="file",
                     out=None,
                     anchor=None,
+                    notice_sink=discard_notice_sink,
                 )
 
     def test_stdout_sink_with_out_set_raises_with_message(self, tmp_path: Path) -> None:
@@ -218,6 +221,7 @@ class TestStreamExportPreconditions:
                     sink="stdout",
                     out=out_dir,
                     anchor=None,
+                    notice_sink=discard_notice_sink,
                 )
 
 
@@ -244,6 +248,7 @@ class TestStreamExportEmptyFile:
                 sink="file",
                 out=out_dir,
                 anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         empty_file = out_dir / "item.jsonl"
@@ -277,6 +282,7 @@ class TestDebeziumBusinessRules:
                     sink="stdout",
                     out=None,
                     anchor=anchor,
+                    notice_sink=discard_notice_sink,
                 )
 
     def test_debezium_requires_anchor_raises(self, tmp_path: Path) -> None:
@@ -292,6 +298,7 @@ class TestDebeziumBusinessRules:
                     sink="stdout",
                     out=None,
                     anchor=None,
+                    notice_sink=discard_notice_sink,
                 )
 
     def test_debezium_requires_config_checked_before_anchor(
@@ -308,7 +315,8 @@ class TestDebeziumBusinessRules:
                     fmt="debezium",
                     sink="stdout",
                     out=None,
-                    anchor=None,  # also missing, but config checked first
+                    anchor=None,
+                    notice_sink=discard_notice_sink,
                 )
 
 
@@ -336,7 +344,13 @@ class TestDebeziumStdoutDelivery:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="stdout",
+                out=None,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         captured = capsys.readouterr()
@@ -363,7 +377,13 @@ class TestDebeziumStdoutDelivery:
 
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="stdout",
+                out=None,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         captured = capsys.readouterr()
@@ -400,7 +420,13 @@ class TestDebeziumFileDelivery:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out_dir,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         out_file = out_dir / "item.jsonl"
@@ -421,7 +447,13 @@ class TestDebeziumFileDelivery:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out_dir,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         out_file = out_dir / "item.jsonl"
@@ -471,7 +503,15 @@ class TestStreamExportPacedByteIdentity:
         out_paced.mkdir()
 
         with open_emit(emit_dir) as emit:
-            stream_export(emit, config, "jsonl", "file", out_unpaced, anchor=None)
+            stream_export(
+                emit,
+                config,
+                "jsonl",
+                "file",
+                out_unpaced,
+                anchor=None,
+                notice_sink=discard_notice_sink,
+            )
         with open_emit(emit_dir) as emit:
             stream_export(
                 emit,
@@ -481,6 +521,7 @@ class TestStreamExportPacedByteIdentity:
                 out_paced,
                 anchor=None,
                 clock=_make_clock(),
+                notice_sink=discard_notice_sink,
             )
 
         unpaced_text = (out_unpaced / "item.jsonl").read_text(encoding="utf-8")
@@ -495,7 +536,15 @@ class TestStreamExportPacedByteIdentity:
         config = _make_config("item")
 
         with open_emit(emit_dir) as emit:
-            stream_export(emit, config, "jsonl", "stdout", None, anchor=None)
+            stream_export(
+                emit,
+                config,
+                "jsonl",
+                "stdout",
+                None,
+                anchor=None,
+                notice_sink=discard_notice_sink,
+            )
         unpaced_out = capsys.readouterr().out
 
         with open_emit(emit_dir) as emit:
@@ -507,6 +556,7 @@ class TestStreamExportPacedByteIdentity:
                 None,
                 anchor=None,
                 clock=_make_clock(),
+                notice_sink=discard_notice_sink,
             )
         paced_out = capsys.readouterr().out
 
@@ -526,7 +576,15 @@ class TestStreamExportPacedByteIdentity:
         out_paced.mkdir()
 
         with open_emit(emit_dir) as emit:
-            stream_export(emit, config, "debezium", "file", out_unpaced, anchor=anchor)
+            stream_export(
+                emit,
+                config,
+                "debezium",
+                "file",
+                out_unpaced,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
+            )
         with open_emit(emit_dir) as emit:
             stream_export(
                 emit,
@@ -536,6 +594,7 @@ class TestStreamExportPacedByteIdentity:
                 out_paced,
                 anchor=anchor,
                 clock=_make_clock(),
+                notice_sink=discard_notice_sink,
             )
 
         unpaced_text = (out_unpaced / "item.jsonl").read_text(encoding="utf-8")
@@ -558,6 +617,7 @@ class TestStreamExportPacedByteIdentity:
                 out_dir,
                 anchor=None,
                 clock=_make_clock(),
+                notice_sink=discard_notice_sink,
             )
 
         assert outcome.total_events > 0
@@ -576,7 +636,14 @@ class TestStreamExportPacedByteIdentity:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, "jsonl", "file", out_dir, anchor=None, clock=None
+                emit,
+                config,
+                "jsonl",
+                "file",
+                out_dir,
+                anchor=None,
+                clock=None,
+                notice_sink=discard_notice_sink,
             )
 
         assert outcome.total_events > 0
@@ -647,6 +714,7 @@ class TestKafkaRequiresAnchor:
                         out=None,
                         anchor=None,
                         bootstrap_servers="localhost:9092",
+                        notice_sink=discard_notice_sink,
                     )
 
         assert len(captured) == 0
@@ -673,6 +741,7 @@ class TestKafkaRequiresAnchor:
                         out=None,
                         anchor=None,
                         bootstrap_servers="localhost:9092",
+                        notice_sink=discard_notice_sink,
                     )
 
         assert len(captured) == 0
@@ -706,6 +775,7 @@ class TestKafkaJsonlRenderValue:
                     out=None,
                     anchor=anchor,
                     bootstrap_servers="localhost:9092",
+                    notice_sink=discard_notice_sink,
                 )
 
         assert len(captured) == 1
@@ -748,6 +818,7 @@ class TestKafkaJsonlRenderValue:
                     out=None,
                     anchor=anchor,
                     bootstrap_servers="localhost:9092",
+                    notice_sink=discard_notice_sink,
                 )
 
         assert captured[0]["topic_set"] == expected_topic_set
@@ -782,6 +853,7 @@ class TestKafkaDebeziumRules:
                         out=None,
                         anchor=anchor,
                         bootstrap_servers="localhost:9092",
+                        notice_sink=discard_notice_sink,
                     )
 
         assert len(captured) == 0
@@ -808,6 +880,7 @@ class TestKafkaDebeziumRules:
                     out=None,
                     anchor=anchor,
                     bootstrap_servers="localhost:9092",
+                    notice_sink=discard_notice_sink,
                 )
 
         assert len(captured) == 1
@@ -884,6 +957,7 @@ class TestKafkaPacedDelivery:
                     anchor=anchor,
                     clock=clock,
                     bootstrap_servers="localhost:9092",
+                    notice_sink=discard_notice_sink,
                 )
 
         assert captured[0]["paced"] is True
@@ -911,6 +985,7 @@ class TestKafkaPacedDelivery:
                     anchor=anchor,
                     clock=None,
                     bootstrap_servers="localhost:9092",
+                    notice_sink=discard_notice_sink,
                 )
 
         assert captured[0]["paced"] is False
@@ -1065,7 +1140,13 @@ class TestMembershipJsonlFileSink:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         assert (out_dir / "queue-waiters.jsonl").exists()
@@ -1087,7 +1168,13 @@ class TestMembershipJsonlFileSink:
 
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         lines = [
@@ -1118,7 +1205,13 @@ class TestMembershipJsonlFileSink:
 
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         lines = [
@@ -1146,7 +1239,13 @@ class TestMembershipJsonlFileSink:
 
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         lines = [
@@ -1172,7 +1271,13 @@ class TestMembershipJsonlFileSink:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         # r1 closed: join + leave = 2; r2 open: join = 1; total = 3
@@ -1191,7 +1296,13 @@ class TestMembershipJsonlFileSink:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="jsonl", sink="file", out=out_dir, anchor=None
+                emit,
+                config,
+                fmt="jsonl",
+                sink="file",
+                out=out_dir,
+                anchor=None,
+                notice_sink=discard_notice_sink,
             )
 
         waiters_file = out_dir / "queue-waiters.jsonl"
@@ -1259,7 +1370,13 @@ class TestMembershipDebeziumStdout:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="stdout",
+                out=None,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         captured = capsys.readouterr()
@@ -1282,7 +1399,13 @@ class TestMembershipDebeziumStdout:
 
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="stdout",
+                out=None,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
@@ -1302,7 +1425,13 @@ class TestMembershipDebeziumStdout:
 
         with open_emit(emit_dir) as emit:
             stream_export(
-                emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="stdout",
+                out=None,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
@@ -1334,7 +1463,13 @@ class TestMembershipDebeziumFileSink:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out_dir,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         waiters_file = out_dir / "queue-waiters.jsonl"
@@ -1365,7 +1500,13 @@ class TestMembershipDebeziumFileSink:
 
         with open_emit(emit_dir) as emit:
             outcome = stream_export(
-                emit, config, fmt="debezium", sink="file", out=out_dir, anchor=anchor
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out_dir,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
             )
 
         assert (out_dir / "queue-waiters.jsonl").read_text(encoding="utf-8") == ""
@@ -1389,7 +1530,13 @@ class TestMembershipDebeziumBusinessRules:
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="debezium.*config block"):
                 stream_export(
-                    emit, config, fmt="debezium", sink="stdout", out=None, anchor=anchor
+                    emit,
+                    config,
+                    fmt="debezium",
+                    sink="stdout",
+                    out=None,
+                    anchor=anchor,
+                    notice_sink=discard_notice_sink,
                 )
 
     def test_membership_debezium_requires_config_file(self, tmp_path: Path) -> None:
@@ -1408,6 +1555,7 @@ class TestMembershipDebeziumBusinessRules:
                     sink="file",
                     out=out_dir,
                     anchor=anchor,
+                    notice_sink=discard_notice_sink,
                 )
 
     def test_membership_debezium_requires_anchor_stdout(self, tmp_path: Path) -> None:
@@ -1417,7 +1565,13 @@ class TestMembershipDebeziumBusinessRules:
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="resolved effective anchor"):
                 stream_export(
-                    emit, config, fmt="debezium", sink="stdout", out=None, anchor=None
+                    emit,
+                    config,
+                    fmt="debezium",
+                    sink="stdout",
+                    out=None,
+                    anchor=None,
+                    notice_sink=discard_notice_sink,
                 )
 
     def test_membership_debezium_config_checked_before_anchor(
@@ -1429,7 +1583,13 @@ class TestMembershipDebeziumBusinessRules:
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="debezium.*config block"):
                 stream_export(
-                    emit, config, fmt="debezium", sink="stdout", out=None, anchor=None
+                    emit,
+                    config,
+                    fmt="debezium",
+                    sink="stdout",
+                    out=None,
+                    anchor=None,
+                    notice_sink=discard_notice_sink,
                 )
 
 
@@ -1463,6 +1623,7 @@ class TestMembershipDebeziumKafka:
                         out=None,
                         anchor=None,
                         bootstrap_servers="localhost:9092",
+                        notice_sink=discard_notice_sink,
                     )
 
         assert len(captured) == 0
@@ -1488,6 +1649,7 @@ class TestMembershipDebeziumKafka:
                         out=None,
                         anchor=anchor,
                         bootstrap_servers="localhost:9092",
+                        notice_sink=discard_notice_sink,
                     )
 
         assert len(captured) == 0
@@ -1517,6 +1679,7 @@ class TestMembershipDebeziumKafka:
                     out=None,
                     anchor=anchor,
                     bootstrap_servers="localhost:9092",
+                    notice_sink=discard_notice_sink,
                 )
 
         assert len(captured) == 1
@@ -1580,6 +1743,7 @@ class TestMembershipDebeziumKafka:
                     out=None,
                     anchor=anchor,
                     bootstrap_servers="localhost:9092",
+                    notice_sink=discard_notice_sink,
                 )
 
         assert len(captured) == 1
@@ -1616,7 +1780,11 @@ class TestBuildKafkaRenderValueJsonl:
             render = build_kafka_render_value(emit, config, "jsonl", anchor, topic_set)
             from fabulexa_forge.exporters.streaming.engine import iter_stream_events
 
-            events = list(iter_stream_events(emit, config, anchor))
+            events = list(
+                iter_stream_events(
+                    emit, config, anchor, notice_sink=discard_notice_sink
+                )
+            )
 
         assert len(events) > 0
         for event in events:
@@ -1664,7 +1832,11 @@ class TestBuildKafkaRenderValueDebezium:
             render = build_kafka_render_value(
                 emit, config, "debezium", anchor, topic_set
             )
-            events = list(iter_stream_events(emit, config, anchor))
+            events = list(
+                iter_stream_events(
+                    emit, config, anchor, notice_sink=discard_notice_sink
+                )
+            )
 
         debezium_cfg = config.debezium
         assert debezium_cfg is not None
