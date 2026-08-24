@@ -8,18 +8,18 @@ streams:
         op: join
         kind: queue
         record_id: q001           # the owner (queue) is the message key
-        after.member__patient__id: p001
-        after.elem__priority: "2"
+        after.patient_id: p001
+        after.priority: "2"
       # open interval p002 -> a join only (no synthetic leave); ranks before the
       # coincident leave at the same instant (join event_class 0 < leave 1)
       - seq: 2
         op: join
         record_id: q001
-        after.member__patient__id: p002
-        after.elem__priority: "1"
+        after.patient_id: p002
+        after.priority: "1"
       # the leave carries what left — not a key-only tombstone
       - seq: 3
         op: leave
         record_id: q001
-        after.member__patient__id: p001
-        after.elem__priority: "2"
+        after.patient_id: p001
+        after.priority: "2"

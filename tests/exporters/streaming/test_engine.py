@@ -22,12 +22,14 @@ from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import KindStream, MembershipStream, StreamConfig
-from fabulexa_forge.derivations.membership_events import resolve_membership_columns
-from fabulexa_forge.derivations.row_state_events import resolve_stream_columns
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
     iter_stream_events,
+)
+from fabulexa_forge.exporters.streaming.presentation import (
+    resolve_membership_output_columns,
+    resolve_stream_output_columns,
 )
 from fabulexa_forge.reader.emit import open_emit
 from fabulexa_forge.reader.errors import TemporalClassUnavailableError
@@ -553,8 +555,8 @@ class TestPayloadIndependentEventSet:
         assert ops == ["c", "u"]
         update = events[1]
         assert update.after is not None
-        assert "prop__b" not in update.after
-        assert "prop__a" in update.after
+        assert "b" not in update.after
+        assert "a" in update.after
 
 
 # ---------------------------------------------------------------------------
@@ -620,11 +622,11 @@ class TestCombinedStreamNulls:
 
         by_record = {e.record_id: e.after for e in events}
         assert by_record["c1"] is not None
-        assert by_record["c1"]["prop__car_feature"] == "sedan"
-        assert by_record["c1"]["prop__truck_feature"] is None
+        assert by_record["c1"]["car_feature"] == "sedan"
+        assert by_record["c1"]["truck_feature"] is None
         assert by_record["t1"] is not None
-        assert by_record["t1"]["prop__car_feature"] is None
-        assert by_record["t1"]["prop__truck_feature"] == "flatbed"
+        assert by_record["t1"]["car_feature"] is None
+        assert by_record["t1"]["truck_feature"] == "flatbed"
         # One column list — both events carry the same after-image key set.
         assert set(by_record["c1"].keys()) == set(by_record["t1"].keys())
 
@@ -742,7 +744,7 @@ class TestAfterImage:
         assert len(creates) == 1
         assert creates[0].after is not None
         assert creates[0].after["record_id"] == "r1"
-        assert creates[0].after["prop__label"] == "x"
+        assert creates[0].after["label"] == "x"
 
 
 # ---------------------------------------------------------------------------
@@ -1222,7 +1224,7 @@ class TestStreamPropertySliceOnly:
             )
         assert len(events) == 1
         assert events[0].after is not None
-        assert events[0].after["prop__widget_type"] == "alpha"
+        assert events[0].after["widget_type"] == "alpha"
 
     def test_missing_temporal_pair_raises_unavailable(self, tmp_path: Path) -> None:
         """A selected property with history_tracked declared but no paired
@@ -1293,12 +1295,15 @@ _RECORD_COLS_INTERLEAVED: list[dict[str, object]] = [
 
 
 class TestFoldColOrder:
-    """Engine fold-row column list equals ROW_STATE_EVENT_COLUMNS + resolve[1:]."""
+    """Engine after-image key order equals resolve_stream_output_columns's
+    output-key order."""
 
     def test_fold_col_names_equal_row_state_plus_resolve_tail(
         self, tmp_path: Path
     ) -> None:
-        """For an interleaved kind, fold columns = ROW_STATE_EVENT_COLUMNS + resolve[1:]."""
+        """For an interleaved kind, after-image keys equal
+        resolve_stream_output_columns's output keys (identity_key='record_id',
+        no election in play)."""
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
@@ -1310,8 +1315,8 @@ class TestFoldColOrder:
             [_kind_stream("items", "item", ["status", "label", "rank"])]
         )
         with open_emit(emit_dir) as emit:
-            resolved = resolve_stream_columns(
-                emit.sidecar, "item", frozenset({"status", "label", "rank"})
+            resolved = resolve_stream_output_columns(
+                emit.sidecar, "item", ["status", "label", "rank"], None, "record_id"
             )
             events = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
@@ -1321,7 +1326,7 @@ class TestFoldColOrder:
         assert len(creates) == 1
         after = creates[0].after
         assert after is not None
-        assert list(after.keys()) == resolved
+        assert list(after.keys()) == [output_key for _, output_key in resolved]
 
     def test_valid_iter_stream_events_same_events_as_before(
         self, tmp_path: Path
@@ -1707,7 +1712,8 @@ class TestMembershipStreamEventFields:
 
 
 class TestMembershipAfterImage:
-    """after keys and order match resolve_membership_columns; values str-or-None."""
+    """after keys and order match resolve_membership_output_columns; values
+    str-or-None."""
 
     def test_after_keys_match_resolve_membership_columns_no_fields(
         self, tmp_path: Path
@@ -1724,7 +1730,9 @@ class TestMembershipAfterImage:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            resolved = resolve_membership_columns(emit.sidecar, "queue", "waiters", [])
+            resolved = resolve_membership_output_columns(
+                emit.sidecar, config.streams[0].membership, [], None, "record_id"
+            )
             events = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
             )
@@ -1732,12 +1740,13 @@ class TestMembershipAfterImage:
         assert len(events) == 1
         after = events[0].after
         assert after is not None
-        assert list(after.keys()) == list(resolved)
+        assert list(after.keys()) == [output_key for _, output_key in resolved]
 
     def test_after_keys_match_resolve_membership_columns_scalar_field(
         self, tmp_path: Path
     ) -> None:
-        """With a scalar field, after keys match resolve_membership_columns order."""
+        """With a scalar field, after keys match resolve_membership_output_columns
+        order."""
         emit_dir = _build_single_membership_emit(
             tmp_path,
             "queue",
@@ -1749,8 +1758,12 @@ class TestMembershipAfterImage:
             [_membership_stream("waiters_feed", "queue", "waiters", ["priority"])]
         )
         with open_emit(emit_dir) as emit:
-            resolved = resolve_membership_columns(
-                emit.sidecar, "queue", "waiters", ["priority"]
+            resolved = resolve_membership_output_columns(
+                emit.sidecar,
+                config.streams[0].membership,
+                ["priority"],
+                None,
+                "record_id",
             )
             events = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
@@ -1759,14 +1772,15 @@ class TestMembershipAfterImage:
         assert len(events) == 1
         after = events[0].after
         assert after is not None
-        assert list(after.keys()) == list(resolved)
-        assert list(after.keys()) == ["record_id", "elem__priority"]
-        assert after["elem__priority"] == "high"
+        assert list(after.keys()) == [output_key for _, output_key in resolved]
+        assert list(after.keys()) == ["record_id", "priority"]
+        assert after["priority"] == "high"
 
     def test_after_keys_match_resolve_membership_columns_ref_field(
         self, tmp_path: Path
     ) -> None:
-        """With a reference field, after keys match resolve_membership_columns order."""
+        """With a reference field, after keys match resolve_membership_output_columns
+        order."""
         emit_dir = _build_single_membership_emit(
             tmp_path,
             "queue",
@@ -1779,8 +1793,8 @@ class TestMembershipAfterImage:
             [_membership_stream("waiters_feed", "queue", "waiters", ["owner"])]
         )
         with open_emit(emit_dir) as emit:
-            resolved = resolve_membership_columns(
-                emit.sidecar, "queue", "waiters", ["owner"]
+            resolved = resolve_membership_output_columns(
+                emit.sidecar, config.streams[0].membership, ["owner"], None, "record_id"
             )
             events = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
@@ -1789,14 +1803,14 @@ class TestMembershipAfterImage:
         assert len(events) == 1
         after = events[0].after
         assert after is not None
-        assert list(after.keys()) == list(resolved)
+        assert list(after.keys()) == [output_key for _, output_key in resolved]
         assert list(after.keys()) == [
             "record_id",
-            "member__owner__kind",
-            "member__owner__id",
+            "owner_kind",
+            "owner_id",
         ]
-        assert after["member__owner__kind"] == "person"
-        assert after["member__owner__id"] == "p1"
+        assert after["owner_kind"] == "person"
+        assert after["owner_id"] == "p1"
 
     def test_after_values_are_str_or_none(self, tmp_path: Path) -> None:
         """All after-image values are str or None (never int, bool, etc.)."""

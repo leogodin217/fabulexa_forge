@@ -2,7 +2,7 @@ sprint: streaming-authoring-parity
 parent_branch: prepare_for_classroom_env
 baseline_sha: 3c7352bb36369c3b58ccf7c3b544d42e38e955a9
 started: 2026-08-24
-current_phase: 3
+current_phase: 4
 capabilities:
   - streaming-exporter:
       [wire-vocabulary, row-selection, change-scope, notice-threading]
@@ -34,7 +34,7 @@ phases:
           - "tests/exporters/streaming/test_mixer.py"
           - "tests/recipes/test_stream_recipes.py"
   3:
-    status: pending
+    status: complete
     name: "Wire naming + kind vocabulary — bare-name after-images, rename, kind labels"
     demo: "docs/sprints/streaming-authoring-parity/demos/phase_3_wire_naming.py"
     steps:

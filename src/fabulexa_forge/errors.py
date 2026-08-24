@@ -471,3 +471,38 @@ class InstantSourceIsBigint(ExportError):
 class JsonPrecisionSourceIsVarchar(ExportError):
     """A `json_precision` election's source column does not carry a declared
     VARCHAR type — electing the column asserts it is a JSON object payload."""
+
+
+class StreamRenameUnresolvable(ExportError):
+    """A stream's `rename` key names no selected property (kind-shaped) or
+    field (membership-shaped) — rename keys are source identities and must
+    name a member of the stream's own projection. Message, engine-wrapped
+    with the declaring stream's name:
+    `"stream '{name}': rename key '{key}' names no selected property"`
+    (field-variant for membership)."""
+
+
+class StreamOutputNameCollision(ExportError):
+    """Two of a stream's resolved after-image output keys collide — two
+    rename targets, a target vs an unrenamed bare default, a renamed
+    reference pair member vs anything — or an output key equals a reserved
+    name on that stream: the identity entry's contract column,
+    `presentation_id` when it ships unabsorbed, or the membership `event`
+    column. Message, engine-wrapped with the declaring stream's name:
+    `"stream '{name}': output name '{key}' collides with '{other}'"`."""
+
+
+class StreamKindLabelUnknown(ExportError):
+    """A `kind_labels` key names no sidecar kind (no `records__<kind>`
+    table) — the sidecar-facts-gate-declarations posture. Message:
+    `"kind_labels: '{kind}' is not a kind in this emit"`."""
+
+
+class StreamKindLabelCollision(ExportError):
+    """A `kind_labels` label, or a per-stream `kind_label`, equals a
+    *different* kind's rendered name (its label, or its verbatim name when
+    unlabeled) — the masquerade refusal. Two streams sharing one
+    `kind_label` is legal; this is not a cross-stream uniqueness rule.
+    Message: `"kind_labels: label '{label}' collides with kind '{kind}'"`
+    (config-level) or `"stream '{name}': kind_label '{label}' collides with
+    kind '{kind}'"` (per-stream)."""

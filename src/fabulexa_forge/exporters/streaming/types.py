@@ -27,8 +27,11 @@ class StreamEvent:
     is deliberately not carried here: the cross-stream merge consumes it from the
     materialized fold rows, and once `seq` is stamped the order lives in `seq`."""
     kind: str
-    """The record kind (state-changes) or owner kind (membership-events); stable across
-    routing."""
+    """The stream's resolved envelope value (§ Kind vocabulary): the
+    stream's own `kind_label` when declared, else the record kind's
+    (state-changes) or owner kind's (membership-events) `kind_labels`
+    label, else the bare kind name verbatim. Presentation only — routing
+    (route_table, key election) always reads the base-layer kind."""
     record_id: str
     """The record's natural id (state-changes) or owner record id (membership-events);
     the event/message key."""

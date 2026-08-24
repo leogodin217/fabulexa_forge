@@ -139,7 +139,7 @@ class TestDefaultByteIdentity:
             "after": {
                 "record_id": "w1",
                 "presentation_id": "W_001",
-                "prop__status": "new",
+                "status": "new",
             },
         }
         assert render_jsonl_object(by_op["u"]) == {
@@ -151,7 +151,7 @@ class TestDefaultByteIdentity:
             "after": {
                 "record_id": "w1",
                 "presentation_id": "W_001",
-                "prop__status": "active",
+                "status": "active",
             },
         }
 
@@ -229,7 +229,7 @@ class TestPresentationIdElection:
         events = self._events(tmp_path)
         create = _events_by_op(events, "w1")["c"]
         assert create.after is not None
-        assert list(create.after.keys()) == ["presentation_id", "prop__status"]
+        assert list(create.after.keys()) == ["presentation_id", "status"]
 
     def test_debezium_value_schema_follows_elect_after_image_columns(
         self, tmp_path: Path
@@ -266,7 +266,7 @@ class TestPresentationIdElection:
         msg = json.loads(lines[0])
         after_field = next(f for f in msg["schema"]["fields"] if f["field"] == "after")
         after_columns = [f["field"] for f in after_field["fields"]]
-        assert after_columns == ["presentation_id", "prop__status"]
+        assert after_columns == ["presentation_id", "status"]
         assert list(msg["payload"]["after"].keys()) == after_columns
 
 
@@ -306,7 +306,7 @@ class TestRecordIndexElection:
         assert list(create.after.keys()) == [
             "record_index",
             "presentation_id",
-            "prop__status",
+            "status",
         ]
         assert create.after["record_index"] == "0"
         assert create.after["presentation_id"] == "W_001"
@@ -347,7 +347,7 @@ class TestRecordIndexElection:
         msg = json.loads(lines[0])
         after_field = next(f for f in msg["schema"]["fields"] if f["field"] == "after")
         after_columns = [f["field"] for f in after_field["fields"]]
-        assert after_columns == ["record_index", "presentation_id", "prop__status"]
+        assert after_columns == ["record_index", "presentation_id", "status"]
         assert list(msg["payload"]["after"].keys()) == after_columns
 
 
@@ -361,7 +361,7 @@ class TestReferenceEdgeTranslation:
     its target kind's own elected surface."""
 
     def test_reference_renders_target_presentation_id(self, tmp_path: Path) -> None:
-        """gadget.prop__target_id renders widget's elected presentation_id."""
+        """gadget.target_id renders widget's elected presentation_id."""
         emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
         config = _kind_config(
             "gadgets", "gadget", ["target_id"], keys={"widget": "presentation_id"}
@@ -373,13 +373,13 @@ class TestReferenceEdgeTranslation:
 
         by_id = {e.record_id: e for e in events}
         assert by_id["g1"].after is not None
-        assert by_id["g1"].after["prop__target_id"] == "W_001"
-        assert by_id["g2"].after["prop__target_id"] == "W_002"
+        assert by_id["g1"].after["target_id"] == "W_001"
+        assert by_id["g2"].after["target_id"] == "W_002"
         # gadget itself elects no surface — its own message key is unaffected.
         assert by_id["g1"].key_column == "record_id"
 
     def test_reference_renders_target_record_index(self, tmp_path: Path) -> None:
-        """gadget.prop__target_id renders widget's elected record_index digits."""
+        """gadget.target_id renders widget's elected record_index digits."""
         emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
         config = _kind_config(
             "gadgets", "gadget", ["target_id"], keys={"widget": "record_index"}
@@ -390,13 +390,13 @@ class TestReferenceEdgeTranslation:
             )
 
         by_id = {e.record_id: e for e in events}
-        assert by_id["g1"].after["prop__target_id"] == "0"
-        assert by_id["g2"].after["prop__target_id"] == "1"
+        assert by_id["g1"].after["target_id"] == "0"
+        assert by_id["g2"].after["target_id"] == "1"
 
     def test_reference_renders_sub_typed_target_record_index(
         self, tmp_path: Path
     ) -> None:
-        """trainer.prop__pet_id renders creature's (sub-typed) elected
+        """trainer.pet_id renders creature's (sub-typed) elected
         record_index, resolved per-row through the target's own discriminator."""
         emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
         config = _kind_config(
@@ -410,7 +410,7 @@ class TestReferenceEdgeTranslation:
         by_id = {e.record_id: e for e in events}
         assert by_id["t1"].after is not None
         # t1 -> c_cat1, creature's record_index 0.
-        assert by_id["t1"].after["prop__pet_id"] == "0"
+        assert by_id["t1"].after["pet_id"] == "0"
 
 
 # ---------------------------------------------------------------------------
@@ -449,15 +449,15 @@ class TestMembershipOwnerRekeyAndMemberFieldTranslation:
     def test_member_reference_field_translates_to_member_kind_surface(
         self, tmp_path: Path
     ) -> None:
-        """member__companion__id renders pet's elected record_index digits;
-        member__companion__kind ships verbatim."""
+        """companion_id renders pet's elected record_index digits;
+        companion_kind ships verbatim."""
         events = self._events(tmp_path)
         companion_join = next(
             e for e in events if e.topic == "waiters_companion" and e.op == "join"
         )
         assert companion_join.after is not None
-        assert companion_join.after["member__companion__kind"] == "pet"
-        assert companion_join.after["member__companion__id"] == "0"
+        assert companion_join.after["companion_kind"] == "pet"
+        assert companion_join.after["companion_id"] == "0"
 
     def test_owner_rekeys_identically_under_elem_and_member_field_formats(
         self, tmp_path: Path

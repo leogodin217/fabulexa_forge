@@ -441,16 +441,16 @@ class TestKindStreamRenderEvents:
         events = self._elect(tmp_path)
         c = _events_by_op(events, "w1")["c"]
         assert c.after is not None
-        assert c.after["prop__volume"] == "5.111"
-        assert c.after["prop__context"] == '{"pct": 0.12}'
+        assert c.after["volume"] == "5.111"
+        assert c.after["context"] == '{"pct": 0.12}'
 
     def test_update_after_image_carries_elected_text(self, tmp_path: Path) -> None:
         """The 'u' after-image's elected columns carry the rendered text too."""
         events = self._elect(tmp_path)
         u = _events_by_op(events, "w1")["u"]
         assert u.after is not None
-        assert u.after["prop__volume"] == "8.256"
-        assert u.after["prop__context"] == '{"pct": 0.12}'
+        assert u.after["volume"] == "8.256"
+        assert u.after["context"] == '{"pct": 0.12}'
 
     def test_delete_tombstone_unaffected(self, tmp_path: Path) -> None:
         """A 'd' tombstone carries no after-image to elect — unaffected."""
@@ -488,8 +488,8 @@ class TestKindStreamRenderEvents:
         events = self._silent(tmp_path)
         c = _events_by_op(events, "w1")["c"]
         assert c.after is not None
-        assert c.after["prop__volume"] == "5.1111"
-        assert c.after["prop__context"] == '{"pct": 0.1234}'
+        assert c.after["volume"] == "5.1111"
+        assert c.after["context"] == '{"pct": 0.1234}'
 
 
 # ---------------------------------------------------------------------------
@@ -535,8 +535,8 @@ class TestMembershipStreamRenderEvents:
         for op in ("join", "leave"):
             after = by_op[op].after
             assert after is not None
-            assert after["elem__amount"] == "8.256"
-            assert after["elem__payload"] == '{"pct": 0.43}'
+            assert after["amount"] == "8.256"
+            assert after["payload"] == '{"pct": 0.43}'
 
     def test_non_after_fields_unchanged_with_elections_on(self, tmp_path: Path) -> None:
         """Message key, merge order, seq, and ts are unchanged with the
@@ -555,5 +555,5 @@ class TestMembershipStreamRenderEvents:
         events = self._silent(tmp_path)
         after = _events_by_op(events, "m1")["join"].after
         assert after is not None
-        assert after["elem__amount"] == "8.2564"
-        assert after["elem__payload"] == '{"pct": 0.4321}'
+        assert after["amount"] == "8.2564"
+        assert after["payload"] == '{"pct": 0.4321}'

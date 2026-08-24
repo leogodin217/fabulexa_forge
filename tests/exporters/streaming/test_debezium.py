@@ -98,7 +98,7 @@ def _make_event(
     tombstone/key-only-before-image rendering under election.
     """
     if after is None and op != "d":
-        after = {"record_id": record_id, "prop__status": "active"}
+        after = {"record_id": record_id, "status": "active"}
     return StreamEvent(
         seq=seq,
         op=op,
@@ -129,7 +129,7 @@ def _make_membership_event(
 ) -> StreamEvent:
     """Build a membership StreamEvent with op in {'join', 'leave'}."""
     if after is None:
-        after = {"record_id": record_id, "elem__priority": "high"}
+        after = {"record_id": record_id, "priority": "high"}
     resolved_route = (
         route_table
         if route_table is not None
@@ -225,7 +225,7 @@ class TestBuildDebeziumValueSchema:
         connector: str = "postgresql",
         table: str = "actor",
     ) -> dict[str, object]:
-        cols = columns if columns is not None else ["record_id", "prop__status"]
+        cols = columns if columns is not None else ["record_id", "status"]
         return build_debezium_value_schema(table, cols, source_name, connector)
 
     def test_envelope_name(self) -> None:
@@ -259,7 +259,7 @@ class TestBuildDebeziumValueSchema:
 
     def test_before_after_columns_in_order(self) -> None:
         """before/after fields match columns list in order."""
-        cols = ["record_id", "presentation_id", "prop__alpha", "prop__beta"]
+        cols = ["record_id", "presentation_id", "alpha", "beta"]
         schema = self._build(columns=cols)
         fields = _schema_fields(schema)
         before_fields = [f["field"] for f in _sub_fields(fields["before"])]
@@ -269,7 +269,7 @@ class TestBuildDebeziumValueSchema:
 
     def test_before_after_column_fields_optional_string(self) -> None:
         """Each column field inside before/after is optional string."""
-        schema = self._build(columns=["record_id", "prop__x"])
+        schema = self._build(columns=["record_id", "x"])
         fields = _schema_fields(schema)
         for col_field in _sub_fields(fields["after"]):
             assert col_field["type"] == "string"
@@ -360,7 +360,7 @@ class TestRenderDebeziumMessage:
     def setup_method(self) -> None:
         self.identity = _make_identity()
         self.anchor = make_anchor()
-        self.columns = ["record_id", "prop__status"]
+        self.columns = ["record_id", "status"]
         self.schema = build_debezium_value_schema(
             "actor", self.columns, "fabulexa", "postgresql"
         )
@@ -377,19 +377,17 @@ class TestRenderDebeziumMessage:
 
     def test_c_event_before_null_after_present(self) -> None:
         """c event: before is null, after is the full after-image."""
-        event = _make_event(op="c", after={"record_id": "r1", "prop__status": "active"})
+        event = _make_event(op="c", after={"record_id": "r1", "status": "active"})
         payload = self._render(event)
         assert payload["before"] is None
-        assert payload["after"] == {"record_id": "r1", "prop__status": "active"}
+        assert payload["after"] == {"record_id": "r1", "status": "active"}
 
     def test_u_event_before_null_after_present(self) -> None:
         """u event: before is null, after is the full after-image."""
-        event = _make_event(
-            op="u", after={"record_id": "r1", "prop__status": "updated"}
-        )
+        event = _make_event(op="u", after={"record_id": "r1", "status": "updated"})
         payload = self._render(event)
         assert payload["before"] is None
-        assert payload["after"] == {"record_id": "r1", "prop__status": "updated"}
+        assert payload["after"] == {"record_id": "r1", "status": "updated"}
 
     def test_d_event_before_record_id_after_null(self) -> None:
         """d event: before is {record_id}, after is null."""
@@ -475,7 +473,7 @@ class TestRenderDebeziumMessage:
 
     def test_envelope_key_order(self) -> None:
         """Serialized envelope key order is pinned: before, after, source, op, ts_ms, transaction."""
-        event = _make_event(op="c", after={"record_id": "r1", "prop__status": "active"})
+        event = _make_event(op="c", after={"record_id": "r1", "status": "active"})
         ts_ms = rebased_epoch_ms(event.event_sim_time, self.anchor)
         bare = render_debezium_message(event, ts_ms, self.identity, event.kind, None)
         encoded = json.dumps(bare, separators=(",", ":"), sort_keys=False)
@@ -578,7 +576,7 @@ class TestRenderDebeziumMessageElectedKey:
         )
         ts_ms = rebased_epoch_ms(event.event_sim_time, self.anchor)
         schema = build_debezium_value_schema(
-            "actor", ["presentation_id", "prop__status"], "fabulexa", "postgresql"
+            "actor", ["presentation_id", "status"], "fabulexa", "postgresql"
         )
         bare = render_debezium_message(event, ts_ms, self.identity, event.kind, None)
         wrapped = render_debezium_message(
@@ -593,7 +591,7 @@ class TestRenderDebeziumMessageElectedKey:
                 op=op,  # type: ignore[arg-type]
                 key_column="presentation_id",
                 key_value="P_003",
-                after={"presentation_id": "P_003", "prop__status": "active"},
+                after={"presentation_id": "P_003", "status": "active"},
             )
             payload = self._render(event)
             assert payload["before"] is None
@@ -610,7 +608,7 @@ class TestWriteDebeziumStream:
     def setup_method(self) -> None:
         self.identity = _make_identity()
         self.anchor = make_anchor()
-        self.columns = ["record_id", "prop__status"]
+        self.columns = ["record_id", "status"]
         self.schemas: dict[str, dict[str, object]] = {
             "actor": build_debezium_value_schema(
                 "actor", self.columns, "fabulexa", "postgresql"
@@ -763,7 +761,7 @@ class TestWriteDebeziumStreamPaced:
     def setup_method(self) -> None:
         self.identity = _make_identity()
         self.anchor = make_anchor()
-        self.columns = ["record_id", "prop__status"]
+        self.columns = ["record_id", "status"]
         self.schemas: dict[str, dict[str, object]] = {
             "actor": build_debezium_value_schema(
                 "actor", self.columns, "fabulexa", "postgresql"
@@ -919,7 +917,7 @@ class TestRenderDebeziumMessageMembership:
     def setup_method(self) -> None:
         self.identity = _make_identity()
         self.anchor = make_anchor()
-        self.columns = ["event", "record_id", "elem__priority"]
+        self.columns = ["event", "record_id", "priority"]
         self.schema = build_debezium_value_schema(
             "membership__actor__priority", self.columns, "fabulexa", "postgresql"
         )
@@ -979,7 +977,7 @@ class TestRenderDebeziumMessageMembership:
 
     def test_after_minus_event_equals_event_after_scalar(self) -> None:
         """Membership after minus leading 'event' equals event.after (scalar field)."""
-        event_after = {"record_id": "r1", "elem__priority": "high"}
+        event_after = {"record_id": "r1", "priority": "high"}
         event = _make_membership_event(op="join", after=event_after)
         payload = self._render(event)
         after = payload["after"]
@@ -991,8 +989,8 @@ class TestRenderDebeziumMessageMembership:
         """Membership after minus leading 'event' equals event.after (reference-pair fields)."""
         event_after = {
             "record_id": "r1",
-            "elem__ref_id": "x1",
-            "elem__ref_name": "alpha",
+            "ref_kind": "x1",
+            "ref_id": "alpha",
         }
         event = _make_membership_event(op="join", after=event_after)
         payload = self._render(event)
@@ -1099,7 +1097,7 @@ class TestBuildDebeziumValueSchemaMembership:
 
     def test_before_after_lead_with_event_field(self) -> None:
         """before/after Value structs lead with an 'event' optional-string field."""
-        columns = ["event", "record_id", "elem__priority"]
+        columns = ["event", "record_id", "priority"]
         schema = build_debezium_value_schema(
             "membership__actor__priority", columns, "fabulexa", "postgresql"
         )
@@ -1111,7 +1109,7 @@ class TestBuildDebeziumValueSchemaMembership:
 
     def test_event_field_is_optional_string(self) -> None:
         """The 'event' field in the Value struct is optional string."""
-        columns = ["event", "record_id", "elem__priority"]
+        columns = ["event", "record_id", "priority"]
         schema = build_debezium_value_schema(
             "membership__actor__priority", columns, "fabulexa", "postgresql"
         )
@@ -1122,7 +1120,7 @@ class TestBuildDebeziumValueSchemaMembership:
 
     def test_before_struct_is_optional(self) -> None:
         """The before struct is optional (always-null membership before is schema-legal)."""
-        columns = ["event", "record_id", "elem__priority"]
+        columns = ["event", "record_id", "priority"]
         schema = build_debezium_value_schema(
             "membership__actor__priority", columns, "fabulexa", "postgresql"
         )
@@ -1131,7 +1129,7 @@ class TestBuildDebeziumValueSchemaMembership:
 
     def test_all_columns_present_in_order(self) -> None:
         """All columns including 'event' are present in order in both structs."""
-        columns = ["event", "record_id", "elem__priority"]
+        columns = ["event", "record_id", "priority"]
         schema = build_debezium_value_schema(
             "membership__actor__priority", columns, "fabulexa", "postgresql"
         )
@@ -1153,7 +1151,7 @@ class TestWriteDebeziumStreamMembership:
     def setup_method(self) -> None:
         self.identity = _make_identity()
         self.anchor = make_anchor()
-        self.columns = ["event", "record_id", "elem__priority"]
+        self.columns = ["event", "record_id", "priority"]
         self.schemas: dict[str, dict[str, object]] = {
             "membership__actor__priority": build_debezium_value_schema(
                 "membership__actor__priority", self.columns, "fabulexa", "postgresql"

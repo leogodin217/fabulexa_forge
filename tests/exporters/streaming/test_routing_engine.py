@@ -546,8 +546,8 @@ class TestDebeziumPerStreamValueSchema:
         staff_fields = {
             f["field"] for f in staff_lines[0]["schema"]["fields"][1]["fields"]
         }
-        assert "prop__name" in customer_fields
-        assert "prop__name" not in staff_fields
+        assert "name" in customer_fields
+        assert "name" not in staff_fields
 
 
 # ---------------------------------------------------------------------------

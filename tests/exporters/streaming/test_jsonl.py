@@ -44,7 +44,7 @@ def _make_event(
     map under election.
     """
     if after is None and op != "d":
-        after = {"record_id": record_id, "prop__status": "active"}
+        after = {"record_id": record_id, "status": "active"}
     return StreamEvent(
         seq=seq,
         op=op,
@@ -102,14 +102,14 @@ class TestRenderJsonlObject:
 
     def test_after_is_row_map_on_create(self) -> None:
         """after carries the full row map on a 'c' event."""
-        after = {"record_id": "r1", "prop__name": "Alice"}
+        after = {"record_id": "r1", "name": "Alice"}
         event = _make_event(op="c", after=after)
         obj = render_jsonl_object(event)
         assert obj["after"] == after
 
     def test_after_is_row_map_on_update(self) -> None:
         """after carries the full row map on a 'u' event."""
-        after = {"record_id": "r1", "prop__name": "Bob"}
+        after = {"record_id": "r1", "name": "Bob"}
         event = _make_event(op="u", after=after)
         obj = render_jsonl_object(event)
         assert obj["after"] == after
@@ -174,7 +174,7 @@ class TestWriteJsonlStreamStdout:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Non-ASCII characters pass through as UTF-8, not \\uXXXX escapes."""
-        after = {"record_id": "r1", "prop__name": "Ångström"}
+        after = {"record_id": "r1", "name": "Ångström"}
         event = _make_event(after=after)
         write_jsonl_stream([event], "stdout", None)
         captured = capsys.readouterr()

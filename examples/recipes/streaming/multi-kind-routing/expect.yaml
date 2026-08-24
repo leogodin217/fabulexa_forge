@@ -7,15 +7,15 @@ streams:
       - seq: 1
         op: c
         record_id: d001
-        after.prop__name: Dr. Carter
+        after.name: Dr. Carter
   patient:
     event_count: 4
     contains_events:
       - seq: 2
         op: c
         record_id: p001
-        after.prop__status: pending
+        after.status: pending
       - seq: 5
         op: u
         record_id: p001
-        after.prop__status: discharged
+        after.status: discharged

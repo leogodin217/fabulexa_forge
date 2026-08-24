@@ -1,9 +1,12 @@
 """Stream-export driver: ties engine → format → sink for one run.
 
 Integrates iter_stream_events (engine), render/write functions (format), and
-the sink. Also handles the selected-topics guarantee for empty streams.
-Layer-direction invariant: imports engine, jsonl, debezium, config, anchor,
-errors — never CLI or writers.
+the sink. Also handles the selected-topics guarantee for empty streams. The
+Debezium value-schema builders read `presentation.py`'s naming resolvers
+directly — the same naming authority the engine's after-image assembly
+reads — so the declared schema and the rendered rows cannot diverge.
+Layer-direction invariant: imports engine, presentation, jsonl, debezium,
+config, anchor, errors — never CLI or writers.
 """
 
 from __future__ import annotations
@@ -21,11 +24,14 @@ from fabulexa_forge.errors import (
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
-    elect_after_image_columns,
     iter_stream_events,
     resolve_stream_surfaces,
 )
 from fabulexa_forge.exporters.streaming.jsonl import write_jsonl_stream
+from fabulexa_forge.exporters.streaming.presentation import (
+    resolve_membership_output_columns,
+    resolve_stream_output_columns,
+)
 from fabulexa_forge.exporters.streaming.types import StreamOutcome
 
 if TYPE_CHECKING:
@@ -495,19 +501,22 @@ def _build_value_schemas_kinds(
     Returns:
         Mapping table_identity_key -> value_schema dict.
     """
-    from fabulexa_forge.derivations.row_state_events import resolve_stream_columns
     from fabulexa_forge.exporters.streaming.debezium import build_debezium_value_schema
 
     value_schemas: dict[str, dict[str, object]] = {}
 
     for stream in config.streams:
         assert isinstance(stream, KindStream)
-        columns = elect_after_image_columns(
-            resolve_stream_columns(
-                emit.sidecar, stream.kind, frozenset(stream.properties)
-            ),
-            surfaces[stream.name],
-        )
+        columns = [
+            output_key
+            for _fold_column, output_key in resolve_stream_output_columns(
+                emit.sidecar,
+                stream.kind,
+                stream.properties,
+                stream.rename,
+                surfaces[stream.name],
+            )
+        ]
         if table_identity == "topic":
             schema_keys: tuple[str, ...] = (stream.name,)
         else:
@@ -544,7 +553,6 @@ def _build_value_schemas_membership(
     Returns:
         Mapping table_identity_key -> value_schema dict.
     """
-    from fabulexa_forge.derivations.membership_events import resolve_membership_columns
     from fabulexa_forge.exporters.streaming.debezium import build_debezium_value_schema
     from fabulexa_forge.exporters.streaming.routing import membership_route_attributes
 
@@ -558,14 +566,16 @@ def _build_value_schemas_membership(
         schema_key = stream.name if table_identity == "topic" else attrs["route_table"]
 
         if schema_key not in value_schemas:
-            payload_columns = elect_after_image_columns(
-                list(
-                    resolve_membership_columns(
-                        emit.sidecar, owner_kind, property_name, stream.fields
-                    )
-                ),
-                surfaces[stream.name],
-            )
+            payload_columns = [
+                output_key
+                for _fold_column, output_key in resolve_membership_output_columns(
+                    emit.sidecar,
+                    stream.membership,
+                    stream.fields,
+                    stream.rename,
+                    surfaces[stream.name],
+                )
+            ]
             columns = ["event", *payload_columns]
             value_schemas[schema_key] = build_debezium_value_schema(
                 table=schema_key,
