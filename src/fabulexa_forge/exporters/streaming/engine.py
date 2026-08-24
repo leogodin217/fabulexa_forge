@@ -1628,9 +1628,11 @@ def iter_stream_events(
 
     Split into two phases: an eager validation pass that runs at call time
     (before the first next()), then an inner generator that materializes one
-    fold per declared stream (kind-shaped: change scope = the kind's full
-    property set, projection = the stream's declared properties;
-    membership-shaped: unchanged), drops rows outside the stream's sub_types
+    fold per declared stream (kind-shaped: change scope = its `only` /
+    audited-minus-`ignore` / audited property set — the audited default,
+    unset, is byte-identical to the shipped full-property-set invocation;
+    projection = the stream's declared properties; membership-shaped:
+    unchanged), drops rows outside the stream's sub_types
     scope post-fold via the discriminator index, drops rows outside the
     stream's resolved `where` / owner selection post-fold (§ Row selection),
     k-way-merges under (event_sim_time, event_class, stream_name, record_id),

@@ -22,7 +22,7 @@ from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import KindStream, MembershipStream, StreamConfig
-from fabulexa_forge.errors import ExportError
+from fabulexa_forge.errors import ExportError, StreamRenameUnresolvable
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
     iter_stream_events,
@@ -1036,6 +1036,42 @@ class TestStreamSubTypesDeclared:
                 )
 
 
+class TestStreamNamingWrapEndToEnd:
+    """StreamRenameUnresolvable is wrapped with the stream-name prefix when
+    it surfaces through iter_stream_events, not just via a direct call to
+    the unwrapped resolver."""
+
+    def test_rename_key_unresolvable_prefixes_stream_name(self, tmp_path: Path) -> None:
+        """A rename key naming no selected property raises with the
+        stream-name-prefixed message, not the resolver's bare message."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        config = _state_changes_config(
+            [
+                KindStream(
+                    name="items",
+                    kind="item",
+                    properties=["status"],
+                    rename={"bogus": "renamed"},
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                StreamRenameUnresolvable,
+                match="stream 'items': rename key 'bogus' names no selected property",
+            ):
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
+
+
 class TestSingleBranch:
     """Multi-branch emit raises ExportError."""
 
@@ -1412,6 +1448,7 @@ def _build_single_membership_emit(
     mem_cols: list[dict[str, object]],
     mem_rows: list[tuple[Any, ...]],
     extra_kinds: tuple[str, ...] = (),
+    extra: dict[str, object] | None = None,
 ) -> Path:
     """Build a minimal emit with one membership table.
 
@@ -1439,6 +1476,7 @@ def _build_single_membership_emit(
         tmp_path,
         tables=tables,
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra=extra,
     )
     return tmp_path
 
@@ -1591,6 +1629,86 @@ class TestMembershipCrossTableMerge:
 
         assert len(events) == 1
         assert events[0].op == "join"
+
+
+# ---------------------------------------------------------------------------
+# Membership stream owner sub_types validation
+# ---------------------------------------------------------------------------
+
+
+class TestMembershipStreamSubTypesRequireSubtyping:
+    """A membership stream's owner `sub_types` on a non-sub-typed owner kind
+    raises ExportError, naming the stream."""
+
+    def test_sub_types_on_non_subtyped_owner_kind_raises(self, tmp_path: Path) -> None:
+        """The owner kind carries no `<kind>_type` discriminator domain."""
+        emit_dir = _build_single_membership_emit(
+            tmp_path,
+            "queue",
+            "waiters",
+            _MEMBERSHIP_BASIC_COLS,
+            [("trunk", "r1", 10, None)],
+        )
+        config = _membership_events_config(
+            [
+                MembershipStream(
+                    name="waiters_feed",
+                    membership={"kind": "queue", "property": "waiters"},
+                    fields=[],
+                    sub_types=["vip"],
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                ExportError,
+                match=("stream 'waiters_feed': owner kind 'queue' is not sub-typed"),
+            ):
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
+
+
+class TestMembershipStreamSubTypesDeclared:
+    """A membership stream's owner `sub_types` value outside the owner
+    kind's declared discriminator domain raises ExportError, naming the
+    stream."""
+
+    def test_undeclared_owner_sub_type_value_raises(self, tmp_path: Path) -> None:
+        """The declared value is not in the owner kind's enum_domains entry."""
+        emit_dir = _build_single_membership_emit(
+            tmp_path,
+            "queue",
+            "waiters",
+            _MEMBERSHIP_BASIC_COLS,
+            [("trunk", "r1", 10, None)],
+            extra={"enum_domains": {"queue": {"queue_type": ["priority", "standard"]}}},
+        )
+        config = _membership_events_config(
+            [
+                MembershipStream(
+                    name="waiters_feed",
+                    membership={"kind": "queue", "property": "waiters"},
+                    fields=[],
+                    sub_types=["vip"],
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                ExportError,
+                match=(
+                    "stream 'waiters_feed': sub_type 'vip' is not declared"
+                    " for owner kind 'queue'"
+                ),
+            ):
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
 
 # ---------------------------------------------------------------------------

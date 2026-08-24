@@ -1118,7 +1118,8 @@ def _require_dict_entries_nonempty(
     Shared by every dict-valued field whose grammar refuses empty keys or
     values on top of `_require_rename_map_valid`'s present-but-empty /
     distinct-values checks (`SourceEventSourceDecl.rename`,
-    `SourceConfig.kind_labels`).
+    `SourceConfig.kind_labels`, `KindStream.rename`, `MembershipStream.rename`,
+    `StreamConfig.kind_labels`).
 
     Args:
         value: The field's value, or None when absent.

@@ -599,6 +599,20 @@ class TestMembershipStreamWhere:
         events = _iter_events(emit_dir, config)
         assert _record_ids(events) == {"r1", "r3"}
 
+    def test_sub_types_covering_full_domain_is_a_no_op(self, tmp_path: Path) -> None:
+        """`sub_types` equal to the owner kind's full declared domain (red +
+        blue) composes no discriminator filter — the same addressed set as
+        declaring no `sub_types` at all (the selection spine's redundant-
+        filter no-op path)."""
+        emit_dir = _build_default_gizmo_emit(tmp_path)
+        full_domain = _membership_events_config(
+            [_membership_stream("full_ward", [], sub_types=["red", "blue"])]
+        )
+        unrestricted = _membership_events_config([_membership_stream("full_ward", [])])
+        assert _record_ids(_iter_events(emit_dir, full_domain)) == _record_ids(
+            _iter_events(emit_dir, unrestricted)
+        )
+
     def test_where_alone(self, tmp_path: Path) -> None:
         emit_dir = _build_default_gizmo_emit(tmp_path)
         config = _membership_events_config(
@@ -810,3 +824,78 @@ class TestUniformityGranularity:
         assert _record_ids(blue_events) == {"r2"}
         assert all(e.key_column == "presentation_id" for e in red_events)
         assert all(e.key_column == "record_index" for e in blue_events)
+
+
+# ---------------------------------------------------------------------------
+# Flat (non-sub-typed) kind `where`
+# ---------------------------------------------------------------------------
+
+_WIDGET_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__region", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+
+def _build_widget_emit(tmp_path: Path, record_rows: list[tuple[Any, ...]]) -> Path:
+    """Build a minimal flat (non-sub-typed) `widget` emit — no `enum_domains`
+    entry, so `sidecar.subtype_values('widget')` returns `()`."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_ddl("records__widget", _WIDGET_COLS))
+    placeholders = ", ".join("?" for _ in _WIDGET_COLS)
+    for row in record_rows:
+        conn.execute(
+            f'INSERT INTO "records__widget" VALUES ({placeholders})', list(row)
+        )
+    conn.close()
+
+    _write_sidecar(
+        tmp_path,
+        tables=[
+            {
+                "name": "records__widget",
+                "category": "records",
+                "columns": _WIDGET_COLS,
+                "rows": len(record_rows),
+                "record_kind": "widget",
+            }
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+    )
+    return tmp_path
+
+
+class TestFlatKindWhere:
+    """`where` on a flat (non-sub-typed) kind resolves against the kind's
+    single unconditioned population (`_stream_populations`'s flat-kind
+    branch — no discriminator column exists)."""
+
+    def test_where_selects_without_a_discriminator(self, tmp_path: Path) -> None:
+        emit_dir = _build_widget_emit(
+            tmp_path,
+            record_rows=[
+                ("trunk", "w1", 0, True, None, 0, 0, "emea"),
+                ("trunk", "w2", 0, True, None, 0, 1, "apac"),
+            ],
+        )
+        config = StreamConfig(
+            content="state-changes",
+            streams=[
+                KindStream(
+                    name="emea_widgets",
+                    kind="widget",
+                    properties=[],
+                    where={"region": "emea"},
+                )
+            ],
+        )
+        events = _iter_events(emit_dir, config)
+        assert _record_ids(events) == {"w1"}

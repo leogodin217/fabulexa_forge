@@ -566,6 +566,30 @@ class TestResolveStreamKindVocabulary:
             with pytest.raises(StreamKindLabelCollision, match="s1"):
                 resolve_stream_kind_vocabulary(config, emit.sidecar)
 
+    def test_per_stream_kind_label_masquerade_raises_for_membership_stream(
+        self, tmp_path: Path
+    ) -> None:
+        """A membership stream's per-stream kind_label equal to a different
+        kind's rendered name refuses (the membership branch of
+        `_stream_subject_kind`)."""
+        emit_dir = _write_records_sidecar(
+            tmp_path, {"person": _RECORD_COLS, "team": _RECORD_COLS}
+        )
+        with open_emit(emit_dir) as emit:
+            config = StreamConfig(
+                content="membership-events",
+                streams=[
+                    MembershipStream(
+                        name="s1",
+                        membership=MembershipRef(kind="person", property="team"),
+                        fields=[],
+                        kind_label="team",
+                    )
+                ],
+            )
+            with pytest.raises(StreamKindLabelCollision, match="s1"):
+                resolve_stream_kind_vocabulary(config, emit.sidecar)
+
     def test_two_streams_sharing_one_kind_label_legal(self, tmp_path: Path) -> None:
         emit_dir = _write_records_sidecar(
             tmp_path, {"person": _RECORD_COLS, "team": _RECORD_COLS}
