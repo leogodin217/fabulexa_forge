@@ -1,0 +1,63 @@
+# StreamConfig — security-logs bundle, mixer/stream preset
+# ============================================================
+# Drives `fabulexa-forge mixer docs/examples/security-logs/bundle <this>` (and
+# `fabulexa-forge stream … --fmt jsonl --sink file` for a non-Kafka dry run).
+#
+#   content: state-changes — the tape replayed as an ordered c/u/d CDC stream.
+#
+# The live SIEM feed. Two topics:
+#
+#   security_events — the log itself: one `c` per tick_decision record
+#                     (440,107 events, event-time order). tick_decision has
+#                     no history-tracked property, so the stream is pure
+#                     creates; the payload rides the type-1 columns —
+#                     decision_type (the event vocabulary), journey_instance
+#                     (the correlation id), context (the JSON detail;
+#                     {"bytes_transferred": ...} on session_opened rows,
+#                     '{}' elsewhere).
+#   server_inventory — asset-inventory CDC over entity/server (42 records):
+#                     `u` events when mail01..03 move port 25 -> 9999 -> 25
+#                     (the mail_maintenance window, day ~60) and `d`
+#                     tombstones when metrics01..03 are decommissioned
+#                     (2026-02-14). The inventory drift a SIEM ingests live.
+#
+# SIEM-REALISTIC (same rule as dimensional/source): no stream carries a
+# label. Deliberately not streamed:
+#   journey_instance.current_state — probing / staging / moving narrate the
+#     intrusion outright (and resolve_rule etc. are engine mechanics).
+#   actor — its only tracked properties (breadth, failed_attempts,
+#     pending_dst_*) are generator ground truth.
+#   accounts / firewall_rules — constant catalogues (creates at seed only);
+#     consumers take them from the source/dimensional inventory exports.
+#   the bindings membership — `content` is single-valued per StreamConfig, so
+#     the event->entity links (dst server / rule / account per event) cannot
+#     ride in this state-changes config; they live in the batch exports
+#     (fact_security_event's FKs, source's event_entities). A companion
+#     `content: membership-events` config over
+#     membership__tick_decision__bindings is the extension point if a live
+#     link feed is ever wanted — its `fields` must then select `entity` only,
+#     never `role_name` (dest_stale / probe_target / victim_account are
+#     labels).
+#
+# KNOWN NAMING LEAK (verified on the wire): after-image fields ship
+#   prop__-prefixed raw property names (prop__journey_instance — the
+#   correlation id the batch exports call session_id — prop__decision_type,
+#   prop__context), and the envelope's `kind` field carries the engine kind
+#   (tick_decision / entity). StreamConfig has no per-stream field rename
+#   surface today (vault feature note:
+#   streaming-per-stream-field-rename-payload-fields-ship-raw-property-names).
+#
+# No `keys:` block — identities render as verbatim record ids, matching the
+# correlation ids the payloads carry. Anchor resolves from the sidecar
+# runtime (2026-01-05T08:00 UTC); no rebase.
+
+content: state-changes
+
+streams:
+  - name: security_events
+    kind: tick_decision
+    properties: [decision_type, journey_instance, context]
+  - name: server_inventory
+    kind: entity
+    sub_types: [server]
+    properties: [port]
