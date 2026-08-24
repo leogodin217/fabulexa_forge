@@ -355,6 +355,23 @@ Each mode reads the same emit and writes a different target shape.
   self-gated `keys` block. Absent the block, output keeps the `record_id` default.
   Forge never mints — election selects among surfaces the emit carries. See
   [`architecture/key-election.md`](architecture/key-election.md).
+- ✓ **Companion artifacts** *(post-Stage 4; dimensional, source, base)* — every
+  file-writing export invocation deposits a human-readable `<prefix>-readme.md`
+  and a deterministic machine-readable `<prefix>-manifest.json` beside its
+  datasets (inside a CSV output directory; as `<db-stem>-<mode>-*` siblings of a
+  `.duckdb` file). The README renders from the packaged per-mode template, the
+  optional author `readme_overlay` markdown (H2 slots: `## overview`,
+  `## table: <name>` — exact-match grammar, plan-time refusal of notes naming
+  tables the export does not produce), and derived facts (columns/types from the
+  materialized Arrow schema, declared keys, row counts, anchor, emit identity).
+  The manifest embeds the full config and per-table facts under a pinned byte
+  form. Artifacts are inert (dataset bytes, notices, exit codes identical with
+  or without them) and rewritten whole-state per emitting incremental window;
+  the incremental fingerprint ignores `readme_overlay`, so documentation can
+  improve mid-drip. See
+  [`architecture/companion-artifacts.md`](architecture/companion-artifacts.md).
+  *Teaches: reading an unfamiliar dataset from its own docs — the habit real
+  handed-off extracts demand.*
 - ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
   through a required caller-supplied sink; CLI renders one line per notice to stderr,
   off stdout. See [`architecture/notices.md`](architecture/notices.md).

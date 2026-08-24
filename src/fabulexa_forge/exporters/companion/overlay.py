@@ -2,8 +2,9 @@
 export-level and per-table prose, plus the post-compile check that every
 `table:` slot names a table the compiled plan actually produces.
 
-Heading matching is exact and case-sensitive (design doc § The overlay
-grammar) — never silently normalized. Two slot forms:
+Heading matching is exact and case-sensitive
+(`docs/architecture/companion-artifacts.md` § The overlay grammar) — never
+silently normalized. Two slot forms:
 
 - `## overview` — export-level prose.
 - `## table: <name>` — one output table's prose, `<name>` taken verbatim.
@@ -39,7 +40,7 @@ class ReadmeOverlay:
 
 
 def load_readme_overlay(path: Path) -> ReadmeOverlay:
-    """Parse an overlay markdown file per the design's slot grammar.
+    """Parse an overlay markdown file per the overlay slot grammar.
 
     Args:
         path: Absolute path to the overlay file.

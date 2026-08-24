@@ -1,6 +1,6 @@
 """Companion README renderer: mode template x overlay x derived facts.
 
-Renders the ordering contract (design doc `export-companion-artifacts.md`
+Renders the ordering contract (`docs/architecture/companion-artifacts.md`
 § The README): title + generated-artifact marker naming the manifest ->
 overlay overview (when present) -> the mode template's semantics prose ->
 one section per output table (overlay note, derived column inventory, row

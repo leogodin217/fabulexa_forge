@@ -1,7 +1,7 @@
 """Mode-neutral companion artifact writer: the README + manifest pair every
-file-writing export invocation deposits beside its datasets (design doc
-`export-companion-artifacts.md` § Artifact names and placement, § Writing
-rules).
+file-writing export invocation deposits beside its datasets
+(`docs/architecture/companion-artifacts.md` § Artifact names and placement,
+§ Writing rules).
 """
 
 from __future__ import annotations
@@ -56,7 +56,8 @@ def _artifact_paths(
 
     A `csv` target is an output directory: the pair lands inside it, named
     `<mode>-*`. A `duckdb` target is the `.duckdb` file path: the pair lands
-    beside it, named `<db-stem>-<mode>-*` (design doc § Artifact names and
+    beside it, named `<db-stem>-<mode>-*`
+    (`docs/architecture/companion-artifacts.md` § Artifact names and
     placement).
 
     Args:

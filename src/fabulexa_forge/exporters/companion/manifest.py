@@ -1,7 +1,8 @@
 """Companion manifest builder: the deterministic `<prefix>-manifest.json` document.
 
-Assembles the manifest's field set (design doc `export-companion-artifacts.md`
-§ The manifest) from the emit, config, resolved anchor, and one invocation's
+Assembles the manifest's field set
+(`docs/architecture/companion-artifacts.md` § The manifest) from the emit,
+config, resolved anchor, and one invocation's
 `ExportReport`, and owns the pinned byte serialization every companion write
 renders through.
 """
@@ -164,7 +165,7 @@ def build_manifest_document(
         windowed: Windowed invocation facts, or None for a full export.
 
     Returns:
-        A JSON-serializable mapping matching the design's field set, ready
+        A JSON-serializable mapping of the manifest's field set, ready
         for `render_manifest_bytes`.
     """
     return {

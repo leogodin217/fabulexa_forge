@@ -248,7 +248,11 @@ field.
 | `csv` | `out/.fabulexa-forge-cursor.json` — keys are exactly the `Cursor` field names | Window staged in `out/.tmp_<label>`, atomically renamed to `out/<label>`, then the cursor is written. A crash between rename and cursor write re-derives the same window and overwrites the identical drop — idempotent |
 
 The **fingerprint** is a SHA-256 over a canonical JSON document (UTF-8, sorted keys,
-compact separators, no NaN/Infinity) of: the parsed `ExportConfig` (model dump), the
+compact separators, no NaN/Infinity) of: the parsed `ExportConfig` (model dump,
+`readme_overlay` excluded — the fingerprint guards data-seam consistency, and the
+overlay provably never affects data, so improving documentation mid-drip must not
+halt a drip; the manifest's embedded config keeps the field —
+[`companion-artifacts.md`](companion-artifacts.md) § The manifest), the
 resolved anchor (`start_instant` ISO + IANA key, or null), the SHA-256 of `base.json`'s
 bytes, the sole branch's `fork_path`, the `fmt`, and the package version. `--next`
 recomputes it and refuses on mismatch (`IncrementalFingerprintMismatch`): changed
@@ -262,7 +266,11 @@ A cursor that is unreadable, structurally invalid, or **lost** is
   views — the only legitimate empty state, a rolled-back window 0). Any non-empty
   catalog missing `_export_meta` is lost.
 - **CSV** — fresh when `out` is absent or holds no non-hidden entries (dot-entries —
-  the cursor file, `.tmp_*` staging — never count). Non-hidden entries with no cursor
+  the cursor file, `.tmp_*` staging — never count, and neither do companion artifact
+  filenames, `is_companion_artifact_name`: otherwise the window-0 artifacts would make
+  every later `--next` read as a lost cursor, and a directory holding only stale
+  artifacts could not classify as fresh; the DuckDB boundary is catalog-based and
+  unaffected by sibling files). Non-hidden entries with no cursor
   file are lost, with one exception: exactly one non-hidden entry, a directory named
   the **derived window-0 label** (drop renamed, first-ever cursor write lost),
   restarts at window 0 and overwrites that drop. Because the allowed drop must match
@@ -272,6 +280,12 @@ A cursor that is unreadable, structurally invalid, or **lost** is
 There is no reset verb: all state lives in the output target, so deleting the warehouse
 file or output directory is the reset. A leftover `.tmp_*` staging directory is
 discarded at the next staging.
+
+Each emitting invocation — `--next` window, range, or empty window — rewrites the
+companion README + manifest whole-state after the window's data and cursor are
+committed; a drained invocation writes nothing, artifacts included. Placement,
+writing rules, and the accepted last-window staleness wart are owned by
+[`companion-artifacts.md`](companion-artifacts.md).
 
 ### Window labels and output layout
 
@@ -462,5 +476,6 @@ usage error on stderr, exit 1, before the emit opens).
 | [`anchor.md`](anchor.md) | The single `EffectiveAnchor` calendar windows resolve through |
 | [`temporal-elections.md`](temporal-elections.md) | The election vocabulary the append-mode window-key rule is election-aware over |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability and its per-write-regime window gating |
+| [`companion-artifacts.md`](companion-artifacts.md) | The README + manifest pair each emitting invocation rewrites whole-state; the census and fingerprint exclusions it motivates |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface the driver reads through |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored contract carrying the relied-on `last_mutation_sim_time` / `slice_at` guarantees |
