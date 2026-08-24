@@ -117,6 +117,121 @@ def test_kind_stream_unknown_field_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# KindStream — where / only / ignore / rename / kind_label
+# ---------------------------------------------------------------------------
+
+
+def test_kind_stream_where_ignore_only_rename_kind_label_absent_are_none() -> None:
+    """Each new field defaults to None when absent."""
+    ks = KindStream.model_validate(_make_kind_stream())
+    assert ks.where is None
+    assert ks.only is None
+    assert ks.ignore is None
+    assert ks.rename is None
+    assert ks.kind_label is None
+
+
+def test_kind_stream_where_parses_scalar_and_list() -> None:
+    """`where` parses a scalar PredicateValue and a list PredicateValue."""
+    ks = KindStream.model_validate(
+        _make_kind_stream(where={"status": "active", "region": ["emea", "apac"]})
+    )
+    assert ks.where == {"status": "active", "region": ["emea", "apac"]}
+
+
+def test_kind_stream_where_empty_map_rejected() -> None:
+    """`where: {}` (present but empty) is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(where={}))
+
+
+def test_kind_stream_where_empty_key_rejected() -> None:
+    """`where` with an empty key is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(where={"": "active"}))
+
+
+def test_kind_stream_where_malformed_predicate_value_rejected() -> None:
+    """An empty-list `where` value is rejected by the PredicateValue type."""
+    with pytest.raises(ValidationError):
+        KindStream.model_validate(_make_kind_stream(where={"status": []}))
+
+
+def test_kind_stream_only_parses() -> None:
+    """`only` parses a non-empty, duplicate-free list."""
+    ks = KindStream.model_validate(_make_kind_stream(only=["status"]))
+    assert ks.only == ["status"]
+
+
+def test_kind_stream_ignore_parses() -> None:
+    """`ignore` parses a non-empty, duplicate-free list."""
+    ks = KindStream.model_validate(_make_kind_stream(ignore=["status"]))
+    assert ks.ignore == ["status"]
+
+
+def test_kind_stream_only_and_ignore_together_raises() -> None:
+    """`only` and `ignore` both present raises (mutually exclusive)."""
+    with pytest.raises(ValidationError, match="mutually exclusive"):
+        KindStream.model_validate(_make_kind_stream(only=["status"], ignore=["name"]))
+
+
+def test_kind_stream_only_empty_raises() -> None:
+    """`only: []` (present but empty) raises."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(only=[]))
+
+
+def test_kind_stream_ignore_duplicate_raises() -> None:
+    """A repeated `ignore` entry raises."""
+    with pytest.raises(ValidationError, match="distinct"):
+        KindStream.model_validate(_make_kind_stream(ignore=["status", "status"]))
+
+
+def test_kind_stream_rename_parses() -> None:
+    """`rename` parses a non-empty map with distinct targets."""
+    ks = KindStream.model_validate(_make_kind_stream(rename={"status": "state"}))
+    assert ks.rename == {"status": "state"}
+
+
+def test_kind_stream_rename_empty_map_rejected() -> None:
+    """`rename: {}` (present but empty) is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(rename={}))
+
+
+def test_kind_stream_rename_empty_key_rejected() -> None:
+    """`rename` with an empty key is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(rename={"": "state"}))
+
+
+def test_kind_stream_rename_empty_target_rejected() -> None:
+    """`rename` with an empty target is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(rename={"status": ""}))
+
+
+def test_kind_stream_rename_two_keys_one_target_raises() -> None:
+    """Two rename keys sharing one target raises."""
+    with pytest.raises(ValidationError, match="distinct"):
+        KindStream.model_validate(
+            _make_kind_stream(rename={"status": "state", "name": "state"})
+        )
+
+
+def test_kind_stream_kind_label_parses() -> None:
+    """`kind_label` parses as a plain string."""
+    ks = KindStream.model_validate(_make_kind_stream(kind_label="security_event"))
+    assert ks.kind_label == "security_event"
+
+
+def test_kind_stream_kind_label_empty_rejected() -> None:
+    """`kind_label: ''` is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(kind_label=""))
+
+
+# ---------------------------------------------------------------------------
 # KindStream.render
 # ---------------------------------------------------------------------------
 
@@ -263,6 +378,105 @@ def test_membership_stream_render_temporal_form_rejected(temporal_form: object) 
         MembershipStream.model_validate(
             _make_membership_stream(render={"priority": temporal_form})
         )
+
+
+# ---------------------------------------------------------------------------
+# MembershipStream — sub_types / where / rename / kind_label
+# ---------------------------------------------------------------------------
+
+
+def test_membership_stream_new_fields_absent_are_none() -> None:
+    """Each new field defaults to None when absent."""
+    ms = MembershipStream.model_validate(_make_membership_stream())
+    assert ms.sub_types is None
+    assert ms.where is None
+    assert ms.rename is None
+    assert ms.kind_label is None
+
+
+def test_membership_stream_sub_types_parses() -> None:
+    """`sub_types` (owner sub-type subset) parses a non-empty, duplicate-free
+    list."""
+    ms = MembershipStream.model_validate(
+        _make_membership_stream(sub_types=["icu", "general"])
+    )
+    assert ms.sub_types == ["icu", "general"]
+
+
+def test_membership_stream_sub_types_empty_raises() -> None:
+    """`sub_types: []` raises."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        MembershipStream.model_validate(_make_membership_stream(sub_types=[]))
+
+
+def test_membership_stream_sub_types_duplicate_raises() -> None:
+    """A repeated `sub_types` entry raises."""
+    with pytest.raises(ValidationError, match="distinct"):
+        MembershipStream.model_validate(
+            _make_membership_stream(sub_types=["icu", "icu"])
+        )
+
+
+def test_membership_stream_where_parses_scalar_and_list() -> None:
+    """`where` (over the owner kind) parses scalar and list PredicateValue."""
+    ms = MembershipStream.model_validate(
+        _make_membership_stream(where={"site": "north_campus", "tier": ["a", "b"]})
+    )
+    assert ms.where == {"site": "north_campus", "tier": ["a", "b"]}
+
+
+def test_membership_stream_where_empty_map_rejected() -> None:
+    """`where: {}` (present but empty) is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        MembershipStream.model_validate(_make_membership_stream(where={}))
+
+
+def test_membership_stream_where_empty_key_rejected() -> None:
+    """`where` with an empty key is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        MembershipStream.model_validate(_make_membership_stream(where={"": "x"}))
+
+
+def test_membership_stream_where_malformed_predicate_value_rejected() -> None:
+    """An empty-list `where` value is rejected by the PredicateValue type."""
+    with pytest.raises(ValidationError):
+        MembershipStream.model_validate(_make_membership_stream(where={"site": []}))
+
+
+def test_membership_stream_rename_parses() -> None:
+    """`rename` parses a non-empty map with distinct targets."""
+    ms = MembershipStream.model_validate(
+        _make_membership_stream(rename={"admitted_by": "clinician"})
+    )
+    assert ms.rename == {"admitted_by": "clinician"}
+
+
+def test_membership_stream_rename_empty_map_rejected() -> None:
+    """`rename: {}` (present but empty) is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        MembershipStream.model_validate(_make_membership_stream(rename={}))
+
+
+def test_membership_stream_rename_two_keys_one_target_raises() -> None:
+    """Two rename keys sharing one target raises."""
+    with pytest.raises(ValidationError, match="distinct"):
+        MembershipStream.model_validate(
+            _make_membership_stream(
+                rename={"priority": "urgency", "admitted_by": "urgency"}
+            )
+        )
+
+
+def test_membership_stream_kind_label_parses() -> None:
+    """`kind_label` parses as a plain string."""
+    ms = MembershipStream.model_validate(_make_membership_stream(kind_label="ward"))
+    assert ms.kind_label == "ward"
+
+
+def test_membership_stream_kind_label_empty_rejected() -> None:
+    """`kind_label: ''` is rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        MembershipStream.model_validate(_make_membership_stream(kind_label=""))
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +672,51 @@ def test_stream_config_same_kind_two_streams_parses() -> None:
     )
     assert len(cfg.streams) == 2
     assert {s.name for s in cfg.streams} == {"patients-all", "patients-status"}
+
+
+# ---------------------------------------------------------------------------
+# StreamConfig.kind_labels
+# ---------------------------------------------------------------------------
+
+
+def test_stream_config_kind_labels_absent_is_none() -> None:
+    """`kind_labels` defaults to None when absent."""
+    cfg = StreamConfig.model_validate(_make_stream_config())
+    assert cfg.kind_labels is None
+
+
+def test_stream_config_kind_labels_parses() -> None:
+    """A well-formed `kind_labels` map parses."""
+    cfg = StreamConfig.model_validate(
+        _make_stream_config(kind_labels={"entity": "user"})
+    )
+    assert cfg.kind_labels == {"entity": "user"}
+
+
+def test_stream_config_kind_labels_empty_map_rejected() -> None:
+    """`kind_labels: {}` -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        StreamConfig.model_validate(_make_stream_config(kind_labels={}))
+
+
+def test_stream_config_kind_labels_empty_key_rejected() -> None:
+    """`kind_labels` with an empty key -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        StreamConfig.model_validate(_make_stream_config(kind_labels={"": "user"}))
+
+
+def test_stream_config_kind_labels_empty_value_rejected() -> None:
+    """`kind_labels` with an empty value -> rejected."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        StreamConfig.model_validate(_make_stream_config(kind_labels={"entity": ""}))
+
+
+def test_stream_config_kind_labels_two_keys_share_label_raises() -> None:
+    """Two kinds mapping to one label -> rejected."""
+    with pytest.raises(ValidationError, match="distinct"):
+        StreamConfig.model_validate(
+            _make_stream_config(kind_labels={"entity": "user", "resource": "user"})
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -2,7 +2,7 @@ sprint: streaming-authoring-parity
 parent_branch: prepare_for_classroom_env
 baseline_sha: 3c7352bb36369c3b58ccf7c3b544d42e38e955a9
 started: 2026-08-24
-current_phase: 1
+current_phase: 2
 capabilities:
   - streaming-exporter:
       [wire-vocabulary, row-selection, change-scope, notice-threading]
@@ -11,7 +11,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Config surface — stream-declaration fields + parse-time validators"
     demo: "docs/sprints/streaming-authoring-parity/demos/phase_1_config_surface.py"
   2:

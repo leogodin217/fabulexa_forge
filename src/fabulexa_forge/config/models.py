@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 
@@ -1030,12 +1030,10 @@ def _require_nonblank_str(value: str | None, field_name: str) -> None:
         raise ValueError(f"{field_name} must be non-empty when present")
 
 
-def _require_distinct_nonempty_tuple(
-    value: tuple[str, ...] | None, field_name: str
-) -> None:
-    """A tuple field: when present, non-empty, with distinct entries.
+def _require_distinct_nonempty(value: "Sequence[str] | None", field_name: str) -> None:
+    """A list/tuple field: when present, non-empty, with distinct entries.
 
-    Shared by every declared-table / events-source list-valued field
+    Shared by every declared-table / events-source / stream list-valued field
     (`sub_types`, `columns`, `only`, `ignore`) — the parse-time rule applies
     identically to all of them.
 
@@ -1044,7 +1042,7 @@ def _require_distinct_nonempty_tuple(
         field_name: The field's dotted name, for the error message.
 
     Raises:
-        ValueError: `value` is an empty tuple, or contains a duplicate entry.
+        ValueError: `value` is empty, or contains a duplicate entry.
     """
     if value is None:
         return
@@ -1213,8 +1211,8 @@ class SourceTableDecl(StrictBaseModel):
         _require_nonempty_str(self.name, "SourceTableDecl.name")
         label = f"table {self.name!r}"
         _require_exactly_one_population_source(self.kind, self.membership, label)
-        _require_distinct_nonempty_tuple(self.sub_types, "SourceTableDecl.sub_types")
-        _require_distinct_nonempty_tuple(self.columns, "SourceTableDecl.columns")
+        _require_distinct_nonempty(self.sub_types, "SourceTableDecl.sub_types")
+        _require_distinct_nonempty(self.columns, "SourceTableDecl.columns")
         _require_rename_map_valid(self.rename, "SourceTableDecl.rename")
         _require_where_map_valid(self.where, "SourceTableDecl.where")
         _require_render_map_valid(self.render, "SourceTableDecl.render")
@@ -1270,11 +1268,9 @@ class SourceEventSourceDecl(StrictBaseModel):
         """
         label = "events source"
         _require_exactly_one_population_source(self.kind, self.membership, label)
-        _require_distinct_nonempty_tuple(
-            self.sub_types, "SourceEventSourceDecl.sub_types"
-        )
-        _require_distinct_nonempty_tuple(self.only, "SourceEventSourceDecl.only")
-        _require_distinct_nonempty_tuple(self.ignore, "SourceEventSourceDecl.ignore")
+        _require_distinct_nonempty(self.sub_types, "SourceEventSourceDecl.sub_types")
+        _require_distinct_nonempty(self.only, "SourceEventSourceDecl.only")
+        _require_distinct_nonempty(self.ignore, "SourceEventSourceDecl.ignore")
         if self.only is not None and self.ignore is not None:
             raise ValueError(f"{label}: 'only' and 'ignore' are mutually exclusive")
         if self.item_type is not None:
@@ -1813,11 +1809,35 @@ class KindStream(StrictBaseModel):
     temporal election attaches to streaming (design doc § Streaming attach).
     Absent = default rendering."""
 
+    where: dict[str, PredicateValue] | None = None
+    """Row predicate over the declared kind, keyed by bare constant-class
+    payload-property name; entries AND-joined (gated at validation time).
+    Absent = every row of the scoped populations."""
+    only: list[str] | None = None
+    """Change-scope subset by bare property name; mutually exclusive with
+    `ignore`. Governs u-event membership only — projection is `properties`.
+    Absent (with `ignore` absent) = the kind's full audited set."""
+    ignore: list[str] | None = None
+    """Change-scope exclusion by bare property name; mutually exclusive with
+    `only`."""
+    rename: dict[str, str] | None = None
+    """Selected bare property name -> after-image output key. Keys are source
+    identities, never output keys. Identity entries are not addressable."""
+    kind_label: str | None = None
+    """This stream's envelope `kind` value, verbatim, overriding the
+    kind_labels / kind-name default. Non-empty when present. Feed
+    presentation, not a kind claim — shareable across streams; must not
+    equal a different kind's rendered name (business pass)."""
+
     @model_validator(mode="after")
     def kind_stream_well_formed(self) -> Self:
         """name matches the topic-name rule; properties never prop__-prefixed
         and duplicate-free; sub_types non-empty and duplicate-free when
-        present; render present-but-empty or empty-keyed rejected.
+        present; render present-but-empty or empty-keyed rejected; where
+        present-but-empty or empty-keyed rejected; only/ignore mutually
+        exclusive, each distinct and non-empty when present; rename
+        present-but-empty, empty-keyed/valued, or colliding-target rejected;
+        kind_label non-empty when present.
 
         Raises:
             ValueError: Any of the above.
@@ -1834,6 +1854,17 @@ class KindStream(StrictBaseModel):
                 )
             _reject_duplicate_names(self.sub_types, f"stream {self.name!r}: sub_types")
         _require_render_map_valid(self.render, f"stream {self.name!r}: render")
+        _require_where_map_valid(self.where, f"stream {self.name!r}: where")
+        _require_distinct_nonempty(self.only, f"stream {self.name!r}: only")
+        _require_distinct_nonempty(self.ignore, f"stream {self.name!r}: ignore")
+        if self.only is not None and self.ignore is not None:
+            raise ValueError(
+                f"stream {self.name!r}: 'only' and 'ignore' are mutually exclusive"
+            )
+        _require_rename_map_valid(self.rename, f"stream {self.name!r}: rename")
+        _require_dict_entries_nonempty(self.rename, f"stream {self.name!r}: rename")
+        if self.kind_label is not None:
+            _require_nonempty_str(self.kind_label, f"stream {self.name!r}: kind_label")
         return self
 
 
@@ -1856,11 +1887,32 @@ class MembershipStream(StrictBaseModel):
     reference field is outside the domain (reference identity is key
     election's surface). Absent = default rendering."""
 
+    sub_types: list[str] | None = None
+    """Owner sub-type subset — the stream's addressed owner population set,
+    resolved per row through the parent lookup. Non-empty and duplicate-free
+    when present; absent = every declared owner sub-type. The owner kind
+    must be sub-typed (business pass)."""
+    where: dict[str, PredicateValue] | None = None
+    """Row predicate over the OWNER kind, keyed by bare constant-class
+    owner-property name; entries AND-joined. Element fields are not
+    predicate-addressable. Absent = every owner's intervals."""
+    rename: dict[str, str] | None = None
+    """Selected bare element-field name -> after-image output key. A
+    reference field's entry renames its expanded `<f>_kind` / `<f>_id`
+    pair in place. The owner identity entry and the Debezium `event`
+    column are not addressable."""
+    kind_label: str | None = None
+    """This stream's envelope `kind` value (the owner-kind slot), verbatim.
+    Non-empty when present."""
+
     @model_validator(mode="after")
     def membership_stream_well_formed(self) -> Self:
         """name matches the topic-name rule; fields never elem__/member__-
         prefixed and duplicate-free; render present-but-empty or empty-keyed
-        rejected.
+        rejected; sub_types non-empty and duplicate-free when present; where
+        present-but-empty or empty-keyed rejected; rename present-but-empty,
+        empty-keyed/valued, or colliding-target rejected; kind_label
+        non-empty when present.
 
         Raises:
             ValueError: Any of the above.
@@ -1870,6 +1922,12 @@ class MembershipStream(StrictBaseModel):
         _reject_prefixed_names(self.fields, ("elem__", "member__"), label)
         _reject_duplicate_names(self.fields, label)
         _require_render_map_valid(self.render, f"stream {self.name!r}: render")
+        _require_distinct_nonempty(self.sub_types, f"stream {self.name!r}: sub_types")
+        _require_where_map_valid(self.where, f"stream {self.name!r}: where")
+        _require_rename_map_valid(self.rename, f"stream {self.name!r}: rename")
+        _require_dict_entries_nonempty(self.rename, f"stream {self.name!r}: rename")
+        if self.kind_label is not None:
+            _require_nonempty_str(self.kind_label, f"stream {self.name!r}: kind_label")
         return self
 
 
@@ -2072,6 +2130,25 @@ class StreamConfig(StrictBaseModel):
     """Optional Kafka connection block; None ⇒ bootstrap comes from --bootstrap-servers
     or FABEXPORT_KAFKA_BOOTSTRAP. The optional-block `= None` exception, mirroring
     rebase / debezium / clock. Inert unless --sink kafka."""
+    kind_labels: dict[str, str] | None = None
+    """Engine kind -> domain label, applied at every kind-name-as-value
+    site: the envelope `kind` default and membership member-kind payload
+    values. Non-empty when present; keys/values non-empty; no two keys share
+    a label (parse time). Kind existence and masquerade-refusal are gated at
+    validation time. Absent: identity fall-through, verbatim kind names."""
+
+    @model_validator(mode="after")
+    def kind_labels_well_formed(self) -> Self:
+        """kind_labels non-empty when present; keys and values non-empty; no
+        two keys share one label.
+
+        Raises:
+            ValueError: The map is empty, a key or value is the empty
+                string, or two kinds map to one label.
+        """
+        _require_rename_map_valid(self.kind_labels, "StreamConfig.kind_labels")
+        _require_dict_entries_nonempty(self.kind_labels, "StreamConfig.kind_labels")
+        return self
 
     @model_validator(mode="after")
     def streams_match_content(self) -> Self:
