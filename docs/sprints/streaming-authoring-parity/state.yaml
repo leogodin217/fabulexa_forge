@@ -1,0 +1,91 @@
+sprint: streaming-authoring-parity
+parent_branch: prepare_for_classroom_env
+baseline_sha: 3c7352bb36369c3b58ccf7c3b544d42e38e955a9
+started: 2026-08-24
+current_phase: 1
+capabilities:
+  - streaming-exporter:
+      [wire-vocabulary, row-selection, change-scope, notice-threading]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "Config surface — stream-declaration fields + parse-time validators"
+    demo: "docs/sprints/streaming-authoring-parity/demos/phase_1_config_surface.py"
+  2:
+    status: pending
+    name: "Notice-sink threading — required sink on the stream entry points"
+    demo: "docs/sprints/streaming-authoring-parity/demos/phase_2_notice_sink.py"
+    steps:
+      - kind: source
+        summary: "Required notice_sink on iter_stream_events / stream_export / seed_mixer_run; CLI stream + mixer verbs pass render_notice_stderr; demo"
+      - kind: migrate
+        tactic: codemod
+        change: "Every iter_stream_events / stream_export / seed_mixer_run call gains notice_sink=discard_notice_sink (import from _support.notices); no assertion changes"
+        files:
+          - "tests/exporters/streaming/test_engine.py"
+          - "tests/exporters/streaming/test_election_stream.py"
+          - "tests/exporters/streaming/test_value_election_stream.py"
+          - "tests/exporters/streaming/test_driver.py"
+          - "tests/exporters/streaming/test_routing_engine.py"
+          - "tests/exporters/streaming/test_init.py"
+          - "tests/exporters/streaming/test_mixer.py"
+          - "tests/recipes/test_stream_recipes.py"
+  3:
+    status: pending
+    name: "Wire naming + kind vocabulary — bare-name after-images, rename, kind labels"
+    demo: "docs/sprints/streaming-authoring-parity/demos/phase_3_wire_naming.py"
+    steps:
+      - kind: source
+        summary: "presentation.py resolvers (subsume elect_after_image_columns / _rekey_after_image); engine assembly + envelope/member-kind labeling + naming/vocabulary gates; driver schema builders read resolvers; four errors.py classes; demo"
+      - kind: migrate
+        tactic: fan-out
+        change: "After-image / value-schema / rendered-object assertions move from prop__/elem__/member__<f>__ keys to bare / <f>_kind+<f>_id names; identity, presentation_id, and membership 'event' contract names unchanged; sidecar fixture column definitions stay prefixed"
+        files:
+          - "tests/exporters/streaming/test_engine.py"
+          - "tests/exporters/streaming/test_debezium.py"
+          - "tests/exporters/streaming/test_jsonl.py"
+          - "tests/exporters/streaming/test_election_stream.py"
+          - "tests/exporters/streaming/test_value_election_stream.py"
+          - "tests/exporters/streaming/test_routing_engine.py"
+          - "tests/exporters/streaming/test_routing.py"
+          - "tests/exporters/streaming/test_mixer.py"
+          - "tests/exporters/streaming/test_driver.py"
+          - "tests/exporters/streaming/_election_fixtures.py"
+      - kind: author
+        summary: "Re-pin the 13 streaming recipe expect.yaml corpora to the bare-name wire contract (identity-tombstone and membership-identity-only carry no payload keys and stay)"
+        files:
+          - "examples/recipes/streaming/state-changes/expect.yaml"
+          - "examples/recipes/streaming/subtype-select/expect.yaml"
+          - "examples/recipes/streaming/custom-stream-name/expect.yaml"
+          - "examples/recipes/streaming/combined-stream/expect.yaml"
+          - "examples/recipes/streaming/multi-kind-routing/expect.yaml"
+          - "examples/recipes/streaming/multi-sub-type-streams/expect.yaml"
+          - "examples/recipes/streaming/membership-events/expect.yaml"
+          - "examples/recipes/streaming/multi-membership-streams/expect.yaml"
+          - "examples/recipes/streaming/clock-realtime/expect.yaml"
+          - "examples/recipes/streaming/rebase-ts/expect.yaml"
+          - "examples/recipes/streaming/debezium-state-changes/expect.yaml"
+          - "examples/recipes/streaming/debezium-membership-events/expect.yaml"
+          - "examples/recipes/streaming/debezium-table-identity/expect.yaml"
+      - kind: author
+        summary: "New naming + vocabulary suite per spec Phase 3 test bullets"
+        files:
+          - "tests/exporters/streaming/test_presentation.py"
+  4:
+    status: pending
+    name: "Row selection — where + membership owner sub_types over the shared spine"
+    demo: "docs/sprints/streaming-authoring-parity/demos/phase_4_row_selection.py"
+    steps:
+      - kind: source
+        summary: "Promote spine device to exporters/selection_spine.py (source re-imports, test_events_render.py import fix); streaming/selection.py gate walk + resolve_stream_selection; engine drop device, membership owner scoping, addressed-set uniformity granularity; StreamWhere* errors; demo"
+      - kind: author
+        summary: "New selection suite per spec Phase 4 test bullets"
+        files:
+          - "tests/exporters/streaming/test_selection.py"
+  5:
+    status: pending
+    name: "Change scope — only/ignore + init trailing comment"
+    demo: "docs/sprints/streaming-authoring-parity/demos/phase_5_change_scope.py"
