@@ -224,6 +224,49 @@ class TestStreamExportPreconditions:
                     notice_sink=discard_notice_sink,
                 )
 
+    def test_file_sink_with_missing_out_dir_raises_naming_it(
+        self, tmp_path: Path
+    ) -> None:
+        """A missing out directory raises ExportRuntimeError naming the path.
+
+        The driver refuses rather than creating the directory (matching `export`),
+        and refuses up front so nothing is written before the failure.
+        """
+        emit_dir = _build_emit(tmp_path, "item", [], [])
+        config = _make_config("item")
+        missing = tmp_path / "not-there"
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(ExportRuntimeError, match="no such directory") as exc:
+                stream_export(
+                    emit,
+                    config,
+                    fmt="jsonl",
+                    sink="file",
+                    out=missing,
+                    anchor=None,
+                    notice_sink=discard_notice_sink,
+                )
+        assert str(missing) in str(exc.value)
+        assert not missing.exists(), "the driver must not create the output directory"
+
+    def test_file_sink_with_out_pointing_at_a_file_raises(self, tmp_path: Path) -> None:
+        """An `out` that exists but is a regular file raises, saying so."""
+        emit_dir = _build_emit(tmp_path, "item", [], [])
+        config = _make_config("item")
+        not_a_dir = tmp_path / "a-file"
+        not_a_dir.write_text("", encoding="utf-8")
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(ExportRuntimeError, match="not a directory"):
+                stream_export(
+                    emit,
+                    config,
+                    fmt="jsonl",
+                    sink="file",
+                    out=not_a_dir,
+                    anchor=None,
+                    notice_sink=discard_notice_sink,
+                )
+
 
 # ---------------------------------------------------------------------------
 # Empty-file creation path — zero-event kind produces an empty <kind>.jsonl

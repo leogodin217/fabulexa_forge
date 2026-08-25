@@ -98,6 +98,8 @@ def stream_export(
         fmt: 'jsonl' or 'debezium'.
         sink: 'stdout', 'file', or 'kafka'.
         out: The output directory for the file sink; None for stdout and kafka.
+            Must already exist — the driver refuses a missing directory rather
+            than creating one.
         anchor: The resolved effective anchor, or None.
         notice_sink: The caller-supplied notice receiver, threaded to every
             internal iter_stream_events call (required — a caller wanting
@@ -113,7 +115,8 @@ def stream_export(
         ExportError: fmt='debezium' with no resolved anchor or no debezium block;
             sink='kafka' with no resolved anchor (KafkaRequiresAnchor); a single-branch,
             config-resolvability, or business-rule failure from the engine.
-        ExportRuntimeError: an unsupported fmt or a sink/out mismatch.
+        ExportRuntimeError: an unsupported fmt, a sink/out mismatch, or
+            sink='file' with an `out` that is not an existing directory.
         KafkaDeliveryError: sink='kafka' and a connection, topic-creation, produce, or
             flush failure (a child of ExportRuntimeError).
         KafkaClientUnavailable: sink='kafka' and confluent-kafka is not installed.
@@ -131,6 +134,19 @@ def stream_export(
     if sink == "stdout" and out is not None:
         raise ExportRuntimeError(
             "sink='stdout' requires out=None (no output directory)"
+        )
+    # The file sink writes one <topic>.jsonl per topic into `out`; it does not
+    # create the directory (matching `export`, which refuses a missing output
+    # path rather than minting one). Checked up front so a missing directory
+    # fails before any topic file is written, never mid-run.
+    if sink == "file" and out is not None and not out.is_dir():
+        detail = (
+            "path exists but is not a directory"
+            if out.exists()
+            else "no such directory"
+        )
+        raise ExportRuntimeError(
+            f"sink='file' requires an existing output directory — {detail}: {out}"
         )
 
     topic_set = build_topic_set(config)
