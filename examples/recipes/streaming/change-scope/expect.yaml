@@ -1,0 +1,28 @@
+streams:
+  # Full change scope would be 4 events; `only: [status]` drops t001's shift
+  # change at 3d, so 3 survive — and the dropped property is still projected.
+  team:
+    event_count: 3
+    contains_events:
+      - seq: 1
+        op: c
+        kind: team
+        record_id: t001
+        after.status: forming
+        after.shift: day
+      - seq: 2
+        op: c
+        kind: team
+        record_id: t002
+        after.status: forming
+        after.shift: day
+      # The narrowing proof: the in-scope status change spawns this `u`, and
+      # the out-of-scope `shift` rides the after-image at its as-of value.
+      # The 3d shift -> night change spawns no event of its own, which the
+      # event_count of 3 pins down.
+      - seq: 3
+        op: u
+        kind: team
+        record_id: t001
+        after.status: active
+        after.shift: day

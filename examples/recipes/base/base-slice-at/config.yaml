@@ -10,9 +10,10 @@
 # sees pending and active but NOT discharged: p001.status = 'active', not
 # 'discharged' as it is at the tape's end (see base-current-state).
 #
-# Output: same five tables as base-current-state (no record in this fixture
-# is created at-or-after T, so no table shrinks), but p001's reconstructed
-# `status` differs from the tape's-end recipe.
+# Output: same six tables as base-current-state (no record in this fixture
+# is created after T, so no table shrinks), but p001's reconstructed
+# `status` differs from the tape's-end recipe — as does t001's `shift`,
+# which only becomes 'night' at 3*DAY.
 
 mode: base
 

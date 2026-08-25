@@ -185,6 +185,8 @@ emit. Everything in the fixture is hand-traceable:
 | `membership__patient__visits` | 1 | p001 in a morning slot with doctor d001; open interval (`left_sim_time` NULL) |
 | `records__queue` | 1 | `q001` Triage — owns the `waiters` collection (the membership-events owner) |
 | `membership__queue__waiters` | 2 | waiters on `q001`: p001 priority 2 (joined 1×DAY, left 2×DAY — closed); p002 priority 1 (joined 2×DAY, open). Element fields `elem__priority` + `member__patient__*` |
+| `records__team` | 2 | `t001` Alpha (surgical), `t002` Bravo (nursing); `prop__team_type` is the sub-type discriminator. The only kind with **two** history-tracked properties — `prop__status` and `prop__shift` — so a stream's change scope (`only` / `ignore`) has more than one audited property to narrow. Owns the `members` collection |
+| `membership__team__members` | 2 | one interval per owner: `t001` holds s002 as "lead" (joined 1×DAY, open); `t002` holds s001 as "float" (joined 2×DAY, left 3×DAY — closed). Element fields `elem__role` + `member__staff__*`. The owner kind is sub-typed and has two records, so a membership stream's owner `sub_types` and owner `where` each select a proper subset |
 
 Patient `prop__primary_staff_id` / `prop__backup_staff_id`: `p001` → primary `s001`,
 backup `s002`; `p002` → primary `s002`, backup NULL.
@@ -395,6 +397,15 @@ flat table by default. These recipes exercise `base:`'s escape hatches
 | [`streaming/subtype-select`](../../examples/recipes/streaming/subtype-select/config.yaml) | Stream a subset of a sub-typed kind's sub-types: rows outside the `sub_types` scope drop before the merge (a faithful selection), `seq` numbers only emitted events, and an undeclared sub-type gets no topic — not even a declared-but-empty one |
 | [`streaming/custom-stream-name`](../../examples/recipes/streaming/custom-stream-name/config.yaml) | `name` is fully author-chosen (the topic-name rule is the only constraint) — a `cdc.`-prefixed topic is just the `name` string, verbatim; no templating mechanism |
 
+**Row selection, change scope, and wire naming**
+
+| Recipe | What it teaches |
+|---|---|
+| [`streaming/stream-where`](../../examples/recipes/streaming/stream-where/config.yaml) | `where` gates which records a state-changes stream carries, keyed on the subject kind's `constant`-class properties — a `tracked` key is refused at load time, because a property with different values at different instants has no single answer to "does this record satisfy the predicate?". Exclusion is whole-record (a dropped record's `c` never appears) and `seq` numbers only survivors |
+| [`streaming/change-scope`](../../examples/recipes/streaming/change-scope/config.yaml) | `only` / `ignore` (mutually exclusive) narrow which property changes spawn a `u` — the *change scope*, independent of `properties`, the *payload projection*. A projected-but-out-of-scope property still rides every surviving after-image at its as-of value, so its later changes never surface at all; genesis values fold into `c` either way, so scope only ever affects post-creation transitions |
+| [`streaming/stream-rename`](../../examples/recipes/streaming/stream-rename/config.yaml) | Per-stream `rename` maps a bare source property name to a different after-image output key. Keys are source identities, never output keys; the fold's internal column vocabulary never reaches the wire. Presentation-only — same event set, same order, only the keys change |
+| [`streaming/kind-vocabulary`](../../examples/recipes/streaming/kind-vocabulary/config.yaml) | The kind vocabulary at every site a kind name renders as a *value*: `kind_labels` maps engine kind → domain label for payload member-kind cells, and a per-stream `kind_label` overrides the envelope `kind` slot alone (precedence: `kind_label` > `kind_labels[subject]` > verbatim). The two knobs have different reach — they are not one knob at two scopes. Identity values, topic names, and op codes never move |
+
 **Membership-events (membership intervals → topics)**
 
 | Recipe | What it teaches |
@@ -402,6 +413,8 @@ flat table by default. These recipes exercise `base:`'s escape hatches
 | [`streaming/membership-events`](../../examples/recipes/streaming/membership-events/config.yaml) | `content: membership-events` streams a collection property's `membership__<owner>__<property>` intervals as an append-only log: each interval unpivots to a `join` (always) and a `leave` (only when the element left — an open interval emits a `join` only). Both carry a full after-image; the owner's identity is the message key; `fields` names bare element-schema fields (`priority` → `elem__priority`; a reference `patient` → `member__patient__kind`/`__id`) |
 | [`streaming/membership-identity-only`](../../examples/recipes/streaming/membership-identity-only/config.yaml) | `fields: []` carries owner identity only — the pure join/leave presence signal, no element columns; the membership analog of a state-changes `properties: []` declaration |
 | [`streaming/multi-membership-streams`](../../examples/recipes/streaming/multi-membership-streams/config.yaml) | Several membership tables in one run, each under its own author-chosen `name` (independent of the owner/property identity it feeds from); a single global `seq` orders events across all streamed relations |
+| [`streaming/membership-owner-sub-types`](../../examples/recipes/streaming/membership-owner-sub-types/config.yaml) | `sub_types` on a membership stream scopes the **owner** population, not the member's — resolved per interval through the parent lookup, and legal only when the owner kind is itself sub-typed. A dropped owner takes its whole interval (join *and* leave) with it; the wire `kind` and message key are the owner's, so owner scoping is consistent with what the stream is keyed by |
+| [`streaming/membership-owner-where`](../../examples/recipes/streaming/membership-owner-where/config.yaml) | `where` on a membership stream reads the **owner** kind's `constant`-class properties through the same parent lookup — element fields are not predicate-addressable at all (a key naming one is read as an owner property and fails the constant-class gate). Drop granularity is the whole interval |
 
 **Debezium format (`--fmt debezium`)**
 

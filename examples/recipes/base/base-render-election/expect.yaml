@@ -50,3 +50,17 @@ tables:
   queue:
     columns: [queue_key, id, created_sim_time, active, deactivated_at, prop__name]
     row_count: 1
+  team:
+    columns:
+      [
+        team_key,
+        id,
+        created_sim_time,
+        active,
+        deactivated_at,
+        prop__name,
+        prop__team_type,
+        prop__status,
+        prop__shift,
+      ]
+    row_count: 2

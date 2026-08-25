@@ -1,0 +1,44 @@
+# Recipe: streaming / stream-rename
+# ============================================================
+# Per-stream `rename`: give a selected property a different output key on the
+# wire, without touching the emit.
+#
+# The naming contract (the teaching point):
+#   - After-image payload keys are BARE property names — `prop__status` is the
+#     fold's internal column vocabulary and never reaches the wire. So the
+#     default output key for property `status` is `status`, not `prop__status`.
+#   - A `rename` key is a SOURCE identity — the bare property name as declared
+#     in `properties` — never the output key it produces. Writing the target on
+#     the left (`patient_status: status`) names no selected property and is
+#     refused, not silently ignored.
+#   - `rename` relabels; it never reorders. The after-image keeps the single
+#     column-order producer's order (identity entry first, then properties in
+#     sidecar order).
+#   - The identity entry (`record_id` here) is not addressable by `rename`: it
+#     keeps its contract name verbatim. The same holds for an auto-included
+#     `presentation_id` and, on a membership stream, the Debezium `event`
+#     column — reserved output names a rename can neither claim nor collide
+#     with.
+#
+# Fixture world (recipe emit):
+#   records__patient — p001 status pending@1d -> active@2d -> discharged@3d (Alice)
+#                      p002 status pending@2d (Bob)
+#   `status` is history-tracked, so each change after creation spawns a `u`;
+#   `name` is constant and rides every event. Neither patient is deactivated,
+#   so there are no `d` events.
+#
+# Output (patient.jsonl) — the same four events as state-changes, re-keyed:
+#   seq 1  c p001  after {record_id: p001, patient_status: pending,    full_name: Alice}
+#   seq 2  c p002  after {record_id: p002, patient_status: pending,    full_name: Bob}
+#   seq 3  u p001  after {record_id: p001, patient_status: active,     full_name: Alice}
+#   seq 4  u p001  after {record_id: p001, patient_status: discharged, full_name: Alice}
+
+content: state-changes
+
+streams:
+  - name: patient
+    kind: patient
+    properties: [status, name]   # bare source names — the selection
+    rename:
+      status: patient_status     # source identity -> output key
+      name: full_name

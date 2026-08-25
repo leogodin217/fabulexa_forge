@@ -1,0 +1,32 @@
+streams:
+  # The stream name is the author's `name`, verbatim — a label never renames a
+  # topic, so this file is still queue__waiters.jsonl.
+  queue__waiters:
+    event_count: 3
+    contains_events:
+      # envelope kind = the per-stream kind_label (beats kind_labels[queue]);
+      # patient_kind = the config-level patient -> person label; the identity
+      # cells (record_id, patient_id) are untouched engine ids.
+      - seq: 1
+        op: join
+        kind: triage_desk
+        record_id: q001
+        after.record_id: q001
+        after.priority: "2"
+        after.patient_kind: person
+        after.patient_id: p001
+      - seq: 2
+        op: join
+        kind: triage_desk
+        record_id: q001
+        after.patient_kind: person
+        after.patient_id: p002
+        after.priority: "1"
+      # a leave carries the same labeled payload as its join
+      - seq: 3
+        op: leave
+        kind: triage_desk
+        record_id: q001
+        after.patient_kind: person
+        after.patient_id: p001
+        after.priority: "2"

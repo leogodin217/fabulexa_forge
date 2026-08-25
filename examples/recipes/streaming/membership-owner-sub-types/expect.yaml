@@ -1,0 +1,19 @@
+streams:
+  # Only owner t002 (team_type nursing) survives the owner-sub-type scope, so the
+  # stream carries its closed interval alone: 2 events, not the 3 an unscoped
+  # membership-events export of this collection would produce (t001's open
+  # interval would add a lone join at 2024-01-02).
+  team__members:
+    event_count: 2
+    contains_events:
+      # closed interval on the nursing owner -> a join then a leave
+      - seq: 1
+        op: join
+        kind: team
+        record_id: t002           # the owner (team) is the message key
+        after.role: float
+      # the leave carries the same full payload — not a key-only tombstone
+      - seq: 2
+        op: leave
+        record_id: t002
+        after.role: float

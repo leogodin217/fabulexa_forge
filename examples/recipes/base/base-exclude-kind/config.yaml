@@ -7,9 +7,9 @@
 # here is simpler: the one flat table for that kind disappears, full stop.
 #
 # Excluding `queue` drops the `queue` output table. Every other kind's table
-# (patient, doctor, staff, admission) survives untouched.
+# (patient, doctor, staff, admission, team) survives untouched.
 #
-# Output: four tables — patient, doctor, staff, admission — `queue` is
+# Output: five tables — patient, doctor, staff, admission, team — `queue` is
 # entirely absent.
 
 mode: base

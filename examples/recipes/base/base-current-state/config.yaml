@@ -6,13 +6,13 @@
 # not the point-in-time value at any earlier instant.
 #
 # Base declares nothing (no declared-table grammar like source):
-# every records-category kind — patient, doctor, staff, admission, queue —
-# yields exactly one output table, named after the kind, with `record_id`
-# presented as `id` and every other column presentation-verbatim
+# every records-category kind — patient, doctor, staff, admission, queue,
+# team — yields exactly one output table, named after the kind, with
+# `record_id` presented as `id` and every other column presentation-verbatim
 # (`prop__<p>` keeps its prefix; base has no rename here to strip it).
 #
-# Output: five tables — patient, doctor, staff, admission, queue — each at
-# the tape's end. p001 (created@1*DAY) has three history events for
+# Output: six tables — patient, doctor, staff, admission, queue, team — each
+# at the tape's end. p001 (created@1*DAY) has three history events for
 # `status` (pending@1*DAY, active@2*DAY, discharged@3*DAY); at the tape's
 # end the reconstruction takes the LATEST one: discharged.
 
