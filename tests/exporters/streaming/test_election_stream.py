@@ -963,3 +963,232 @@ class TestNeverSchemaWrapped:
         assert key_obj == {"presentation_id": "W_001"}
         assert "schema" not in key_obj
         assert "payload" not in key_obj
+
+
+# ---------------------------------------------------------------------------
+# Multi-surface `identity` publication: the headline Phase 3 capability
+# ---------------------------------------------------------------------------
+
+
+class TestMultiSurfaceIdentityPublication:
+    """`identity: [record_index, presentation_id]` publishes both surfaces
+    under their (possibly renamed) wire names, in sidecar column order
+    (record_id, presentation_id, record_index) regardless of declaration
+    order; only the elected surface ever reaches the message key."""
+
+    def _events(self, tmp_path: Path) -> list[StreamEvent]:
+        emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
+        config = StreamConfig(
+            content="state-changes",
+            streams=[
+                KindStream(
+                    name="widgets",
+                    kind="widget",
+                    properties=["status"],
+                    identity=["record_index", "presentation_id"],
+                    rename={"record_index": "id", "presentation_id": "nhs_number"},
+                )
+            ],
+            keys={"widget": "presentation_id"},
+        )
+        with open_emit(emit_dir) as emit:
+            return list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
+
+    def test_after_image_carries_both_surfaces_under_renamed_wire_names(
+        self, tmp_path: Path
+    ) -> None:
+        """Sidecar order: presentation_id (as nhs_number) before record_index
+        (as id) — the declared `[record_index, presentation_id]` order is
+        discarded."""
+        events = self._events(tmp_path)
+        create = _events_by_op(events, "w1")["c"]
+        assert create.after is not None
+        assert list(create.after.keys()) == ["nhs_number", "id", "status"]
+        assert create.after["nhs_number"] == "W_001"
+        assert create.after["id"] == "0"
+
+    def test_message_key_carries_only_the_elected_surface(self, tmp_path: Path) -> None:
+        """Even though both surfaces publish, the key map carries the
+        elected (presentation_id / nhs_number) entry alone — the non-elected
+        published surface never reaches the message key."""
+        events = self._events(tmp_path)
+        create = _events_by_op(events, "w1")["c"]
+        assert create.key_column == "nhs_number"
+        assert create.key_value == "W_001"
+        jsonl_key = render_jsonl_object(create)["key"]
+        assert jsonl_key == {"nhs_number": "W_001"}
+
+
+class TestElectedKeyDuplicateOnPublishedNonElectedSurface:
+    """The render-time uniqueness guard ranges over every published surface,
+    not only the elected one: a duplicated presentation_id fails even when
+    record_index is elected — the surface's own failure, not the
+    election's."""
+
+    def test_duplicated_presentation_id_raises_under_record_index_election(
+        self, tmp_path: Path
+    ) -> None:
+        emit_dir = build_election_emit(
+            tmp_path,
+            presentation_keys=FULL_REGISTRY,
+            duplicate_widget_presentation_id=True,
+        )
+        config = StreamConfig(
+            content="state-changes",
+            streams=[
+                KindStream(
+                    name="widgets",
+                    kind="widget",
+                    properties=["status"],
+                    identity=["record_index", "presentation_id"],
+                )
+            ],
+            keys={"widget": "record_index"},
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(ElectedKeyDuplicate, match="presentation_id"):
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
+
+
+class TestUnionUnsafeWidenedGate:
+    """The identity union-safety gate ranges over every published surface,
+    not only the elected one: a non-elected presentation_id over
+    union-unsafe key spaces fails, naming the stream and the surface."""
+
+    def test_published_non_elected_presentation_id_union_unsafe_raises(
+        self, tmp_path: Path
+    ) -> None:
+        emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
+        config = StreamConfig(
+            content="state-changes",
+            streams=[
+                KindStream(
+                    name="creatures",
+                    kind="creature",
+                    properties=[],
+                    identity=["record_id", "presentation_id"],
+                )
+            ],
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                ElectionUnionUnsafe,
+                match=r"stream 'creatures': identity surface 'presentation_id'",
+            ):
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
+
+
+class TestMixedElectionOrderingBeforeIdentityGates:
+    """A stream that is both mixed-election and carries a declared
+    `identity` reports the mixing — the election's own gates run first, so
+    `resolve_identity_projection`'s gates never see a mixed-election
+    stream."""
+
+    def test_mixed_election_wins_over_declared_identity(self, tmp_path: Path) -> None:
+        emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
+        config = StreamConfig(
+            content="state-changes",
+            streams=[
+                KindStream(
+                    name="creatures",
+                    kind="creature",
+                    properties=[],
+                    identity=["record_id", "presentation_id"],
+                )
+            ],
+            keys={"creature": {"cat": "presentation_id", "dog": "record_index"}},
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(ElectionMixedIdentity, match="stream 'creatures'"):
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
+
+
+# ---------------------------------------------------------------------------
+# Membership owner: multi-surface projection ahead of element fields
+# ---------------------------------------------------------------------------
+
+
+class TestMembershipOwnerMultiSurfaceProjection:
+    """A membership stream's owner projection admits the same three
+    surfaces, resolved against the owner's election, rendered ahead of the
+    selected element fields (after Debezium's leading 'event' column)."""
+
+    def test_owner_identity_projection_ahead_of_element_fields(
+        self, tmp_path: Path
+    ) -> None:
+        emit_dir = build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
+        config = StreamConfig(
+            content="membership-events",
+            streams=[
+                MembershipStream(
+                    name="waiters_priority",
+                    membership=MembershipRef(kind="person", property="waiters"),
+                    fields=["priority"],
+                    identity=["record_id", "record_index", "presentation_id"],
+                )
+            ],
+            keys={"person": "presentation_id"},
+            debezium=DebeziumConfig(source=_DEBEZIUM_SOURCE, schemas_enable=True),
+        )
+        anchor = EffectiveAnchor(
+            start_instant=datetime(2026, 1, 1, tzinfo=timezone.utc),
+            timezone=ZoneInfo("UTC"),
+        )
+        out = tmp_path / "out"
+        out.mkdir()
+        with open_emit(emit_dir) as emit:
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
+            stream_export(
+                emit,
+                config,
+                fmt="debezium",
+                sink="file",
+                out=out,
+                anchor=anchor,
+                notice_sink=discard_notice_sink,
+            )
+
+        join = next(e for e in events if e.op == "join")
+        assert join.after is not None
+        assert list(join.after.keys()) == [
+            "record_id",
+            "presentation_id",
+            "record_index",
+            "priority",
+        ]
+        assert join.after["record_id"] == "p1"
+        assert join.after["presentation_id"] == "P_001"
+        assert join.after["record_index"] == "0"
+        assert join.key_column == "presentation_id"
+        assert join.key_value == "P_001"
+
+        lines = (
+            (out / "waiters_priority.jsonl").read_text(encoding="utf-8").splitlines()
+        )
+        msg = json.loads(lines[0])
+        after_field = next(f for f in msg["schema"]["fields"] if f["field"] == "after")
+        after_columns = [f["field"] for f in after_field["fields"]]
+        assert after_columns == [
+            "event",
+            "record_id",
+            "presentation_id",
+            "record_index",
+            "priority",
+        ]
+        assert list(msg["payload"]["after"].keys()) == after_columns

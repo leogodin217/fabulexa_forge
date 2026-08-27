@@ -117,6 +117,46 @@ def test_kind_stream_unknown_field_raises() -> None:
 
 
 # ---------------------------------------------------------------------------
+# KindStream.identity
+# ---------------------------------------------------------------------------
+
+
+def test_kind_stream_identity_absent_is_none() -> None:
+    """Absent `identity` -> None (the elected surface alone)."""
+    ks = KindStream.model_validate(_make_kind_stream())
+    assert ks.identity is None
+
+
+def test_kind_stream_identity_valid_list_parses() -> None:
+    """A non-empty, duplicate-free identity list parses, declaration order
+    preserved (publication order is a business-pass concern, not parse-time)."""
+    ks = KindStream.model_validate(
+        _make_kind_stream(identity=["record_index", "presentation_id"])
+    )
+    assert ks.identity == ["record_index", "presentation_id"]
+
+
+def test_kind_stream_identity_empty_raises() -> None:
+    """`identity: []` raises ValueError (omit the field instead)."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        KindStream.model_validate(_make_kind_stream(identity=[]))
+
+
+def test_kind_stream_identity_duplicate_raises() -> None:
+    """A repeated identity surface raises ValueError."""
+    with pytest.raises(ValidationError, match="distinct"):
+        KindStream.model_validate(
+            _make_kind_stream(identity=["record_id", "record_id"])
+        )
+
+
+def test_kind_stream_identity_unknown_surface_unrepresentable() -> None:
+    """A surface name outside the KeySurface Literal is unrepresentable."""
+    with pytest.raises(ValidationError):
+        KindStream.model_validate(_make_kind_stream(identity=["bogus"]))
+
+
+# ---------------------------------------------------------------------------
 # KindStream — where / only / ignore / rename / kind_label
 # ---------------------------------------------------------------------------
 
@@ -415,6 +455,45 @@ def test_membership_stream_sub_types_duplicate_raises() -> None:
         MembershipStream.model_validate(
             _make_membership_stream(sub_types=["icu", "icu"])
         )
+
+
+# ---------------------------------------------------------------------------
+# MembershipStream.identity (owner identity surfaces)
+# ---------------------------------------------------------------------------
+
+
+def test_membership_stream_identity_absent_is_none() -> None:
+    """Absent `identity` -> None (the owner's elected surface alone)."""
+    ms = MembershipStream.model_validate(_make_membership_stream())
+    assert ms.identity is None
+
+
+def test_membership_stream_identity_valid_list_parses() -> None:
+    """A non-empty, duplicate-free owner identity list parses."""
+    ms = MembershipStream.model_validate(
+        _make_membership_stream(identity=["record_id", "presentation_id"])
+    )
+    assert ms.identity == ["record_id", "presentation_id"]
+
+
+def test_membership_stream_identity_empty_raises() -> None:
+    """`identity: []` raises ValueError (omit the field instead)."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        MembershipStream.model_validate(_make_membership_stream(identity=[]))
+
+
+def test_membership_stream_identity_duplicate_raises() -> None:
+    """A repeated owner identity surface raises ValueError."""
+    with pytest.raises(ValidationError, match="distinct"):
+        MembershipStream.model_validate(
+            _make_membership_stream(identity=["record_index", "record_index"])
+        )
+
+
+def test_membership_stream_identity_unknown_surface_unrepresentable() -> None:
+    """A surface name outside the KeySurface Literal is unrepresentable."""
+    with pytest.raises(ValidationError):
+        MembershipStream.model_validate(_make_membership_stream(identity=["bogus"]))
 
 
 def test_membership_stream_where_parses_scalar_and_list() -> None:

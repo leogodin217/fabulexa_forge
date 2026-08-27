@@ -547,3 +547,25 @@ class StreamChangeScopeUnresolvable(ExportError):
     kind. Message: `"stream '{name}': {field} entry '{property}' has no
     prop__{property} column on kind '{kind}'"` (`field` is `only` or
     `ignore`)."""
+
+
+class StreamIdentityMissingElected(ExportError):
+    """A stream's declared `identity` omits its own gated elected surface —
+    a topic must publish the surface it keys on. Message:
+    `"stream '{name}': identity omits the elected surface '{surface}'; a
+    topic must publish its own key"`."""
+
+
+class StreamIdentityUnavailable(ExportError):
+    """A stream publishes `presentation_id` on a kind (the owner kind, for a
+    membership stream) that mints no surrogate. Message:
+    `"stream '{name}': the kind '{kind}' mints no presentation_id"`."""
+
+
+class StreamPropertyNotAddressable(ExportError):
+    """A kind-shaped stream's `properties` names an identity surface
+    (`record_id`, `record_index`, `presentation_id`) — identity is projected
+    through `identity`, never selected through `properties`, so a
+    same-named producer payload property is unaddressable, full stop.
+    Message: `"stream '{name}': '{property}' is an identity surface —
+    declare it in identity, not properties"`."""

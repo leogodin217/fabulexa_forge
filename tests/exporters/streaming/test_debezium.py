@@ -593,6 +593,31 @@ class TestRenderDebeziumMessageElectedKey:
             payload = self._render(event)
             assert payload["before"] is None
 
+    def test_published_non_elected_surface_in_after_never_in_before(self) -> None:
+        """A published non-elected surface (record_id, here) rides the 'c'
+        after payload alongside the elected key, but a 'd' tombstone's
+        before carries the elected key alone — the non-elected surface never
+        reaches a message key."""
+        create = _make_event(
+            op="c",
+            key_column="presentation_id",
+            key_value="P_004",
+            after={"record_id": "r1", "presentation_id": "P_004", "status": "active"},
+        )
+        create_payload = self._render(create)
+        assert create_payload["after"] == {
+            "record_id": "r1",
+            "presentation_id": "P_004",
+            "status": "active",
+        }
+
+        delete = _make_event(
+            op="d", after=None, key_column="presentation_id", key_value="P_004"
+        )
+        delete_payload = self._render(delete)
+        assert delete_payload["before"] == {"presentation_id": "P_004"}
+        assert delete_payload["after"] is None
+
 
 # ---------------------------------------------------------------------------
 # write_debezium_stream

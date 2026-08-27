@@ -25,11 +25,11 @@ from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
     iter_stream_events,
+    resolve_stream_identities,
     resolve_stream_surfaces,
 )
 from fabulexa_forge.exporters.streaming.jsonl import write_jsonl_stream
 from fabulexa_forge.exporters.streaming.presentation import (
-    IdentityProjection,
     resolve_membership_output_columns,
     resolve_stream_output_columns,
 )
@@ -41,11 +41,11 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import (
         DebeziumSourceIdentity,
-        KeySurface,
         StreamConfig,
     )
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.streaming.pacer import ResolvedClock
+    from fabulexa_forge.exporters.streaming.presentation import IdentityProjection
     from fabulexa_forge.exporters.streaming.types import StreamEvent
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -466,11 +466,14 @@ def _build_value_schemas(
     membership-shaped streams with a leading 'event' column; all other content
     loops its kind-shaped streams. Every stream's declared column list is
     resolved through `presentation.resolve_stream_output_columns` /
-    `resolve_membership_output_columns` under its gated elected surface
-    (`resolve_stream_surfaces`) — a pure recomputation of the same gates and
-    surfaces the engine's own validation pass resolves, so the declared
-    schema and the rendered after-image stay the same list by construction
-    (mirrors `exporters.base.engine`'s recompute-not-thread posture).
+    `resolve_membership_output_columns` under its gated identity projection
+    (`engine.resolve_identity_projection`) — a pure recomputation of the same
+    gates and projections the engine's own validation pass resolves, so the
+    declared schema and the rendered after-image stay the same list by
+    construction (mirrors `exporters.base.engine`'s recompute-not-thread
+    posture). `resolve_stream_surfaces` also runs, for its edge-gate side
+    effects only — the reference/member-field union-safety gates over each
+    stream's own payload, independent of `identity`.
 
     Args:
         emit: The open emit.
@@ -485,17 +488,25 @@ def _build_value_schemas(
         ElectionMixedIdentity: A stream's spanned populations elect differing
             surfaces.
         ElectionUnionUnsafe: A uniform presentation_id election's spanned key
-            spaces, or an edge's admitted target key spaces, contain a
-            pairwise-unsafe pair.
+            spaces, an edge's admitted target key spaces, or a published
+            surface's spanned key spaces, contain a pairwise-unsafe pair.
+        ElectionPresentationUndeclared: A population elects presentation_id
+            without a registry entry, or a published surface's population is
+            registry-undeclared.
+        StreamIdentityMissingElected: A stream's declared `identity` omits
+            its elected surface.
+        StreamIdentityUnavailable: A stream publishes presentation_id on a
+            kind that mints no surrogate.
     """
     election = resolve_election(emit.sidecar, config.keys)
-    surfaces = resolve_stream_surfaces(emit.sidecar, election, config)
+    resolve_stream_surfaces(emit.sidecar, election, config)
+    identity_by_stream = resolve_stream_identities(emit.sidecar, election, config)
     if config.content == "membership-events":
         return _build_value_schemas_membership(
-            emit, config, source_identity, table_identity, surfaces
+            emit, config, source_identity, table_identity, identity_by_stream
         )
     return _build_value_schemas_kinds(
-        emit, config, source_identity, table_identity, surfaces
+        emit, config, source_identity, table_identity, identity_by_stream
     )
 
 
@@ -504,7 +515,7 @@ def _build_value_schemas_kinds(
     config: "StreamConfig",
     source_identity: "DebeziumSourceIdentity",
     table_identity: str,
-    surfaces: "dict[str, KeySurface]",
+    identity_by_stream: "dict[str, IdentityProjection]",
 ) -> dict[str, dict[str, object]]:
     """Build value schemas for state-changes content, one per declared stream.
 
@@ -513,7 +524,7 @@ def _build_value_schemas_kinds(
         config: The validated streaming configuration.
         source_identity: The masquerade source identity.
         table_identity: 'source_table' or 'topic'.
-        surfaces: Every stream's gated uniform elected surface.
+        identity_by_stream: Every stream's gated identity projection.
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
@@ -524,8 +535,7 @@ def _build_value_schemas_kinds(
 
     for stream in config.streams:
         assert isinstance(stream, KindStream)
-        surface = surfaces[stream.name]
-        identity = IdentityProjection(elected=surface, published=(surface,))
+        identity = identity_by_stream[stream.name]
         columns = [
             entry.output_key
             for entry in resolve_stream_output_columns(
@@ -558,7 +568,7 @@ def _build_value_schemas_membership(
     config: "StreamConfig",
     source_identity: "DebeziumSourceIdentity",
     table_identity: str,
-    surfaces: "dict[str, KeySurface]",
+    identity_by_stream: "dict[str, IdentityProjection]",
 ) -> dict[str, dict[str, object]]:
     """Build value schemas for membership-events content, one per declared stream.
 
@@ -567,7 +577,7 @@ def _build_value_schemas_membership(
         config: The validated streaming configuration.
         source_identity: The masquerade source identity.
         table_identity: 'source_table' or 'topic'.
-        surfaces: Every stream's gated uniform owner elected surface.
+        identity_by_stream: Every stream's gated owner identity projection.
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
@@ -585,8 +595,7 @@ def _build_value_schemas_membership(
         schema_key = stream.name if table_identity == "topic" else attrs["route_table"]
 
         if schema_key not in value_schemas:
-            surface = surfaces[stream.name]
-            owner_identity = IdentityProjection(elected=surface, published=(surface,))
+            owner_identity = identity_by_stream[stream.name]
             payload_columns = [
                 entry.output_key
                 for entry in resolve_membership_output_columns(

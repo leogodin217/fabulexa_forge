@@ -203,6 +203,7 @@ def _build_single_kind_emit(
     record_rows: list[tuple[Any, ...]],
     history_rows: list[tuple[Any, ...]],
     record_cols: list[dict[str, object]] | None = None,
+    extra: dict[str, object] | None = None,
 ) -> Path:
     """Build a minimal populated single-kind emit, for engine-level tests."""
     cols = record_cols if record_cols is not None else _RECORD_COLS
@@ -230,6 +231,7 @@ def _build_single_kind_emit(
             },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra=extra,
     )
     return tmp_path
 
@@ -448,6 +450,53 @@ class TestResolveStreamOutputColumns:
             ("payload", "record_index"),
         ]
 
+    def test_three_surfaces_publish_in_sidecar_column_order(
+        self, tmp_path: Path
+    ) -> None:
+        """`published=(record_id, presentation_id, record_index)` renders
+        three identity entries, in that order, ahead of properties —
+        regardless of which surface is elected."""
+        emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS_PID})
+        identity = IdentityProjection(
+            elected="record_index",
+            published=("record_id", "presentation_id", "record_index"),
+        )
+        with open_emit(emit_dir) as emit:
+            entries = resolve_stream_output_columns(
+                emit.sidecar, "item", ["status"], None, identity
+            )
+        assert [(e.source_kind, e.source, e.output_key) for e in entries] == [
+            ("identity", "record_id", "record_id"),
+            ("identity", "presentation_id", "presentation_id"),
+            ("identity", "record_index", "record_index"),
+            ("payload", "prop__status", "status"),
+        ]
+
+    def test_rename_addresses_a_published_non_elected_surface(
+        self, tmp_path: Path
+    ) -> None:
+        """`rename` may retarget a published surface that is not the elected
+        one — the resolved wire name follows every published surface, not
+        only the message key."""
+        emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS_PID})
+        identity = IdentityProjection(
+            elected="record_index",
+            published=("presentation_id", "record_index"),
+        )
+        with open_emit(emit_dir) as emit:
+            entries = resolve_stream_output_columns(
+                emit.sidecar,
+                "item",
+                ["status"],
+                {"presentation_id": "nhs_number"},
+                identity,
+            )
+        assert [(e.source_kind, e.output_key) for e in entries] == [
+            ("identity", "nhs_number"),
+            ("identity", "record_index"),
+            ("payload", "status"),
+        ]
+
 
 # ---------------------------------------------------------------------------
 # resolve_membership_output_columns
@@ -595,6 +644,33 @@ class TestResolveMembershipOutputColumns:
                     {"priority": "record_id"},
                     _RECORD_ID_IDENTITY,
                 )
+
+    def test_three_owner_surfaces_publish_ahead_of_element_fields(
+        self, tmp_path: Path
+    ) -> None:
+        """The owner projection's three published surfaces render in
+        sidecar column order, ahead of the selected scalar field."""
+        emit_dir = _write_membership_sidecar(
+            tmp_path, "person", "team", _MEMBERSHIP_SCALAR_COLS
+        )
+        identity = IdentityProjection(
+            elected="record_index",
+            published=("record_id", "presentation_id", "record_index"),
+        )
+        with open_emit(emit_dir) as emit:
+            entries = resolve_membership_output_columns(
+                emit.sidecar,
+                MembershipRef(kind="person", property="team"),
+                ["priority"],
+                None,
+                identity,
+            )
+        assert [(e.source_kind, e.output_key) for e in entries] == [
+            ("identity", "record_id"),
+            ("identity", "presentation_id"),
+            ("identity", "record_index"),
+            ("payload", "priority"),
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -825,6 +901,55 @@ class TestDebeziumSchemaMatchesResolver:
         after_struct = schema["fields"][1]
         field_names = [f["field"] for f in after_struct["fields"]]
         assert field_names == expected
+
+    def test_multi_surface_identity_value_schema_matches_resolver_order(
+        self, tmp_path: Path
+    ) -> None:
+        """A stream publishing two surfaces (`identity: [record_id,
+        presentation_id]`) schemas the same two identity fields, in sidecar
+        order, ahead of the payload — never in the message key alone."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 1001, 10, True, None, 10, 0, "a")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_PID,
+            extra={
+                "presentation_keys": {
+                    "item": {
+                        "key": {
+                            "unique_within": "emit",
+                            "branch_stable": False,
+                            "slice_stable": False,
+                            "key_space": {
+                                "class": "counter",
+                                "prefix": "I_",
+                                "width": 3,
+                            },
+                        }
+                    }
+                }
+            },
+        )
+        config = StreamConfig(
+            content="state-changes",
+            streams=[
+                KindStream(
+                    name="item",
+                    kind="item",
+                    properties=["status"],
+                    identity=["record_id", "presentation_id"],
+                )
+            ],
+        )
+        source_identity = _source_identity()
+        with open_emit(emit_dir) as emit:
+            schemas = _build_value_schemas(emit, config, source_identity, "topic")
+
+        schema = schemas["item"]
+        after_struct = schema["fields"][1]
+        field_names = [f["field"] for f in after_struct["fields"]]
+        assert field_names == ["record_id", "presentation_id", "status"]
 
     def test_membership_value_schema_fields_equal_event_plus_resolver_output_keys(
         self, tmp_path: Path

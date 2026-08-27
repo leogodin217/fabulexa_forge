@@ -1799,6 +1799,11 @@ class KindStream(StrictBaseModel):
     non-empty and duplicate-free when present. Omitted on a sub-typed kind =
     the full discriminator domain. A flat kind refuses it (business pass)."""
 
+    identity: list[KeySurface] | None = None
+    """The identity surfaces this topic publishes; must contain the stream's
+    elected surface (business pass). Non-empty and duplicate-free when
+    present. Absent: the elected surface alone."""
+
     properties: list[str]
     """Bare property names projected into the after-image — required, no
     default: `[]` must be written to declare a notification feed (identity-only
@@ -1834,11 +1839,13 @@ class KindStream(StrictBaseModel):
     def kind_stream_well_formed(self) -> Self:
         """name matches the topic-name rule; properties never prop__-prefixed
         and duplicate-free; sub_types non-empty and duplicate-free when
-        present; render present-but-empty or empty-keyed rejected; where
-        present-but-empty or empty-keyed rejected; only/ignore mutually
-        exclusive, each distinct and non-empty when present; rename
-        present-but-empty, empty-keyed/valued, or colliding-target rejected;
-        kind_label non-empty when present.
+        present; identity non-empty and duplicate-free when present (whether
+        it contains the elected surface, and whether the kind can source
+        each member, are business rules); render present-but-empty or
+        empty-keyed rejected; where present-but-empty or empty-keyed
+        rejected; only/ignore mutually exclusive, each distinct and
+        non-empty when present; rename present-but-empty, empty-keyed/valued,
+        or colliding-target rejected; kind_label non-empty when present.
 
         Raises:
             ValueError: Any of the above.
@@ -1854,6 +1861,7 @@ class KindStream(StrictBaseModel):
                     " present (omit the field for the full discriminator domain)"
                 )
             _reject_duplicate_names(self.sub_types, f"stream {self.name!r}: sub_types")
+        _require_distinct_nonempty(self.identity, f"stream {self.name!r}: identity")
         _require_render_map_valid(self.render, f"stream {self.name!r}: render")
         _require_where_map_valid(self.where, f"stream {self.name!r}: where")
         _require_distinct_nonempty(self.only, f"stream {self.name!r}: only")
@@ -1877,6 +1885,11 @@ class MembershipStream(StrictBaseModel):
 
     membership: MembershipRef
     """The membership table."""
+
+    identity: list[KeySurface] | None = None
+    """The **owner** identity surfaces this topic publishes; must contain the
+    owner's elected surface (business pass). Non-empty and duplicate-free
+    when present. Absent: the owner's elected surface alone."""
 
     fields: list[str]
     """Bare element-schema field names — required, no default: `[]` must be
@@ -1909,11 +1922,13 @@ class MembershipStream(StrictBaseModel):
     @model_validator(mode="after")
     def membership_stream_well_formed(self) -> Self:
         """name matches the topic-name rule; fields never elem__/member__-
-        prefixed and duplicate-free; render present-but-empty or empty-keyed
-        rejected; sub_types non-empty and duplicate-free when present; where
-        present-but-empty or empty-keyed rejected; rename present-but-empty,
-        empty-keyed/valued, or colliding-target rejected; kind_label
-        non-empty when present.
+        prefixed and duplicate-free; identity non-empty and duplicate-free
+        when present (whether it contains the owner's elected surface, and
+        whether the owner kind can source each member, are business rules);
+        render present-but-empty or empty-keyed rejected; sub_types
+        non-empty and duplicate-free when present; where present-but-empty
+        or empty-keyed rejected; rename present-but-empty, empty-keyed/valued,
+        or colliding-target rejected; kind_label non-empty when present.
 
         Raises:
             ValueError: Any of the above.
@@ -1922,6 +1937,7 @@ class MembershipStream(StrictBaseModel):
         label = f"stream {self.name!r}: fields"
         _reject_prefixed_names(self.fields, ("elem__", "member__"), label)
         _reject_duplicate_names(self.fields, label)
+        _require_distinct_nonempty(self.identity, f"stream {self.name!r}: identity")
         _require_render_map_valid(self.render, f"stream {self.name!r}: render")
         _require_distinct_nonempty(self.sub_types, f"stream {self.name!r}: sub_types")
         _require_where_map_valid(self.where, f"stream {self.name!r}: where")

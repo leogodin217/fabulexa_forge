@@ -22,10 +22,22 @@ from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import KindStream, MembershipStream, StreamConfig
-from fabulexa_forge.errors import ExportError, StreamRenameUnresolvable
+from fabulexa_forge.errors import (
+    ElectionPresentationUndeclared,
+    ExportError,
+    RenderKeyResolves,
+    StreamChangeScopeUnresolvable,
+    StreamIdentityMissingElected,
+    StreamIdentityUnavailable,
+    StreamPropertyNotAddressable,
+    StreamRenameUnresolvable,
+)
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
     iter_stream_events,
+    resolve_identity_projection,
+    resolve_stream_key_populations,
 )
 from fabulexa_forge.exporters.streaming.presentation import (
     IdentityProjection,
@@ -88,6 +100,20 @@ _HISTORY_COLS: list[dict[str, object]] = [
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
 ]
+
+#: A flat-kind whole-column presentation_keys claim for kind 'item' — the
+#: registry `resolve_identity_projection`'s widened presentation_id gate
+#: consults when a stream publishes presentation_id.
+_ITEM_PRESENTATION_KEYS: dict[str, object] = {
+    "item": {
+        "key": {
+            "unique_within": "emit",
+            "branch_stable": False,
+            "slice_stable": False,
+            "key_space": {"class": "counter", "prefix": "I_", "width": 3},
+        }
+    }
+}
 
 #: The default identity projection every non-election-focused resolver call
 #: in this file uses: the byte-identical 'record_id' surface, published once.
@@ -2198,3 +2224,296 @@ class TestStateChangesRegression:
         assert events[0].after["record_id"] == "r1"
         assert isinstance(events[0].ts, int)
         assert isinstance(events[1].ts, int)
+
+
+# ---------------------------------------------------------------------------
+# resolve_stream_key_populations / resolve_identity_projection (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveStreamKeyPopulations:
+    """The population set a stream's identity draws from: {None} for a flat
+    kind, the declared domain (or a `sub_types` narrowing) otherwise."""
+
+    def test_flat_kind_is_singleton_none(self, tmp_path: Path) -> None:
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        with open_emit(emit_dir) as emit:
+            populations = resolve_stream_key_populations(emit.sidecar, "item", None)
+        assert populations == frozenset({None})
+
+
+class TestResolveIdentityProjection:
+    """Direct unit tests over `resolve_identity_projection`: publication
+    order, the missing-elected gate, the unavailable-surrogate gate, and the
+    widened presentation_id-declared gate."""
+
+    def test_absent_identity_publishes_elected_alone(self, tmp_path: Path) -> None:
+        """declared=None publishes exactly the elected surface."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, None)
+            projection = resolve_identity_projection(
+                emit.sidecar, "items", "item", None, election, frozenset({None})
+            )
+        assert projection.elected == "record_id"
+        assert projection.published == ("record_id",)
+
+    def test_declared_omitting_elected_raises_stream_identity_missing_elected(
+        self, tmp_path: Path
+    ) -> None:
+        """A declared identity list that omits the (default record_id)
+        elected surface raises, naming the stream and the elected surface."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 1001, 10, True, None, 10, 0, "Alice")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_WITH_PID,
+            extra={"presentation_keys": _ITEM_PRESENTATION_KEYS},
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, None)
+            with pytest.raises(
+                StreamIdentityMissingElected,
+                match=(
+                    "stream 'items': identity omits the elected surface"
+                    " 'record_id'; a topic must publish its own key"
+                ),
+            ):
+                resolve_identity_projection(
+                    emit.sidecar,
+                    "items",
+                    "item",
+                    ["presentation_id"],
+                    election,
+                    frozenset({None}),
+                )
+
+    def test_publication_order_is_sidecar_order_regardless_of_declaration_order(
+        self, tmp_path: Path
+    ) -> None:
+        """`[record_index, presentation_id]` and its reverse both publish
+        (presentation_id, record_index) — sidecar column order, declaration
+        order discarded."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 1001, 10, True, None, 10, 0, "Alice")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_WITH_PID,
+            extra={"presentation_keys": _ITEM_PRESENTATION_KEYS},
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, {"item": "presentation_id"})
+            forward = resolve_identity_projection(
+                emit.sidecar,
+                "items",
+                "item",
+                ["record_index", "presentation_id"],
+                election,
+                frozenset({None}),
+            )
+            reverse = resolve_identity_projection(
+                emit.sidecar,
+                "items",
+                "item",
+                ["presentation_id", "record_index"],
+                election,
+                frozenset({None}),
+            )
+        assert forward.published == ("presentation_id", "record_index")
+        assert reverse.published == ("presentation_id", "record_index")
+
+    def test_presentation_id_on_kind_with_no_surrogate_raises_unavailable(
+        self, tmp_path: Path
+    ) -> None:
+        """Publishing presentation_id on a kind that mints no surrogate
+        raises StreamIdentityUnavailable, naming the stream and the kind."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, None)
+            with pytest.raises(
+                StreamIdentityUnavailable,
+                match="stream 'items': the kind 'item' mints no presentation_id",
+            ):
+                resolve_identity_projection(
+                    emit.sidecar,
+                    "items",
+                    "item",
+                    ["record_id", "presentation_id"],
+                    election,
+                    frozenset({None}),
+                )
+
+    def test_published_non_elected_presentation_id_undeclared_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """The widened publication gate: presentation_id published (but not
+        elected) on a registry-undeclared population raises
+        ElectionPresentationUndeclared — the default record_id election alone
+        would need no registry at all, but publishing presentation_id
+        requires the claim regardless of election."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 1001, 10, True, None, 10, 0, "Alice")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_WITH_PID,
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, None)
+            with pytest.raises(ElectionPresentationUndeclared):
+                resolve_identity_projection(
+                    emit.sidecar,
+                    "items",
+                    "item",
+                    ["record_id", "presentation_id"],
+                    election,
+                    frozenset({None}),
+                )
+
+
+# ---------------------------------------------------------------------------
+# StreamPropertyNotAddressable (end-to-end)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamPropertyNotAddressable:
+    """An identity surface named in `properties` is refused before any fold
+    runs — identity is projected through `identity`, never `properties`."""
+
+    def test_identity_surface_in_properties_raises(self, tmp_path: Path) -> None:
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        config = _single_kind_config("item", ["record_index"])
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                StreamPropertyNotAddressable,
+                match=(
+                    "stream 'item': 'record_index' is an identity surface —"
+                    " declare it in identity, not properties"
+                ),
+            ):
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+
+    def test_producer_payload_property_named_record_index_unaddressable(
+        self, tmp_path: Path
+    ) -> None:
+        """A producer payload property that merely shares an identity
+        surface's bare name (`prop__record_index`) is unaddressable too, full
+        stop — the rule claims the bare name outright, not only the
+        sidecar's own identity columns."""
+        cols: list[dict[str, object]] = [
+            identity_column("fork_path", "VARCHAR"),
+            identity_column("record_id", "VARCHAR"),
+            {"name": "created_sim_time", "type": "BIGINT"},
+            {"name": "active", "type": "BOOLEAN"},
+            {"name": "deactivated_at", "type": "BIGINT"},
+            {"name": "last_mutation_sim_time", "type": "BIGINT"},
+            identity_column("record_index", "BIGINT"),
+            {
+                "name": "prop__record_index",
+                "type": "VARCHAR",
+                "history_tracked": False,
+                "temporal_class": "constant",
+            },
+        ]
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "z")],
+            history_rows=[],
+            record_cols=cols,
+        )
+        config = _single_kind_config("item", ["record_index"])
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(StreamPropertyNotAddressable):
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+
+
+# ---------------------------------------------------------------------------
+# Identity surfaces stay outside only/ignore/render (representative cases)
+# ---------------------------------------------------------------------------
+
+
+class TestIdentitySurfacesOutsideChangeScopeAndRender:
+    """Identity surfaces stay outside `only` / `ignore` / `where` / `render`
+    — the existing refusal identities apply unchanged, one representative
+    case each (design doc § Surfaces closed to identity surfaces)."""
+
+    def test_identity_surface_in_only_raises_change_scope_unresolvable(
+        self, tmp_path: Path
+    ) -> None:
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        config = _state_changes_config(
+            [
+                KindStream(
+                    name="items",
+                    kind="item",
+                    properties=["status"],
+                    only=["record_index"],
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                StreamChangeScopeUnresolvable,
+                match=(
+                    "stream 'items': only entry 'record_index' has no"
+                    " prop__record_index column on kind 'item'"
+                ),
+            ):
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+
+    def test_identity_surface_in_render_raises_render_key_resolves(
+        self, tmp_path: Path
+    ) -> None:
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        config = _state_changes_config(
+            [
+                KindStream(
+                    name="items",
+                    kind="item",
+                    properties=["status"],
+                    render={"presentation_id": {"decimal": [6, 3]}},
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                RenderKeyResolves,
+                match=(
+                    "stream 'items': render key 'presentation_id' does not"
+                    " name a declared property"
+                ),
+            ):
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)

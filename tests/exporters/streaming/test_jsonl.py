@@ -97,6 +97,18 @@ class TestRenderJsonlObject:
         obj = render_jsonl_object(event)
         assert len(obj["key"]) == 1
 
+    def test_published_non_elected_surface_rides_after_never_key(self) -> None:
+        """A published non-elected surface (presentation_id, here) rides the
+        after-image alongside the elected record_id, but the key map still
+        carries the elected surface alone."""
+        after = {"record_id": "r1", "presentation_id": "P_003", "status": "active"}
+        event = _make_event(
+            record_id="r1", key_column="record_id", key_value="r1", after=after
+        )
+        obj = render_jsonl_object(event)
+        assert obj["key"] == {"record_id": "r1"}
+        assert obj["after"] == after
+
     def test_after_is_row_map_on_create(self) -> None:
         """after carries the full row map on a 'c' event."""
         after = {"record_id": "r1", "name": "Alice"}
