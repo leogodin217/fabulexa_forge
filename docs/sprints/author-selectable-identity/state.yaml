@@ -1,0 +1,80 @@
+sprint: author-selectable-identity
+parent_branch: prepare_for_classroom_env
+baseline_sha: 01021111e6d1e9397d092e776fc61dd41d8e5bea
+started: 2026-08-27
+current_phase: 1
+capabilities:
+  - streaming-exporter: [identity-projection, identity-output-naming, publication-gates, stream-event-record]
+  - playback-tier-1: [identity-projection]
+  - key-election-init: [election-menu, degradation-retirement]
+  - config-loading: [duplicate-key-refusal]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "Duplicate-key config loading"
+    demo: "docs/sprints/author-selectable-identity/demos/phase_1_duplicate_key_refusal.py"
+  2:
+    status: pending
+    name: "Streaming elected-identity naming"
+    demo: "docs/sprints/author-selectable-identity/demos/phase_2_identity_rename.py"
+    steps:
+      - kind: source
+        summary: "Resolved identity output key at all four sites; absorption + auto-published surrogate removed; StreamEvent drops presentation_id; resolvers take IdentityProjection and return OutputEntry lists"
+      - kind: migrate
+        tactic: fan-out
+        change: "StreamEvent has no presentation_id field; key_column is the elected surface's resolved output key; after-images carry the elected surface alone by default"
+        files:
+          - "tests/exporters/streaming/test_pacer.py"
+          - "tests/exporters/streaming/test_mixer.py"
+          - "tests/exporters/streaming/mixer/test_mixer_sink.py"
+          - "tests/exporters/streaming/mixer/test_mixer_meters.py"
+          - "tests/exporters/streaming/test_kafka_sink.py"
+          - "tests/exporters/streaming/test_jsonl.py"
+          - "tests/exporters/streaming/test_debezium.py"
+          - "tests/exporters/streaming/test_selection.py"
+          - "tests/exporters/streaming/test_value_election_stream.py"
+          - "tests/integration/kafka/test_kafka_rig.py"
+      - kind: author
+        summary: "Intent-changing rewrites (absorption retired, resolver API reshaped) plus new elected-surface rename coverage per the spec's Phase 2 author-step test list"
+        files:
+          - "tests/exporters/streaming/test_engine.py"
+          - "tests/exporters/streaming/test_presentation.py"
+          - "tests/exporters/streaming/test_election_stream.py"
+          - "tests/exporters/streaming/_election_fixtures.py"
+  3:
+    status: pending
+    name: "Streaming identity projection"
+    demo: "docs/sprints/author-selectable-identity/demos/phase_3_identity_projection.py"
+    steps:
+      - kind: source
+        summary: "identity list on both stream shapes; resolve_identity_projection with the widened publication gates; per-published-surface identity relations; three new error classes"
+      - kind: author
+        summary: "New projection/gate test coverage per the spec's Phase 3 test list, over the same deep election/engine surface the source step reads"
+        files:
+          - "tests/config/test_stream_config.py"
+          - "tests/exporters/streaming/test_engine.py"
+          - "tests/exporters/streaming/test_election_stream.py"
+          - "tests/exporters/streaming/test_presentation.py"
+          - "tests/exporters/streaming/test_debezium.py"
+          - "tests/exporters/streaming/test_jsonl.py"
+  4:
+    status: pending
+    name: "Playback tier-1 identity projection"
+    demo: "docs/sprints/author-selectable-identity/demos/phase_4_playback_identity.py"
+  5:
+    status: pending
+    name: "The init election menu"
+    demo: "docs/sprints/author-selectable-identity/demos/phase_5_init_menu.py"
+    steps:
+      - kind: source
+        summary: "propose_key_election + render_keys_block menu; degradation surface deleted; three init engines re-spliced; dimensional advisory comment re-emitted"
+      - kind: author
+        summary: "Intent-changing rewrites of the per-mode init tests (degradation retired) plus the new shared-module unit tests per the spec's Phase 5 test list"
+        files:
+          - "tests/exporters/test_keys_init.py"
+          - "tests/test_cli_init.py"
+          - "tests/exporters/source/test_init.py"
+          - "tests/exporters/streaming/test_init.py"
