@@ -2,7 +2,7 @@ sprint: author-selectable-identity
 parent_branch: prepare_for_classroom_env
 baseline_sha: 01021111e6d1e9397d092e776fc61dd41d8e5bea
 started: 2026-08-27
-current_phase: 1
+current_phase: 2
 capabilities:
   - streaming-exporter: [identity-projection, identity-output-naming, publication-gates, stream-event-record]
   - playback-tier-1: [identity-projection]
@@ -13,7 +13,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Duplicate-key config loading"
     demo: "docs/sprints/author-selectable-identity/demos/phase_1_duplicate_key_refusal.py"
   2:
