@@ -1,68 +1,105 @@
 # FabulMixer live-perform config — ride-sharing marketplace (primary demo)
 # ============================================================
 # Drives `fabulexa-forge mixer docs/examples/ride-sharing-marketplace/bundle <this>`
-# (and `fabulexa-forge stream …` for a non-Kafka dry run). Streams a real 30-day,
-# ~129k-event two-sided marketplace emit as `state-changes`, producing FIVE Kafka
-# topics — one channel strip per topic on the board:
+# (and `fabulexa-forge stream …` for a non-Kafka dry run). Streams a real 30-day
+# two-sided marketplace emit as `state-changes` (113,063 events, measured),
+# producing FIVE Kafka topics — one channel strip per topic on the board:
 #
-#   journey_instance  — trip-lifecycle DIMENSION. current_state -> c/u/d.
-#                       Busiest strip (~77k events).
-#   rider             — actor sub-type, demand FACT. status + zone (FSM + spatial)
-#                       and the rider scorecard (loyalty_band, ride_count) -> c/u/d.
-#   driver            — actor sub-type, supply FACT. status + zone and the driver
-#                       scorecard (session_rides) -> c/u/d.
-#   pairing           — ride_match FACT. One row per rider<->driver match; created
-#                       at match, deactivated at release -> ephemeral c/d. The
-#                       marketplace centerpiece.
-#   zone_market       — zone-market DIMENSION. supply/demand surge pressure -> c/u.
-#                       Three zones, lowest volume (~2k events): the laggable dim.
+#   user_session — session-lifecycle DIMENSION (rider trips, driver shifts).
+#                  current_state -> c/u/d, with user_id / session_type on every
+#                  payload. Busiest strip.
+#   rider        — actor sub-type, demand FACT. status + zone (FSM + spatial)
+#                  and the rider scorecard (loyalty_band, ride_count) -> c/u/d.
+#   driver       — actor sub-type, supply FACT. status + zone and the driver
+#                  scorecard (session_rides) -> c/u/d.
+#   match        — pairing FACT. One row per rider<->driver match, with
+#                  rider_id / driver_id on every payload; created at match,
+#                  deactivated at release -> ephemeral c/d. The marketplace
+#                  centerpiece.
+#   zone         — zone-market DIMENSION. supply/demand surge pressure -> c/u.
+#                  Three zones, lowest volume: the laggable dim.
 #
-# Declared streams (no routing block — each stream names its own topic):
-#   - `actor` gets two streams, `rider` and `driver`, each scoped via `sub_types`.
-#     Sub-typing is driven by the `<kind>_type` discriminator domain in
-#     enum_domains, NOT by record_roles.
-#   - `entity` gets one stream, `zone_market`: its `entity_type` domain is
-#     [zone_market] (one sub-type), so the stream is scoped to it, NOT named `entity`.
-#   - `journey_instance` and `pairing` carry single-value/string roles -> one stream
-#     each, named for the kind.
+# VOCABULARY (parity with source.yaml): the same mapping the app database
+# applies — actor/rider -> rider, actor/driver -> driver, entity/zone_market ->
+# zone, journey_instance -> user_session, pairing -> match:
+#   - Per-stream `kind_label` mirrors source.yaml's per-source `item_type`;
+#     topics carry the app database's own table names.
+#   - `keys:` is source.yaml's record_index elections verbatim: event keys are
+#     the same compact BIGINTs each state table presents as `id` (the engine's
+#     actor record_id is a 64-hex content hash), and every payload reference
+#     renders its target's index — match.rider_id / driver_id join the rider /
+#     driver topics, rider and driver zone_id joins zone, user_session.user_id
+#     joins rider / driver. Source.yaml's own renames (requester -> rider_id,
+#     counterpart -> driver_id, zone -> zone_id, actor -> user_id,
+#     journey_type -> session_type), applied per stream.
+#   - PARTITIONS: each actor stream projects only its own `sub_type_columns` —
+#     the previous revision projected the driver's session_rides on rider
+#     events and the rider's ride_count on driver events, all-NULL payload
+#     entries on every row (`sub_type_columns` gives the scorecards to one
+#     side each; only status / zone / loyalty_band are shared).
 #
-# `pairing.prop__requester -> actor` (always a rider) and `prop__counterpart -> actor`
-# (always a driver) are contract-true edges (base.json references). The producer
-# brackets each pairing inside the rider's enroute->on_trip->completed
-# journey_instance.current_state span; the streaming global `seq` (event-time order)
-# preserves that causal nesting automatically. `journey_instance.prop__bound_roles` /
-# `prop__output_roles` are internal coupling bookkeeping (no references) — opaque,
+# `match` payloads surface prop__requester -> rider_id and prop__counterpart ->
+# driver_id — contract-true edges (base.json references; verified all 5,443
+# pairings join a rider requester to a driver counterpart), the same columns
+# source.yaml's match table carries.
+# The producer brackets each match inside the rider's enroute->on_trip->completed
+# user_session.current_state span; the streaming global `seq` (event-time order)
+# preserves that causal nesting automatically. `journey_instance.prop__bound_roles`
+# / `prop__output_roles` are internal coupling bookkeeping (no references) — opaque,
 # not surfaced.
 #
 # Demo joins (CLI flags via the paired demo.yaml, not config) — two contract-true
 # fact->dimension dependencies, both laggable on the board:
-#   --join driver:zone_market --join rider:zone_market   (actor zone enrichment)
-#   --join pairing:driver --join pairing:rider           (match needs both sides)
-# Mute `zone_market` -> the surge joins go dark; mute `driver` -> the market goes
-# one-sided and `pairing` joins stall. One slow stream stalls the pipeline.
+#   --join driver:zone --join rider:zone     (actor zone enrichment)
+#   --join match:driver --join match:rider   (a match needs both sides)
+# Mute `zone` -> the surge joins go dark; mute `driver` -> the market goes
+# one-sided and `match` joins stall. One slow stream stalls the pipeline.
 # (See docs/architecture/mixer-consumer.md.)
 
 content: state-changes
+
+# source.yaml's elections, verbatim — stream identities join the app database.
+keys:
+  actor: record_index
+  entity: record_index
+  journey_instance: record_index
+  pairing: record_index
 
 streams:
   - name: rider
     kind: actor
     sub_types: [rider]
-    # status + zone (FSM + spatial), plus the rider/driver SCD-2 scorecards.
-    # All history-tracked; null-safe across both sub-types.
-    properties: [status, zone, loyalty_band, ride_count, session_rides]
+    # status + zone (FSM + spatial) plus the rider scorecard — rider's own
+    # sub_type_columns only.
+    properties: [status, zone, loyalty_band, ride_count]
+    rename:
+      zone: zone_id
+    kind_label: rider
   - name: driver
     kind: actor
     sub_types: [driver]
-    properties: [status, zone, loyalty_band, ride_count, session_rides]
-  - name: zone_market
+    properties: [status, zone, loyalty_band, session_rides]
+    rename:
+      zone: zone_id
+    kind_label: driver
+  - name: zone
     kind: entity
     sub_types: [zone_market]
     properties: [demand_pressure, supply_pressure]
-  - name: journey_instance
+    kind_label: zone
+  - name: user_session
     kind: journey_instance
-    properties: [current_state]
-  - name: pairing
+    properties: [current_state, actor, journey_type]
+    rename:
+      actor: user_id
+      journey_type: session_type
+    kind_label: user_session
+  - name: match
     kind: pairing
-    # No history-tracked property -> pure create/delete lifecycle (match / release).
-    properties: []
+    # No history-tracked property -> pure create/delete lifecycle (match /
+    # release), with both sides of the market on the payload.
+    properties: [requester, counterpart]
+    rename:
+      requester: rider_id
+      counterpart: driver_id
+    kind_label: match

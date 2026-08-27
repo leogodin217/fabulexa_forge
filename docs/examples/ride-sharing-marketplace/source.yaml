@@ -190,11 +190,13 @@ source:
         rename:
           zone: zone_id
           base_zone: base_zone_id
-      # the zone source drops the generator draw weights and the constant
-      # single-value entity_type; the surge signals stay audited
+      # the zone source drops the generator draw weight and the constant
+      # single-value entity_type; the surge signals stay audited. (The current
+      # bundle carries only dest_weight — origin_weight / base_weight no longer
+      # exist on the zone_market partition.)
       - kind: entity
         item_type: zone
-        ignore: [origin_weight, dest_weight, base_weight, entity_type]
+        ignore: [dest_weight, entity_type]
       - kind: journey_instance
         item_type: user_session
         rename:

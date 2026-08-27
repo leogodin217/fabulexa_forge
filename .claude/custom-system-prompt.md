@@ -87,3 +87,8 @@ user has to decode is a failed response, however correct it is.
   them as such; don't interleave them under topical headers.
 - `path:line` citations belong at the end of the claim they support, and only
   when the user would plausibly open them. They are not proof of work.
+
+## Pull Requests
+
+- **Focus on features and bug fixes in the description** No need to mention every doc and skill update
+- **Never attribute Claude Code in the description** Attribution should never include a link to a session.

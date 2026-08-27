@@ -4,10 +4,11 @@
 # by `fabulexa-forge`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
 # See dev/demo/README.md.
 #
-# Ride-sharing topic set (default routing `{route_table}` -> the leaf):
-#   trip               — actor sub-typed to its single declared sub-type (status, surge_tier);
-#                        actor_type=[trip], so the topic is `trip`, not `actor`
-#   journey_instance   — trip lifecycle (current_state, complete); not sub-typed
+# Ride-sharing topic set (stream.yaml's declared streams — source.yaml's names):
+#   trip             — actor sub-typed to its single declared sub-type (status);
+#                      actor_type=[trip], so the topic is `trip`, not `actor`
+#   trip_lifecycle   — journey_instance (current_state + trip_id); not sub-typed,
+#                      named for source.yaml's trip_lifecycle table
 #
 # Without an explicit fact->dimension edge declared in the base-layer record_roles
 # for this emit, joins is empty. This is a valid pure read-back preset that
