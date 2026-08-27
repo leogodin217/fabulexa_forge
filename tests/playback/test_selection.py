@@ -39,12 +39,14 @@ def _record(
     sub_types: tuple[str, ...] = (),
     properties: tuple[str, ...] | None = (),
     record_ids: frozenset[str] | None = None,
+    identity: tuple[str, ...] | None = None,
 ) -> RecordAtomSelection:
     return RecordAtomSelection(
         kind=kind,
         sub_types=sub_types,
         properties=properties,
         record_ids=record_ids,
+        identity=identity,
     )
 
 
@@ -378,6 +380,168 @@ def test_instance_set_non_empty_negative_owner_record_ids(sidecar: "Sidecar") ->
                 memberships=(_membership(owner_record_ids=frozenset()),),
             ),
         )
+
+
+# ---------------------------------------------------------------------------
+# Playback rules — identity shape, domain, spine, availability, properties
+# disjoint
+# ---------------------------------------------------------------------------
+
+
+def test_identity_shape_positive(sidecar: "Sidecar") -> None:
+    resolve_selection(
+        sidecar,
+        PlaybackSelection(
+            records=(_record("patient", identity=("record_id",)),), memberships=()
+        ),
+    )
+
+
+def test_identity_shape_negative_empty(sidecar: "Sidecar") -> None:
+    with pytest.raises(
+        PlaybackError,
+        match="identity must be non-empty and duplicate-free",
+    ):
+        resolve_selection(
+            sidecar,
+            PlaybackSelection(
+                records=(_record("patient", identity=()),), memberships=()
+            ),
+        )
+
+
+def test_identity_shape_negative_duplicate(sidecar: "Sidecar") -> None:
+    with pytest.raises(
+        PlaybackError,
+        match="identity must be non-empty and duplicate-free",
+    ):
+        resolve_selection(
+            sidecar,
+            PlaybackSelection(
+                records=(_record("patient", identity=("record_id", "record_id")),),
+                memberships=(),
+            ),
+        )
+
+
+def test_identity_domain_positive(sidecar: "Sidecar") -> None:
+    resolve_selection(
+        sidecar,
+        PlaybackSelection(
+            records=(_record("device", identity=("record_id", "presentation_id")),),
+            memberships=(),
+        ),
+    )
+
+
+def test_identity_domain_negative(sidecar: "Sidecar") -> None:
+    with pytest.raises(
+        PlaybackError, match="'record_index' is not a tier-1 identity surface"
+    ):
+        resolve_selection(
+            sidecar,
+            PlaybackSelection(
+                records=(_record("patient", identity=("record_id", "record_index")),),
+                memberships=(),
+            ),
+        )
+
+
+def test_identity_spine_positive(sidecar: "Sidecar") -> None:
+    resolve_selection(
+        sidecar,
+        PlaybackSelection(
+            records=(_record("device", identity=("presentation_id", "record_id")),),
+            memberships=(),
+        ),
+    )
+
+
+def test_identity_spine_negative(sidecar: "Sidecar") -> None:
+    with pytest.raises(PlaybackError, match="identity must contain record_id"):
+        resolve_selection(
+            sidecar,
+            PlaybackSelection(
+                records=(_record("device", identity=("presentation_id",)),),
+                memberships=(),
+            ),
+        )
+
+
+def test_identity_available_positive(sidecar: "Sidecar") -> None:
+    resolve_selection(
+        sidecar,
+        PlaybackSelection(
+            records=(_record("device", identity=("record_id", "presentation_id")),),
+            memberships=(),
+        ),
+    )
+
+
+def test_identity_available_negative(sidecar: "Sidecar") -> None:
+    with pytest.raises(PlaybackError, match="the kind mints no presentation_id"):
+        resolve_selection(
+            sidecar,
+            PlaybackSelection(
+                records=(
+                    _record("patient", identity=("record_id", "presentation_id")),
+                ),
+                memberships=(),
+            ),
+        )
+
+
+def test_properties_disjoint_from_identity_positive(sidecar: "Sidecar") -> None:
+    resolve_selection(
+        sidecar,
+        PlaybackSelection(
+            records=(_record("patient", properties=("status",)),), memberships=()
+        ),
+    )
+
+
+def test_properties_disjoint_from_identity_negative(sidecar: "Sidecar") -> None:
+    with pytest.raises(
+        PlaybackError,
+        match="'record_id' is an identity surface — declare it in identity",
+    ):
+        resolve_selection(
+            sidecar,
+            PlaybackSelection(
+                records=(_record("patient", properties=("record_id",)),), memberships=()
+            ),
+        )
+
+
+def test_identity_none_resolves_record_id_alone_on_non_minting_kind(
+    sidecar: "Sidecar",
+) -> None:
+    resolved = resolve_selection(
+        sidecar, PlaybackSelection(records=(_record("patient"),), memberships=())
+    )
+    assert resolved.records[0].identity == ("record_id",)
+
+
+def test_identity_none_resolves_record_id_and_presentation_id_on_minting_kind(
+    sidecar: "Sidecar",
+) -> None:
+    resolved = resolve_selection(
+        sidecar, PlaybackSelection(records=(_record("device"),), memberships=())
+    )
+    assert resolved.records[0].identity == ("record_id", "presentation_id")
+
+
+def test_identity_named_tuple_reorders_to_sidecar_column_order(
+    sidecar: "Sidecar",
+) -> None:
+    resolved = resolve_selection(
+        sidecar,
+        PlaybackSelection(
+            records=(_record("device", identity=("presentation_id", "record_id")),),
+            memberships=(),
+        ),
+    )
+    assert resolved.records[0].identity == ("record_id", "presentation_id")
 
 
 # ---------------------------------------------------------------------------

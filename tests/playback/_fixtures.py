@@ -13,6 +13,8 @@ Scenario:
       (constant), prop__count (tracked), prop__internal (slice_only, non-exempt).
   - records__drifted_patient: sub-typed via enum_domains, but its discriminator
       column is undeclared (a drifted tape); prop__name (constant).
+  - records__device: not sub-typed; mints presentation_id; prop__serial
+      (constant).
   - membership__patient__team: owner patient; elem__role (scalar), member__lead
       (reference).
   - membership__widget__tags: owner widget (not sub-typed); elem__tag (scalar).
@@ -80,6 +82,20 @@ _DRIFTED_PATIENT_COLS: list[dict[str, object]] = [
     *_LIFECYCLE_COLS,
     prop_column(
         "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+_DEVICE_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__serial", "VARCHAR", history_tracked=False, temporal_class="constant"
     ),
 ]
 
@@ -153,6 +169,7 @@ def build_fixture_sidecar(tmp_path: "Path") -> Sidecar:
             _DRIFTED_PATIENT_COLS,
             record_kind="drifted_patient",
         ),
+        _table_spec("records__device", "records", _DEVICE_COLS, record_kind="device"),
         _table_spec(
             "membership__patient__team",
             "membership",

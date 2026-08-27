@@ -2,7 +2,7 @@ sprint: author-selectable-identity
 parent_branch: prepare_for_classroom_env
 baseline_sha: 01021111e6d1e9397d092e776fc61dd41d8e5bea
 started: 2026-08-27
-current_phase: 4
+current_phase: 5
 capabilities:
   - streaming-exporter: [identity-projection, identity-output-naming, publication-gates, stream-event-record]
   - playback-tier-1: [identity-projection]
@@ -61,7 +61,7 @@ phases:
           - "tests/exporters/streaming/test_debezium.py"
           - "tests/exporters/streaming/test_jsonl.py"
   4:
-    status: pending
+    status: complete
     name: "Playback tier-1 identity projection"
     demo: "docs/sprints/author-selectable-identity/demos/phase_4_playback_identity.py"
   5:
