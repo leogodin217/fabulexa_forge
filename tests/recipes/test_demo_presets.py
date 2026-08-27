@@ -144,6 +144,4 @@ def test_entity_not_in_marketplace_topic_set() -> None:
         f"'entity' should not be in topic set {sorted(topic_set)}; "
         "expected the declared domain topic 'zone'"
     )
-    assert "zone" in topic_set, (
-        f"'zone' should be in topic set {sorted(topic_set)}"
-    )
+    assert "zone" in topic_set, f"'zone' should be in topic set {sorted(topic_set)}"
