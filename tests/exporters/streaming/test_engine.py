@@ -28,6 +28,7 @@ from fabulexa_forge.exporters.streaming.engine import (
     iter_stream_events,
 )
 from fabulexa_forge.exporters.streaming.presentation import (
+    IdentityProjection,
     resolve_membership_output_columns,
     resolve_stream_output_columns,
 )
@@ -87,6 +88,10 @@ _HISTORY_COLS: list[dict[str, object]] = [
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
 ]
+
+#: The default identity projection every non-election-focused resolver call
+#: in this file uses: the byte-identical 'record_id' surface, published once.
+_RECORD_ID_IDENTITY = IdentityProjection(elected="record_id", published=("record_id",))
 
 
 # ---------------------------------------------------------------------------
@@ -637,7 +642,8 @@ class TestCombinedStreamNulls:
 
 
 class TestRecordIdentity:
-    """record_id and presentation_id are set correctly on events."""
+    """record_id is set correctly on events; a minted presentation_id column
+    never auto-publishes to the after-image (no election addresses it)."""
 
     def test_record_id_is_set_on_every_op(self, tmp_path: Path) -> None:
         """record_id is populated on c, u, and d events."""
@@ -658,10 +664,12 @@ class TestRecordIdentity:
         for e in events:
             assert e.record_id == "r1"
 
-    def test_presentation_id_populated_when_kind_carries_surrogate(
+    def test_presentation_id_absent_from_after_image_under_default_election(
         self, tmp_path: Path
     ) -> None:
-        """presentation_id is set when the kind has a presentation_id column."""
+        """A kind's own presentation_id column never surfaces in the
+        after-image under the default (record_id) election, even when the
+        kind mints one — the retired auto-published surrogate."""
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
@@ -677,26 +685,9 @@ class TestRecordIdentity:
 
         creates = [e for e in events if e.op == "c"]
         assert len(creates) == 1
-        assert creates[0].presentation_id == "1001"
-
-    def test_presentation_id_none_when_kind_has_no_surrogate(
-        self, tmp_path: Path
-    ) -> None:
-        """presentation_id is None when the kind has no presentation_id column."""
-        emit_dir = _build_single_kind_emit(
-            tmp_path,
-            "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
-            history_rows=[],
-        )
-        config = _single_kind_config("item", [])
-        with open_emit(emit_dir) as emit:
-            events = list(
-                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
-            )
-
-        for e in events:
-            assert e.presentation_id is None
+        assert creates[0].after == {"record_id": "r1"}
+        assert creates[0].key_column == "record_id"
+        assert creates[0].key_value == "r1"
 
 
 # ---------------------------------------------------------------------------
@@ -1352,7 +1343,11 @@ class TestFoldColOrder:
         )
         with open_emit(emit_dir) as emit:
             resolved = resolve_stream_output_columns(
-                emit.sidecar, "item", ["status", "label", "rank"], None, "record_id"
+                emit.sidecar,
+                "item",
+                ["status", "label", "rank"],
+                None,
+                _RECORD_ID_IDENTITY,
             )
             events = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
@@ -1362,7 +1357,7 @@ class TestFoldColOrder:
         assert len(creates) == 1
         after = creates[0].after
         assert after is not None
-        assert list(after.keys()) == [output_key for _, output_key in resolved]
+        assert list(after.keys()) == [entry.output_key for entry in resolved]
 
     def test_valid_iter_stream_events_same_events_as_before(
         self, tmp_path: Path
@@ -1780,26 +1775,6 @@ class TestMembershipStreamEventFields:
         assert len(events) == 1
         assert events[0].record_id == "myrecord"
 
-    def test_membership_event_presentation_id_is_none(self, tmp_path: Path) -> None:
-        """presentation_id is always None for membership-events."""
-        emit_dir = _build_single_membership_emit(
-            tmp_path,
-            "queue",
-            "waiters",
-            _MEMBERSHIP_BASIC_COLS,
-            [("trunk", "r1", 10, 50)],
-        )
-        config = _membership_events_config(
-            [_membership_stream("waiters_feed", "queue", "waiters", [])]
-        )
-        with open_emit(emit_dir) as emit:
-            events = list(
-                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
-            )
-
-        for e in events:
-            assert e.presentation_id is None
-
     def test_membership_event_after_nonnull_on_join_and_leave(
         self, tmp_path: Path
     ) -> None:
@@ -1849,7 +1824,11 @@ class TestMembershipAfterImage:
         )
         with open_emit(emit_dir) as emit:
             resolved = resolve_membership_output_columns(
-                emit.sidecar, config.streams[0].membership, [], None, "record_id"
+                emit.sidecar,
+                config.streams[0].membership,
+                [],
+                None,
+                _RECORD_ID_IDENTITY,
             )
             events = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
@@ -1858,7 +1837,7 @@ class TestMembershipAfterImage:
         assert len(events) == 1
         after = events[0].after
         assert after is not None
-        assert list(after.keys()) == [output_key for _, output_key in resolved]
+        assert list(after.keys()) == [entry.output_key for entry in resolved]
 
     def test_after_keys_match_resolve_membership_columns_scalar_field(
         self, tmp_path: Path
@@ -1881,7 +1860,7 @@ class TestMembershipAfterImage:
                 config.streams[0].membership,
                 ["priority"],
                 None,
-                "record_id",
+                _RECORD_ID_IDENTITY,
             )
             events = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
@@ -1890,7 +1869,7 @@ class TestMembershipAfterImage:
         assert len(events) == 1
         after = events[0].after
         assert after is not None
-        assert list(after.keys()) == [output_key for _, output_key in resolved]
+        assert list(after.keys()) == [entry.output_key for entry in resolved]
         assert list(after.keys()) == ["record_id", "priority"]
         assert after["priority"] == "high"
 
@@ -1912,7 +1891,11 @@ class TestMembershipAfterImage:
         )
         with open_emit(emit_dir) as emit:
             resolved = resolve_membership_output_columns(
-                emit.sidecar, config.streams[0].membership, ["owner"], None, "record_id"
+                emit.sidecar,
+                config.streams[0].membership,
+                ["owner"],
+                None,
+                _RECORD_ID_IDENTITY,
             )
             events = list(
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
@@ -1921,7 +1904,7 @@ class TestMembershipAfterImage:
         assert len(events) == 1
         after = events[0].after
         assert after is not None
-        assert list(after.keys()) == [output_key for _, output_key in resolved]
+        assert list(after.keys()) == [entry.output_key for entry in resolved]
         assert list(after.keys()) == [
             "record_id",
             "owner_kind",

@@ -261,7 +261,6 @@ def _non_after_fields(event: StreamEvent) -> tuple[Any, ...]:
         event.op,
         event.kind,
         event.record_id,
-        event.presentation_id,
         event.event_sim_time,
         event.ts,
         event.topic,

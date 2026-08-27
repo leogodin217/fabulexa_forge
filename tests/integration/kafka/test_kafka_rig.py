@@ -123,7 +123,6 @@ def _make_stream_event(
         op=op,  # type: ignore[arg-type]
         kind="entity",
         record_id=record_id,
-        presentation_id=None,
         event_sim_time=event_sim_time,
         ts="2024-06-17T00:00:00+00:00",
         after={"record_id": record_id, "prop__name": f"name-{record_id}"},

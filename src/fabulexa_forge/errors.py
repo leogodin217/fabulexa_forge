@@ -474,21 +474,24 @@ class JsonPrecisionSourceIsVarchar(ExportError):
 
 
 class StreamRenameUnresolvable(ExportError):
-    """A stream's `rename` key names no selected property (kind-shaped) or
-    field (membership-shaped) — rename keys are source identities and must
-    name a member of the stream's own projection. Message, engine-wrapped
-    with the declaring stream's name:
+    """A stream's `rename` key names neither a selected property
+    (kind-shaped) or field (membership-shaped) nor a published identity
+    surface's contract column name — rename keys are source identities and
+    must name a member of the stream's own projection or its published
+    identity set. Message, engine-wrapped with the declaring stream's name:
     `"stream '{name}': rename key '{key}' names no selected property"`
-    (field-variant for membership)."""
+    (field-variant for membership); when the key is itself a KeySurface name
+    this stream simply does not publish, the message appends the published
+    set."""
 
 
 class StreamOutputNameCollision(ExportError):
     """Two of a stream's resolved after-image output keys collide — two
     rename targets, a target vs an unrenamed bare default, a renamed
     reference pair member vs anything — or an output key equals a reserved
-    name on that stream: the identity entry's contract column,
-    `presentation_id` when it ships unabsorbed, or the membership `event`
-    column. Message, engine-wrapped with the declaring stream's name:
+    name on that stream: a published identity surface's resolved output key,
+    or the membership `event` column. Message, engine-wrapped with the
+    declaring stream's name:
     `"stream '{name}': output name '{key}' collides with '{other}'"`."""
 
 

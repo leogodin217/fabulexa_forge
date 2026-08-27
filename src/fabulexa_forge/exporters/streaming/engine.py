@@ -75,7 +75,10 @@ from fabulexa_forge.exporters.election import (
 )
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 from fabulexa_forge.exporters.streaming.presentation import (
+    IdentityProjection,
+    OutputEntry,
     apply_kind_vocabulary,
+    resolve_identity_output_key,
     resolve_membership_output_columns,
     resolve_stream_envelope_kind,
     resolve_stream_kind_vocabulary,
@@ -670,24 +673,24 @@ def build_elected_identity_index(
 
 def _apply_output_columns(
     after: dict[str, object] | None,
-    output_columns: "Sequence[tuple[str, str]]",
+    output_columns: "Sequence[OutputEntry]",
     key_value: str,
 ) -> dict[str, object] | None:
     """Rekey a raw after-image dict to its resolved output keys.
 
     The per-row analog of `presentation.resolve_stream_output_columns` /
     `resolve_membership_output_columns`: the naming authority's one consumer
-    at render time. Replaces the shipped identity re-key/presentation_id-
-    absorb rule and applies `rename` in the same pass — the identity entry's
-    value is always the row's own elected key_value, regardless of the raw
-    dict's 'record_id' entry, since a resolver's identity pair's fold-column
-    name is always 'record_id'.
+    at render time. Every identity entry's value is the row's own elected
+    key_value — Phase 2's `IdentityProjection.published` is always the
+    elected surface alone, so there is exactly one identity entry per
+    stream. Every payload entry's value is read verbatim off the raw dict
+    by its fold column name.
 
     Args:
         after: The raw after-image dict, keyed by fold column name
             (record_id, presentation_id when carried, prop__/elem__/member__
             columns), or None on a delete.
-        output_columns: The resolved (fold column, output key) pairs.
+        output_columns: The resolved OutputEntry list.
         key_value: The row's elected identity value.
 
     Returns:
@@ -696,8 +699,10 @@ def _apply_output_columns(
     if after is None:
         return None
     return {
-        output_key: key_value if fold_column == "record_id" else after[fold_column]
-        for fold_column, output_key in output_columns
+        entry.output_key: key_value
+        if entry.source_kind == "identity"
+        else after[entry.source]
+        for entry in output_columns
     }
 
 
@@ -914,6 +919,7 @@ def _validate_stream_naming(
     """
     for stream in config.streams:
         identity_key = surface_by_stream[stream.name]
+        identity = IdentityProjection(elected=identity_key, published=(identity_key,))
         try:
             if isinstance(stream, KindStream):
                 resolve_stream_output_columns(
@@ -921,7 +927,7 @@ def _validate_stream_naming(
                     stream.kind,
                     stream.properties,
                     stream.rename,
-                    identity_key,
+                    identity,
                 )
             else:
                 resolve_membership_output_columns(
@@ -929,7 +935,7 @@ def _validate_stream_naming(
                     stream.membership,
                     stream.fields,
                     stream.rename,
-                    identity_key,
+                    identity,
                 )
         except (StreamRenameUnresolvable, StreamOutputNameCollision) as exc:
             raise type(exc)(f"stream '{stream.name}': {exc}") from exc
@@ -1258,12 +1264,16 @@ def _build_after_image(
     col_names: list[str],
     op: str,
 ) -> dict[str, object] | None:
-    """Build the after-image dict for one row-state-events row.
+    """Build the raw after-image dict for one row-state-events row.
 
     On a delete op the after-image is None. Otherwise, builds a dict from
     every column after the 4-column fixed prefix (record_id, event_sim_time,
-    event_class, op), which gives: presentation_id (when present) and all
-    prop__<p> columns. Also adds record_id as the first after-image key.
+    event_class, op), which gives: presentation_id (when the kind carries
+    one) and all prop__<p> columns, keyed by fold column name — an
+    intermediate value `_apply_output_columns` re-keys to the published,
+    output-named after-image; an unpublished raw entry (presentation_id
+    under a record_id/record_index election) never survives that pass. Also
+    adds record_id as the first after-image key.
 
     Args:
         row: The fold output row.
@@ -1359,7 +1369,8 @@ def _iter_kind_streams_inner(
     col_names_by_stream: dict[str, list[str]] = {}
     kind_by_stream: dict[str, str] = {}
     reference_targets_by_stream: dict[str, dict[str, str]] = {}
-    output_columns_by_stream: dict[str, list[tuple[str, str]]] = {}
+    output_columns_by_stream: dict[str, list[OutputEntry]] = {}
+    key_output_key_by_stream: dict[str, str] = {}
     envelope_kind_by_stream: dict[str, str] = {}
     identity_index_cache: dict[tuple[str, str], dict[str, str]] = {}
     known_kinds = frozenset(known_records_kinds(sidecar))
@@ -1390,12 +1401,17 @@ def _iter_kind_streams_inner(
         reference_targets_by_stream[stream.name] = kind_reference_targets(
             sidecar, kind, stream.properties, known_kinds
         )
+        surface = surface_by_stream[stream.name]
+        identity = IdentityProjection(elected=surface, published=(surface,))
         output_columns_by_stream[stream.name] = resolve_stream_output_columns(
             sidecar,
             kind,
             stream.properties,
             stream.rename,
-            surface_by_stream[stream.name],
+            identity,
+        )
+        key_output_key_by_stream[stream.name] = resolve_identity_output_key(
+            stream.rename, surface
         )
         envelope_kind_by_stream[stream.name] = resolve_stream_envelope_kind(
             stream.kind_label, kind_vocabulary, kind
@@ -1411,13 +1427,6 @@ def _iter_kind_streams_inner(
         kind = kind_by_stream[stream_name]
 
         col_names = col_names_by_stream[stream_name]
-        has_pid = "presentation_id" in col_names
-
-        presentation_id: str | None = None
-        if has_pid:
-            pid_idx = col_names.index("presentation_id")
-            raw_pid = row[pid_idx]
-            presentation_id = str(raw_pid) if raw_pid is not None else None
 
         surface = surface_by_stream[stream_name]
         if surface == "record_id":
@@ -1457,13 +1466,12 @@ def _iter_kind_streams_inner(
             op=op,  # type: ignore[arg-type]
             kind=envelope_kind_by_stream[stream_name],
             record_id=record_id,
-            presentation_id=presentation_id,
             event_sim_time=event_sim_time,
             ts=ts,
             after=after,
             topic=stream_name,
             route_table=attrs["route_table"],
-            key_column=surface,
+            key_column=key_output_key_by_stream[stream_name],
             key_value=key_value,
         )
 
@@ -1514,7 +1522,8 @@ def _iter_membership_streams_inner(
     owner_kind_by_stream: dict[str, str] = {}
     property_by_stream: dict[str, str] = {}
     reference_fields_by_stream: dict[str, frozenset[str]] = {}
-    output_columns_by_stream: dict[str, list[tuple[str, str]]] = {}
+    output_columns_by_stream: dict[str, list[OutputEntry]] = {}
+    key_output_key_by_stream: dict[str, str] = {}
     envelope_kind_by_stream: dict[str, str] = {}
     identity_index_cache: dict[tuple[str, str], dict[str, str]] = {}
     subtype_index_cache: dict[str, dict[str, str]] = {}
@@ -1543,12 +1552,17 @@ def _iter_membership_streams_inner(
         reference_fields_by_stream[stream.name] = membership_reference_fields(
             sidecar, owner_kind, property_name, stream.fields
         )
+        surface = surface_by_stream[stream.name]
+        owner_identity = IdentityProjection(elected=surface, published=(surface,))
         output_columns_by_stream[stream.name] = resolve_membership_output_columns(
             sidecar,
             stream.membership,
             stream.fields,
             stream.rename,
-            surface_by_stream[stream.name],
+            owner_identity,
+        )
+        key_output_key_by_stream[stream.name] = resolve_identity_output_key(
+            stream.rename, surface
         )
         envelope_kind_by_stream[stream.name] = resolve_stream_envelope_kind(
             stream.kind_label, kind_vocabulary, owner_kind
@@ -1607,13 +1621,12 @@ def _iter_membership_streams_inner(
             op=op,  # type: ignore[arg-type]
             kind=envelope_kind_by_stream[stream_name],
             record_id=record_id,
-            presentation_id=None,
             event_sim_time=event_sim_time,
             ts=ts,
             after=after,
             topic=stream_name,
             route_table=attrs["route_table"],
-            key_column=surface,
+            key_column=key_output_key_by_stream[stream_name],
             key_value=key_value,
         )
 

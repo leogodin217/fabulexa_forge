@@ -3,14 +3,14 @@
 Pure config+sidecar presentation resolution, shared by the engine's
 after-image assembly and the driver's Debezium value-schema builders (the
 single-producer discipline extended from column order to column naming):
-both consumers read the same resolved `(fold column, output key)` list, so
-the declared schema and the rendered rows cannot diverge.
+both consumers read the same resolved `OutputEntry` list, so the declared
+schema and the rendered rows cannot diverge.
 
-Subsumes and replaces `engine.elect_after_image_columns` (the identity
-re-key / presentation_id-absorption rule folds into the leading pair each
-resolver returns) and `engine._rekey_after_image` (the engine assembles
-after-images by keying dicts directly off the resolved pairs, never by a
-separate re-key pass).
+The single naming authority: every published identity surface's output key
+(`resolve_identity_output_key`) and every stream's full ordered after-image
+naming (`resolve_stream_output_columns` / `resolve_membership_output_columns`)
+resolve here, consumed by the engine's after-image assembly and by the
+driver's Debezium value-schema builders alike.
 
 Layer-direction invariant: imports derivations, config, the mode-neutral
 routing surface, and errors — never the engine, drivers, writers, or CLI.
@@ -18,7 +18,8 @@ routing surface, and errors — never the engine, drivers, writers, or CLI.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Mapping, Sequence
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Literal, Mapping, Sequence
 
 from fabulexa_forge.config.models import KindStream, MembershipStream
 from fabulexa_forge.derivations.membership_events import resolve_membership_columns
@@ -32,7 +33,7 @@ from fabulexa_forge.errors import (
 from fabulexa_forge.exporters.streaming.routing import known_records_kinds
 
 if TYPE_CHECKING:
-    from fabulexa_forge.config.models import MembershipRef, StreamConfig
+    from fabulexa_forge.config.models import KeySurface, MembershipRef, StreamConfig
     from fabulexa_forge.reader.sidecar import Sidecar
 
 #: The Debezium membership envelope's reserved payload column — never
@@ -40,51 +41,123 @@ if TYPE_CHECKING:
 #: config never knows its eventual format, so one eager rule covers both).
 _MEMBERSHIP_EVENT_RESERVED = "event"
 
+#: Every identity surface a `rename` key might name — used only to decide
+#: whether an unresolved rename key gets the published-set suffix (it names
+#: a surface that simply isn't published here) or not (a plain typo).
+_KEY_SURFACE_NAMES: frozenset[str] = frozenset(
+    {"record_id", "record_index", "presentation_id"}
+)
+
+
+@dataclass(frozen=True)
+class IdentityProjection:
+    """One stream's resolved, gated identity projection."""
+
+    elected: "KeySurface"
+    """The stream's gated uniform elected surface — for a membership stream,
+    the owner's. Always a member of `published`."""
+
+    published: "tuple[KeySurface, ...]"
+    """Every surface this stream publishes, in the kind's sidecar column
+    order (record_id, presentation_id, record_index). Never empty."""
+
+
+@dataclass(frozen=True)
+class OutputEntry:
+    """One after-image entry: where its value comes from, and its wire name."""
+
+    source_kind: 'Literal["identity", "payload"]'
+    """'identity': `source` names a KeySurface rendered through its election
+    relation (or, for record_id, the fold's own column). 'payload': `source`
+    names a fold output column read verbatim."""
+
+    source: str
+    """The surface name or the fold column name, per `source_kind`."""
+
+    output_key: str
+    """The wire name — the bare default or the resolved rename target."""
+
+
+def resolve_identity_output_key(
+    rename: "Mapping[str, str] | None",
+    surface: "KeySurface",
+) -> str:
+    """The wire name of one published identity surface.
+
+    The single producer of every identity output key, consulted by the
+    after-image resolvers and the message-key assembly site.
+
+    Args:
+        rename: The stream's declared rename map, or None.
+        surface: A published surface.
+
+    Returns:
+        The rename target keyed on `surface` when the map carries one, else
+        `surface` itself (the contract column name).
+    """
+    if rename and surface in rename:
+        return rename[surface]
+    return surface
+
 
 def _validate_rename_keys(
     rename: "Mapping[str, str] | None",
     selected: frozenset[str],
+    published: "tuple[KeySurface, ...]",
     noun: str,
 ) -> None:
-    """Enforce StreamRenameUnresolvable: every rename key names a selection member.
+    """Enforce StreamRenameUnresolvable: every rename key names a selection
+    member or a published identity surface's contract column name.
 
     Args:
         rename: The stream's declared rename map, or None.
         selected: The stream's declared projection (`properties` / `fields`),
             as a set.
+        published: The stream's published identity surfaces — each surface's
+            own contract column name is a legal rename key.
         noun: 'property' or 'field', for the message.
 
     Raises:
-        StreamRenameUnresolvable: A rename key is not a member of `selected`.
+        StreamRenameUnresolvable: A rename key names neither a member of
+            `selected` nor a published surface. When the key is itself a
+            KeySurface name that this stream simply does not publish, the
+            message appends the published set.
     """
     if not rename:
         return
+    published_set = frozenset(published)
     for key in rename:
-        if key not in selected:
+        if key in selected or key in published_set:
+            continue
+        if key in _KEY_SURFACE_NAMES:
             raise StreamRenameUnresolvable(
-                f"rename key '{key}' names no selected {noun}"
+                f"rename key '{key}' names no selected {noun} and is not a"
+                f" published identity surface (published: {sorted(published_set)})"
             )
+        raise StreamRenameUnresolvable(f"rename key '{key}' names no selected {noun}")
 
 
-def _record_output_pair(
-    pairs: list[tuple[str, str]],
+def _record_output_entry(
+    entries: list[OutputEntry],
     claimed: dict[str, str],
-    fold_column: str,
+    source_kind: 'Literal["identity", "payload"]',
+    source: str,
     output_key: str,
     label: str,
 ) -> None:
-    """Append one resolved (fold column, output key) pair, gating collisions.
+    """Append one resolved OutputEntry, gating collisions.
 
     The one place an output key is claimed — shared by every entry a
-    resolver emits (the identity entry, the presentation_id entry, and each
-    payload column), so reserved names and payload names are checked against
-    the same claim table.
+    resolver emits (each published identity surface and each payload
+    column), so reserved names and payload names are checked against the
+    same claim table.
 
     Args:
-        pairs: The resolver's accumulated result list, appended in place.
+        entries: The resolver's accumulated result list, appended in place.
         claimed: output key -> the label of the entry that first claimed it,
             mutated in place.
-        fold_column: The fold's own column name for this entry.
+        source_kind: 'identity' or 'payload'.
+        source: The surface name (identity) or fold column name (payload).
         output_key: The entry's resolved output key.
         label: A human-readable description of this entry, used as `{other}`
             in a later collision this entry causes.
@@ -97,7 +170,9 @@ def _record_output_pair(
             f"output name '{output_key}' collides with '{claimed[output_key]}'"
         )
     claimed[output_key] = label
-    pairs.append((fold_column, output_key))
+    entries.append(
+        OutputEntry(source_kind=source_kind, source=source, output_key=output_key)
+    )
 
 
 def resolve_stream_output_columns(
@@ -105,65 +180,55 @@ def resolve_stream_output_columns(
     kind: str,
     properties: "Sequence[str]",
     rename: "Mapping[str, str] | None",
-    identity_key: str,
-) -> list[tuple[str, str]]:
-    """Resolve a kind-shaped stream's after-image (fold column, output key)
-    pairs — the single naming authority extending resolve_stream_columns.
+    identity: IdentityProjection,
+) -> list[OutputEntry]:
+    """Resolve a kind-shaped stream's after-image entries.
 
-    Order is resolve_stream_columns order exactly (identity entry, then
-    presentation_id when carried and not absorbed, then projected properties
-    in sidecar order); the identity entry's output key is `identity_key`,
-    payload columns take their bare name or their rename target.
+    The single naming authority. Order: published identity surfaces in
+    sidecar column order, then selected properties in the column-order
+    producer's order. No absorption branch — under a presentation_id
+    election the surface is published once, as identity.
 
     Args:
         sidecar: The typed sidecar.
         kind: The stream's records kind, bare.
         properties: The stream's declared projection, bare names.
         rename: The stream's rename map, or None.
-        identity_key: The identity entry's output key — the stream's elected
-            surface's contract column name (record_id / record_index /
-            presentation_id), resolved by the caller from the stream's
-            election with absorption applied. Defines the reserved-name set
-            together with presentation_id, reserved when the kind carries
-            one and identity_key is not presentation_id (the unabsorbed
-            case).
+        identity: The stream's resolved, gated identity projection.
 
     Returns:
-        Ordered (fold column name, output key) pairs — the one list the
-        after-image keying, the JSONL renderer, and the Debezium value
-        schema all consume.
+        Ordered OutputEntry list — the one list the after-image keying, the
+        JSONL renderer, and the Debezium value schema all consume.
 
     Raises:
-        StreamRenameUnresolvable: A rename key names no selected property.
-        StreamOutputNameCollision: Two output keys collide, or an output key
-            collides with a reserved identity name.
+        StreamRenameUnresolvable: A rename key names neither a selected
+            property nor a published surface; message appends the published
+            set only when the key is an unpublished surface name.
+        StreamOutputNameCollision: Two output keys collide, or one collides
+            with a published identity key.
     """
     fold_columns = resolve_stream_columns(sidecar, kind, frozenset(properties))
     selected = frozenset(properties)
-    _validate_rename_keys(rename, selected, "property")
+    _validate_rename_keys(rename, selected, identity.published, "property")
 
-    has_presentation_id = "presentation_id" in fold_columns
-    absorbed = has_presentation_id and identity_key == "presentation_id"
-
-    pairs: list[tuple[str, str]] = []
+    entries: list[OutputEntry] = []
     claimed: dict[str, str] = {}
-    _record_output_pair(pairs, claimed, "record_id", identity_key, "identity")
+    for surface in identity.published:
+        output_key = resolve_identity_output_key(rename, surface)
+        _record_output_entry(
+            entries, claimed, "identity", surface, output_key, "identity"
+        )
 
-    for fold_column in fold_columns[1:]:
-        if fold_column == "presentation_id":
-            if absorbed:
-                continue
-            _record_output_pair(
-                pairs, claimed, fold_column, "presentation_id", "presentation_id"
-            )
+    for fold_column in fold_columns:
+        if fold_column in ("record_id", "presentation_id"):
             continue
         prop = fold_column[len("prop__") :]
         output_key = rename.get(prop, prop) if rename else prop
-        _record_output_pair(
-            pairs, claimed, fold_column, output_key, f"property '{prop}'"
+        _record_output_entry(
+            entries, claimed, "payload", fold_column, output_key, f"property '{prop}'"
         )
 
-    return pairs
+    return entries
 
 
 def resolve_membership_output_columns(
@@ -171,13 +236,12 @@ def resolve_membership_output_columns(
     membership: "MembershipRef",
     fields: "Sequence[str]",
     rename: "Mapping[str, str] | None",
-    owner_identity_key: str,
-) -> list[tuple[str, str]]:
-    """The membership analog of resolve_stream_output_columns, extending
-    resolve_membership_columns. Order is resolve_membership_columns order
-    exactly: owner identity entry, then selected element fields in
+    owner_identity: IdentityProjection,
+) -> list[OutputEntry]:
+    """The membership analog: published owner identity surfaces in the owner
+    kind's sidecar column order, then selected element fields in
     element-schema declaration order (never the config `fields` list's
-    order) — a scalar field one pair, a reference field its `<f>_kind` /
+    order) — a scalar field one entry, a reference field its `<f>_kind` /
     `<f>_id` pair renamed in place.
 
     Args:
@@ -185,29 +249,31 @@ def resolve_membership_output_columns(
         membership: The stream's membership-table address.
         fields: The stream's declared field projection, bare names.
         rename: The stream's rename map, or None.
-        owner_identity_key: The owner identity entry's output key — the
-            owner's elected surface's contract column name, resolved by the
-            caller. With the membership `event` name, defines the reserved
-            set.
+        owner_identity: The stream's resolved, gated owner identity
+            projection.
 
     Returns:
-        Ordered (fold column name, output key) pairs.
+        Ordered OutputEntry list.
 
     Raises:
-        StreamRenameUnresolvable: A rename key names no selected field.
-        StreamOutputNameCollision: Two output keys collide, or an output key
-            collides with the owner identity entry or the reserved
-            membership `event` name.
+        StreamRenameUnresolvable: A rename key names neither a selected
+            field nor a published owner surface.
+        StreamOutputNameCollision: Two output keys collide, or one collides
+            with a published owner identity key or with `event`.
     """
     fold_columns = resolve_membership_columns(
         sidecar, membership.kind, membership.property, fields
     )
     selected = frozenset(fields)
-    _validate_rename_keys(rename, selected, "field")
+    _validate_rename_keys(rename, selected, owner_identity.published, "field")
 
-    pairs: list[tuple[str, str]] = []
+    entries: list[OutputEntry] = []
     claimed: dict[str, str] = {_MEMBERSHIP_EVENT_RESERVED: _MEMBERSHIP_EVENT_RESERVED}
-    _record_output_pair(pairs, claimed, "record_id", owner_identity_key, "identity")
+    for surface in owner_identity.published:
+        output_key = resolve_identity_output_key(rename, surface)
+        _record_output_entry(
+            entries, claimed, "identity", surface, output_key, "identity"
+        )
 
     payload_columns = fold_columns[1:]
     i = 0
@@ -217,20 +283,32 @@ def resolve_membership_output_columns(
             field = column[len("member__") : -len("__kind")]
             id_column = payload_columns[i + 1]
             target = rename.get(field, field) if rename else field
-            _record_output_pair(
-                pairs, claimed, column, f"{target}_kind", f"field '{field}'"
+            _record_output_entry(
+                entries,
+                claimed,
+                "payload",
+                column,
+                f"{target}_kind",
+                f"field '{field}'",
             )
-            _record_output_pair(
-                pairs, claimed, id_column, f"{target}_id", f"field '{field}'"
+            _record_output_entry(
+                entries,
+                claimed,
+                "payload",
+                id_column,
+                f"{target}_id",
+                f"field '{field}'",
             )
             i += 2
         else:
             field = column[len("elem__") :]
             target = rename.get(field, field) if rename else field
-            _record_output_pair(pairs, claimed, column, target, f"field '{field}'")
+            _record_output_entry(
+                entries, claimed, "payload", column, target, f"field '{field}'"
+            )
             i += 1
 
-    return pairs
+    return entries
 
 
 def _stream_subject_kind(stream: "KindStream | MembershipStream") -> str:

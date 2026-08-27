@@ -54,7 +54,6 @@ def make_event(
         op=op,  # type: ignore[arg-type]
         kind="patient",
         record_id=f"r{seq}",
-        presentation_id=None,
         event_sim_time=event_sim_time,
         ts=event_sim_time,
         after={"id": f"r{seq}"},
@@ -666,7 +665,6 @@ def test_advance_invariant3_released_event_identical_to_seeded() -> None:
     assert ev.op == original.op
     assert ev.kind == original.kind
     assert ev.record_id == original.record_id
-    assert ev.presentation_id == original.presentation_id
     assert ev.event_sim_time == original.event_sim_time
     assert ev.ts == original.ts
     assert ev.after == original.after

@@ -1,10 +1,16 @@
 """Tests for presentation.py: output-name resolution and kind vocabulary.
 
 Covers the two naming resolvers (resolve_stream_output_columns /
-resolve_membership_output_columns), the kind-vocabulary resolver
-(resolve_stream_kind_vocabulary), the member-kind value mapping
-(apply_kind_vocabulary), and the presentation-invariance / Debezium-schema-
-agreement properties end to end through the engine and driver.
+resolve_membership_output_columns) against `IdentityProjection` /
+`OutputEntry`, the kind-vocabulary resolver (resolve_stream_kind_vocabulary),
+the member-kind value mapping (apply_kind_vocabulary), and the
+presentation-invariance / Debezium-schema-agreement properties end to end
+through the engine and driver.
+
+No absorption branch: `identity.published` always carries the elected
+surface exactly once, so a `presentation_id`-elected stream publishes one
+identity entry by construction — there is no special-cased duplicate-drop
+to test.
 """
 
 from __future__ import annotations
@@ -34,6 +40,7 @@ from fabulexa_forge.errors import (
 from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
 from fabulexa_forge.exporters.streaming.engine import iter_stream_events
 from fabulexa_forge.exporters.streaming.presentation import (
+    IdentityProjection,
     apply_kind_vocabulary,
     resolve_membership_output_columns,
     resolve_stream_envelope_kind,
@@ -131,6 +138,10 @@ _MEMBERSHIP_REF_AND_SCALAR_COLS: list[dict[str, object]] = [
     {"name": "member__owner__id", "type": "VARCHAR"},
     {"name": "elem__captain_kind", "type": "VARCHAR"},
 ]
+
+#: The default identity projection every non-election-focused resolver test
+#: uses: the byte-identical 'record_id' surface, published once.
+_RECORD_ID_IDENTITY = IdentityProjection(elected="record_id", published=("record_id",))
 
 
 def _table_spec(
@@ -236,71 +247,128 @@ def _source_identity() -> DebeziumSourceIdentity:
 
 
 class TestResolveStreamOutputColumns:
-    def test_order_identity_presentation_id_properties(self, tmp_path: Path) -> None:
-        """Order: identity, presentation_id (carried), properties in sidecar order."""
+    def test_order_identity_then_properties(self, tmp_path: Path) -> None:
+        """Order: the published identity surface, then properties in sidecar order."""
         emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS_PID})
         with open_emit(emit_dir) as emit:
-            pairs = resolve_stream_output_columns(
-                emit.sidecar, "item", ["status"], None, "record_id"
+            entries = resolve_stream_output_columns(
+                emit.sidecar, "item", ["status"], None, _RECORD_ID_IDENTITY
             )
-        assert pairs == [
-            ("record_id", "record_id"),
-            ("presentation_id", "presentation_id"),
-            ("prop__status", "status"),
+        assert [(e.source_kind, e.source, e.output_key) for e in entries] == [
+            ("identity", "record_id", "record_id"),
+            ("payload", "prop__status", "status"),
         ]
 
     def test_bare_defaults_no_rename(self, tmp_path: Path) -> None:
         """Absent rename: every property's output key is its bare name."""
         emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS})
         with open_emit(emit_dir) as emit:
-            pairs = resolve_stream_output_columns(
-                emit.sidecar, "item", ["status", "label"], None, "record_id"
+            entries = resolve_stream_output_columns(
+                emit.sidecar, "item", ["status", "label"], None, _RECORD_ID_IDENTITY
             )
-        assert dict(pairs) == {
+        assert {e.output_key: e.source for e in entries} == {
             "record_id": "record_id",
-            "prop__status": "status",
-            "prop__label": "label",
+            "status": "prop__status",
+            "label": "prop__label",
         }
 
     def test_rename_target_applied(self, tmp_path: Path) -> None:
         """A rename entry retargets its property's output key; order unchanged."""
         emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS})
         with open_emit(emit_dir) as emit:
-            pairs = resolve_stream_output_columns(
+            entries = resolve_stream_output_columns(
                 emit.sidecar,
                 "item",
                 ["status", "label"],
                 {"status": "state"},
-                "record_id",
+                _RECORD_ID_IDENTITY,
             )
-        assert pairs == [
-            ("record_id", "record_id"),
-            ("prop__status", "state"),
-            ("prop__label", "label"),
+        assert [e.output_key for e in entries] == ["record_id", "state", "label"]
+
+    def test_presentation_id_elected_published_once(self, tmp_path: Path) -> None:
+        """A presentation_id-elected identity publishes exactly one identity
+        entry — no absorption special case, just `published` carrying one
+        surface."""
+        emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS_PID})
+        identity = IdentityProjection(
+            elected="presentation_id", published=("presentation_id",)
+        )
+        with open_emit(emit_dir) as emit:
+            entries = resolve_stream_output_columns(
+                emit.sidecar, "item", ["status"], None, identity
+            )
+        assert [(e.source_kind, e.output_key) for e in entries] == [
+            ("identity", "presentation_id"),
+            ("payload", "status"),
         ]
 
-    def test_absorbed_presentation_id_drops_standalone_entry(
+    def test_unelected_presentation_id_never_appears_in_payload(
         self, tmp_path: Path
     ) -> None:
-        """identity_key == 'presentation_id' absorbs the standalone entry."""
+        """Under a record_id / record_index election, the kind's own
+        presentation_id column never surfaces as a payload entry, even
+        though the fold's raw row still carries it."""
         emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS_PID})
+        identity = IdentityProjection(
+            elected="record_index", published=("record_index",)
+        )
         with open_emit(emit_dir) as emit:
-            pairs = resolve_stream_output_columns(
-                emit.sidecar, "item", ["status"], None, "presentation_id"
+            entries = resolve_stream_output_columns(
+                emit.sidecar, "item", ["status"], None, identity
             )
-        assert pairs == [
-            ("record_id", "presentation_id"),
-            ("prop__status", "status"),
+        assert [e.output_key for e in entries] == ["record_index", "status"]
+
+    def test_rename_addresses_elected_surface_output_key(self, tmp_path: Path) -> None:
+        """`rename` may retarget the elected surface's own contract column
+        name — the Phase 2 capability: a `record_index` election's `rename:
+        {record_index: id}` renames the identity entry itself."""
+        emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS})
+        identity = IdentityProjection(
+            elected="record_index", published=("record_index",)
+        )
+        with open_emit(emit_dir) as emit:
+            entries = resolve_stream_output_columns(
+                emit.sidecar, "item", ["status"], {"record_index": "id"}, identity
+            )
+        assert [(e.source_kind, e.output_key) for e in entries] == [
+            ("identity", "id"),
+            ("payload", "status"),
         ]
 
     def test_rename_key_not_selected_raises(self, tmp_path: Path) -> None:
-        """A rename key naming no selected property is unresolvable."""
+        """A rename key naming no selected property and no published surface
+        is unresolvable, with no published-set suffix (a plain typo)."""
         emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS})
         with open_emit(emit_dir) as emit:
-            with pytest.raises(StreamRenameUnresolvable, match="'bogus'"):
+            with pytest.raises(StreamRenameUnresolvable, match="'bogus'") as excinfo:
                 resolve_stream_output_columns(
-                    emit.sidecar, "item", ["status"], {"bogus": "x"}, "record_id"
+                    emit.sidecar,
+                    "item",
+                    ["status"],
+                    {"bogus": "x"},
+                    _RECORD_ID_IDENTITY,
                 )
+        assert "published" not in str(excinfo.value)
+
+    def test_rename_unpublished_surface_name_raises_with_published_suffix(
+        self, tmp_path: Path
+    ) -> None:
+        """A rename key naming a KeySurface this stream does not publish is
+        unresolvable, and the message appends the published set."""
+        emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS_PID})
+        identity = IdentityProjection(
+            elected="record_index", published=("record_index",)
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(StreamRenameUnresolvable, match="published") as excinfo:
+                resolve_stream_output_columns(
+                    emit.sidecar,
+                    "item",
+                    ["status"],
+                    {"presentation_id": "pid"},
+                    identity,
+                )
+        assert "record_index" in str(excinfo.value)
 
     def test_two_rename_targets_collide(self, tmp_path: Path) -> None:
         """Two different properties renamed to the same target collide."""
@@ -312,7 +380,7 @@ class TestResolveStreamOutputColumns:
                     "item",
                     ["status", "label"],
                     {"status": "x", "label": "x"},
-                    "record_id",
+                    _RECORD_ID_IDENTITY,
                 )
 
     def test_rename_target_vs_bare_default_collides(self, tmp_path: Path) -> None:
@@ -325,11 +393,11 @@ class TestResolveStreamOutputColumns:
                     "item",
                     ["status", "label"],
                     {"status": "label"},
-                    "record_id",
+                    _RECORD_ID_IDENTITY,
                 )
 
     def test_output_key_equals_identity_raises(self, tmp_path: Path) -> None:
-        """A rename target equal to the identity entry's contract name collides."""
+        """A rename target equal to the identity entry's resolved key collides."""
         emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS})
         with open_emit(emit_dir) as emit:
             with pytest.raises(StreamOutputNameCollision):
@@ -338,23 +406,47 @@ class TestResolveStreamOutputColumns:
                     "item",
                     ["status"],
                     {"status": "record_id"},
-                    "record_id",
+                    _RECORD_ID_IDENTITY,
                 )
 
-    def test_output_key_equals_unabsorbed_presentation_id_raises(
-        self, tmp_path: Path
-    ) -> None:
-        """A property renamed to 'presentation_id' collides when unabsorbed."""
-        emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS_PID})
+    def test_reserved_name_follows_resolved_key_collision(self, tmp_path: Path) -> None:
+        """`rename: {record_index: status}` under a record_index election
+        collides with the selected 'status' property's bare output key —
+        the reserved name follows the resolved key, not a fixed literal."""
+        emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS})
+        identity = IdentityProjection(
+            elected="record_index", published=("record_index",)
+        )
         with open_emit(emit_dir) as emit:
             with pytest.raises(StreamOutputNameCollision):
                 resolve_stream_output_columns(
                     emit.sidecar,
                     "item",
                     ["status"],
-                    {"status": "presentation_id"},
-                    "record_id",
+                    {"record_index": "status"},
+                    identity,
                 )
+
+    def test_reserved_name_legal_when_surface_unpublished(self, tmp_path: Path) -> None:
+        """`rename: {status: record_index}` is legal when `record_index` is
+        not a published surface (a presentation_id election publishes only
+        presentation_id)."""
+        emit_dir = _write_records_sidecar(tmp_path, {"item": _RECORD_COLS_PID})
+        identity = IdentityProjection(
+            elected="presentation_id", published=("presentation_id",)
+        )
+        with open_emit(emit_dir) as emit:
+            entries = resolve_stream_output_columns(
+                emit.sidecar,
+                "item",
+                ["status"],
+                {"status": "record_index"},
+                identity,
+            )
+        assert [(e.source_kind, e.output_key) for e in entries] == [
+            ("identity", "presentation_id"),
+            ("payload", "record_index"),
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -369,16 +461,41 @@ class TestResolveMembershipOutputColumns:
             tmp_path, "person", "team", _MEMBERSHIP_SCALAR_COLS
         )
         with open_emit(emit_dir) as emit:
-            pairs = resolve_membership_output_columns(
+            entries = resolve_membership_output_columns(
                 emit.sidecar,
                 MembershipRef(kind="person", property="team"),
                 ["priority"],
                 None,
-                "record_id",
+                _RECORD_ID_IDENTITY,
             )
-        assert pairs == [
-            ("record_id", "record_id"),
-            ("elem__priority", "priority"),
+        assert [(e.source_kind, e.output_key) for e in entries] == [
+            ("identity", "record_id"),
+            ("payload", "priority"),
+        ]
+
+    def test_owner_identity_rename_addresses_elected_surface(
+        self, tmp_path: Path
+    ) -> None:
+        """The owner identity entry re-keys the same way a kind stream's
+        does: `rename` may retarget the elected owner surface's own
+        contract column name."""
+        emit_dir = _write_membership_sidecar(
+            tmp_path, "person", "team", _MEMBERSHIP_SCALAR_COLS
+        )
+        identity = IdentityProjection(
+            elected="record_index", published=("record_index",)
+        )
+        with open_emit(emit_dir) as emit:
+            entries = resolve_membership_output_columns(
+                emit.sidecar,
+                MembershipRef(kind="person", property="team"),
+                ["priority"],
+                {"record_index": "id"},
+                identity,
+            )
+        assert [(e.source_kind, e.output_key) for e in entries] == [
+            ("identity", "id"),
+            ("payload", "priority"),
         ]
 
     def test_reference_field_renamed_in_place(self, tmp_path: Path) -> None:
@@ -387,17 +504,17 @@ class TestResolveMembershipOutputColumns:
             tmp_path, "person", "team", _MEMBERSHIP_REF_COLS
         )
         with open_emit(emit_dir) as emit:
-            pairs = resolve_membership_output_columns(
+            entries = resolve_membership_output_columns(
                 emit.sidecar,
                 MembershipRef(kind="person", property="team"),
                 ["owner"],
                 {"owner": "captain"},
-                "record_id",
+                _RECORD_ID_IDENTITY,
             )
-        assert pairs == [
-            ("record_id", "record_id"),
-            ("member__owner__kind", "captain_kind"),
-            ("member__owner__id", "captain_id"),
+        assert [e.output_key for e in entries] == [
+            "record_id",
+            "captain_kind",
+            "captain_id",
         ]
 
     def test_order_is_element_schema_order_not_config_fields_order(
@@ -409,18 +526,14 @@ class TestResolveMembershipOutputColumns:
             tmp_path, "person", "team", _MEMBERSHIP_MULTI_SCALAR_COLS
         )
         with open_emit(emit_dir) as emit:
-            pairs = resolve_membership_output_columns(
+            entries = resolve_membership_output_columns(
                 emit.sidecar,
                 MembershipRef(kind="person", property="team"),
                 ["note", "priority"],
                 None,
-                "record_id",
+                _RECORD_ID_IDENTITY,
             )
-        assert pairs == [
-            ("record_id", "record_id"),
-            ("elem__priority", "priority"),
-            ("elem__note", "note"),
-        ]
+        assert [e.output_key for e in entries] == ["record_id", "priority", "note"]
 
     def test_rename_key_not_selected_raises(self, tmp_path: Path) -> None:
         emit_dir = _write_membership_sidecar(
@@ -433,7 +546,7 @@ class TestResolveMembershipOutputColumns:
                     MembershipRef(kind="person", property="team"),
                     ["priority"],
                     {"bogus": "x"},
-                    "record_id",
+                    _RECORD_ID_IDENTITY,
                 )
 
     def test_renamed_reference_pair_member_collides_with_other_output(
@@ -451,7 +564,7 @@ class TestResolveMembershipOutputColumns:
                     MembershipRef(kind="person", property="team"),
                     ["owner", "captain_kind"],
                     {"owner": "captain"},
-                    "record_id",
+                    _RECORD_ID_IDENTITY,
                 )
 
     def test_output_key_equals_event_raises(self, tmp_path: Path) -> None:
@@ -466,7 +579,7 @@ class TestResolveMembershipOutputColumns:
                     MembershipRef(kind="person", property="team"),
                     ["priority"],
                     {"priority": "event"},
-                    "record_id",
+                    _RECORD_ID_IDENTITY,
                 )
 
     def test_output_key_equals_owner_identity_raises(self, tmp_path: Path) -> None:
@@ -480,7 +593,7 @@ class TestResolveMembershipOutputColumns:
                     MembershipRef(kind="person", property="team"),
                     ["priority"],
                     {"priority": "record_id"},
-                    "record_id",
+                    _RECORD_ID_IDENTITY,
                 )
 
 
@@ -698,13 +811,13 @@ class TestDebeziumSchemaMatchesResolver:
         with open_emit(emit_dir) as emit:
             schemas = _build_value_schemas(emit, config, source_identity, "topic")
             expected = [
-                output_key
-                for _fold, output_key in resolve_stream_output_columns(
+                entry.output_key
+                for entry in resolve_stream_output_columns(
                     emit.sidecar,
                     "item",
                     ["status", "label"],
                     {"status": "state"},
-                    "record_id",
+                    _RECORD_ID_IDENTITY,
                 )
             ]
 
@@ -736,13 +849,13 @@ class TestDebeziumSchemaMatchesResolver:
         with open_emit(emit_dir) as emit:
             schemas = _build_value_schemas(emit, config, source_identity, "topic")
             expected = ["event"] + [
-                output_key
-                for _fold, output_key in resolve_membership_output_columns(
+                entry.output_key
+                for entry in resolve_membership_output_columns(
                     emit.sidecar,
                     membership,
                     ["priority"],
                     {"priority": "prio"},
-                    "record_id",
+                    _RECORD_ID_IDENTITY,
                 )
             ]
 

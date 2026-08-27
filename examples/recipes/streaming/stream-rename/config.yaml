@@ -12,13 +12,15 @@
 #     the left (`patient_status: status`) names no selected property and is
 #     refused, not silently ignored.
 #   - `rename` relabels; it never reorders. The after-image keeps the single
-#     column-order producer's order (identity entry first, then properties in
-#     sidecar order).
-#   - The identity entry (`record_id` here) is not addressable by `rename`: it
-#     keeps its contract name verbatim. The same holds for an auto-included
-#     `presentation_id` and, on a membership stream, the Debezium `event`
-#     column — reserved output names a rename can neither claim nor collide
-#     with.
+#     column-order producer's order (published identity surfaces first, then
+#     properties in sidecar order).
+#   - The identity entry (`record_id` here) IS addressable by `rename` — the
+#     elected surface's own contract column name is a legal rename key
+#     (`rename: {record_id: patient_id}` would carry `patient_id` at all four
+#     identity sites). This recipe leaves it unrenamed to keep the teaching
+#     point on property renaming. On a membership stream, the Debezium
+#     `event` column is still reserved — a rename can neither claim it nor
+#     collide with it.
 #
 # Fixture world (recipe emit):
 #   records__patient — p001 status pending@1d -> active@2d -> discharged@3d (Alice)

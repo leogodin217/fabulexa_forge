@@ -29,6 +29,7 @@ from fabulexa_forge.exporters.streaming.engine import (
 )
 from fabulexa_forge.exporters.streaming.jsonl import write_jsonl_stream
 from fabulexa_forge.exporters.streaming.presentation import (
+    IdentityProjection,
     resolve_membership_output_columns,
     resolve_stream_output_columns,
 )
@@ -464,12 +465,12 @@ def _build_value_schemas(
     Dispatches on config.content: 'membership-events' loops the config's
     membership-shaped streams with a leading 'event' column; all other content
     loops its kind-shaped streams. Every stream's declared column list is
-    re-keyed through `elect_after_image_columns` under its gated elected
-    surface (`resolve_stream_surfaces`) — a pure recomputation of the same
-    gates and surfaces the engine's own validation pass resolves, so the
-    declared schema and the rendered after-image stay the same list by
-    construction (mirrors `exporters.base.engine`'s recompute-not-thread
-    posture).
+    resolved through `presentation.resolve_stream_output_columns` /
+    `resolve_membership_output_columns` under its gated elected surface
+    (`resolve_stream_surfaces`) — a pure recomputation of the same gates and
+    surfaces the engine's own validation pass resolves, so the declared
+    schema and the rendered after-image stay the same list by construction
+    (mirrors `exporters.base.engine`'s recompute-not-thread posture).
 
     Args:
         emit: The open emit.
@@ -523,14 +524,16 @@ def _build_value_schemas_kinds(
 
     for stream in config.streams:
         assert isinstance(stream, KindStream)
+        surface = surfaces[stream.name]
+        identity = IdentityProjection(elected=surface, published=(surface,))
         columns = [
-            output_key
-            for _fold_column, output_key in resolve_stream_output_columns(
+            entry.output_key
+            for entry in resolve_stream_output_columns(
                 emit.sidecar,
                 stream.kind,
                 stream.properties,
                 stream.rename,
-                surfaces[stream.name],
+                identity,
             )
         ]
         if table_identity == "topic":
@@ -582,14 +585,16 @@ def _build_value_schemas_membership(
         schema_key = stream.name if table_identity == "topic" else attrs["route_table"]
 
         if schema_key not in value_schemas:
+            surface = surfaces[stream.name]
+            owner_identity = IdentityProjection(elected=surface, published=(surface,))
             payload_columns = [
-                output_key
-                for _fold_column, output_key in resolve_membership_output_columns(
+                entry.output_key
+                for entry in resolve_membership_output_columns(
                     emit.sidecar,
                     stream.membership,
                     stream.fields,
                     stream.rename,
-                    surfaces[stream.name],
+                    owner_identity,
                 )
             ]
             columns = ["event", *payload_columns]

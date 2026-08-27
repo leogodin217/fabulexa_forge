@@ -34,7 +34,6 @@ def _make_event(
         op="c",
         kind="person",
         record_id=record_id,
-        presentation_id=None,
         event_sim_time=event_sim_time,
         ts=event_sim_time,
         after=None,

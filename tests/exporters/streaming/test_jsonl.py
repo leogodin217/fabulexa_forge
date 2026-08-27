@@ -29,7 +29,6 @@ def _make_event(
     op: Literal["c", "u", "d"] = "c",
     kind: str = "item",
     record_id: str = "r1",
-    presentation_id: str | None = None,
     event_sim_time: int = 1000,
     ts: str | int = "2026-01-01T00:00:00+00:00",
     after: dict[str, object] | None = None,
@@ -50,7 +49,6 @@ def _make_event(
         op=op,
         kind=kind,
         record_id=record_id,
-        presentation_id=presentation_id,
         event_sim_time=event_sim_time,
         ts=ts,
         after=after,
@@ -76,9 +74,8 @@ class TestRenderJsonlObject:
         assert list(obj.keys()) == ["seq", "op", "ts", "kind", "key", "after"]
 
     def test_key_is_record_id_dict(self) -> None:
-        """key is {"record_id": ...} under the default (no-election) surface,
-        even when presentation_id is set (never the message key)."""
-        event = _make_event(record_id="r42", presentation_id="pid-99")
+        """key is {"record_id": ...} under the default (no-election) surface."""
+        event = _make_event(record_id="r42")
         obj = render_jsonl_object(event)
         assert obj["key"] == {"record_id": "r42"}
 

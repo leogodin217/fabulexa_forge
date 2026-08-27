@@ -174,7 +174,6 @@ def _make_event(
         op="c",
         kind="entity",
         record_id=record_id,
-        presentation_id=None,
         event_sim_time=event_sim_time,
         ts="2026-01-01T00:00:00+00:00",
         after={"record_id": record_id},
