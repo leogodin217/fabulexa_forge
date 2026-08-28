@@ -17,7 +17,7 @@ from zoneinfo import ZoneInfo
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column
+from _support.sidecar_builder import enum_options, identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.anchor import EffectiveAnchor
@@ -194,6 +194,9 @@ def _build_single_kind_emit(
         ],
         branches=branches,
         extra=extra,
+        # The vendored schema pins branches to exactly one entry; the
+        # multi-branch guard fixture is schema-invalid by construction.
+        schema_valid=n_branches == 1,
     )
     return tmp_path
 
@@ -569,7 +572,9 @@ class TestPayloadIndependentEventSet:
             record_rows=[("trunk", "r1", 10, True, None, 20, 0, "car", "a0", "b0")],
             history_rows=[("trunk", "actor", "r1", "b", 20, "b1")],
             record_cols=cols,
-            extra={"enum_domains": {"actor": {"actor_type": ["car", "truck"]}}},
+            extra={
+                "enum_domains": {"actor": {"actor_type": enum_options("car", "truck")}}
+            },
         )
         # Stream selects only 'a' (never 'b') but scopes sub_types=['car'].
         config = _state_changes_config(
@@ -641,7 +646,11 @@ class TestCombinedStreamNulls:
             ],
             history_rows=[],
             record_cols=self._COLS_VEHICLE,
-            extra={"enum_domains": {"vehicle": {"vehicle_type": ["car", "truck"]}}},
+            extra={
+                "enum_domains": {
+                    "vehicle": {"vehicle_type": enum_options("car", "truck")}
+                }
+            },
         )
         config = _state_changes_config(
             [_kind_stream("vehicles", "vehicle", ["car_feature", "truck_feature"])]
@@ -1036,7 +1045,11 @@ class TestStreamSubTypesDeclared:
             record_rows=[("trunk", "r1", 10, True, None, 10, 0, "alpha")],
             history_rows=[],
             record_cols=_RECORD_COLS_DISCRIMINATOR,
-            extra={"enum_domains": {"widget": {"widget_type": ["alpha", "beta"]}}},
+            extra={
+                "enum_domains": {
+                    "widget": {"widget_type": enum_options("alpha", "beta")}
+                }
+            },
         )
         config = _state_changes_config(
             [_kind_stream("widgets", "widget", ["widget_type"], sub_types=["gamma"])]
@@ -1266,7 +1279,11 @@ class TestStreamPropertySliceOnly:
             record_rows=[("trunk", "r1", 10, True, None, 10, 0, "alpha")],
             history_rows=[],
             record_cols=_RECORD_COLS_DISCRIMINATOR,
-            extra={"enum_domains": {"widget": {"widget_type": ["alpha", "beta"]}}},
+            extra={
+                "enum_domains": {
+                    "widget": {"widget_type": enum_options("alpha", "beta")}
+                }
+            },
         )
         config = _state_changes_config(
             [_kind_stream("widgets", "widget", ["widget_type"], sub_types=["alpha"])]
@@ -1705,7 +1722,11 @@ class TestMembershipStreamSubTypesDeclared:
             "waiters",
             _MEMBERSHIP_BASIC_COLS,
             [("trunk", "r1", 10, None)],
-            extra={"enum_domains": {"queue": {"queue_type": ["priority", "standard"]}}},
+            extra={
+                "enum_domains": {
+                    "queue": {"queue_type": enum_options("priority", "standard")}
+                }
+            },
         )
         config = _membership_events_config(
             [

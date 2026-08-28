@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 from zoneinfo import ZoneInfo
 
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.playback.types import (
@@ -90,7 +90,9 @@ TAGS_COLS: list[dict[str, object]] = [
     {"name": "elem__tag", "type": "VARCHAR"},
 ]
 
-ENUM_DOMAINS = {"enum_domains": {"patient": {"patient_type": ["doctor", "nurse"]}}}
+ENUM_DOMAINS = {
+    "enum_domains": {"patient": {"patient_type": enum_options("doctor", "nurse")}}
+}
 
 
 def make_anchor() -> EffectiveAnchor:

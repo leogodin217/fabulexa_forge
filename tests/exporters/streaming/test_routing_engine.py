@@ -19,6 +19,7 @@ from typing import Any
 
 import duckdb
 from _support.notices import discard_notice_sink
+from _support.sidecar_builder import enum_options as _enum_options
 from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
@@ -125,7 +126,9 @@ def _build_actor_emit(
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
         extra={
             "enum_domains": {
-                "actor": {"actor_type": ["customer", "vip_customer", "staff"]}
+                "actor": {
+                    "actor_type": _enum_options("customer", "vip_customer", "staff")
+                }
             },
         },
     )

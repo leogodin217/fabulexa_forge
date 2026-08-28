@@ -18,7 +18,7 @@ from typing import Any
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.config.models import KindStream, MembershipStream, StreamConfig
@@ -216,9 +216,9 @@ _DEFAULT_MEMBERSHIP_ROWS: list[tuple[Any, ...]] = [
 
 _ENUM_DOMAINS: dict[str, object] = {
     "gizmo": {
-        "gizmo_type": ["red", "blue"],
-        "region": ["emea", "apac"],
-        "priority": ["10", "20", "30", "40"],
+        "gizmo_type": enum_options("red", "blue"),
+        "region": enum_options("emea", "apac"),
+        "priority": enum_options("10", "20", "30", "40"),
     }
 }
 

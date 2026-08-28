@@ -26,7 +26,12 @@ from typing import TYPE_CHECKING
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
@@ -266,8 +271,8 @@ def _write_clinician_emit(tmp_path: Path) -> Path:
             },
             "enum_domains": {
                 "clinician": {
-                    "clinician_type": ["day", "night"],
-                    "region": ["east", "west"],
+                    "clinician_type": enum_options("day", "night"),
+                    "region": enum_options("east", "west"),
                 }
             },
         },
@@ -445,7 +450,7 @@ def _write_sensor_emit(tmp_path: Path) -> Path:
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
             },
-            "enum_domains": {"sensor": {"category": ["indoor", "outdoor"]}},
+            "enum_domains": {"sensor": {"category": enum_options("indoor", "outdoor")}},
         },
     )
     return tmp_path

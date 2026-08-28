@@ -187,7 +187,7 @@ one external surface: adapting to its version bumps is versioning, not a shim.)
 
 | Stage | Scope | Status |
 |---|---|---|
-| 1 | Reader + conformance (C1–C14), trunk-only | Shipped |
+| 1 | Reader + conformance (C1–C15), trunk-only | Shipped |
 | 2 | Dimensional exporter, config envelope, CSV/DuckDB writers, anchor, `export` + `init` | Shipped |
 | 3 | Source + base + streaming exporters, derivations layer, incremental driver, playback, mixer | Shipped |
 | 4 | Corrupter family + defect manifest | Shipped |

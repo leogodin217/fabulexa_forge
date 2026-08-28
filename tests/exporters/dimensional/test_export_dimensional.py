@@ -14,7 +14,12 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.anchor import resolve_effective_anchor
@@ -155,7 +160,7 @@ def _build_export_emit(tmp_path: Path) -> Path:
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
         extra={
             "enum_domains": {
-                "journey_instance": {"entity_type": ["type_a", "type_b"]},
+                "journey_instance": {"entity_type": enum_options("type_a", "type_b")},
             }
         },
     )

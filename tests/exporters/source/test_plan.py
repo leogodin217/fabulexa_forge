@@ -18,7 +18,12 @@ from typing import TYPE_CHECKING
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
@@ -127,6 +132,7 @@ def _write_bare_emit(
     branches: list[dict[str, object]] | None = None,
     extra: dict[str, object] | None = None,
     records_shape_valid: bool = True,
+    schema_valid: bool = True,
 ) -> Path:
     """Write a minimal single-table emit: an empty run.duckdb (never queried
     by these fixtures' plan builds — default election, no declare_keys data
@@ -142,6 +148,7 @@ def _write_bare_emit(
         branches=branches,
         extra=merged_extra,
         records_shape_valid=records_shape_valid,
+        schema_valid=schema_valid,
     )
     return tmp_path
 
@@ -220,7 +227,9 @@ def build_multi_branch_emit(tmp_path: Path) -> Path:
         {"fork_path": "trunk", "parent": None, "slice_at": 0},
         {"fork_path": "feature", "parent": "trunk", "slice_at": 0},
     ]
-    return _write_bare_emit(tmp_path, table, branches=branches)
+    # The vendored schema pins branches to exactly one entry, so the
+    # multi-branch defect is schema-level as well as guard-level.
+    return _write_bare_emit(tmp_path, table, branches=branches, schema_valid=False)
 
 
 def build_partial_presentation_claim_emit(tmp_path: Path) -> Path:
@@ -258,7 +267,7 @@ def build_partial_presentation_claim_emit(tmp_path: Path) -> Path:
         }
 
     extra = {
-        "enum_domains": {"gizmo": {"gizmo_type": ["a", "b", "c"]}},
+        "enum_domains": {"gizmo": {"gizmo_type": enum_options("a", "b", "c")}},
         "presentation_keys": {
             "gizmo": {
                 "sub_types": {

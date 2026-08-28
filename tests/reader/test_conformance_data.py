@@ -10,7 +10,7 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.reader import open_emit, run_check, validate
@@ -1967,8 +1967,8 @@ _C14_ACTOR_COLUMNS: list[dict[str, object]] = [
 ]
 
 #: The declared discriminator domain for the C14 actor fixtures.
-_C14_ENUM_DOMAINS: dict[str, dict[str, list[str]]] = {
-    "actor": {"actor_type": ["driver", "staff"]}
+_C14_ENUM_DOMAINS: dict[str, dict[str, list[dict[str, object]]]] = {
+    "actor": {"actor_type": enum_options("driver", "staff")}
 }
 
 #: A C14-consistent partition: union == {presentation_id, prop__name,
@@ -1993,7 +1993,7 @@ def _write_c14_emit(
     dest: Path,
     *,
     sub_type_columns: dict[str, dict[str, list[str]]] | None,
-    enum_domains: dict[str, dict[str, list[str]]] | None = None,
+    enum_domains: dict[str, dict[str, list[dict[str, object]]]] | None = None,
 ) -> Path:
     """Write a records__actor emit for C14 (no data rows; C14 reads only sidecar).
 
@@ -2156,7 +2156,9 @@ def test_c14_kind_without_discriminator_is_not_partitioned(tmp_path: Path) -> No
     dest = _write_c14_emit(
         tmp_path / "c14_notpart",
         sub_type_columns=_C14_VALID_PARTITION,
-        enum_domains={"actor": {"status": ["a", "b"]}},  # no actor_type discriminator
+        enum_domains={
+            "actor": {"status": enum_options("a", "b")}
+        },  # no actor_type discriminator
     )
     with open_emit(dest) as emit:
         result = run_check(emit, "C14")

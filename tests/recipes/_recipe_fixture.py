@@ -85,7 +85,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 # One whole day in nanoseconds (sim_time unit = ns offset from runtime anchor).
 # 1*DAY → 2024-01-02, 2*DAY → 2024-01-03, 3*DAY → 2024-01-04.
@@ -661,12 +666,12 @@ def build_recipe_emit(dest: Path) -> None:
                 "patient": {"alice": "p001"},
             },
             "enum_domains": {
-                "patient": {"status": ["active", "discharged", "pending"]},
-                "staff": {"staff_type": ["nurse", "physician"]},
+                "patient": {"status": enum_options("active", "discharged", "pending")},
+                "staff": {"staff_type": enum_options("nurse", "physician")},
                 "team": {
-                    "team_type": ["nursing", "surgical"],
-                    "status": ["active", "forming"],
-                    "shift": ["day", "night"],
+                    "team_type": enum_options("nursing", "surgical"),
+                    "status": enum_options("active", "forming"),
+                    "shift": enum_options("day", "night"),
                 },
             },
             "record_roles": {

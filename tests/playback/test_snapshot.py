@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 
 from fabulexa_forge.anchor import render_ts
 from fabulexa_forge.playback import (
@@ -270,7 +270,9 @@ class TestStampSemantics:
             tmp_path,
             records=[RecordSpec("drifted_patient", cols, rows)],
             extra={
-                "enum_domains": {"drifted_patient": {"drifted_patient_type": ["a"]}}
+                "enum_domains": {
+                    "drifted_patient": {"drifted_patient_type": enum_options("a")}
+                }
             },
         )
         selection = PlaybackSelection(

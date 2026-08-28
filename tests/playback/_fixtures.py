@@ -27,7 +27,12 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -198,8 +203,8 @@ def build_fixture_sidecar(tmp_path: "Path") -> Sidecar:
         branches=[{"fork_path": FORK_PATH, "parent": None, "slice_at": 9999}],
         extra={
             "enum_domains": {
-                "patient": {"patient_type": ["doctor", "nurse"]},
-                "drifted_patient": {"drifted_patient_type": ["a", "b"]},
+                "patient": {"patient_type": enum_options("doctor", "nurse")},
+                "drifted_patient": {"drifted_patient_type": enum_options("a", "b")},
             }
         },
     )

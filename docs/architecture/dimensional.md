@@ -776,7 +776,7 @@ When the emit carries no census, or the census enumerates no rows for that serie
 the comment says so explicitly. Silence would read as *measured, and fine* on
 exactly the emits where nothing was measured.
 
-`init` trusts a C1–C14-conformant emit exactly as the engine does — it does not
+`init` trusts a C1–C15-conformant emit exactly as the engine does — it does not
 re-validate — and relies on these guarantees:
 
 - `record_roles` is present whenever the emit carries ≥ 1 records kind; its absence raises
@@ -1124,7 +1124,7 @@ What the dimensional exporter deliberately does not own:
   the writers; Parquet is not.
 - **Conformance re-validation.** Neither the engine nor `init` re-validates the emit: the
   engine consumes `history_tracked` (C11) and `init` reads `record_roles` (C12) on an emit
-  both trust to be conformant (as they trust all of C1–C14) — see
+  both trust to be conformant (as they trust all of C1–C15) — see
   [`conformance.md`](conformance.md) § Boundaries.
 
 ## Related
@@ -1136,7 +1136,7 @@ What the dimensional exporter deliberately does not own:
 | [`playback.md`](playback.md) | The seam whose tier-2 `state` compiles this mode over a truncated tape via `base_relations`; the presentation-name posture's companion |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface this reads through — `query_arrow`, the `history_tracked` flag, the faithful-read builders, the per-type decode contract |
 | [`row-predicates.md`](row-predicates.md) | The scalar-or-list grammar and rendering authority the mode's five predicate surfaces share |
-| [`conformance.md`](conformance.md) | The C1–C14 contract the input is trusted to satisfy |
+| [`conformance.md`](conformance.md) | The C1–C15 contract the input is trusted to satisfy |
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — FK `target_key` semantics, inheritance, the dim-key agreement check, `init`'s `keys` proposal |
 | [`temporal-elections.md`](temporal-elections.md) | The cross-mode election vocabulary `derived: timestamp` / `scd_window` / `elapsed` / `date_parse` render through — the full election set, anchor-requirement rule, and declared date-parse contract |
 | [`value-rendering-elections.md`](value-rendering-elections.md) | The value elections `derived: decimal` / `derived: json_precision` spell per column — semantics, guards, and the shared rendering authorities |

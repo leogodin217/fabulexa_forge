@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from _support.sidecar_builder import identity_column, write_emit
+from _support.sidecar_builder import enum_options, identity_column, write_emit
 
 from fabulexa_forge.corrupters.base_writer import write_base_emit
 from fabulexa_forge.corrupters.state import CorruptState, WorkingTable
@@ -43,7 +43,7 @@ def _source_sidecar(tmp_path: Path) -> dict[str, object]:
                 "start_datetime": "2024-01-01T00:00:00+00:00",
             },
             "pinned_ids": {"actor": {"alice": "a001"}},
-            "enum_domains": {"actor": {"status": ["active", "discharged"]}},
+            "enum_domains": {"actor": {"status": enum_options("active", "discharged")}},
             "record_roles": {"actor": "fact"},
         },
     )

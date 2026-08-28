@@ -20,7 +20,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 # ---------------------------------------------------------------------------
 # Sidecar column definitions
@@ -198,7 +203,7 @@ def build_test_emit(tmp_path: Path) -> Path:
                 "start_datetime": "2024-01-01T00:00:00+00:00",
             },
             "enum_domains": {
-                "entity": {"entity_type": ["consultant", "nurse", "admin"]},
+                "entity": {"entity_type": enum_options("consultant", "nurse", "admin")},
             },
         },
     )
@@ -392,7 +397,7 @@ def build_no_runtime_emit(tmp_path: Path) -> Path:
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
             "enum_domains": {
-                "entity": {"entity_type": ["consultant", "nurse"]},
+                "entity": {"entity_type": enum_options("consultant", "nurse")},
             },
         },
     )

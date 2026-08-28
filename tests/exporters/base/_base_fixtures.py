@@ -19,7 +19,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 DAY_NS = 86_400 * 1_000_000_000  # one civil day, in sim-time nanoseconds
 
@@ -818,7 +823,7 @@ def build_base_keys_emit(tmp_path: Path) -> Path:
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
             },
-            "enum_domains": {"doctor": {"doctor_type": ["a", "b"]}},
+            "enum_domains": {"doctor": {"doctor_type": enum_options("a", "b")}},
             "presentation_keys": {
                 "patient": {
                     "key": {
@@ -1049,7 +1054,7 @@ def build_mixed_edge_election_emit(
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
             },
-            "enum_domains": {"target": {"target_type": ["alpha", "beta"]}},
+            "enum_domains": {"target": {"target_type": enum_options("alpha", "beta")}},
             "presentation_keys": {
                 "target": {
                     "sub_types": {

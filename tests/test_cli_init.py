@@ -26,7 +26,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_emit_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
@@ -179,7 +179,7 @@ def _write_sidecar(tmp_path: Path, sidecar: dict[str, object]) -> None:
 def _base_sidecar(
     tables: list[dict[str, object]],
     record_roles: dict[str, object] | None,
-    enum_domains: dict[str, dict[str, list[str]]] | None = None,
+    enum_domains: dict[str, dict[str, list[dict[str, object]]]] | None = None,
     sub_type_columns: dict[str, dict[str, list[str]]] | None = None,
     presentation_keys: dict[str, object] | None = None,
     row_census: dict[str, object] | None = None,
@@ -434,7 +434,9 @@ def build_bare_subtyped_dim_emit(tmp_path: Path) -> Path:
                 ),
             ],
             record_roles={"equipment": "dimension"},
-            enum_domains={"equipment": {"equipment_type": ["forklift", "scanner"]}},
+            enum_domains={
+                "equipment": {"equipment_type": enum_options("forklift", "scanner")}
+            },
         ),
     )
     return tmp_path
@@ -470,7 +472,9 @@ def build_bare_subtyped_fact_emit(tmp_path: Path) -> Path:
                 ),
             ],
             record_roles={"delivery": "fact"},
-            enum_domains={"delivery": {"delivery_type": ["express", "standard"]}},
+            enum_domains={
+                "delivery": {"delivery_type": enum_options("express", "standard")}
+            },
         ),
     )
     return tmp_path
@@ -510,7 +514,9 @@ def build_object_valued_actor_emit(
             record_roles={
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
             },
-            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            enum_domains={
+                "actor": {"actor_type": enum_options("driver", "ride", "bus")}
+            },
         ),
     )
     return tmp_path
@@ -548,7 +554,9 @@ def build_actor_emit_with_sub_type_columns(tmp_path: Path) -> Path:
             record_roles={
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
             },
-            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            enum_domains={
+                "actor": {"actor_type": enum_options("driver", "ride", "bus")}
+            },
             sub_type_columns={
                 "actor": {
                     "driver": ["prop__name"],
@@ -1427,7 +1435,9 @@ def build_object_valued_actor_emit_with_presentation_id(
             record_roles={
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
             },
-            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            enum_domains={
+                "actor": {"actor_type": enum_options("driver", "ride", "bus")}
+            },
             presentation_keys=presentation_keys,
         ),
     )
@@ -1596,7 +1606,9 @@ def build_actor_with_referencing_booking_emit(
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"},
                 "booking": "fact",
             },
-            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            enum_domains={
+                "actor": {"actor_type": enum_options("driver", "ride", "bus")}
+            },
             presentation_keys=presentation_keys,
         ),
     )
@@ -1805,7 +1817,7 @@ def build_source_subtyped_membership_emit(tmp_path: Path) -> Path:
                 ),
             ],
             record_roles=None,
-            enum_domains={"actor": {"actor_type": ["consultant", "nurse"]}},
+            enum_domains={"actor": {"actor_type": enum_options("consultant", "nurse")}},
         ),
     )
     return tmp_path

@@ -11,7 +11,7 @@ doc owns the design and build order.
 |---|---|
 | [`bundle.md`](bundle.md) | The input, understood — consumer-side orientation to the bundle: where emit data comes from, table-genre semantics, inherited guarantees, mechanism vs presentation columns, single-branch facts. Informational companion to the vendored contract |
 | [`reader.md`](reader.md) | The base reader — open + version-gate an emit, expose the typed sidecar, the records-column taxonomy (the one classifier every records-column consumer reads through), the structural-temporal surface (the one answer to which structural columns carry a sim-time instant and which may change after creation), the strict `presentation_keys` registry view + union-safety algebra, the row-tuple + columnar query surfaces, the faithful-read SQL builders (the sole faithful namer of base tables) |
-| [`conformance.md`](conformance.md) | C1–C14 conformance — `validate` / `fabulexa-forge validate`, the independent codec, comparison sources |
+| [`conformance.md`](conformance.md) | C1–C15 conformance — `validate` / `fabulexa-forge validate`, the independent codec, comparison sources |
 | [`derivations.md`](derivations.md) | The derivations layer — interpretive shared folds between the reader and the modes; the versioned-intervals, reference-resolution, row-state-events (two-scope: a change-scope set governing `u` event membership × an independently-scoped after-image projection), membership-events, state-at (horizoned + end-of-tape), membership-state-at, and record-index (`record_id` → `record_index`, horizoned + end-of-tape) residents plus the truncated-tape surface, the layer contract (purity / anti-weld / traceability / temporal honesty), the fold-vs-join-relation reading of the determinism rule, the single-branch guard |
 | [`dimensional.md`](dimensional.md) | The dimensional exporter — `mode: dimensional` star-schema reshape (config grammar, grains, FK pathfind, `lookup` enrichment, SCD-2, writers, `export` / `init`) |
 | [`source.md`](source.md) | The source exporter — `mode: source` as the author-declared app database: the declared-table grammar (populations → named tables), the `state` / `junction` renders and the single polymorphic event log, per-table `columns` / `rename`, the two-axis row selection (population `sub_types` × the constant-gated `where`, evaluated on membership units through the owner parent lookup) and the selection-aware event-source disjointness gate, the author-declared domain vocabulary (`kind_labels` / per-source `item_type` / `rename`) resolving kind-name-as-value and `changes`-key surfaces, operational presentation defaults, the mandatory wallclock anchor, corrupt→source composition, the cross-mode incremental driver's per-render window membership (windowed state snapshots via the state-at fold, appended event log, junction extract-on-change), and the `init --mode source` proposal engine |
@@ -60,7 +60,7 @@ layer, the streaming, source, and base exporters (Stage 3), the corrupter family
 
 | Module | Role | Status |
 |---|---|---|
-| `reader/` | The foundation. Open an emit, parse + version-gate `base.json`, expose typed tables/branches/runtime/pins/enum_domains/record_roles, the per-column temporal pair (`history_tracked` + the `temporal_class` accessor), and the records-column taxonomy, and run conformance C1–C14. The one path every exporter/corrupter reads through. See [`reader.md`](reader.md) + [`conformance.md`](conformance.md). | Implemented (Stage 1) |
+| `reader/` | The foundation. Open an emit, parse + version-gate `base.json`, expose typed tables/branches/runtime/pins/enum_domains/record_roles, the per-column temporal pair (`history_tracked` + the `temporal_class` accessor), and the records-column taxonomy, and run conformance C1–C15. The one path every exporter/corrupter reads through. See [`reader.md`](reader.md) + [`conformance.md`](conformance.md). | Implemented (Stage 1) |
 | `derivations/` | Interpretive shared folds between the reader and the modes. Pure SQL, anti-weld signatures (sidecar + plain values), one canonical raw relation each. Six residents — `history` → versioned-intervals, reference-resolution (reference-path · membership-edge), `history` → row-state-events (per-record `c`/`u`/`d`), `membership__<K>__<p>` → membership-events (`join`/`leave`), `history` + `records__<kind>` → state-at (point-in-time row reconstruction, horizoned + end-of-tape entry points), and `membership__<K>__<p>` → membership-state-at (interval containment at a horizon) — plus the truncated-tape surface (base-table presenters + sidecar view rendering the emit sliced at T); owns the single-branch guard. See [`derivations.md`](derivations.md). | Implemented (Stage 3, extended for playback) — six residents + truncated-tape surface |
 | `exporters/` | Base → different shape. One sub-package per mode, plus two mode-neutral modules (`query_spec.py` — the shared compiled-table shape and full-export write dispatch; `reserved_names.py` — the shared bookkeeping-name check). `dimensional` (Stage 2), `streaming` (Stage 3), `source` (Stage 3), and `base` (Stage 3) all ship. The `streaming` mode includes the Layer-A leaf derivation (`streaming/routing.py` — the per-event `route_table` the Debezium `source_table` masquerade reports) and the `init --mode streaming` proposal engine (`streaming/init.py`); `base` is the flat one-row-per-record projection composing the derivations layer's state-at fold as its whole engine. See [`dimensional.md`](dimensional.md), [`source.md`](source.md), [`base.md`](base.md), [`streaming.md`](streaming.md). | `dimensional`, `streaming`, `source` + `base` implemented (Stages 2–3) |
 | `corrupters/` | Base → broken base. The engine (`corrupt_emit`), the seeded selection surface (five-way table-selector resolution, pattern column matching, uniform + placement-weighted samplers), the `Corrupter` operation registry (`null_cells` / `mutate_cells` / `duplicate_rows` / `delete_rows` / `insert_rows` / `schema_drift` / `dangle_reference` / `mispoint_reference` / `freeze_series` / `drop_events` / `shift_sim_time`), the base-emit writer, and the defect manifest (`build_defect_manifest`, `defects.json`) — breaking C6/C7/C9–C12 while preserving C1–C5/C8 and C13's structural clauses by construction. See [`corrupters.md`](corrupters.md). | Implemented (Stage 4) |
@@ -79,7 +79,7 @@ its own.
 
 1. **Reader + conformance, trunk-only.** Open an emit, validate `base.json` against the
    vendored schema, version-gate, expose tables/columns/runtime/pins/enum_domains as
-   typed accessors, reimplement C1–C14 independently (the producer's
+   typed accessors, reimplement C1–C15 independently (the producer's
    reference conformance checker is a *reference to read*, never a dependency). The
    sanitised subset mandates exactly one `branches` entry (C8 asserts it).
    `fabulexa-forge validate`.
@@ -179,7 +179,7 @@ repo, and the producer is never invoked.
   one bound to a tracked source (class `tracked`, making its kind auditably
   tracked) and one bound to an immutable source (class `constant`, which does not). It carries no
   `firings` table, no provenance column group, and exactly one branch, so each
-  C1–C14 check has live input.
+  C1–C15 check has live input.
 - Several **deliberately-broken** variants drive the negative suite — a retyped
   `history` column (C4), a dropped `prop__` column the sidecar still declares
   (C2/C5), a half-NULL membership reference pair (C7), a phantom column (C2/C5), the
@@ -194,8 +194,8 @@ repo, and the producer is never invoked.
   genesis row with later rows intact (C13's semantic clause alone), and an emptied
   `(kind, property)` series (C11's converse **and** C13's genesis clause — zero rows
   implies no genesis row; the expectation names both) — plus defects that
-  *pass* C1–C14 by design (duplicate tick, dangling records-prop reference), which
-  exercise the boundary that C1–C14 is narrower than the producer's QA suite (see
+  *pass* C1–C15 by design (duplicate tick, dangling records-prop reference), which
+  exercise the boundary that C1–C15 is narrower than the producer's QA suite (see
   [`conformance.md`](conformance.md) § Boundaries). A negative fixture must fail the
   check it is named for and no other, except a coupling the contract itself forces —
   which its expectation then names in full.
@@ -265,7 +265,7 @@ sidecar-shape churn):
 | Area | Status |
 |---|---|
 | Project skeleton + standalone-venv boundary | Scaffolded |
-| Vendored contract (`base_format_version 7`) | Vendored — re-synced on version bump (`contract/README.md`) |
+| Vendored contract (`base_format_version 9`) | Vendored — re-synced on version bump (`contract/README.md`) |
 | Reader + conformance | Implemented (Stage 1) — [`reader.md`](reader.md), [`conformance.md`](conformance.md) |
 | Reader structural-temporal surface — `StructuralInstant`, `structural_instant_columns`, `records_structural_column_is_mutable`; the closed table-category gate at the sidecar structural floor; dimensional / source / base resolving their instant sets through it | Implemented — [`reader.md`](reader.md) § The structural-temporal surface |
 | `fabulexa-forge validate` CLI verb | Implemented (Stage 1) |

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 
 from exporters._emit_fixtures import build_test_emit
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
@@ -1168,7 +1168,10 @@ def _bare_sidecar(
         "tables": tables,
     }
     if enum_domains is not None:
-        raw["enum_domains"] = enum_domains
+        raw["enum_domains"] = {
+            kind: {prop: enum_options(*values) for prop, values in props.items()}
+            for kind, props in enum_domains.items()
+        }
     return Sidecar.from_raw(raw)
 
 

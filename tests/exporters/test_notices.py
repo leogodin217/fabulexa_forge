@@ -14,7 +14,7 @@ import duckdb
 import pytest
 import yaml
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, write_emit
+from _support.sidecar_builder import enum_options, identity_column, write_emit
 
 from fabulexa_forge.cli import cmd_export
 from fabulexa_forge.config.models import ExportConfig
@@ -107,7 +107,11 @@ def _build_notice_emit(tmp_path: Path, slice_at: int = 250) -> Path:
             },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": slice_at}],
-        extra={"enum_domains": {"entity": {"entity_type": ["consultant", "nurse"]}}},
+        extra={
+            "enum_domains": {
+                "entity": {"entity_type": enum_options("consultant", "nurse")}
+            }
+        },
     )
     return emit_dir
 

@@ -25,7 +25,12 @@ from typing import Literal
 
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
@@ -1476,7 +1481,9 @@ def build_subtyped_actor_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
         extra={
-            "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
+            "enum_domains": {
+                "actor": {"actor_type": enum_options("consultant", "nurse")}
+            },
             "presentation_keys": _CONSULTANT_ONLY_PRESENTATION_KEYS,
         },
     )
@@ -1598,7 +1605,9 @@ def build_three_subtype_actor_emit(tmp_path: Path) -> Path:
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
         extra={
             "enum_domains": {
-                "actor": {"actor_type": ["consultant", "registrar", "nurse"]}
+                "actor": {
+                    "actor_type": enum_options("consultant", "registrar", "nurse")
+                }
             },
         },
     )
@@ -2812,7 +2821,10 @@ def _bare_sidecar(
         "tables": tables,
     }
     if enum_domains is not None:
-        raw["enum_domains"] = enum_domains
+        raw["enum_domains"] = {
+            kind: {prop: enum_options(*values) for prop, values in props.items()}
+            for kind, props in enum_domains.items()
+        }
     return Sidecar.from_raw(raw)
 
 

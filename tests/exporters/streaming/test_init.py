@@ -40,7 +40,12 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters.source._source_fixtures import build_source_test_emit
 from exporters.streaming._election_fixtures import (
@@ -215,7 +220,7 @@ def _build_gizmo_partition_emit(tmp_path: Path) -> Path:
         tables=[_table_spec("records__gizmo", "records", _GIZMO_COLUMNS, 1, "gizmo")],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
-            "enum_domains": {"gizmo": {"gizmo_type": ["alpha", "beta"]}},
+            "enum_domains": {"gizmo": {"gizmo_type": enum_options("alpha", "beta")}},
             "sub_type_columns": {
                 "gizmo": {"alpha": ["prop__weight"], "beta": ["prop__color"]}
             },
@@ -365,7 +370,7 @@ def _build_kind_subtype_collision_emit(tmp_path: Path) -> Path:
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"catalog": {"catalog_type": ["product"]}}},
+        extra={"enum_domains": {"catalog": {"catalog_type": enum_options("product")}}},
     )
     return tmp_path
 
@@ -531,7 +536,7 @@ def _build_topic_illegal_subtype_emit(tmp_path: Path) -> Path:
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"gadget2": {"gadget2_type": ["bad type"]}}},
+        extra={"enum_domains": {"gadget2": {"gadget2_type": enum_options("bad type")}}},
     )
     return tmp_path
 
@@ -690,7 +695,7 @@ def _build_membership_member_field_degrade_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
-            "enum_domains": {"creature": {"creature_type": ["cat", "dog"]}},
+            "enum_domains": {"creature": {"creature_type": enum_options("cat", "dog")}},
             "presentation_keys": CREATURE_UNSAFE_REGISTRY,
         },
     )
@@ -786,7 +791,11 @@ def _build_all_names_illegal_emit(tmp_path: Path) -> Path:
             _table_spec("records__onlybad", "records", _ONLYBAD_COLUMNS, 0, "onlybad")
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"onlybad": {"onlybad_type": ["bad one", "bad/two"]}}},
+        extra={
+            "enum_domains": {
+                "onlybad": {"onlybad_type": enum_options("bad one", "bad/two")}
+            }
+        },
     )
     return tmp_path
 

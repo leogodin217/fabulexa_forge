@@ -12,7 +12,7 @@ opens a base-layer emit (`run.duckdb` + `base.json`), version-gates it to the
 supported `base_format_version`, parses the sidecar into typed handles, and opens the single
 sanctioned read-only query surface over `run.duckdb`. It depends on nothing outside
 the vendored [`contract/`](../../contract/base-format.md) — that is the only
-coupling. Conformance assessment (C1–C14) is a separate surface that reads through
+coupling. Conformance assessment (C1–C15) is a separate surface that reads through
 this one — see [`conformance.md`](conformance.md).
 
 ```
@@ -705,7 +705,7 @@ the claim-consuming call, never the open.
 - **Strict on read where no conformance check owns the diagnosis.** The sibling
   registry views (`record_roles`, `sub_type_columns`) parse leniently because
   C12/C14 own their diagnosis; no check owns the `presentation_keys` block's
-  semantic rules — conformance is the published C1–C14, reimplemented verbatim,
+  semantic rules — conformance is the published C1–C15, reimplemented verbatim,
   and forge does not invent a C15 — and a silently-mended block would feed wrong
   keys to a consumer building a merge or join key on them. So the accessor
   refuses instead, placing enforcement at the moment claims are about to be
@@ -745,7 +745,7 @@ What the reader deliberately does not own:
 - **Timestamp rebasing.** The reader exposes `RuntimeAnchor`; mapping `sim_time`
   through the anchor to wallclock is a downstream exporter concern.
 - **Conformance assessment.** The reader *opens*; assessing whether an emit conforms
-  (C1–C14) is [`conformance.md`](conformance.md)'s surface, which reads through the
+  (C1–C15) is [`conformance.md`](conformance.md)'s surface, which reads through the
   `Emit` this reader produces.
 - **Presentation-column detection.** The reader classifies columns by contract
   family, never by origin. The emit carries no marker distinguishing a
@@ -772,7 +772,7 @@ What the reader deliberately does not own:
 
 | Document | Why |
 |---|---|
-| [`conformance.md`](conformance.md) | The C1–C14 conformance contract that reads through this reader |
+| [`conformance.md`](conformance.md) | The C1–C15 conformance contract that reads through this reader |
 | [`bundle.md`](bundle.md) | Consumer-side orientation to the format — the column temporal classes and the genesis guarantee the temporal accessors surface |
 | [`source.md`](source.md) | The audited-set resolution — the first consumer of `Sidecar.temporal_class` |
 | [`derivations.md`](derivations.md) | The interpretive layer that composes the faithful-read builders — the home for reads that reconstruct versions or resolve references |

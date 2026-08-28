@@ -284,6 +284,11 @@ def _parse_enum_domains(
 ) -> Mapping[str, Mapping[str, tuple[str, ...]]]:
     """Parse the optional enum_domains block into a nested mapping.
 
+    Each option is a value object (`{"value": ..., "description"?: ...}`,
+    contract § Closed-domain registry); this view extracts the allowed value
+    strings in declaration order. The optional per-value gloss is not
+    surfaced here — a consumer that needs it reads `Sidecar.raw`.
+
     Args:
         raw: The raw enum_domains value from the sidecar.
 
@@ -298,7 +303,12 @@ def _parse_enum_domains(
             inner: dict[str, tuple[str, ...]] = {}
             for prop, options in props.items():
                 if isinstance(options, list):
-                    inner[prop] = tuple(str(o) for o in options if isinstance(o, str))
+                    inner[prop] = tuple(
+                        entry["value"]
+                        for entry in options
+                        if isinstance(entry, dict)
+                        and isinstance(entry.get("value"), str)
+                    )
             result[kind] = inner
     return result
 

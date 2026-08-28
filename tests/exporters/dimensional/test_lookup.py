@@ -21,7 +21,12 @@ from typing import Literal
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
@@ -114,7 +119,10 @@ def _build_sidecar_dict(
         "tables": tables,
     }
     if enum_domains is not None:
-        raw["enum_domains"] = enum_domains
+        raw["enum_domains"] = {
+            kind: {prop: enum_options(*values) for prop, values in props.items()}
+            for kind, props in enum_domains.items()
+        }
     return raw
 
 

@@ -39,7 +39,7 @@ test suites under [`tests/`](../../tests/).
   representation, compiled by the one authority per election kind.
 - **Above the read surface.** No read the reader serves changes under an
   election: the faithful read, the sidecar surface, and every query API
-  serve unrendered values, and C1–C14 conformance and the corrupters read
+  serve unrendered values, and C1–C15 conformance and the corrupters read
   them unrendered. The reader's one contribution is session setup, not
   reading: `register_render_functions` registers the json-precision scalar
   on the emit's connection at open — the same species of connection-scoped
@@ -481,7 +481,7 @@ contract is external and vendored, and this surface reads it as-is.
   is connection setup at open; no read surface, sidecar accessor, or
   query API is election-aware, and no consumer below the modes calls the
   registered function.
-- **No conformance change** — C1–C14 read the base layer unrendered.
+- **No conformance change** — C1–C15 read the base layer unrendered.
   `compare`'s decimal canonical family ([`compare.md`](compare.md)) is
   the one accompaniment that keeps a decimal-elected render comparable;
   no other family, tolerance, or verdict semantics belong to this

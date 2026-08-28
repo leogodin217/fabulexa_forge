@@ -13,7 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 
 from fabulexa_forge.anchor import EffectiveAnchor, render_ts
 from fabulexa_forge.errors import ExportError
@@ -85,7 +85,9 @@ _TAGS_COLS: list[dict[str, object]] = [
     {"name": "elem__tag", "type": "VARCHAR"},
 ]
 
-_ENUM_DOMAINS = {"enum_domains": {"patient": {"patient_type": ["doctor", "nurse"]}}}
+_ENUM_DOMAINS = {
+    "enum_domains": {"patient": {"patient_type": enum_options("doctor", "nurse")}}
+}
 
 
 def _make_anchor() -> EffectiveAnchor:

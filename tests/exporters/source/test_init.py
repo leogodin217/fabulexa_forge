@@ -41,7 +41,12 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from exporters.source._source_fixtures import build_source_test_emit
@@ -271,7 +276,11 @@ def _build_subtyped_owner_membership_emit(tmp_path: Path) -> Path:
             ),
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}}},
+        extra={
+            "enum_domains": {
+                "actor": {"actor_type": enum_options("consultant", "nurse")}
+            }
+        },
     )
     return emit_dir
 
@@ -501,7 +510,11 @@ def _build_subtyped_junction_collision_emit(tmp_path: Path) -> Path:
             ),
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}}},
+        extra={
+            "enum_domains": {
+                "actor": {"actor_type": enum_options("consultant", "nurse")}
+            }
+        },
     )
     return emit_dir
 
@@ -569,7 +582,7 @@ def _build_subtyped_actor_emit(
 ) -> Path:
     """A sub-typed `actor` kind, with an optional `presentation_keys` block."""
     extra: dict[str, object] = {
-        "enum_domains": {"actor": {"actor_type": sub_types}},
+        "enum_domains": {"actor": {"actor_type": enum_options(*sub_types)}},
     }
     if presentation_keys is not None:
         extra["presentation_keys"] = presentation_keys
@@ -713,7 +726,7 @@ def _build_subtyped_actor_with_referencing_order_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
-            "enum_domains": {"actor": {"actor_type": ["driver", "bus"]}},
+            "enum_domains": {"actor": {"actor_type": enum_options("driver", "bus")}},
             "presentation_keys": _ACTOR_BARE_COUNTER_KEYS,
         },
     )

@@ -818,6 +818,9 @@ def _build_two_kind_emit(
             _table_spec("history", "fixed", _HISTORY_COLS, 0),
         ],
         branches=branches,
+        # The vendored schema pins branches to exactly one entry; the
+        # multi-branch guard fixture is schema-invalid by construction.
+        schema_valid=n_branches == 1,
     )
     return tmp_path
 

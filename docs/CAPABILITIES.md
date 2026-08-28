@@ -69,7 +69,7 @@ See [`architecture/reader.md`](architecture/reader.md) and
   `enum_domains`, per-column `references`, and the per-column temporal pair
   (`history_tracked` + the `Sidecar.temporal_class` narrowing accessor — verbatim
   carry, never inferred) — all read from the sidecar, never hard-coded.
-- ✓ **Conformance C1–C14** — reimplemented independently of the producer (`fabulexa-forge
+- ✓ **Conformance C1–C15** — reimplemented independently of the producer (`fabulexa-forge
   validate <emit_dir>`). The producer's reference conformance checker is a reference to
   read, never a dependency.
 - ✓ **Records-column taxonomy** — `records_column_role` classifies every
@@ -429,7 +429,7 @@ these are out of reach until the contract restores multi-branch / provenance:
 
 Read base, write base. Break **semantic** conformance (C6/C7/C9–C13, including C13's
 genesis clause — now a declared impact) while preserving **structural** conformance
-(C1–C5, C8, C13's structural clauses, and the sidecar-only C14); output stays base-shaped
+(C1–C5, C8, C13's structural clauses, and the sidecar-only C14 and C15); output stays base-shaped
 so any exporter can run
 downstream of a corrupter. A `CorruptConfig` YAML envelope (sibling of `ExportConfig` /
 `StreamConfig`) declares a seed and an ordered list of operations over a shared
@@ -523,7 +523,7 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
 
 ## CLI
 
-- ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C14 against an emit.
+- ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C15 against an emit.
 - ✓ `fabulexa-forge export` *(Stage 2)* — run an export config against an emit,
   dispatching on `config.mode` to the dimensional, source, or base engine;
   `--fmt csv|duckdb` selects delivery; `--next` / `--from` / `--to` drive

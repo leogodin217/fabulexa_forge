@@ -7,7 +7,7 @@
 [`corrupters/engine.py`](../../src/fabulexa_forge/corrupters/engine.py) (`corrupt_emit`).
 
 The corrupter family reads a conformant base-layer emit and writes a realistically-broken
-one: a structurally-conformant (C1–C5, C8) but semantically-broken (C6/C7/C9–C12) base
+one: a structurally-conformant (C1–C5, C8, C15) but semantically-broken (C6/C7/C9–C12) base
 emit, plus `defects.json` — a deterministic, label-grade ground-truth artifact naming
 every defect it injected. A third top-level YAML envelope, `CorruptConfig`, sibling of
 `ExportConfig` / `StreamConfig`, declares a master `seed` and an ordered list of
@@ -494,7 +494,7 @@ Each rewrite holds properties load-bearing for C10:
 | `left_before_join` violates C10 strictly: `left' < joined'` | the population requires `left > joined` strictly; the swap inverts it |
 | no two units rewrite one cell | pair units key on distinct earlier rows; single-row units are distinct rows |
 
-`B_end ≤ slice_at` is an **inherited producer guarantee**, not a C1–C14 predicate: the
+`B_end ≤ slice_at` is an **inherited producer guarantee**, not a C1–C15 predicate: the
 producer constructs membership intervals from a slice-bounded series, so every non-NULL
 `joined_sim_time` / `left_sim_time` is ≤ the branch's `slice_at` — for `left_sim_time` the
 contract's NULL biconditional (non-NULL *means* the member left before the slice boundary)
@@ -683,7 +683,7 @@ and `mutate_cells` ever reach `history` — near-duplicate `jitter` is confined 
 
 ### What each operation breaks, and the impact it declares
 
-Every operation **preserves structural conformance (C1–C5, C8) by construction** (§ The
+Every operation **preserves structural conformance (C1–C5, C8, C15) by construction** (§ The
 base-emit writer) and breaks only semantic conformance and/or the pin surface, or falls
 outside the impact vocabulary entirely. The manifest requires each operation to declare
 the **complete, correct** `impact` set for each defect it injects — the set of semantic
@@ -973,7 +973,7 @@ operation's own removals apply, so same-operation removals compose correctly:
 | `records__<K>` row, `record_id` R | `C6` iff zero rows carrying R survive **and** ≥ 1 working `history` series `(K, R, p)` has a non-empty C6 view whose `prop__<p>` exists in the working `records__<K>` schema with a round-trippable type — the C6 oracle's own gates (§ Family-C's impact rule: mirroring C6), mirrored gate-for-gate: an orphaned series is an *unresolved* series, which C6 fails, never skips |
 | `records__<K>` row, `record_id` R | `C10` iff zero rows carrying R survive **and** ≥ 1 surviving membership row anywhere in the working set carries a non-NULL member pair resolving to (K, R) |
 | `records__<K>` row — dangling records-prop references from other tables, an orphaned series outside the C6 gates, an intact pin via a surviving copy | none of these trip a check — contributes nothing to the union |
-| membership row | always `beyond-c1-c12` — removing an interval removes the check subject; no C1–C14 check quantifies over interval existence |
+| membership row | always `beyond-c1-c12` — removing an interval removes the check subject; no C1–C15 check quantifies over interval existence |
 
 Codes compose by set union; an empty union declares the lone sentinel
 `beyond-c1-c12`. The dangling records-prop reference and the removed membership interval
@@ -1349,7 +1349,7 @@ Each record names one or more `impact` codes:
 | `C6`, `C7`, `C9`–`C13` | This defect causes that named *semantic* check to fail on the corrupted emit. `C13` covers a lost genesis `history` row (a phantom row, a renamed tracked column, a dropped or shifted genesis tick). | Yes |
 | `beyond-c1-c12` | No C6–C13 check fails from this defect. A C14 break — a sidecar-only sub-type partition, outside the vocabulary — cannot arise from a corrupter; the sentinel keeps its historical spelling (§ What each operation breaks). | Not via C6–C13; C14 unreachable. |
 
-A corrupter preserves structural conformance (C1–C5, C8, and C13's structural clauses)
+A corrupter preserves structural conformance (C1–C5, C8, C15, and C13's structural clauses)
 by construction, so `ImpactCode` omits the structural codes entirely — Principle #3 is
 enforced by the type, not by convention. `ImpactCode` spans C6, C7, C9–C12 plus the
 sentinel; C13 is outside it, and naming C13 breaks would widen the vocabulary — a
@@ -1511,7 +1511,7 @@ what makes the generated schema, `defects.json`, the round-trip read, and the
 ## Invariants
 
 1. **Structural preservation.** Corrupt output opens under `open_emit` and passes C1–C5,
-   C8, and C13's structural clauses; it is a valid emit at the supported
+   C8, C15, and C13's structural clauses; it is a valid emit at the supported
    `base_format_version`. The
    base-emit writer round-trips every sidecar column attribute the reader models —
    declared attributes verbatim, absent attributes absent (§ The base-emit writer).
@@ -2046,7 +2046,7 @@ What the corrupter family deliberately does not own:
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles (#1 domain-agnostic, #3 the corrupter exception, #7 no invented defaults, #8 no scaffolding, #9 the base contract is not ours to extend), the boundary, vocabulary |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The base format the writer regenerates and the operations break; base row identity columns and the duplicate-tick / multiplicity legality the locator scheme accounts for |
 | [`reader.md`](reader.md) | `Emit.query_arrow` (the one faithful materialization), the typed `Sidecar` the selector reads metadata from, the `to_csv_text` codec `RowRef` renders through, and the row-order / binary-determinism caveat |
-| [`conformance.md`](conformance.md) | The C1–C14 split (structural preserved, semantic broken) this design targets, and the C1–C14-is-narrower-than-QA boundary the `impact` field and `beyond-c1-c12` sentinel build on |
+| [`conformance.md`](conformance.md) | The C1–C15 split (structural preserved, semantic broken) this design targets, and the C1–C15-is-narrower-than-QA boundary the `impact` field and `beyond-c1-c12` sentinel build on |
 | [`config-docstrings.md`](config-docstrings.md) | The three-channel docstring convention the corrupter config models adopt |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Stage 4 corrupter inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |

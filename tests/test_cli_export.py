@@ -108,6 +108,9 @@ def build_two_branch_emit(tmp_path: Path) -> Path:
             {"fork_path": "trunk", "parent": None, "slice_at": 0},
             {"fork_path": "trunk@branch_a", "parent": "trunk", "slice_at": 50},
         ],
+        # The vendored schema pins branches to exactly one entry; the
+        # multi-branch guard fixture is schema-invalid by construction.
+        schema_valid=False,
     )
     return tmp_path
 

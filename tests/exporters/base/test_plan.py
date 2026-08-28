@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
+from _support.sidecar_builder import enum_options
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import EffectiveAnchor
@@ -144,7 +145,10 @@ def _sidecar(
         "tables": tables,
     }
     if enum_domains is not None:
-        raw["enum_domains"] = enum_domains
+        raw["enum_domains"] = {
+            kind: {prop: enum_options(*values) for prop, values in props.items()}
+            for kind, props in enum_domains.items()
+        }
     if presentation_keys is not None:
         raw["presentation_keys"] = presentation_keys
     return Sidecar.from_raw(raw)

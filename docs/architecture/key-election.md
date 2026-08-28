@@ -581,7 +581,7 @@ uniqueness guard) is the single data-touching rule, raising
   among surfaces the emit carries.
 - **The reader and the C-set are consumed, not extended.**
   `Sidecar.presentation_keys()`, `union_safe`, `combined_claim`,
-  strict-on-read, and conformance C1–C14 are composed as the reader ships
+  strict-on-read, and conformance C1–C15 are composed as the reader ships
   them.
 - **Dimensional identity columns are author-declared.** Election renders no
   dimensional identity column; its dimensional surface is edge defaults, the

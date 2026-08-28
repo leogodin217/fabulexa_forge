@@ -27,7 +27,12 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
@@ -94,7 +99,7 @@ _RUNTIME_EXTRA: "dict[str, object]" = {
     "runtime": {"timezone": "UTC", "start_datetime": "2024-01-01T00:00:00+00:00"}
 }
 _DEVICE_ENUM_DOMAIN: "dict[str, object]" = {
-    "enum_domains": {"device": {"device_type": ["day", "night"]}}
+    "enum_domains": {"device": {"device_type": enum_options("day", "night")}}
 }
 _LIFECYCLE_COLUMNS: "list[dict[str, object]]" = [
     {"name": "created_sim_time", "type": "BIGINT"},

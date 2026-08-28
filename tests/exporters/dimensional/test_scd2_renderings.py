@@ -30,7 +30,12 @@ from zoneinfo import ZoneInfo
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.anchor import EffectiveAnchor
@@ -124,7 +129,18 @@ def _build_actor_emit(
             _table_spec("history", "fixed", _HISTORY_COLUMNS, len(history_rows)),
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
-        extra={"enum_domains": enum_domains} if enum_domains is not None else None,
+        extra=(
+            {
+                "enum_domains": {
+                    kind: {
+                        prop: enum_options(*values) for prop, values in props.items()
+                    }
+                    for kind, props in enum_domains.items()
+                }
+            }
+            if enum_domains is not None
+            else None
+        ),
     )
     return tmp_path
 

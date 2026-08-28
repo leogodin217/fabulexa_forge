@@ -30,7 +30,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from fabulexa_forge.incremental.windows import Window
 
@@ -297,8 +302,8 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
 
     extra: dict[str, object] = {
         "enum_domains": {
-            "actor": {"actor_type": ["consultant", "nurse"]},
-            "shift": {"shift_type": ["day", "night"]},
+            "actor": {"actor_type": enum_options("consultant", "nurse")},
+            "shift": {"shift_type": enum_options("day", "night")},
         },
     }
     if with_runtime:
@@ -840,7 +845,9 @@ def build_source_keys_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
+            "enum_domains": {
+                "actor": {"actor_type": enum_options("consultant", "nurse")}
+            },
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1108,7 +1115,7 @@ def build_source_election_emit(tmp_path: Path, *, corrupt_device: bool = False) 
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 50 * _MS}],
         extra={
-            "enum_domains": {"device": {"device_type": ["day", "night"]}},
+            "enum_domains": {"device": {"device_type": enum_options("day", "night")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1277,7 +1284,7 @@ def build_corrupted_junction_member_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 30 * _MS}],
         extra={
-            "enum_domains": {"device": {"device_type": ["solo"]}},
+            "enum_domains": {"device": {"device_type": enum_options("solo")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1513,7 +1520,7 @@ def build_events_test_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"ticket": {"ticket_type": ["bug", "feature"]}},
+            "enum_domains": {"ticket": {"ticket_type": enum_options("bug", "feature")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1600,7 +1607,7 @@ def build_event_tie_test_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"ticket": {"ticket_type": ["bug", "feature"]}},
+            "enum_domains": {"ticket": {"ticket_type": enum_options("bug", "feature")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1699,7 +1706,7 @@ def build_event_log_suppressed_update_test_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"ticket": {"ticket_type": ["bug", "feature"]}},
+            "enum_domains": {"ticket": {"ticket_type": enum_options("bug", "feature")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1767,7 +1774,9 @@ def build_split_actor_presentation_id_emit(
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
-            "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
+            "enum_domains": {
+                "actor": {"actor_type": enum_options("consultant", "nurse")}
+            },
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1974,7 +1983,7 @@ def build_source_junction_selection_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"worker": {"worker_type": ["day", "night"]}},
+            "enum_domains": {"worker": {"worker_type": enum_options("day", "night")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -2163,7 +2172,7 @@ def build_value_election_events_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"widget": {"widget_type": ["safe", "risky"]}},
+            "enum_domains": {"widget": {"widget_type": enum_options("safe", "risky")}},
             "runtime": {
                 "timezone": "America/New_York",
                 "start_datetime": "2024-01-01T00:00:00+00:00",

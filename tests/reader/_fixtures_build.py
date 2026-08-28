@@ -18,6 +18,7 @@ from pathlib import Path
 import duckdb
 from _support.sidecar_builder import (
     UNSUPPORTED_VERSION_SENTINEL,
+    enum_options,
     identity_column,
     prop_column,
     write_emit,
@@ -192,7 +193,7 @@ def _base_extra(*, include_record_roles: bool = True) -> dict[str, object]:
             "actor": {"alice": "a001"},
         },
         "enum_domains": {
-            "actor": {"status": ["active", "discharged", "pending"]},
+            "actor": {"status": enum_options("active", "discharged", "pending")},
         },
     }
     if include_record_roles:
@@ -824,7 +825,7 @@ def build_history_series(dest: Path) -> None:
     assert isinstance(enum_domains, dict)
     actor_domains = enum_domains["actor"]
     assert isinstance(actor_domains, dict)
-    actor_domains["actor_type"] = ["nurse", "patient"]
+    actor_domains["actor_type"] = enum_options("nurse", "patient")
     write_emit(dest, tables=tables, branches=_SPANNING_BRANCHES, extra=extra)
 
 
@@ -903,7 +904,7 @@ def build_membership_intervals(dest: Path) -> None:
     assert isinstance(enum_domains, dict)
     actor_domains = enum_domains["actor"]
     assert isinstance(actor_domains, dict)
-    actor_domains["actor_type"] = ["nurse", "patient"]
+    actor_domains["actor_type"] = enum_options("nurse", "patient")
     write_emit(dest, tables=tables, branches=_SPANNING_BRANCHES, extra=extra)
 
 

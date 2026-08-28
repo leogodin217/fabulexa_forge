@@ -10,4 +10,4 @@ __version__ = "0.0.1"
 
 # The format version this package's vendored contract covers. The reader refuses any
 # base.json whose base_format_version is not this value (no auto-upgrade).
-SUPPORTED_BASE_FORMAT_VERSION = 8
+SUPPORTED_BASE_FORMAT_VERSION = 9

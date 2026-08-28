@@ -126,6 +126,25 @@ def identity_column(name: str, duckdb_type: str) -> dict[str, object]:
     return {"name": name, "type": duckdb_type}
 
 
+def enum_options(*values: str) -> list[dict[str, object]]:
+    """Build one enum_domains option list from its allowed value strings.
+
+    The sole constructor for an `enum_domains` option array across every
+    fixture builder — the contract shapes each option as a value object
+    (`{"value": ...}`, optional `description`), and this helper is the one
+    place the test tree knows that shape. A fixture needing a per-value gloss
+    appends `"description"` to the returned entries; a shape-defective
+    negative fixture mutates the result.
+
+    Args:
+        values: The allowed option strings, in declaration order.
+
+    Returns:
+        The option list for one `enum_domains[<kind>][<property>]` entry.
+    """
+    return [{"value": value} for value in values]
+
+
 def _column_spec_from_raw(raw: dict[str, object]) -> ColumnSpec:
     """Build a `ColumnSpec` from one raw fixture column dict.
 
@@ -209,6 +228,7 @@ def write_emit(
     branches: list[dict[str, object]] | None = None,
     extra: dict[str, object] | None = None,
     base_format_version: int | None = None,
+    surface: str | None = "published",
     schema_valid: bool = True,
     records_shape_valid: bool = True,
 ) -> None:
@@ -232,6 +252,12 @@ def write_emit(
             UNSUPPORTED_VERSION_SENTINEL, composed with schema_valid=False:
             the vendored schema pins the version, so any override is
             schema-invalid by construction.
+        surface: The surface discriminator to stamp. Defaults to the one
+            value the contract admits for a published emit. None omits the
+            field; any other override writes that value — both exist for the
+            surface-negative fixtures alone and are schema-invalid by
+            construction (the vendored schema requires the field and pins its
+            value), so they compose with schema_valid=False.
         schema_valid: When True (the default), validate the result against the
             vendored contract/base-format.schema.json before writing, so a
             fixture that has not learned a new required field fails at
@@ -263,6 +289,8 @@ def write_emit(
         "branches": branches if branches is not None else _DEFAULT_BRANCHES,
         "tables": tables,
     }
+    if surface is not None:
+        sidecar["surface"] = surface
     if extra:
         sidecar.update(extra)
 
