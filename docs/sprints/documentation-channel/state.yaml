@@ -2,7 +2,7 @@ sprint: documentation-channel
 parent_branch: base-format-v9
 baseline_sha: d949348858aa2e1b024ad0dd8d07d5dcab88e1a3
 started: 2026-08-28
-current_phase: 2
+current_phase: 3
 capabilities:
   - reader: [documentation-view, column-attribute-model]
   - corrupters: [documentation-fidelity]
@@ -26,7 +26,7 @@ phases:
           - "tests/reader/test_documentation.py"
           - "tests/reader/test_sidecar.py"
   2:
-    status: pending
+    status: complete
     name: "Corrupter documentation fidelity"
     demo: "docs/sprints/documentation-channel/demos/phase_2_corrupter_fidelity.py"
   3:

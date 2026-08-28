@@ -33,6 +33,13 @@ def column_spec(
     references: str | None = None,
     history_tracked: bool | None = None,
     temporal_class: str | None = None,
+    description: str | None = None,
+    unit: str | None = None,
+    min: float | int | None = None,
+    max: float | int | None = None,
+    immutable: bool | None = None,
+    required: bool | None = None,
+    extra_data: bool | None = None,
 ) -> ColumnSpec:
     """Build one ColumnSpec.
 
@@ -54,6 +61,14 @@ def column_spec(
             type-1); None for a non-value-carrying column.
         temporal_class: The column's point-in-time contract; None for a
             non-value-carrying column.
+        description: The column's business meaning; None when absent.
+        unit: The column's unit of measure; None when absent.
+        min: The column's inclusive numeric floor; None when absent.
+        max: The column's inclusive numeric ceiling; None when absent.
+        immutable: Whether the column is declared immutable; None when absent.
+        required: Whether the column is declared required; None when absent.
+        extra_data: Whether the column is declared extra_data; None when
+            absent.
 
     Returns:
         A ColumnSpec.
@@ -82,6 +97,13 @@ def column_spec(
         references=references,
         history_tracked=history_tracked,
         temporal_class=temporal_class,
+        description=description,
+        unit=unit,
+        min=min,
+        max=max,
+        immutable=immutable,
+        required=required,
+        extra_data=extra_data,
     )
 
 
@@ -93,6 +115,7 @@ def table_spec(
     record_kind: str | None = None,
     property_: str | None = None,
     rows: int = 0,
+    description: str | None = None,
 ) -> TableSpec:
     """Build one TableSpec."""
     return TableSpec(
@@ -102,6 +125,7 @@ def table_spec(
         property=property_,
         columns=columns,
         rows=rows,
+        description=description,
     )
 
 

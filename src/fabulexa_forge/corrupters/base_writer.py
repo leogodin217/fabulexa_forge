@@ -155,6 +155,22 @@ def _write_run_duckdb(
     return written
 
 
+_COLUMN_ATTRIBUTES: tuple[str, ...] = (
+    "references",
+    "history_tracked",
+    "temporal_class",
+    "description",
+    "unit",
+    "min",
+    "max",
+    "immutable",
+    "required",
+    "extra_data",
+)
+"""The `ColumnSpec` attribute names `_build_table_entry` forwards verbatim,
+in `base.json` `tables[].columns[]` field order."""
+
+
 def _build_table_entry(
     table_name: str, working_table: "WorkingTable", written: _WrittenTable
 ) -> dict[str, object]:
@@ -162,14 +178,16 @@ def _build_table_entry(
 
     `{name, type}` per column, and `rows`, come from `written` (the catalog
     and row count just written); `references` / `history_tracked` /
-    `temporal_class` come from the matching `WorkingTable.spec` `ColumnSpec`,
-    joined by post-drift name -- so a renamed column carries them on its
-    relabeled spec, and a dropped column drops them (it is simply absent
-    from `written.columns`). Each attribute is declared verbatim when the
-    spec carries it and left absent otherwise -- never emitted as `null`,
-    never invented for a column that carries neither. Table-level `category`
-    / `record_kind` / `property` come from `working_table.spec` (C1/C3
-    require them).
+    `temporal_class` / `description` / `unit` / `min` / `max` / `immutable` /
+    `required` / `extra_data` come from the matching `WorkingTable.spec`
+    `ColumnSpec`, joined by post-drift name -- so a renamed column carries
+    them on its relabeled spec, and a dropped column drops them (it is simply
+    absent from `written.columns`). Each attribute is declared verbatim when
+    the spec carries it and left absent otherwise -- never emitted as `null`,
+    never invented for a column that carries neither, never re-looked-up from
+    the source sidecar. Table-level `category` / `record_kind` / `property`
+    come from `working_table.spec` (C1/C3 require them); `description`
+    forwards the same way when carried.
 
     Args:
         table_name: The table's (unchanged) name.
@@ -186,12 +204,10 @@ def _build_table_entry(
     for name, duckdb_type in written.columns:
         col_spec = columns_by_name[name]
         column_entry: dict[str, object] = {"name": name, "type": duckdb_type}
-        if col_spec.references is not None:
-            column_entry["references"] = col_spec.references
-        if col_spec.history_tracked is not None:
-            column_entry["history_tracked"] = col_spec.history_tracked
-        if col_spec.temporal_class is not None:
-            column_entry["temporal_class"] = col_spec.temporal_class
+        for attribute in _COLUMN_ATTRIBUTES:
+            value = getattr(col_spec, attribute)
+            if value is not None:
+                column_entry[attribute] = value
         columns.append(column_entry)
 
     entry: dict[str, object] = {
@@ -204,6 +220,8 @@ def _build_table_entry(
         entry["record_kind"] = spec.record_kind
     if spec.property is not None:
         entry["property"] = spec.property
+    if spec.description is not None:
+        entry["description"] = spec.description
     return entry
 
 
@@ -218,12 +236,14 @@ def write_base_emit(
     emit stays read-only) in source table order, working-schema column order, and
     canonical content row order, then rebuilds base.json's `tables` array from the
     written catalog -- per-table `rows` and per-column `{name, type}` read back from
-    what was just written; the table-level `category` / `record_kind` / `property`
-    carried from each `WorkingTable.spec` (C1/C3 require them); per-column `references`
-    / `history_tracked` / `temporal_class` read from each column's `WorkingTable.spec`
-    `ColumnSpec` (joined to the written catalog by post-drift name, so they follow a
-    rename and drop with a drop) -- never re-looked-up from the source sidecar by name.
-    Every other
+    what was just written; the table-level `category` / `record_kind` / `property` /
+    `description` carried from each `WorkingTable.spec` (C1/C3 require the first
+    three; `description` forwards when carried); per-column `references` /
+    `history_tracked` / `temporal_class` / `description` / `unit` / `min` / `max` /
+    `immutable` / `required` / `extra_data` read from each column's
+    `WorkingTable.spec` `ColumnSpec` (joined to the written catalog by post-drift
+    name, so they follow a rename and drop with a drop) -- never re-looked-up from
+    the source sidecar by name. Every other
     top-level sidecar field -- including `enum_domains` and `record_roles` -- is copied
     verbatim from `source_sidecar_raw`. Regenerating the sidecar from the written
     catalog makes C2 hold by construction; untouched structural columns make C3/C4/C5
