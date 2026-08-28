@@ -52,7 +52,16 @@ sink, opens a session, or reads a clock — those are caller concerns above it
 | 2 — shaped | a target shape (`ExportConfig`) | `window` / `state`, as the shape's tables | above the modes |
 
 Both tiers share the inclusive-T event-time line, the anchor rendering rules,
-permissive totality, and determinism. Selection/identity/event types and the
+permissive totality, and determinism. Tier 2's `open` resolves an anchor and
+materializes over the head's connection exactly as the export driver does, so
+it joins the reader's session-zone pin the same way
+([`reader.md`](reader.md) § The session-zone pin); because `state` and
+`window` bind an `ExportConfig` and reuse the modes' own compile and
+validation surfaces directly, an elected temporal rendering and its business
+rules (the anchor requirement included) flow through tier 2 with no
+seam-side handling ([`temporal-elections.md`](temporal-elections.md)). Tier 1
+renders instants Python-side and carries no elected rendering.
+Selection/identity/event types and the
 head signatures are the dataclasses in
 [`selection.py`](../../src/fabulexa_forge/playback/selection.py),
 [`events.py`](../../src/fabulexa_forge/playback/events.py),
@@ -422,3 +431,4 @@ any id.
 | [`streaming.md`](streaming.md) | The canonical order and `seq` a single-content stream conforms to |
 | [`slice-only.md`](slice-only.md) | The `slice_only` policy the seam inherits at selection and at open |
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` both tiers render wallclock through |
+| [`temporal-elections.md`](temporal-elections.md) | The election vocabulary tier 2 renders by reusing the modes' own compile and validation surfaces directly |

@@ -3,12 +3,18 @@
 Verifies: N-version reconstruction, valid_from/valid_to windowing, tracked vs
 static column split (flag-authoritative), single-version for tracked-but-unchanged
 columns, projection-only columns never tracked, Scd2NeedsHistory validation rule,
-flag-absent emits refused, and total ORDER BY.
+flag-absent emits refused, and total ORDER BY. Also the `scd_window` object
+form's instant-rendering election: a date-grained window, same-day version
+collapse, and the open interval's `valid_to` staying NULL under every
+election (temporal-elections sprint Phase 4). Also the per-record derived
+modes admitted on a type2 dim (derived: timestamp / date_parse / value_map,
+untracked sources only) and their expression identity with the
+records-grain builders (scd2-derived-temporal-parse sprint Phase 2).
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -22,13 +28,21 @@ from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
+    DateParseSpec,
     DerivedSpec,
     DimensionalConfig,
-    OrdinalSpec,
+    ScdWindowSpec,
     SourceDecl,
     TableDecl,
+    TimestampSpec,
+    ValueMapSpec,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.columns import (
+    build_date_parse_expr,
+    build_timestamp_expr,
+    build_value_map_expr,
+)
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.scd import (
     build_scd2_column_expr_flag,
@@ -73,6 +87,56 @@ _HISTORY_COLUMNS = [
     {"name": "value", "type": "VARCHAR"},
 ]
 
+# Adds the untracked per-record derived-mode sources (Phase 2) to the flags
+# fixture: prop__birth_date / prop__admitted_at_str for derived: date_parse
+# (date-only vs. datetime-denoting formats), prop__region for derived: value_map.
+_ACTOR_COLUMNS_WITH_DERIVED = [
+    *_ACTOR_COLUMNS_WITH_FLAGS,
+    prop_column(
+        "prop__birth_date", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__admitted_at_str",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+    prop_column(
+        "prop__region", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+_SCD2_SOURCE_TABLE = "records__actor"
+_SCD2_TABLE_LABEL = "dim_patient"
+
+
+def _scd2_column_expr_sidecar() -> Sidecar:
+    """Sidecar for build_scd2_column_expr_flag unit tests: prop__ columns
+    across the DuckDB types the tracked-path CAST wrapping exercises, plus
+    the untracked derived-mode sources _ACTOR_COLUMNS_WITH_DERIVED adds."""
+    raw: dict = {
+        "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+        "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        "tables": [
+            {
+                "name": _SCD2_SOURCE_TABLE,
+                "category": "records",
+                "record_kind": "actor",
+                "columns": [
+                    *_ACTOR_COLUMNS_WITH_DERIVED,
+                    prop_column(
+                        "prop__surgical_referred",
+                        "BOOLEAN",
+                        history_tracked=True,
+                        temporal_class="tracked",
+                    ),
+                ],
+                "rows": 0,
+            }
+        ],
+    }
+    return Sidecar.from_raw(raw)
+
 
 def _make_scd2_table_decl(name: str = "dim_patient") -> TableDecl:
     """Return a standard scd: type2 dim_patient TableDecl."""
@@ -103,6 +167,45 @@ def _make_config(table_decl: TableDecl) -> DimensionalConfig:
     return DimensionalConfig(tables=[table_decl])
 
 
+def _make_scd2_table_decl_with(extra_column: ColumnDecl) -> TableDecl:
+    """The standard scd: type2 dim_patient TableDecl plus one extra
+    (typically derived) column."""
+    decl = _make_scd2_table_decl()
+    return decl.model_copy(update={"columns": [*decl.columns, extra_column]})
+
+
+def _make_scd2_table_decl_elected(
+    as_value: str, name: str = "dim_patient"
+) -> TableDecl:
+    """Return a scd: type2 dim_patient TableDecl whose valid_from/valid_to
+    columns carry the object-form scd_window election `as_value`."""
+    return TableDecl(
+        name=name,
+        role="dim",
+        scd="type2",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["id", "valid_from"],
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="name", **{"from": "prop__name"}),
+            ColumnDecl(name="status", **{"from": "prop__status"}),
+            ColumnDecl(name="admission_count", **{"from": "prop__admission_count"}),
+            ColumnDecl(
+                name="valid_from",
+                derived=DerivedSpec(
+                    scd_window=ScdWindowSpec(bound="valid_from", **{"as": as_value})
+                ),
+            ),
+            ColumnDecl(
+                name="valid_to",
+                derived=DerivedSpec(
+                    scd_window=ScdWindowSpec(bound="valid_to", **{"as": as_value})
+                ),
+            ),
+        ],
+    )
+
+
 def _build_scd2_emit(
     tmp_path: Path,
     actor_columns: list[dict],
@@ -127,8 +230,9 @@ def _build_scd2_emit(
     conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
 
     for row in actor_rows:
+        placeholders = ", ".join(["?"] * len(row))
         conn.execute(
-            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            f'INSERT INTO "records__actor" VALUES ({placeholders})',
             list(row),
         )
     for row in history_rows:
@@ -601,6 +705,141 @@ def test_multiple_records_multiple_versions(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# scd_window object form — instant-rendering election
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("as_value", ["date", "time", "timestamptz"])
+def test_scd_window_open_interval_valid_to_null_under_every_election(
+    tmp_path: Path, as_value: str
+) -> None:
+    """The last (open) version's valid_to renders NULL under every election —
+    date, time, and timestamptz alike."""
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_FLAGS,
+        actor_rows=[("trunk", "a001", 0, True, None, 10, 0, "Alice", "admitted", 1)],
+        history_rows=[("trunk", "actor", "a001", "status", 10, "admitted")],
+    )
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-06-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    with open_emit(emit_dir) as emit:
+        config = _make_config(_make_scd2_table_decl_elected(as_value))
+        specs = build_query_specs(
+            emit,
+            config,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    assert rows["valid_to"] == [None]
+
+
+def test_scd_window_date_grained_same_day_versions_collapse(tmp_path: Path) -> None:
+    """A date-grained window: same-day version boundaries collapse
+    valid_from == valid_to for the earlier version, while raw version order
+    is preserved — 3 distinct rows, not deduplicated."""
+    t1 = 3_600_000_000_000  # +1h -> 2024-06-01 01:00 UTC
+    t2 = 18_000_000_000_000  # +5h -> 2024-06-01 05:00 UTC (same day as t1)
+    t3 = 108_000_000_000_000  # +30h -> 2024-06-02 06:00 UTC (next day)
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_FLAGS,
+        actor_rows=[("trunk", "a001", 0, True, None, t3, 0, "Alice", "discharged", 3)],
+        history_rows=[
+            ("trunk", "actor", "a001", "status", t1, "admitted"),
+            ("trunk", "actor", "a001", "status", t2, "under_treatment"),
+            ("trunk", "actor", "a001", "status", t3, "discharged"),
+        ],
+    )
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-06-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    with open_emit(emit_dir) as emit:
+        config = _make_config(_make_scd2_table_decl_elected("date"))
+        specs = build_query_specs(
+            emit,
+            config,
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    # Raw version order preserved: 3 distinct rows, not deduplicated by date.
+    assert result.num_rows == 3
+    assert rows["status"] == ["admitted", "under_treatment", "discharged"]
+    # Version 1 (t1 -> t2, same calendar day) collapses valid_from == valid_to.
+    assert rows["valid_from"][0] == rows["valid_to"][0]
+    # Version 2 (t2 -> t3, crosses midnight) does not collapse.
+    assert rows["valid_from"][1] != rows["valid_to"][1]
+    # Version 3 is open (last) -> valid_to is None.
+    assert rows["valid_to"][2] is None
+
+
+def test_build_scd2_column_expr_flag_scd_window_object_form_date() -> None:
+    """The ScdWindowSpec object form with as: date renders a
+    CAST(... AS DATE) window off the raw version_start column."""
+    col = ColumnDecl(
+        name="valid_from",
+        derived=DerivedSpec(
+            scd_window=ScdWindowSpec(bound="valid_from", **{"as": "date"})
+        ),
+    )
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-01-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    expr = _flag_expr(col, frozenset(), anchor, _scd2_column_expr_sidecar())
+    assert "CAST(" in expr
+    assert "AS DATE)" in expr
+    assert "version_start" in expr
+    assert 'AS "valid_from"' in expr
+
+
+def test_scd_window_bare_literal_unchanged_by_election_grammar(tmp_path: Path) -> None:
+    """The bare-literal shorthand (no election) reconstructs identically
+    against the same fixture the object-form tests use — the default
+    `timestamp` rendering, unaffected by the new election grammar."""
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_FLAGS,
+        actor_rows=[
+            ("trunk", "a001", 0, True, None, 30, 0, "Alice", "discharged", 3),
+        ],
+        history_rows=[
+            ("trunk", "actor", "a001", "status", 10, "admitted"),
+            ("trunk", "actor", "a001", "status", 20, "under_treatment"),
+            ("trunk", "actor", "a001", "status", 30, "discharged"),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        config = _make_config(_make_scd2_table_decl())
+        specs = build_query_specs(
+            emit,
+            config,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    assert rows["valid_from"] == [10, 20, 30]
+    assert rows["valid_to"] == [20, 30, None]
+
+
+# ---------------------------------------------------------------------------
 # Tests for expression-builder paths
 # ---------------------------------------------------------------------------
 
@@ -613,13 +852,24 @@ def _make_col_decl_null(name: str) -> ColumnDecl:
     return ColumnDecl(name=name, null=True)
 
 
-def _make_col_decl_ordinal(name: str) -> ColumnDecl:
-    """Return a ColumnDecl with a non-scd_window derived (ordinal), so from_ is None."""
-    return ColumnDecl(
-        name=name,
-        derived=DerivedSpec(
-            ordinal=OrdinalSpec(partition_by="record_id", order_by="record_id")
-        ),
+def _flag_expr(
+    col: ColumnDecl,
+    tracked_props: frozenset[str],
+    anchor: EffectiveAnchor | None,
+    sidecar: Sidecar,
+) -> str:
+    """Call build_scd2_column_expr_flag with the standard unit-test source
+    binding (_SCD2_SOURCE_TABLE / _SCD2_TABLE_LABEL), varying only the
+    per-test column/tracked-props/anchor/sidecar."""
+    return build_scd2_column_expr_flag(
+        col,
+        "_versions",
+        "_records",
+        tracked_props,
+        anchor,
+        sidecar,
+        _SCD2_SOURCE_TABLE,
+        _SCD2_TABLE_LABEL,
     )
 
 
@@ -630,7 +880,7 @@ def test_build_scd2_column_expr_flag_with_anchor() -> None:
         start_instant=datetime.fromisoformat("2024-01-01T00:00:00+00:00"),
         timezone=ZoneInfo("UTC"),
     )
-    expr = build_scd2_column_expr_flag(col, "_versions", "_records", False, anchor)
+    expr = _flag_expr(col, frozenset(), anchor, _scd2_column_expr_sidecar())
     # Expression must include the anchor timestamp and microsecond offset
     assert "TIMESTAMPTZ '2024-01-01T00:00:00+00:00'" in expr
     assert "to_microseconds" in expr
@@ -640,7 +890,7 @@ def test_build_scd2_column_expr_flag_with_anchor() -> None:
 def test_build_scd2_column_expr_flag_scd_window_no_runtime() -> None:
     """scd_window column without runtime anchor produces direct column alias."""
     col = _make_col_decl_scd_window("valid_to", "valid_to")
-    expr = build_scd2_column_expr_flag(col, "_versions", "_records", False, None)
+    expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
     assert "version_end" in expr
     assert 'AS "valid_to"' in expr
     assert "TIMESTAMP" not in expr
@@ -649,18 +899,9 @@ def test_build_scd2_column_expr_flag_scd_window_no_runtime() -> None:
 def test_build_scd2_column_expr_flag_null_column() -> None:
     """null column produces CAST(NULL AS VARCHAR) expression."""
     col = _make_col_decl_null("placeholder")
-    expr = build_scd2_column_expr_flag(col, "_versions", "_records", False, None)
+    expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
     assert "CAST(NULL AS VARCHAR)" in expr
     assert 'AS "placeholder"' in expr
-
-
-def test_build_scd2_column_expr_flag_from_none() -> None:
-    """Column with from_=None (non-scd_window derived) produces bare NULL expression."""
-    # An ordinal-derived column has scd_window=None and from_=None; the flag
-    # builder falls through to the `if col_decl.from_ is None` branch.
-    col = _make_col_decl_ordinal("row_num")
-    expr = build_scd2_column_expr_flag(col, "_versions", "_records", False, None)
-    assert expr == 'NULL AS "row_num"'
 
 
 # ---------------------------------------------------------------------------
@@ -671,8 +912,8 @@ def test_build_scd2_column_expr_flag_from_none() -> None:
 def test_build_scd2_column_expr_flag_bigint_wraps_cast() -> None:
     """Tracked flag path wraps correlated subquery in CAST(... AS BIGINT)."""
     col = ColumnDecl(name="admission_count", **{"from": "prop__admission_count"})
-    expr = build_scd2_column_expr_flag(
-        col, "_versions", "_records", True, None, "BIGINT"
+    expr = _flag_expr(
+        col, frozenset({"admission_count"}), None, _scd2_column_expr_sidecar()
     )
     # Must start with CAST( and contain AS BIGINT)
     assert expr.startswith("CAST(")
@@ -686,9 +927,7 @@ def test_build_scd2_column_expr_flag_bigint_wraps_cast() -> None:
 def test_build_scd2_column_expr_flag_varchar_no_regression() -> None:
     """Tracked flag path with VARCHAR source includes CAST(... AS VARCHAR)."""
     col = ColumnDecl(name="status", **{"from": "prop__status"})
-    expr = build_scd2_column_expr_flag(
-        col, "_versions", "_records", True, None, "VARCHAR"
-    )
+    expr = _flag_expr(col, frozenset({"status"}), None, _scd2_column_expr_sidecar())
     assert expr.startswith("CAST(")
     assert "AS VARCHAR)" in expr
     assert 'AS "status"' in expr
@@ -697,8 +936,8 @@ def test_build_scd2_column_expr_flag_varchar_no_regression() -> None:
 def test_build_scd2_column_expr_flag_boolean_wraps_cast() -> None:
     """Tracked flag path wraps correlated subquery in CAST(... AS BOOLEAN)."""
     col = ColumnDecl(name="referred", **{"from": "prop__surgical_referred"})
-    expr = build_scd2_column_expr_flag(
-        col, "_versions", "_records", True, None, "BOOLEAN"
+    expr = _flag_expr(
+        col, frozenset({"surgical_referred"}), None, _scd2_column_expr_sidecar()
     )
     assert expr.startswith("CAST(")
     assert "AS BOOLEAN)" in expr
@@ -707,13 +946,348 @@ def test_build_scd2_column_expr_flag_boolean_wraps_cast() -> None:
 def test_build_scd2_column_expr_flag_static_unchanged() -> None:
     """Static (not tracked) flag path reads from the reader records relation."""
     col = ColumnDecl(name="name", **{"from": "prop__name"})
-    expr = build_scd2_column_expr_flag(
-        col, "_versions", "_records", False, None, "VARCHAR"
-    )
+    expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
     # Static: direct projection from reader records relation, no tracked subquery
     assert "SELECT h.value" not in expr
     assert "_records" in expr
     assert 'AS "name"' in expr
+
+
+# ---------------------------------------------------------------------------
+# Test: per-record derived modes on type2 (Phase 2) — untracked sources only
+# ---------------------------------------------------------------------------
+
+
+def test_derived_date_parse_untracked_exports_date_constant_across_versions(
+    tmp_path: Path,
+) -> None:
+    """derived: date_parse on an untracked VARCHAR prop exports a DATE
+    column on a type2 dim, constant across one record's version rows."""
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_DERIVED,
+        actor_rows=[
+            (
+                "trunk",
+                "a001",
+                0,
+                True,
+                None,
+                20,
+                0,
+                "Alice",
+                "discharged",
+                2,
+                "1990-05-12",
+                "2024-06-01 08:30:00",
+                "north",
+            ),
+        ],
+        history_rows=[
+            ("trunk", "actor", "a001", "status", 10, "admitted"),
+            ("trunk", "actor", "a001", "status", 20, "discharged"),
+        ],
+    )
+    table_decl = _make_scd2_table_decl_with(
+        ColumnDecl(
+            name="birth_date",
+            derived=DerivedSpec(
+                date_parse=DateParseSpec(
+                    **{"from": "prop__birth_date", "format": "%Y-%m-%d"}
+                )
+            ),
+        )
+    )
+    with open_emit(emit_dir) as emit:
+        specs = build_query_specs(
+            emit,
+            _make_config(table_decl),
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    assert rows["birth_date"] == [date(1990, 5, 12), date(1990, 5, 12)]
+
+
+def test_derived_date_parse_datetime_format_exports_timestamp_on_type2_dim(
+    tmp_path: Path,
+) -> None:
+    """derived: date_parse with a datetime format exports TIMESTAMP on a
+    type2 dim (composes Phase 1)."""
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_DERIVED,
+        actor_rows=[
+            (
+                "trunk",
+                "a001",
+                0,
+                True,
+                None,
+                10,
+                0,
+                "Alice",
+                "admitted",
+                1,
+                "1990-05-12",
+                "2024-06-01 08:30:00",
+                "north",
+            ),
+        ],
+        history_rows=[("trunk", "actor", "a001", "status", 10, "admitted")],
+    )
+    table_decl = _make_scd2_table_decl_with(
+        ColumnDecl(
+            name="admitted_ts",
+            derived=DerivedSpec(
+                date_parse=DateParseSpec(
+                    **{
+                        "from": "prop__admitted_at_str",
+                        "format": "%Y-%m-%d %H:%M:%S",
+                    }
+                )
+            ),
+        )
+    )
+    with open_emit(emit_dir) as emit:
+        specs = build_query_specs(
+            emit,
+            _make_config(table_decl),
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    assert rows["admitted_ts"][0] == datetime(2024, 6, 1, 8, 30, 0)
+
+
+def test_derived_timestamp_elected_with_anchor_constant_across_versions(
+    tmp_path: Path,
+) -> None:
+    """derived: timestamp on a structural instant (created_sim_time) with an
+    anchor and an explicit election renders the elected type on every
+    version row; identical value across versions."""
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_DERIVED,
+        actor_rows=[
+            (
+                "trunk",
+                "a001",
+                3_600_000_000_000,
+                True,
+                None,
+                20,
+                0,
+                "Alice",
+                "discharged",
+                2,
+                "1990-05-12",
+                "2024-06-01 08:30:00",
+                "north",
+            ),
+        ],
+        history_rows=[
+            ("trunk", "actor", "a001", "status", 10, "admitted"),
+            ("trunk", "actor", "a001", "status", 20, "discharged"),
+        ],
+    )
+    table_decl = _make_scd2_table_decl_with(
+        ColumnDecl(
+            name="created_at",
+            derived=DerivedSpec(
+                timestamp=TimestampSpec(source="created_sim_time", **{"as": "date"})
+            ),
+        )
+    )
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-06-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    with open_emit(emit_dir) as emit:
+        specs = build_query_specs(
+            emit,
+            _make_config(table_decl),
+            anchor,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    assert rows["created_at"] == [date(2024, 6, 1), date(2024, 6, 1)]
+
+
+def test_derived_timestamp_default_unelected_no_anchor_renders_raw_ns(
+    tmp_path: Path,
+) -> None:
+    """Default (unelected) derived: timestamp with no anchor renders the raw
+    ns integer."""
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_DERIVED,
+        actor_rows=[
+            (
+                "trunk",
+                "a001",
+                3_600_000_000_000,
+                True,
+                None,
+                10,
+                0,
+                "Alice",
+                "admitted",
+                1,
+                "1990-05-12",
+                "2024-06-01 08:30:00",
+                "north",
+            ),
+        ],
+        history_rows=[("trunk", "actor", "a001", "status", 10, "admitted")],
+    )
+    table_decl = _make_scd2_table_decl_with(
+        ColumnDecl(
+            name="created_raw",
+            derived=DerivedSpec(timestamp=TimestampSpec(source="created_sim_time")),
+        )
+    )
+    with open_emit(emit_dir) as emit:
+        specs = build_query_specs(
+            emit,
+            _make_config(table_decl),
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    assert rows["created_raw"] == [3_600_000_000_000]
+
+
+def test_derived_value_map_untracked_exports_typed_case_constant_across_versions(
+    tmp_path: Path,
+) -> None:
+    """derived: value_map on an untracked prop exports the typed CASE
+    value, constant across versions."""
+    emit_dir = _build_scd2_emit(
+        tmp_path,
+        _ACTOR_COLUMNS_WITH_DERIVED,
+        actor_rows=[
+            (
+                "trunk",
+                "a001",
+                0,
+                True,
+                None,
+                20,
+                0,
+                "Alice",
+                "discharged",
+                2,
+                "1990-05-12",
+                "2024-06-01 08:30:00",
+                "north",
+            ),
+        ],
+        history_rows=[
+            ("trunk", "actor", "a001", "status", 10, "admitted"),
+            ("trunk", "actor", "a001", "status", 20, "discharged"),
+        ],
+    )
+    table_decl = _make_scd2_table_decl_with(
+        ColumnDecl(
+            name="region_code",
+            derived=DerivedSpec(
+                value_map=ValueMapSpec(
+                    **{"from": "prop__region"}, map={"north": 1, "south": 2}
+                )
+            ),
+        )
+    )
+    with open_emit(emit_dir) as emit:
+        specs = build_query_specs(
+            emit,
+            _make_config(table_decl),
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+        result = emit.query_arrow(specs[0].sql, ())
+
+    rows = result.to_pydict()
+    assert rows["region_code"] == [1, 1]
+
+
+# ---------------------------------------------------------------------------
+# Expression identity: type2 derived expr == records-grain builder output,
+# modulo the grain alias (_records on both sides here).
+# ---------------------------------------------------------------------------
+
+
+def test_derived_timestamp_expression_identical_to_records_grain_builder() -> None:
+    """The type2 derived: timestamp expression equals build_timestamp_expr's
+    output, modulo the grain alias."""
+    col = ColumnDecl(
+        name="created_at",
+        derived=DerivedSpec(
+            timestamp=TimestampSpec(source="created_sim_time", **{"as": "date"})
+        ),
+    )
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-06-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    scd2_expr = _flag_expr(col, frozenset(), anchor, _scd2_column_expr_sidecar())
+    records_expr = build_timestamp_expr(col, anchor, '"_records"."created_sim_time"')
+    assert scd2_expr == records_expr
+
+
+def test_derived_date_parse_expression_identical_to_records_grain_builder() -> None:
+    """The type2 derived: date_parse expression equals build_date_parse_expr's
+    output, modulo the grain alias."""
+    col = ColumnDecl(
+        name="birth_date",
+        derived=DerivedSpec(
+            date_parse=DateParseSpec(
+                **{"from": "prop__birth_date", "format": "%Y-%m-%d"}
+            )
+        ),
+    )
+    table_decl = _make_scd2_table_decl()
+    scd2_expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
+    records_expr = build_date_parse_expr(
+        col, '"_records"."prop__birth_date"', table_decl.name
+    )
+    assert scd2_expr == records_expr
+
+
+def test_derived_value_map_expression_identical_to_records_grain_builder() -> None:
+    """The type2 derived: value_map expression equals build_value_map_expr's
+    output, modulo the grain alias."""
+    col = ColumnDecl(
+        name="region_code",
+        derived=DerivedSpec(
+            value_map=ValueMapSpec(
+                **{"from": "prop__region"}, map={"north": 1, "south": 2}
+            )
+        ),
+    )
+    scd2_expr = _flag_expr(col, frozenset(), None, _scd2_column_expr_sidecar())
+    records_expr = build_value_map_expr(
+        col, '"_records"."prop__region"', source_col_type="VARCHAR"
+    )
+    assert scd2_expr == records_expr
 
 
 def test_build_scd2_sql_flag_path_uses_cast_for_bigint(tmp_path: Path) -> None:

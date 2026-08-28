@@ -15,13 +15,13 @@
 #
 #   FACT     actor -> fact_trip. The actor kind IS the trip (atlas: "a single ride
 #            request and its lifecycle — the transactional fact"), so it is not a
-#            dimension. Measured 1,496 trips: 1,262 completed, 232 cancelled, and
+#            dimension. Measured 1,496 trips: 1,253 completed, 241 cancelled, and
 #            2 still in flight at tape's end (1 en_route, 1 on_trip). The record is
 #            deliberately thin — its only tracked property is `status`, and
 #            `surge_tier` is slice_only, so it is not projectable in any mode.
 #   FACT     journey_instance -> fact_trip_state, NOT a dimension. Measured: 1,496
 #            journeys (exactly one per trip — 1,496 distinct `actor` values)
-#            against 6,715 `current_state` history rows, 4.5 versions per trip.
+#            against 6,695 `current_state` history rows, 4.5 versions per trip.
 #            Its only tracked property is a state-machine position, so its value
 #            IS the timeline — and this timeline is the whole point of the bundle:
 #            the atlas says match-wait "emerges from a peaking demand stream
@@ -67,16 +67,35 @@
 #            record itself (decision_type, context) simply gets no table.
 #   DROPPED  journey_instance.output_roles — engine role bookkeeping, no domain
 #            meaning.
+#   KEYS     entity and resource elect `record_index` (the `keys:` block), so the
+#            three dims key on compact BIGINTs and every inbound FK (rider_id,
+#            zone_id, driver_id) renders the same surface. The registry's
+#            presentation keys are all bare prefixless counters (rider and zone
+#            union-unsafe with each other inside entity), a second integer
+#            spelling of the same identity — so the *_code / trip_number columns
+#            are dropped rather than elected. actor is NOT elected: the trip is a
+#            fact, not a dim, so nothing fk-renders its identity — its record_id
+#            is the one join surface reachable from every grain that carries the
+#            trip (history lookup, membership member__actor__id), and it stays
+#            the trip id everywhere, consistently.
+#   HYGIENE  (realism QA) the raw `*_ns` sim-epoch twins are gone: every instant
+#            renders once, as a TIMESTAMP via the anchor, and the interval /
+#            bridge facts key on entered_at / held_from — measured zero journeys
+#            with two state changes, and zero trips with two driver holds, in the
+#            same microsecond, so the ns->µs truncation costs no key uniqueness.
 #
 # TIME: the sidecar carries a `runtime` anchor (2026-01-05T00:00:00 UTC), so no
 # `rebase:` block is needed; `derived: {timestamp: ...}` renders wallclock through
-# it and `_ns` siblings keep raw sim-time BIGINT for exact arithmetic. A records
-# grain accepts three structural instant sources — `created_sim_time`,
-# `deactivated_at` and `last_mutation_sim_time` — so fact_trip carries both the
-# moment the trip was requested and the moment it settled, and their difference is
-# end-to-end trip duration.
+# it. A records grain accepts three structural instant sources —
+# `created_sim_time`, `deactivated_at` and `last_mutation_sim_time` — so
+# fact_trip carries both the moment the trip was requested and the moment it
+# settled, and their difference is end-to-end trip duration.
 
 mode: dimensional
+
+keys:
+  entity: record_index
+  resource: record_index
 
 dimensional:
   exclude:
@@ -93,8 +112,7 @@ dimensional:
         filter: {prop__entity_type: rider}
       key: [rider_id]
       columns:
-        - {name: rider_id, from: record_id}
-        - {name: rider_code, from: presentation_id}
+        - {name: rider_id, from: record_index}
         - {name: rider_name, from: prop__name}
         - {name: loyalty, from: prop__loyalty}
 
@@ -108,8 +126,7 @@ dimensional:
         filter: {prop__entity_type: zone}
       key: [zone_id]
       columns:
-        - {name: zone_id, from: record_id}
-        - {name: zone_code, from: presentation_id}
+        - {name: zone_id, from: record_index}
         - {name: zone_name, from: prop__name}
         # commercial / transit / residential / campus
         - {name: zone_type, from: prop__zone_type}
@@ -123,8 +140,7 @@ dimensional:
         kind: resource
       key: [driver_id]
       columns:
-        - {name: driver_id, from: record_id}
-        - {name: driver_code, from: presentation_id}
+        - {name: driver_id, from: record_index}
         - {name: driver_name, from: prop__name}
         - {name: capacity, from: prop__capacity}
         - {name: region, from: prop__region}
@@ -139,7 +155,6 @@ dimensional:
       key: [trip_id]
       columns:
         - {name: trip_id, from: record_id}
-        - {name: trip_number, from: presentation_id}
         # terminal outcome: completed / cancelled (or the in-flight state for the
         # 2 trips still open at tape's end)
         - {name: outcome, from: prop__status}
@@ -147,8 +162,6 @@ dimensional:
         # difference is end-to-end trip duration
         - {name: requested_at, derived: {timestamp: {source: created_sim_time}}}
         - {name: settled_at, derived: {timestamp: {source: last_mutation_sim_time}}}
-        - {name: requested_at_ns, from: created_sim_time}
-        - {name: settled_at_ns, from: last_mutation_sim_time}
 
     # --- fact: trip state (history_interval grain) — one row per state occupancy.
     #     THE match-wait fact: time in `matching` is the emergent wait the whole
@@ -159,7 +172,7 @@ dimensional:
         grain: history_interval
         kind: journey_instance
         property: current_state
-      key: [trip_id, entered_ns]
+      key: [trip_id, entered_at]
       columns:
         # zero-hop self-lookup: `actor` is a type-1 property of the journey itself,
         # and it is the trip's record_id — so this joins fact_trip.trip_id
@@ -168,8 +181,6 @@ dimensional:
         - {name: entered_at, derived: {timestamp: {source: sim_time}}}
         # lead_sim_time = LEAD(sim_time): NULL on the trip's last (open) state
         - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
-        - {name: entered_ns, from: sim_time}
-        - {name: exited_ns, from: lead_sim_time}
 
     # --- bridge fact: trip <-> driver — grain: one driver hold (1,496 rows) ---
     #     membership__resource__holders: owner = resource (the driver), member =
@@ -181,7 +192,7 @@ dimensional:
         grain: membership
         kind: resource
         property: holders
-      key: [trip_id, held_from_ns]
+      key: [trip_id, held_from]
       columns:
         - {name: trip_id, from: member__actor__id}
         # resolved from the binding's OWNER record, which IS the resource
@@ -189,7 +200,6 @@ dimensional:
         - {name: slots_held, from: elem__slots_held}
         - {name: held_from, derived: {timestamp: {source: joined_sim_time}}}
         - {name: released_at, derived: {timestamp: {source: left_sim_time}}}
-        - {name: held_from_ns, from: joined_sim_time}
 
     # --- bridge fact: trip <-> rider — grain: one rider binding (1,496 rows) ---
     #     membership__tick_decision__bindings narrowed to the rider role. `trip_id`

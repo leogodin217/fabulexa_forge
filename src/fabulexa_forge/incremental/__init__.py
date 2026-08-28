@@ -8,6 +8,7 @@ from __future__ import annotations
 from fabulexa_forge.incremental.cursor import Cursor, read_cursor, write_csv_cursor
 from fabulexa_forge.incremental.driver import (
     IncrementalOutcome,
+    WindowedExport,
     export_incremental_next,
     export_window,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "Cursor",
     "IncrementalOutcome",
     "Window",
+    "WindowedExport",
     "compute_fingerprint",
     "derive_window",
     "export_incremental_next",

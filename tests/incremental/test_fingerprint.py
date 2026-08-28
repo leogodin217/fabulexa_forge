@@ -146,6 +146,32 @@ def test_fingerprint_changes_on_anchor_none() -> None:
     assert a != b
 
 
+# ---------------------------------------------------------------------------
+# readme_overlay exclusion: presentation-only, never a drip-identity input
+# ---------------------------------------------------------------------------
+
+
+def test_fingerprint_unaffected_by_readme_overlay_added() -> None:
+    """readme_overlay absent vs. present (same otherwise) → same fingerprint."""
+    without_overlay = _config()
+    with_overlay = _config(readme_overlay="notes.md")
+    assert _fp(config=without_overlay) == _fp(config=with_overlay)
+
+
+def test_fingerprint_unaffected_by_readme_overlay_changed() -> None:
+    """Different readme_overlay values → same fingerprint."""
+    overlay_a = _config(readme_overlay="a.md")
+    overlay_b = _config(readme_overlay="b.md")
+    assert _fp(config=overlay_a) == _fp(config=overlay_b)
+
+
+def test_fingerprint_unaffected_by_readme_overlay_removed() -> None:
+    """readme_overlay present vs. removed (same otherwise) → same fingerprint."""
+    with_overlay = _config(readme_overlay="notes.md")
+    without_overlay = _config()
+    assert _fp(config=with_overlay) == _fp(config=without_overlay)
+
+
 def test_fingerprint_changes_on_config() -> None:
     """Different config (extra table) → different fingerprint."""
     cfg_a = _config()

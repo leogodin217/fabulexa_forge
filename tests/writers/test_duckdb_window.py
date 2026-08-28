@@ -383,7 +383,7 @@ def test_second_window_facts_append(tmp_path: Path) -> None:
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # type-1 dim is replaced: full snapshot count returned
-    assert result["dim_entity"] == 3
+    assert result["dim_entity"].row_count == 3
 
 
 def test_second_window_export_windows_gains_row(tmp_path: Path) -> None:
@@ -445,9 +445,9 @@ def test_second_window_scd2_rows_append(tmp_path: Path) -> None:
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # w0 [0,15) catches change at sim_time=10 → 1 row
-    assert result0["dim_actor__rows"] == 1
+    assert result0["dim_actor__rows"].row_count == 1
     # w1 [15,35) catches changes at sim_time=20,30 → 2 rows
-    assert result1["dim_actor__rows"] == 2
+    assert result1["dim_actor__rows"].row_count == 2
     # total accumulated in table
     assert _row_count(out_path, "dim_actor__rows") == 3
 
@@ -676,7 +676,7 @@ def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     # After 2 windows, snapshot should show 3 total entities
-    assert result1["dim_entity"] == 3
+    assert result1["dim_entity"].row_count == 3
 
 
 # ---------------------------------------------------------------------------
@@ -725,7 +725,7 @@ def test_keyed_first_window_creates_constraints_second_window_preserves(
         )
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
-    assert result1["dim_entity"] == 3
+    assert result1["dim_entity"].row_count == 3
     assert "PRIMARY KEY" in constraint_types(out_path, "dim_entity")
 
 

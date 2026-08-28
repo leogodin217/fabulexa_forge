@@ -9,6 +9,7 @@ tables:
         deactivated_at,
         prop__status,
         prop__name,
+        prop__dob,
         prop__doctor_id,
         doctor_id_key,
         prop__primary_staff_id,
@@ -26,6 +27,7 @@ tables:
         deactivated_at: null
         prop__status: active
         prop__name: Alice
+        prop__dob: "1990-05-14"
       - id: p002
         prop__status: pending
   doctor:
@@ -49,3 +51,25 @@ tables:
   queue:
     columns: [queue_key, id, created_sim_time, active, deactivated_at, prop__name]
     row_count: 1
+  team:
+    columns:
+      [
+        team_key,
+        id,
+        created_sim_time,
+        active,
+        deactivated_at,
+        prop__name,
+        prop__team_type,
+        prop__status,
+        prop__shift,
+      ]
+    row_count: 2
+    contains_rows:
+      # Each tracked property reconstructs at T independently. t001's status
+      # is 'active' (changed@2*DAY, inside the horizon) while its shift is
+      # still 'day' — the night change lands at 3*DAY, after T, so this row
+      # differs from the tape's-end recipe in `shift` alone.
+      - id: t001
+        prop__status: active
+        prop__shift: day

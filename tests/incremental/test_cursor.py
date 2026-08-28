@@ -189,11 +189,40 @@ def test_csv_fresh_only_tmp_leftover(tmp_path: Path) -> None:
     assert result is None
 
 
+def test_csv_fresh_only_companion_artifacts(tmp_path: Path) -> None:
+    """A directory holding only companion artifact files (no drop dir, no
+    cursor file) classifies fresh -- a window-0 rewrite's own artifacts must
+    never count as evidence of a prior cursor."""
+    drops = tmp_path / "drops"
+    drops.mkdir()
+    (drops / "base-readme.md").write_text("readme")
+    (drops / "base-manifest.json").write_text("{}")
+    result = read_cursor(drops, "csv", _WINDOW_ZERO_LABEL)
+    assert result is None
+
+
 def test_csv_crash_recovery_correct_label(tmp_path: Path) -> None:
     """Exactly one non-hidden dir named window_zero_label → None (restart at 0)."""
     drops = tmp_path / "drops"
     drops.mkdir()
     (drops / _WINDOW_ZERO_LABEL).mkdir()
+
+    result = read_cursor(drops, "csv", _WINDOW_ZERO_LABEL)
+    assert result is None
+
+
+def test_csv_window_zero_drop_and_artifacts_without_cursor_restarts_at_zero(
+    tmp_path: Path,
+) -> None:
+    """Window-0 drop dir plus its companion artifacts, cursor file absent,
+    still classifies as the crash-recovery restart-at-0 state -- the
+    artifacts never count as extra non-hidden entries that would otherwise
+    raise a lost-cursor error on the next --next."""
+    drops = tmp_path / "drops"
+    drops.mkdir()
+    (drops / _WINDOW_ZERO_LABEL).mkdir()
+    (drops / "base-readme.md").write_text("readme")
+    (drops / "base-manifest.json").write_text("{}")
 
     result = read_cursor(drops, "csv", _WINDOW_ZERO_LABEL)
     assert result is None

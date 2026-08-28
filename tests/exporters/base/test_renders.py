@@ -17,12 +17,17 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import date, time
 from pathlib import Path
 from typing import Iterator
 
+import duckdb
+import pytest
 from _support.notices import discard_notice_sink
+from _support.sidecar_builder import write_emit
 
 from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.config.models import DateParseElection
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.derivations.state_at import (
     build_state_at_end_sql,
@@ -31,8 +36,13 @@ from fabulexa_forge.derivations.state_at import (
 from fabulexa_forge.exporters.base.plan import BaseTableSpec, build_base_plan
 from fabulexa_forge.exporters.base.renders import build_base_render_sql
 from fabulexa_forge.reader.emit import Emit, open_emit
+from fabulexa_forge.reader.errors import RunDatabaseError
 
-from ._base_fixtures import DAY_NS, build_base_test_emit
+from ._base_fixtures import (
+    DAY_NS,
+    build_base_render_election_emit,
+    build_base_test_emit,
+)
 
 # Fixed emission order for the fixture's default (unrenamed) plan: the self key
 # (record_index -> patient_key; the fixture's `patient` kind has no reference
@@ -65,6 +75,36 @@ def _patient_emit(tmp_path: Path) -> Iterator[tuple[Emit, BaseTableSpec, str]]:
 def _rows(emit: Emit, sql: str) -> list[dict[str, object]]:
     """Execute sql and zip every row against the fixed default column order."""
     return [dict(zip(_COLUMN_ORDER, row)) for row in emit.query(sql, ())]
+
+
+# Emission order for the election fixture's default (unrenamed) plan: adds
+# prop__signup_date after prop__status (sidecar declaration order).
+_ELECTION_COLUMN_ORDER = (
+    "patient_key",
+    "id",
+    "created_sim_time",
+    "active",
+    "deactivated_at",
+    "presentation_id",
+    "prop__status",
+    "prop__signup_date",
+)
+
+
+@contextmanager
+def _election_emit(tmp_path: Path) -> Iterator[tuple[Emit, BaseTableSpec, str]]:
+    """Open the render-election fixture emit and resolve its plan and fork_path."""
+    emit_dir = build_base_render_election_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        fork_path = require_single_branch(emit.sidecar)
+        plan = build_base_plan(emit.sidecar, None, notice_sink=discard_notice_sink)
+        spec = next(t for t in plan.tables if t.kind == "patient")
+        yield emit, spec, fork_path
+
+
+def _election_rows(emit: Emit, sql: str) -> list[dict[str, object]]:
+    """Execute sql and zip every row against the election fixture's column order."""
+    return [dict(zip(_ELECTION_COLUMN_ORDER, row)) for row in emit.query(sql, ())]
 
 
 # ---------------------------------------------------------------------------
@@ -247,3 +287,169 @@ def test_empty_property_set_renders_identity_and_lifecycle_only(
     # presentation_id — no prop__.
     assert all(len(row) == 6 for row in rows)
     assert "prop__" not in sql
+
+
+# ---------------------------------------------------------------------------
+# `render`: temporal rendering elections (bare shorthand + `date_parse` form)
+# ---------------------------------------------------------------------------
+
+
+def test_render_election_created_sim_time_renders_date(tmp_path: Path) -> None:
+    """An elected `date` rendering on created_sim_time yields a DATE value,
+    not the default TIMESTAMP."""
+    with _election_emit(tmp_path) as (emit, spec, fork_path):
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        elected_spec = replace(spec, render=(("created_sim_time", "date"),))
+        sql = build_base_render_sql(emit.sidecar, fork_path, elected_spec, anchor, None)
+        rows = {r["id"]: r for r in _election_rows(emit, sql)}
+    assert rows["p001"]["created_sim_time"] == date(2024, 1, 1)
+
+
+def test_date_parse_on_prop_renders_date_and_nulls_flow_through(
+    tmp_path: Path,
+) -> None:
+    """A date_parse election on a prop__ VARCHAR renders DATE; NULL flows
+    through as NULL."""
+    with _election_emit(tmp_path) as (emit, spec, fork_path):
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        elected_spec = replace(
+            spec,
+            render=(("prop__signup_date", DateParseElection(date_parse="%Y-%m-%d")),),
+        )
+        sql = build_base_render_sql(emit.sidecar, fork_path, elected_spec, anchor, None)
+        rows = {r["id"]: r for r in _election_rows(emit, sql)}
+    assert rows["p001"]["prop__signup_date"] == date(2024, 1, 15)
+    assert rows["p002"]["prop__signup_date"] is None
+
+
+_TIME_PARSE_PATIENT_COLUMNS: list[dict[str, object]] = [
+    {"name": "fork_path", "type": "VARCHAR"},
+    {"name": "record_id", "type": "VARCHAR"},
+    {"name": "presentation_id", "type": "BIGINT"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    {"name": "record_index", "type": "BIGINT"},
+    {
+        "name": "prop__meeting_time",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+]
+
+_TIME_PARSE_COLUMN_ORDER = (
+    "patient_key",
+    "id",
+    "created_sim_time",
+    "active",
+    "deactivated_at",
+    "presentation_id",
+    "prop__meeting_time",
+)
+
+
+@contextmanager
+def _time_parse_patient_emit(
+    tmp_path: Path,
+) -> Iterator[tuple[Emit, BaseTableSpec, str]]:
+    """Build and open a minimal `patient` emit whose `prop__meeting_time`
+    payload column carries a time-of-day string — the widened parse
+    family's TIME-denotation flow-through fixture."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(
+        'CREATE TABLE "records__patient" ('
+        '"fork_path" VARCHAR, "record_id" VARCHAR, "presentation_id" BIGINT,'
+        ' "created_sim_time" BIGINT, "active" BOOLEAN, "deactivated_at" BIGINT,'
+        ' "last_mutation_sim_time" BIGINT, "record_index" BIGINT,'
+        ' "prop__meeting_time" VARCHAR)'
+    )
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "p001", 1001, 0, True, 0, 0, "14:30"],
+    )
+    conn.close()
+    write_emit(
+        tmp_path,
+        tables=[
+            {
+                "name": "records__patient",
+                "category": "records",
+                "record_kind": "patient",
+                "columns": _TIME_PARSE_PATIENT_COLUMNS,
+                "rows": 1,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": DAY_NS}],
+        extra={
+            "record_roles": {"patient": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    with open_emit(tmp_path) as emit:
+        fork_path = require_single_branch(emit.sidecar)
+        plan = build_base_plan(emit.sidecar, None, notice_sink=discard_notice_sink)
+        spec = next(t for t in plan.tables if t.kind == "patient")
+        yield emit, spec, fork_path
+
+
+def test_date_parse_time_only_format_renders_time_end_to_end(tmp_path: Path) -> None:
+    """A date_parse format carrying only time directives (the widened parse
+    family) denotes and renders TIME through the base map form, end-to-end."""
+    with _time_parse_patient_emit(tmp_path) as (emit, spec, fork_path):
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        elected_spec = replace(
+            spec,
+            render=(("prop__meeting_time", DateParseElection(date_parse="%H:%M")),),
+        )
+        sql = build_base_render_sql(emit.sidecar, fork_path, elected_spec, anchor, None)
+        rows = [dict(zip(_TIME_PARSE_COLUMN_ORDER, row)) for row in emit.query(sql, ())]
+    assert rows[0]["prop__meeting_time"] == time(14, 30)
+
+
+def test_date_parse_mismatch_fails_loudly_naming_table_column_value(
+    tmp_path: Path,
+) -> None:
+    """A non-matching non-NULL date_parse value fails the export loudly,
+    naming the table, source column, and offending value."""
+    with _election_emit(tmp_path) as (emit, spec, fork_path):
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        elected_spec = replace(
+            spec,
+            render=(("prop__status", DateParseElection(date_parse="%Y-%m-%d")),),
+        )
+        sql = build_base_render_sql(emit.sidecar, fork_path, elected_spec, anchor, None)
+        with pytest.raises(RunDatabaseError) as excinfo:
+            emit.query(sql, ())
+    message = str(excinfo.value)
+    assert spec.table_name in message
+    assert "prop__status" in message
+    assert "admitted" in message
+
+
+def test_render_election_applies_identically_under_a_window(tmp_path: Path) -> None:
+    """A windowed export applies the same election as a full export; the
+    cast-back posture is unaffected for unelected columns."""
+    with _election_emit(tmp_path) as (emit, spec, fork_path):
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        elected_spec = replace(spec, render=(("created_sim_time", "date"),))
+        horizon_sql = build_base_render_sql(
+            emit.sidecar, fork_path, elected_spec, anchor, DAY_NS
+        )
+        rows = {r["id"]: r for r in _election_rows(emit, horizon_sql)}
+    assert rows["p001"]["created_sim_time"] == date(2024, 1, 1)
+    assert isinstance(rows["p001"]["prop__status"], str)
+
+
+def test_no_anchor_default_rendering_keeps_raw_ns(tmp_path: Path) -> None:
+    """With no election and no anchor, created_sim_time stays raw sim-time
+    ns — the no-anchor default path is unaffected by the render surface."""
+    with _election_emit(tmp_path) as (emit, spec, fork_path):
+        sql = build_base_render_sql(emit.sidecar, fork_path, spec, None, None)
+        rows = {r["id"]: r for r in _election_rows(emit, sql)}
+    assert rows["p001"]["created_sim_time"] == 0

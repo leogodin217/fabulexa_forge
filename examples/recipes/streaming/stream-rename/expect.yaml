@@ -1,0 +1,26 @@
+streams:
+  patient:
+    event_count: 4
+    contains_events:
+      # creates — the after-image carries the renamed keys, never `status`/`name`
+      - seq: 1
+        op: c
+        record_id: p001
+        after.patient_status: pending
+        after.full_name: Alice
+      - seq: 2
+        op: c
+        record_id: p002
+        after.patient_status: pending
+        after.full_name: Bob
+      # updates — renaming is presentation only; the event set is unchanged
+      - seq: 3
+        op: u
+        record_id: p001
+        after.patient_status: active
+        after.full_name: Alice
+      - seq: 4
+        op: u
+        record_id: p001
+        after.patient_status: discharged
+        after.full_name: Alice

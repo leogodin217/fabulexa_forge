@@ -1,9 +1,12 @@
 """Stream-export driver: ties engine → format → sink for one run.
 
 Integrates iter_stream_events (engine), render/write functions (format), and
-the sink. Also handles the selected-topics guarantee for empty streams.
-Layer-direction invariant: imports engine, jsonl, debezium, config, anchor,
-errors — never CLI or writers.
+the sink. Also handles the selected-topics guarantee for empty streams. The
+Debezium value-schema builders read `presentation.py`'s naming resolvers
+directly — the same naming authority the engine's after-image assembly
+reads — so the declared schema and the rendered rows cannot diverge.
+Layer-direction invariant: imports engine, presentation, jsonl, debezium,
+config, anchor, errors — never CLI or writers.
 """
 
 from __future__ import annotations
@@ -21,11 +24,15 @@ from fabulexa_forge.errors import (
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
-    elect_after_image_columns,
     iter_stream_events,
+    resolve_stream_identities,
     resolve_stream_surfaces,
 )
 from fabulexa_forge.exporters.streaming.jsonl import write_jsonl_stream
+from fabulexa_forge.exporters.streaming.presentation import (
+    resolve_membership_output_columns,
+    resolve_stream_output_columns,
+)
 from fabulexa_forge.exporters.streaming.types import StreamOutcome
 
 if TYPE_CHECKING:
@@ -34,10 +41,11 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import (
         DebeziumSourceIdentity,
-        KeySurface,
         StreamConfig,
     )
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.streaming.pacer import ResolvedClock
+    from fabulexa_forge.exporters.streaming.presentation import IdentityProjection
     from fabulexa_forge.exporters.streaming.types import StreamEvent
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -67,6 +75,7 @@ def stream_export(
     sink: Literal["stdout", "file", "kafka"],
     out: Path | None,
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
     clock: "ResolvedClock | None" = None,
     bootstrap_servers: str | None = None,
 ) -> StreamOutcome:
@@ -90,7 +99,12 @@ def stream_export(
         fmt: 'jsonl' or 'debezium'.
         sink: 'stdout', 'file', or 'kafka'.
         out: The output directory for the file sink; None for stdout and kafka.
+            Must already exist — the driver refuses a missing directory rather
+            than creating one.
         anchor: The resolved effective anchor, or None.
+        notice_sink: The caller-supplied notice receiver, threaded to every
+            internal iter_stream_events call (required — a caller wanting
+            silence passes a discarding sink).
         clock: The resolved realtime pacing policy, or None for unpaced delivery.
         bootstrap_servers: The resolved bootstrap-servers string; non-None for
             sink='kafka', None (ignored) otherwise.
@@ -102,7 +116,8 @@ def stream_export(
         ExportError: fmt='debezium' with no resolved anchor or no debezium block;
             sink='kafka' with no resolved anchor (KafkaRequiresAnchor); a single-branch,
             config-resolvability, or business-rule failure from the engine.
-        ExportRuntimeError: an unsupported fmt or a sink/out mismatch.
+        ExportRuntimeError: an unsupported fmt, a sink/out mismatch, or
+            sink='file' with an `out` that is not an existing directory.
         KafkaDeliveryError: sink='kafka' and a connection, topic-creation, produce, or
             flush failure (a child of ExportRuntimeError).
         KafkaClientUnavailable: sink='kafka' and confluent-kafka is not installed.
@@ -121,20 +136,33 @@ def stream_export(
         raise ExportRuntimeError(
             "sink='stdout' requires out=None (no output directory)"
         )
+    # The file sink writes one <topic>.jsonl per topic into `out`; it does not
+    # create the directory (matching `export`, which refuses a missing output
+    # path rather than minting one). Checked up front so a missing directory
+    # fails before any topic file is written, never mid-run.
+    if sink == "file" and out is not None and not out.is_dir():
+        detail = (
+            "path exists but is not a directory"
+            if out.exists()
+            else "no such directory"
+        )
+        raise ExportRuntimeError(
+            f"sink='file' requires an existing output directory — {detail}: {out}"
+        )
 
     topic_set = build_topic_set(config)
 
     if sink == "kafka":
         return _stream_export_kafka(
-            emit, config, fmt, anchor, topic_set, clock, bootstrap_servers
+            emit, config, fmt, anchor, notice_sink, topic_set, clock, bootstrap_servers
         )
 
     if fmt == "debezium":
         return _stream_export_debezium(
-            emit, config, sink, out, anchor, topic_set, clock
+            emit, config, sink, out, anchor, notice_sink, topic_set, clock
         )
 
-    raw_events = iter_stream_events(emit, config, anchor)
+    raw_events = iter_stream_events(emit, config, anchor, notice_sink)
     paced = clock is not None
     if paced:
         from fabulexa_forge.exporters.streaming.pacer import pace_events
@@ -266,6 +294,7 @@ def _stream_export_kafka(
     config: "StreamConfig",
     fmt: Literal["jsonl", "debezium"],
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
     topic_set: tuple[str, ...],
     clock: "ResolvedClock | None",
     bootstrap_servers: str | None,
@@ -277,6 +306,8 @@ def _stream_export_kafka(
         config: The validated streaming configuration.
         fmt: 'jsonl' or 'debezium'.
         anchor: The resolved effective anchor, or None.
+        notice_sink: The caller-supplied notice receiver, threaded to
+            iter_stream_events.
         topic_set: The full topic set.
         clock: The resolved realtime pacing policy, or None.
         bootstrap_servers: The resolved bootstrap-servers string.
@@ -297,7 +328,7 @@ def _stream_export_kafka(
 
     render_value = build_kafka_render_value(emit, config, fmt, anchor, topic_set)
 
-    raw_events = iter_stream_events(emit, config, anchor)
+    raw_events = iter_stream_events(emit, config, anchor, notice_sink)
     paced = clock is not None
     if paced:
         from fabulexa_forge.exporters.streaming.pacer import pace_events
@@ -326,6 +357,7 @@ def _stream_export_debezium(
     sink: Literal["stdout", "file"],
     out: Path | None,
     anchor: "EffectiveAnchor | None",
+    notice_sink: "NoticeSink",
     topic_set: tuple[str, ...],
     clock: "ResolvedClock | None" = None,
 ) -> StreamOutcome:
@@ -337,6 +369,8 @@ def _stream_export_debezium(
         sink: 'stdout' or 'file'.
         out: The output directory for the file sink; None for stdout.
         anchor: The resolved effective anchor, or None.
+        notice_sink: The caller-supplied notice receiver, threaded to
+            iter_stream_events.
         topic_set: The full topic set.
         clock: The resolved realtime pacing policy, or None.
 
@@ -370,7 +404,7 @@ def _stream_export_debezium(
             emit, config, source_identity, table_identity
         )
 
-    raw_events = iter_stream_events(emit, config, anchor)
+    raw_events = iter_stream_events(emit, config, anchor, notice_sink)
     paced = clock is not None
     if paced:
         from fabulexa_forge.exporters.streaming.pacer import pace_events
@@ -431,12 +465,15 @@ def _build_value_schemas(
     Dispatches on config.content: 'membership-events' loops the config's
     membership-shaped streams with a leading 'event' column; all other content
     loops its kind-shaped streams. Every stream's declared column list is
-    re-keyed through `elect_after_image_columns` under its gated elected
-    surface (`resolve_stream_surfaces`) — a pure recomputation of the same
-    gates and surfaces the engine's own validation pass resolves, so the
+    resolved through `presentation.resolve_stream_output_columns` /
+    `resolve_membership_output_columns` under its gated identity projection
+    (`engine.resolve_identity_projection`) — a pure recomputation of the same
+    gates and projections the engine's own validation pass resolves, so the
     declared schema and the rendered after-image stay the same list by
     construction (mirrors `exporters.base.engine`'s recompute-not-thread
-    posture).
+    posture). `resolve_stream_surfaces` also runs, for its edge-gate side
+    effects only — the reference/member-field union-safety gates over each
+    stream's own payload, independent of `identity`.
 
     Args:
         emit: The open emit.
@@ -451,17 +488,25 @@ def _build_value_schemas(
         ElectionMixedIdentity: A stream's spanned populations elect differing
             surfaces.
         ElectionUnionUnsafe: A uniform presentation_id election's spanned key
-            spaces, or an edge's admitted target key spaces, contain a
-            pairwise-unsafe pair.
+            spaces, an edge's admitted target key spaces, or a published
+            surface's spanned key spaces, contain a pairwise-unsafe pair.
+        ElectionPresentationUndeclared: A population elects presentation_id
+            without a registry entry, or a published surface's population is
+            registry-undeclared.
+        StreamIdentityMissingElected: A stream's declared `identity` omits
+            its elected surface.
+        StreamIdentityUnavailable: A stream publishes presentation_id on a
+            kind that mints no surrogate.
     """
     election = resolve_election(emit.sidecar, config.keys)
-    surfaces = resolve_stream_surfaces(emit.sidecar, election, config)
+    resolve_stream_surfaces(emit.sidecar, election, config)
+    identity_by_stream = resolve_stream_identities(emit.sidecar, election, config)
     if config.content == "membership-events":
         return _build_value_schemas_membership(
-            emit, config, source_identity, table_identity, surfaces
+            emit, config, source_identity, table_identity, identity_by_stream
         )
     return _build_value_schemas_kinds(
-        emit, config, source_identity, table_identity, surfaces
+        emit, config, source_identity, table_identity, identity_by_stream
     )
 
 
@@ -470,7 +515,7 @@ def _build_value_schemas_kinds(
     config: "StreamConfig",
     source_identity: "DebeziumSourceIdentity",
     table_identity: str,
-    surfaces: "dict[str, KeySurface]",
+    identity_by_stream: "dict[str, IdentityProjection]",
 ) -> dict[str, dict[str, object]]:
     """Build value schemas for state-changes content, one per declared stream.
 
@@ -479,24 +524,28 @@ def _build_value_schemas_kinds(
         config: The validated streaming configuration.
         source_identity: The masquerade source identity.
         table_identity: 'source_table' or 'topic'.
-        surfaces: Every stream's gated uniform elected surface.
+        identity_by_stream: Every stream's gated identity projection.
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
     """
-    from fabulexa_forge.derivations.row_state_events import resolve_stream_columns
     from fabulexa_forge.exporters.streaming.debezium import build_debezium_value_schema
 
     value_schemas: dict[str, dict[str, object]] = {}
 
     for stream in config.streams:
         assert isinstance(stream, KindStream)
-        columns = elect_after_image_columns(
-            resolve_stream_columns(
-                emit.sidecar, stream.kind, frozenset(stream.properties)
-            ),
-            surfaces[stream.name],
-        )
+        identity = identity_by_stream[stream.name]
+        columns = [
+            entry.output_key
+            for entry in resolve_stream_output_columns(
+                emit.sidecar,
+                stream.kind,
+                stream.properties,
+                stream.rename,
+                identity,
+            )
+        ]
         if table_identity == "topic":
             schema_keys: tuple[str, ...] = (stream.name,)
         else:
@@ -519,7 +568,7 @@ def _build_value_schemas_membership(
     config: "StreamConfig",
     source_identity: "DebeziumSourceIdentity",
     table_identity: str,
-    surfaces: "dict[str, KeySurface]",
+    identity_by_stream: "dict[str, IdentityProjection]",
 ) -> dict[str, dict[str, object]]:
     """Build value schemas for membership-events content, one per declared stream.
 
@@ -528,12 +577,11 @@ def _build_value_schemas_membership(
         config: The validated streaming configuration.
         source_identity: The masquerade source identity.
         table_identity: 'source_table' or 'topic'.
-        surfaces: Every stream's gated uniform owner elected surface.
+        identity_by_stream: Every stream's gated owner identity projection.
 
     Returns:
         Mapping table_identity_key -> value_schema dict.
     """
-    from fabulexa_forge.derivations.membership_events import resolve_membership_columns
     from fabulexa_forge.exporters.streaming.debezium import build_debezium_value_schema
     from fabulexa_forge.exporters.streaming.routing import membership_route_attributes
 
@@ -547,14 +595,17 @@ def _build_value_schemas_membership(
         schema_key = stream.name if table_identity == "topic" else attrs["route_table"]
 
         if schema_key not in value_schemas:
-            payload_columns = elect_after_image_columns(
-                list(
-                    resolve_membership_columns(
-                        emit.sidecar, owner_kind, property_name, stream.fields
-                    )
-                ),
-                surfaces[stream.name],
-            )
+            owner_identity = identity_by_stream[stream.name]
+            payload_columns = [
+                entry.output_key
+                for entry in resolve_membership_output_columns(
+                    emit.sidecar,
+                    stream.membership,
+                    stream.fields,
+                    stream.rename,
+                    owner_identity,
+                )
+            ]
             columns = ["event", *payload_columns]
             value_schemas[schema_key] = build_debezium_value_schema(
                 table=schema_key,

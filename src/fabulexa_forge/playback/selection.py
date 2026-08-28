@@ -49,6 +49,12 @@ class ResolvedRecordSelection:
     record_ids: frozenset[str] | None
     has_presentation_id: bool
     discriminator_declared: bool
+    identity: tuple[str, ...]
+    """The published identity surfaces, in sidecar column order — the
+    resolution of the selection's `identity` (None resolving to the full
+    available set: 'record_id', plus 'presentation_id' when the kind mints
+    one). Governs the event after-image map and the record_state table;
+    never the typed PlaybackEvent fields, and never the fold invocation."""
 
 
 @dataclass(frozen=True)
@@ -309,6 +315,73 @@ def _resolve_membership_fields(
     return effective, full
 
 
+#: The seam's own identity surface vocabulary, declared as string literals
+#: rather than importing config.KeySurface (the layer-direction invariant) —
+#: in sidecar column order: record_id then presentation_id. 'record_index' is
+#: outside the tier-1 domain (tier 1 sources no election relation).
+_TIER1_IDENTITY_DOMAIN: tuple[str, ...] = ("record_id", "presentation_id")
+
+
+def _resolve_identity(
+    kind: str, identity: tuple[str, ...] | None, kind_has_presentation_id: bool
+) -> tuple[str, ...]:
+    """Resolve a RecordAtomSelection.identity axis (design doc § Playback rules).
+
+    None resolves to the full available set: record_id alone, or record_id +
+    presentation_id when the kind mints one. A named tuple is checked for
+    shape (non-empty, duplicate-free), domain (record_id / presentation_id
+    only), spine (record_id required), and availability (presentation_id
+    published only on a minting kind), then reordered to sidecar column
+    order.
+
+    Raises:
+        PlaybackError: Any of the four checks fails.
+    """
+    if identity is None:
+        return (
+            _TIER1_IDENTITY_DOMAIN
+            if kind_has_presentation_id
+            else (_TIER1_IDENTITY_DOMAIN[0],)
+        )
+    if not identity or len(set(identity)) != len(identity):
+        raise PlaybackError(
+            f"record atom {kind!r}: identity must be non-empty and duplicate-free"
+        )
+    for surface in identity:
+        if surface not in _TIER1_IDENTITY_DOMAIN:
+            raise PlaybackError(
+                f"record atom {kind!r}: {surface!r} is not a tier-1 identity surface"
+            )
+    if "record_id" not in identity:
+        raise PlaybackError(
+            f"record atom {kind!r}: identity must contain record_id — "
+            "it is the event key"
+        )
+    if "presentation_id" in identity and not kind_has_presentation_id:
+        raise PlaybackError(f"record atom {kind!r}: the kind mints no presentation_id")
+    return tuple(surface for surface in _TIER1_IDENTITY_DOMAIN if surface in identity)
+
+
+def _check_properties_disjoint_from_identity(
+    kind: str, properties: tuple[str, ...] | None
+) -> None:
+    """Properties disjoint from identity: no selected property names an
+    identity surface — a distinct authoring mistake from an unresolvable
+    property, with a distinct remedy.
+
+    Raises:
+        PlaybackError: A named property is 'record_id' or 'presentation_id'.
+    """
+    if not properties:
+        return
+    for prop in properties:
+        if prop in _TIER1_IDENTITY_DOMAIN:
+            raise PlaybackError(
+                f"record atom {kind!r}: {prop!r} is an identity surface — "
+                "declare it in identity, not properties"
+            )
+
+
 def _resolve_record_atom_selection(
     sidecar: "Sidecar", selection: RecordAtomSelection
 ) -> ResolvedRecordSelection:
@@ -319,6 +392,11 @@ def _resolve_record_atom_selection(
         sidecar, selection.kind, cols, selection.sub_types
     )
     _check_instance_ids_non_empty(selection.record_ids, "record_ids")
+    kind_has_presentation_id = has_presentation_id(sidecar, selection.kind)
+    identity = _resolve_identity(
+        selection.kind, selection.identity, kind_has_presentation_id
+    )
+    _check_properties_disjoint_from_identity(selection.kind, selection.properties)
     properties, full_properties = _resolve_record_properties(
         sidecar, selection.kind, cols, table_name, selection.properties
     )
@@ -328,8 +406,9 @@ def _resolve_record_atom_selection(
         properties=properties,
         full_properties=full_properties,
         record_ids=selection.record_ids,
-        has_presentation_id=has_presentation_id(sidecar, selection.kind),
+        has_presentation_id=kind_has_presentation_id,
         discriminator_declared=discriminator_declared,
+        identity=identity,
     )
 
 
@@ -369,7 +448,9 @@ def resolve_selection(
     SelectionNonEmpty, RecordKindResolvable, SubTypesDeclared,
     PropertiesResolvable, PropertiesNotSliceOnly, MembershipResolvable,
     OwnerSubTypesDeclared, MembershipFieldsResolvable, AtomsUnique,
-    InstanceSetNonEmpty) — sidecar-only, no data reads.
+    InstanceSetNonEmpty; plus § Playback rules: identity shape, identity
+    domain, identity spine, identity available, properties disjoint from
+    identity) — sidecar-only, no data reads.
 
     Args:
         sidecar: The open emit's sidecar.

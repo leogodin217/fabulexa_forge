@@ -33,10 +33,10 @@ _EXPECTED_JOINS: dict[str, list[dict[str, str]]] = {
     "retail": [],
     "ride-sharing": [],
     "ride-sharing-marketplace": [
-        {"fact": "driver", "dim": "zone_market"},
-        {"fact": "rider", "dim": "zone_market"},
-        {"fact": "pairing", "dim": "driver"},
-        {"fact": "pairing", "dim": "rider"},
+        {"fact": "driver", "dim": "zone"},
+        {"fact": "rider", "dim": "zone"},
+        {"fact": "match", "dim": "driver"},
+        {"fact": "match", "dim": "rider"},
     ],
 }
 
@@ -126,9 +126,10 @@ def test_demo_consumer_offset_valid(name: str) -> None:
 def test_entity_not_in_marketplace_topic_set() -> None:
     """'entity' is not in the ride-sharing-marketplace topic set.
 
-    It sub-types entirely to 'zone_market', so only 'zone_market' appears in
-    the routed topic set — not the bare kind 'entity'.  This proves the guard
-    tests against the routed topic set, not the raw kind list.
+    The entity kind streams under the declared domain topic 'zone'
+    (source.yaml's table name for entity/zone_market) — never the bare kind
+    'entity'.  This proves the guard tests against the declared topic set,
+    not the raw kind list.
     """
     bundle = _preset_bundle("ride-sharing-marketplace")
     run_db = bundle / "run.duckdb"
@@ -141,8 +142,6 @@ def test_entity_not_in_marketplace_topic_set() -> None:
 
     assert "entity" not in topic_set, (
         f"'entity' should not be in topic set {sorted(topic_set)}; "
-        "expected only 'zone_market' (its sole sub-type)"
+        "expected the declared domain topic 'zone'"
     )
-    assert "zone_market" in topic_set, (
-        f"'zone_market' should be in topic set {sorted(topic_set)}"
-    )
+    assert "zone" in topic_set, f"'zone' should be in topic set {sorted(topic_set)}"

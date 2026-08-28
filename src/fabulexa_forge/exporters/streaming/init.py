@@ -25,20 +25,22 @@ likewise emitted commented out, naming the rule and the offending value.
 records kind, or when no proposal survives live at all (every sidecar-
 derived name topic-illegal).
 
-The `keys:` proposal shares the key-election `init` contract's natural rule
-(`exporters.keys_init`: declared population -> presentation_id, undeclared ->
-record_index) and is self-gated through streaming's own gates before a line
-is written: edge union safety over every live kind-shaped stream's selected
-reference-valued properties, and over every (not excluded-by-collision)
-membership-shaped stream's reference-valued fields against every known
-kind (a membership member field's target kind is per-row, never fixed —
-design doc § Message-key election). Every proposed stream draws from exactly
-one population, so the identity-uniformity gate never fires for a proposal
-`init` builds itself; a kind implicated in an edge-safety failure degrades to
-uniform `record_index`, with a comment naming the forcing gate.
+The `keys:` proposal shares the key-election `init` contract's cross-mode
+menu (`exporters.keys_init.propose_key_election` / `render_keys_block`) with
+dimensional and source's engines: uniform `record_index` active for every
+population, with each population's resolvable alternatives (`record_id`
+always, `presentation_id` where the registry declares the population)
+offered as swap-not-join comments.
 
 Non-exempt `slice_only` columns are never proposed; one
 'slice-only-column-omitted' notice each.
+
+None of `rename` / `kind_label` / `kind_labels` / `where` / `only` / `ignore`
+/ `identity` / membership `sub_types` is ever proposed — each is author
+intent with no sidecar-derived value, and proposing one would be invention.
+The trailing comment names them alongside the never-proposed delivery blocks
+(design doc § `init`); proposal output is otherwise unchanged and remains
+parse-clean.
 """
 
 from __future__ import annotations
@@ -48,24 +50,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable, Literal, Sequence
 
 from fabulexa_forge.config.models import _validate_stream_name
-from fabulexa_forge.errors import ElectionUnionUnsafe, StreamInitNothingToStream
-from fabulexa_forge.exporters.election import check_edge_union_safety, resolve_election
-from fabulexa_forge.exporters.keys_init import (
-    build_keys_config,
-    domains_for_kinds,
-    natural_expanded_surfaces,
-    write_keys_block,
-)
+from fabulexa_forge.errors import StreamInitNothingToStream
+from fabulexa_forge.exporters.keys_init import propose_key_election, render_keys_block
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
-from fabulexa_forge.exporters.streaming.routing import (
-    kind_reference_targets,
-    known_records_kinds,
-    membership_reference_fields,
-)
 
 if TYPE_CHECKING:
-    from fabulexa_forge.config.models import KeySurface
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -372,101 +362,6 @@ def _classify_units(
 
 
 # ---------------------------------------------------------------------------
-# Key-election self-gate
-# ---------------------------------------------------------------------------
-
-
-def _self_gate_streaming_keys(
-    sidecar: "Sidecar",
-    domains: "dict[str, tuple[str, ...]]",
-    expanded: "dict[tuple[str, str | None], KeySurface]",
-    kind_units: "Sequence[tuple[_KindStreamUnit, _UnitStatus]]",
-    membership_units: "Sequence[tuple[_MembershipStreamUnit, _UnitStatus]]",
-) -> "tuple[dict[str, KeySurface | dict[str, KeySurface]], dict[str, str]]":
-    """Gate the natural proposal through streaming's own edge-safety gate.
-
-    Every proposed stream draws from exactly one population, so the
-    identity-uniformity gate (`check_identity_election`) can never fire for a
-    proposal `init` builds itself; the one gate needed is edge union safety
-    (`check_edge_union_safety`), run over every live kind-shaped stream's
-    selected reference-valued properties and every non-excluded
-    membership-shaped stream's reference-valued fields — against every known
-    kind, since a membership member field's target kind is per-row, never
-    fixed. A kind implicated in a failure degrades to uniform `record_index`
-    — always passing, by construction; one pass suffices (mirrors
-    `exporters.keys_init.self_gate_edge_safety`'s argument).
-
-    Args:
-        sidecar: The open emit's sidecar.
-        domains: Every known kind's sub-type domain.
-        expanded: The natural per-population proposal, mutated in place with
-            any degradations.
-        kind_units: Every proposed kind-shaped unit with its classification.
-        membership_units: Every proposed membership-shaped unit with its
-            classification.
-
-    Returns:
-        (keys_config, degraded) — the gated `StreamConfig.keys`-shaped
-        proposal, and kind -> a one-line reason naming the forcing gate.
-    """
-    known_kinds = frozenset(domains)
-    election = resolve_election(sidecar, build_keys_config(expanded, domains))
-    degraded: dict[str, str] = {}
-
-    for kind_unit, kind_status in kind_units:
-        if kind_status != "live":
-            continue
-        targets = kind_reference_targets(
-            sidecar, kind_unit.kind, kind_unit.properties, known_kinds
-        )
-        for prop, target_kind in targets.items():
-            if target_kind in degraded:
-                continue
-            try:
-                check_edge_union_safety(
-                    election,
-                    target_kind,
-                    domains[target_kind],
-                    f"stream '{kind_unit.name}'.prop__{prop}",
-                )
-            except ElectionUnionUnsafe as exc:
-                degraded[target_kind] = f"ElectionUnionUnsafe: {exc}"
-
-    for membership_unit, membership_status in membership_units:
-        if membership_status != "live":
-            continue
-        ref_fields = membership_reference_fields(
-            sidecar,
-            membership_unit.owner_kind,
-            membership_unit.property,
-            membership_unit.fields,
-        )
-        for field in ref_fields:
-            for kind in known_kinds:
-                if kind in degraded:
-                    continue
-                try:
-                    check_edge_union_safety(
-                        election,
-                        kind,
-                        domains[kind],
-                        f"stream '{membership_unit.name}'.member__{field}"
-                        f" (member kind '{kind}')",
-                    )
-                except ElectionUnionUnsafe as exc:
-                    degraded[kind] = f"ElectionUnionUnsafe: {exc}"
-
-    if not degraded:
-        return build_keys_config(expanded, domains), degraded
-
-    for kind in degraded:
-        sub_types: tuple[str | None, ...] = domains[kind] if domains[kind] else (None,)
-        for sub_type in sub_types:
-            expanded[(kind, sub_type)] = "record_index"
-    return build_keys_config(expanded, domains), degraded
-
-
-# ---------------------------------------------------------------------------
 # `streams:` block
 # ---------------------------------------------------------------------------
 
@@ -595,10 +490,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
             sidecar-derived name topic-illegal).
     """
     sidecar = emit.sidecar
-    known_kinds = known_records_kinds(sidecar)
-    domains = domains_for_kinds(sidecar, known_kinds)
-    presentation_keys = sidecar.presentation_keys()
-    expanded = natural_expanded_surfaces(presentation_keys, domains)
+    proposal = propose_key_election(sidecar)
 
     units = _proposed_units(sidecar, notice_sink)
     statuses = _classify_units(units)
@@ -619,10 +511,6 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
             " streaming config can be proposed"
         )
 
-    keys_config, degraded = _self_gate_streaming_keys(
-        sidecar, domains, expanded, kind_units, membership_units
-    )
-
     buf = io.StringIO()
 
     def w(line: str = "") -> None:
@@ -639,7 +527,8 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     w("")
     _write_streams_block(w, kind_units)
     w("")
-    write_keys_block(w, keys_config, degraded)
+    for line in render_keys_block(proposal):
+        w(line)
     w(
         "# rebase: / debezium: / clock: / kafka: -- never proposed; delivery and"
         " environment"
@@ -647,6 +536,14 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     w(
         "# knobs, not emit-derived. Add them yourself, e.g. debezium:"
         " {table_identity: source_table, ...}"
+    )
+    w(
+        "# rename: / kind_label: / kind_labels: / where: / only: / ignore: /"
+        " identity: / sub_types: (membership) --"
+    )
+    w(
+        "# never proposed either; each is author intent with no sidecar-derived"
+        " value (proposing one would be invention). Add them yourself."
     )
     _write_membership_alternative(w, membership_units)
 
@@ -662,14 +559,15 @@ def generate_stream_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     fallback with a comment when the sidecar omits the partition), per kind
     for a flat kind — a lifecycle-only population's stream live under an
     advisory comment, name-collision losers and topic-illegal names emitted
-    commented out, the `keys` block proposed and self-gated per the
-    key-election init contract, and the membership-events alternative fully
-    commented. Names are sidecar identity verbatim; no intent is inferred.
-    Non-exempt `slice_only` columns are never proposed, one notice each. The
-    emitted text always parses into a valid `StreamConfig` and streams clean
-    against this emit (self-gated; every proposal is live except collision
-    losers and topic-illegal names, a collision pair's first entry stays
-    live, and no live proposal at all is a refusal, not an emitted config).
+    commented out, the `keys` menu proposed through the cross-mode
+    `exporters.keys_init.propose_key_election` / `render_keys_block`
+    contract, and the membership-events alternative fully commented. Names
+    are sidecar identity verbatim; no intent is inferred. Non-exempt
+    `slice_only` columns are never proposed, one notice each. The emitted
+    text always parses into a valid `StreamConfig` and streams clean against
+    this emit (every proposal is live except collision losers and
+    topic-illegal names, a collision pair's first entry stays live, and no
+    live proposal at all is a refusal, not an emitted config).
 
     Args:
         emit: An open, version-gated emit (trusted as conformant; not
@@ -680,7 +578,9 @@ def generate_stream_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     Returns:
         The candidate config YAML, commented, ending in a trailing block
         naming the never-proposed delivery blocks (rebase / debezium / clock
-        / kafka) and the fully-commented membership-events alternative.
+        / kafka) and authoring fields (rename / kind_label / kind_labels /
+        where / only / ignore / identity / membership sub_types), followed
+        by the fully-commented membership-events alternative.
 
     Raises:
         StreamInitNothingToStream: The emit carries no records kind, or no
@@ -691,7 +591,7 @@ def generate_stream_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
             TemporalClassUnavailableError on an emit predating per-column
             temporal classes.
     """
-    if not known_records_kinds(emit.sidecar):
+    if not emit.sidecar.record_kinds():
         raise StreamInitNothingToStream(
             "this emit carries no records kind; a candidate streaming config"
             " that cannot stream is not proposed"

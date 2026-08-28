@@ -5,9 +5,9 @@ SourceTableExists, KeyColumnsDeclared, ProjectionColumnExists,
 OrdinalRefsSiblings, TimestampSourceAvailable, DiscriminatorValueObserved,
 ExcludedKindNotSourced, ExcludedTableNotSourced, FkTargetIsDim,
 ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
-Scd2ColumnModeSupported, SliceOnlyColumnRefused (filter keys, column
-reads, and fk hops), ReservedPresentationName (last_mutation_sim_time —
-always-on, full export included).
+Scd2ColumnModeSupported, SliceOnlyColumnRefused
+(filter keys, column reads, and fk hops), ReservedPresentationName
+(last_mutation_sim_time — always-on, full export included).
 
 The SingleBranch rule is enforced by derivations.require_single_branch (the
 stage-wide guard); dimensional calls it but does not own it.
@@ -29,6 +29,7 @@ import logging
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import (
         ColumnDecl,
         DimensionalConfig,
@@ -41,12 +42,25 @@ if TYPE_CHECKING:
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
+from fabulexa_forge.config.models import (
+    ScdWindowSpec,
+    scd_window_bound,
+    scd_window_render,
+    timestamp_render,
+)
 from fabulexa_forge.derivations.reference_resolution import (
     _collect_reference_columns,
     _find_all_reference_paths,
     _path_hint_to_cols,
 )
-from fabulexa_forge.errors import ElectionDimKeyDisagrees, ExportError
+from fabulexa_forge.errors import (
+    DateParseSourceColumn,
+    DecimalSourceIsDouble,
+    ElectionDimKeyDisagrees,
+    ExportError,
+    JsonPrecisionSourceIsVarchar,
+    TemporalRenderRequiresAnchor,
+)
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
 from fabulexa_forge.exporters.dimensional.populations import (
     dim_key_projects_surface,
@@ -258,7 +272,10 @@ def check_projection_column_exists(
 ) -> None:
     """Enforce ProjectionColumnExists for a single column declaration.
 
-    Checks from, correlation, and derived.value_map.from against the grain surface.
+    Checks from, correlation, derived.value_map.from, derived.date_parse.from,
+    derived.decimal.from, and derived.json_precision.from against the grain
+    surface — each derived `from` resolves off the grain's projectable
+    surface exactly as `value_map.from` does.
 
     Args:
         col_decl: The column declaration being validated.
@@ -275,6 +292,12 @@ def check_projection_column_exists(
         src = col_decl.correlation
     elif col_decl.derived is not None and col_decl.derived.value_map is not None:
         src = col_decl.derived.value_map.from_
+    elif col_decl.derived is not None and col_decl.derived.date_parse is not None:
+        src = col_decl.derived.date_parse.from_
+    elif col_decl.derived is not None and col_decl.derived.decimal is not None:
+        src = col_decl.derived.decimal.from_
+    elif col_decl.derived is not None and col_decl.derived.json_precision is not None:
+        src = col_decl.derived.json_precision.from_
 
     if src is not None and src not in surface:
         raise ExportError(
@@ -356,6 +379,186 @@ def check_timestamp_source_available(
         f"timestamp source '{ts_source}' is not available on grain"
         f" '{grain}' for '{table_decl.name}.{col_decl.name}'"
     )
+
+
+def check_temporal_render_requires_anchor(
+    col_decl: "ColumnDecl",
+    anchor: "EffectiveAnchor | None",
+) -> None:
+    """Enforce TemporalRenderRequiresAnchor: an explicit election needs an anchor.
+
+    Covers `derived: timestamp` with `as` set (the mode-definitional default
+    `timestamp` rendering, absence detection, is exempt) and the
+    `scd_window` object form (always an explicit election — the object form
+    exists to elect). `elapsed: interval` and `date_parse` are exempt: a
+    duration is a physical delta and a parse reads no sim_time (§ Anchor
+    requirement).
+
+    Args:
+        col_decl: The column declaration.
+        anchor: The resolved EffectiveAnchor, or None.
+
+    Raises:
+        TemporalRenderRequiresAnchor: An explicit election is set and no
+            anchor resolved.
+    """
+    if anchor is not None or col_decl.derived is None:
+        return
+
+    derived = col_decl.derived
+    render: str | None = None
+    if derived.timestamp is not None and derived.timestamp.as_ is not None:
+        render = derived.timestamp.as_
+    elif isinstance(derived.scd_window, ScdWindowSpec):
+        render = derived.scd_window.as_
+
+    if render is not None:
+        raise TemporalRenderRequiresAnchor(
+            f"column '{col_decl.name}': temporal rendering '{render}' requires"
+            " a resolved anchor; this emit declares no runtime calendar and"
+            " none was supplied"
+        )
+
+
+def _resolve_grain_source_type(
+    from_: str,
+    source_table_name: str,
+    sidecar: "Sidecar",
+) -> str | None:
+    """Resolve a grain-surface source column's declared DuckDB type, or None.
+
+    Reads the sidecar's column list for the resolved source table — the same
+    type authority `value_map`'s literal typing reads, which already covers
+    the history_interval grain's `value` alias (its source table is
+    'history', whose sidecar `value` column carries the type). A structural,
+    virtual, or grain-constant source with no matching sidecar column
+    returns None — no declared type behind it. Shared by the three typed
+    derived-source gates (`date_parse`, `decimal`, `json_precision`).
+
+    Args:
+        from_: The source column's name (source spelling).
+        source_table_name: The resolved DuckDB source table name.
+        sidecar: The open emit's sidecar.
+
+    Returns:
+        The column's declared DuckDB type, or None when no sidecar column
+        by that name exists on the source table.
+    """
+    try:
+        cols = sidecar.columns(source_table_name)
+    except TableNotFoundError:
+        return None
+    for col_spec in cols:
+        if col_spec.name == from_:
+            return col_spec.type
+    return None
+
+
+def check_date_parse_source_column(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    source_table_name: str,
+    sidecar: "Sidecar",
+) -> None:
+    """Enforce DateParseSourceColumn: the parse source is a declared VARCHAR column.
+
+    Existence/resolution is ProjectionColumnExists' (`from` resolves off the
+    grain's projectable surface exactly as `value_map.from` does); this rule
+    additionally requires the resolved column carry a declared VARCHAR type.
+
+    Args:
+        col_decl: The column declaration potentially containing a date_parse spec.
+        table_decl: The output table declaration (for error messages).
+        source_table_name: The resolved DuckDB source table name.
+        sidecar: The open emit's sidecar.
+
+    Raises:
+        DateParseSourceColumn: The resolved source column carries no declared
+            VARCHAR type.
+    """
+    if col_decl.derived is None or col_decl.derived.date_parse is None:
+        return
+
+    dp_from = col_decl.derived.date_parse.from_
+    resolved_type = _resolve_grain_source_type(dp_from, source_table_name, sidecar)
+    if resolved_type is None or resolved_type.upper() != "VARCHAR":
+        got = resolved_type if resolved_type is not None else "no declared type"
+        raise DateParseSourceColumn(
+            f"date_parse column '{col_decl.name}' on '{table_decl.name}':"
+            f" source must be an existing VARCHAR column (got {got})"
+        )
+
+
+def check_decimal_source_column(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    source_table_name: str,
+    sidecar: "Sidecar",
+) -> None:
+    """Enforce DecimalSourceIsDouble: the decimal source is a declared DOUBLE column.
+
+    Existence/resolution is ProjectionColumnExists' (`from` resolves off the
+    grain's projectable surface exactly as `value_map.from` does); this rule
+    additionally requires the resolved column carry a declared DOUBLE type —
+    the contract's one floating-point type.
+
+    Args:
+        col_decl: The column declaration potentially containing a decimal spec.
+        table_decl: The output table declaration (for error messages).
+        source_table_name: The resolved DuckDB source table name.
+        sidecar: The open emit's sidecar.
+
+    Raises:
+        DecimalSourceIsDouble: The resolved source column carries no declared
+            DOUBLE type.
+    """
+    if col_decl.derived is None or col_decl.derived.decimal is None:
+        return
+
+    dec_from = col_decl.derived.decimal.from_
+    resolved_type = _resolve_grain_source_type(dec_from, source_table_name, sidecar)
+    if resolved_type is None or resolved_type.upper() != "DOUBLE":
+        got = resolved_type if resolved_type is not None else "no declared type"
+        raise DecimalSourceIsDouble(
+            f"decimal column '{col_decl.name}' on '{table_decl.name}':"
+            f" source must be an existing DOUBLE column (got {got})"
+        )
+
+
+def check_json_precision_source_column(
+    col_decl: "ColumnDecl",
+    table_decl: "TableDecl",
+    source_table_name: str,
+    sidecar: "Sidecar",
+) -> None:
+    """Enforce JsonPrecisionSourceIsVarchar: the source is a declared VARCHAR column.
+
+    Existence/resolution is ProjectionColumnExists' (`from` resolves off the
+    grain's projectable surface exactly as `value_map.from` does); this rule
+    additionally requires the resolved column carry a declared VARCHAR type.
+
+    Args:
+        col_decl: The column declaration potentially containing a
+            json_precision spec.
+        table_decl: The output table declaration (for error messages).
+        source_table_name: The resolved DuckDB source table name.
+        sidecar: The open emit's sidecar.
+
+    Raises:
+        JsonPrecisionSourceIsVarchar: The resolved source column carries no
+            declared VARCHAR type.
+    """
+    if col_decl.derived is None or col_decl.derived.json_precision is None:
+        return
+
+    jp_from = col_decl.derived.json_precision.from_
+    resolved_type = _resolve_grain_source_type(jp_from, source_table_name, sidecar)
+    if resolved_type is None or resolved_type.upper() != "VARCHAR":
+        got = resolved_type if resolved_type is not None else "no declared type"
+        raise JsonPrecisionSourceIsVarchar(
+            f"json_precision column '{col_decl.name}' on '{table_decl.name}':"
+            f" source must be an existing VARCHAR column (got {got})"
+        )
 
 
 def check_elapsed_columns_exist(
@@ -549,9 +752,13 @@ def _collect_value_read_sources(col_decl: "ColumnDecl") -> list[str]:
     """Collect every source-column name a column declaration's value derives from.
 
     Covers from, correlation, resolved value_map.from, derived: timestamp
-    source, and derived: elapsed correlate_on/start_source/end_source/
-    other_where keys — the exhaustive SliceOnlyColumnRefused value-read
-    surface (lookup and fk hops are checked separately).
+    source, derived: elapsed correlate_on/start_source/end_source/
+    other_where keys, derived: date_parse.from, derived: decimal.from, and
+    derived: json_precision.from — the exhaustive SliceOnlyColumnRefused
+    value-read surface (lookup and fk hops are checked separately). Each
+    derived source is a value-read like any other: it joins this surface
+    list, so deriving from a slice_only column is refused at plan time
+    (§ The declared date parse).
 
     Args:
         col_decl: The column declaration.
@@ -575,6 +782,12 @@ def _collect_value_read_sources(col_decl: "ColumnDecl") -> list[str]:
             refs.append(derived.elapsed.start_source)
             refs.append(derived.elapsed.end_source)
             refs.extend(derived.elapsed.other_where.keys())
+        if derived.date_parse is not None:
+            refs.append(derived.date_parse.from_)
+        if derived.decimal is not None:
+            refs.append(derived.decimal.from_)
+        if derived.json_precision is not None:
+            refs.append(derived.json_precision.from_)
     return refs
 
 
@@ -698,7 +911,7 @@ def check_scd2_needs_history(
         if (
             col_decl.name in key_set
             and col_decl.derived is not None
-            and col_decl.derived.scd_window == "valid_from"
+            and scd_window_bound(col_decl.derived.scd_window) == "valid_from"
         ):
             has_valid_from_key = True
             break
@@ -730,21 +943,24 @@ def check_scd2_column_mode_supported(
     col_decl: "ColumnDecl",
     table_decl: "TableDecl",
 ) -> None:
-    """Enforce Scd2ColumnModeSupported: type2 columns use only implemented modes.
+    """Enforce Scd2ColumnModeSupported: type2 columns use supported modes.
 
-    The SCD-2 type2 builder implements exactly three column modes: from, null,
-    and derived: scd_window. Any other mode — fk, correlation, or a derived
-    ordinal / value_map / timestamp / elapsed — would render as NULL on every
-    row: accepted config, silently wrong data (Principle #7). Reject at
-    validate time instead. (lookup is gated separately by LookupColumnSafety.)
+    The type2 surface admits from, null, derived: scd_window, and the pure
+    per-row value renderings derived: timestamp / date_parse / value_map /
+    decimal / json_precision — each a pure function of one row's source
+    value, evaluated per record for constant sources and per version for
+    tracked sources. It refuses fk, correlation, derived: ordinal, and
+    derived: elapsed — cross-row or grain-surface semantics the type2 build
+    does not define. (lookup is gated separately by LookupColumnSafety;
+    slice_only sources by the export-wide slice-only surface.)
 
     Args:
         col_decl: The column declaration.
-        table_decl: The output table declaration (mode gate applies iff
+        table_decl: The output table declaration (gate applies iff
             scd: type2; also used for error messages).
 
     Raises:
-        ExportError: The column uses an unimplemented mode on an scd: type2
+        ExportError: The column uses an unsupported mode on an scd: type2
             table.
     """
     if table_decl.scd != "type2":
@@ -758,18 +974,16 @@ def check_scd2_column_mode_supported(
     elif col_decl.derived is not None and col_decl.derived.scd_window is None:
         if col_decl.derived.ordinal is not None:
             mode = "derived: ordinal"
-        elif col_decl.derived.value_map is not None:
-            mode = "derived: value_map"
-        elif col_decl.derived.timestamp is not None:
-            mode = "derived: timestamp"
         elif col_decl.derived.elapsed is not None:
             mode = "derived: elapsed"
 
     if mode is not None:
         raise ExportError(
-            f"table '{table_decl.name}' column '{col_decl.name}':"
+            f"column '{col_decl.name}' on table '{table_decl.name}':"
             f" {mode} is not supported on an scd: type2 table; type2 columns"
-            " support only from, null, and derived: scd_window"
+            " support only from, null, derived: scd_window, and the value"
+            " renderings derived: timestamp, derived: date_parse, derived:"
+            " value_map, derived: decimal, and derived: json_precision"
         )
 
 
@@ -891,9 +1105,10 @@ def check_incremental_scd2_valid_from_unique(table_decl: "TableDecl") -> None:
     valid_to_count = 0
     for col_decl in table_decl.columns:
         if col_decl.derived is not None:
-            if col_decl.derived.scd_window == "valid_from":
+            bound = scd_window_bound(col_decl.derived.scd_window)
+            if bound == "valid_from":
                 valid_from_count += 1
-            elif col_decl.derived.scd_window == "valid_to":
+            elif bound == "valid_to":
                 valid_to_count += 1
 
     if valid_to_count > 0 and valid_from_count != 1:
@@ -1010,6 +1225,12 @@ def _get_window_key_cols(table_decl: "TableDecl") -> frozenset[str]:
     For SCD-2 dim: the scd_window: valid_from column(s).
     Plus any derived: timestamp whose source is the grain's time column.
 
+    Election-aware: a `time`-elected rendering is not monotone in its raw-ns
+    source, so it is excluded — an append-mode `order_by` naming it is
+    refused. `timestamp` / `date` / `timestamptz` (or the default rendering)
+    remain window keys exactly as `timestamp` does today (§ Ordering and the
+    ordinal amendment).
+
     Args:
         table_decl: The output table declaration.
 
@@ -1024,8 +1245,12 @@ def _get_window_key_cols(table_decl: "TableDecl") -> frozenset[str]:
         for col_decl in table_decl.columns:
             if col_decl.derived is None:
                 continue
-            if col_decl.derived.scd_window == "valid_from":
-                valid_from_cols.add(col_decl.name)
+            if scd_window_bound(col_decl.derived.scd_window) != "valid_from":
+                continue
+            assert col_decl.derived.scd_window is not None
+            if scd_window_render(col_decl.derived.scd_window) == "time":
+                continue
+            valid_from_cols.add(col_decl.name)
         return frozenset(valid_from_cols)
 
     if grain == "records":
@@ -1043,6 +1268,7 @@ def _get_window_key_cols(table_decl: "TableDecl") -> frozenset[str]:
             col_decl.derived is not None
             and col_decl.derived.timestamp is not None
             and col_decl.derived.timestamp.source == raw_key
+            and timestamp_render(col_decl.derived.timestamp) != "time"
         ):
             window_key_cols.add(col_decl.name)
 
@@ -1301,28 +1527,34 @@ def validate_table(
     window: "Window | None",
     notice_sink: "NoticeSink",
     *,
+    anchor: "EffectiveAnchor | None" = None,
     election: "Election | None" = None,
 ) -> str:
     """Run all business rules for a single table declaration.
 
     Runs: SourceTableExists, ExcludedKindNotSourced, ExcludedTableNotSourced,
     KeyColumnsDeclared, ProjectionColumnExists, OrdinalRefsSiblings,
-    TimestampSourceAvailable, DiscriminatorValueObserved, FkTargetIsDim,
+    TimestampSourceAvailable, TemporalRenderRequiresAnchor,
+    DateParseSourceColumn, DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar,
+    DiscriminatorValueObserved, FkTargetIsDim,
     ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
     Scd2ColumnModeSupported, LookupColumnSafety, SliceOnlyColumnRefused
-    (filter keys, column reads, fk hops), ReservedPresentationName
-    (last_mutation_sim_time — always-on, full export included). Per fk
-    column: resolves the destination dim's source population set
-    (`resolve_dim_source_populations`), the edge's one resolved surface
-    (`resolve_fk_surface` — inherited or the explicit `target_key`),
-    `check_edge_union_safety` over that set with the resolved surface as
-    `surface_override`, then `check_dim_key_agreement`; the probe
-    `build_fk_expr` call passes the resolved surface + population set.
+    (filter keys, column reads including date_parse.from / decimal.from /
+    json_precision.from, fk hops),
+    ReservedPresentationName (last_mutation_sim_time — always-on, full
+    export included). Per fk column: resolves the destination dim's source
+    population set (`resolve_dim_source_populations`), the edge's one
+    resolved surface (`resolve_fk_surface` — inherited or the explicit
+    `target_key`), `check_edge_union_safety` over that set with the
+    resolved surface as `surface_override`, then `check_dim_key_agreement`;
+    the probe `build_fk_expr` call passes the resolved surface + population
+    set.
 
     When window is not None, also runs the ten incremental gates:
     IncrementalGrainUnsupported, IncrementalElapsedUnsupported,
     IncrementalFkMembershipUnsupported, IncrementalFkMutableHop,
-    IncrementalOrdinalOrderBy, IncrementalSliceColumnMutable,
+    IncrementalOrdinalOrderBy (election-aware — a `time`-elected window-key
+    sibling is excluded), IncrementalSliceColumnMutable,
     IncrementalFilterColumnMutable, IncrementalScd2IdentityKey,
     IncrementalScd2ValidFromUnique, IncrementalReservedName.
 
@@ -1333,6 +1565,8 @@ def validate_table(
         window: The window for windowed export, or None for full export.
         notice_sink: Receiver for plan notices (threaded to
             check_discriminator_value_observed).
+        anchor: The resolved EffectiveAnchor, or None — threaded to
+            TemporalRenderRequiresAnchor.
         election: The resolved election, or None to resolve the all-default
             election internally (every population elects record_id — the
             caller has no `keys` block to thread, or is an election-free
@@ -1343,6 +1577,14 @@ def validate_table(
 
     Raises:
         ExportError: Any business rule fails.
+        TemporalRenderRequiresAnchor: An explicitly-elected instant rendering
+            has no resolved anchor.
+        DateParseSourceColumn: A date_parse source is not a declared VARCHAR
+            column.
+        DecimalSourceIsDouble: A decimal source is not a declared DOUBLE
+            column.
+        JsonPrecisionSourceIsVarchar: A json_precision source is not a
+            declared VARCHAR column.
         ElectionInheritanceAmbiguous: An fk column's `target_key` is absent
             and the destination dim's source population set carries more
             than one distinct election.
@@ -1409,6 +1651,12 @@ def validate_table(
         check_projection_column_exists(col_decl, table_decl, surface)
         check_ordinal_refs_siblings(col_decl, table_decl)
         check_timestamp_source_available(col_decl, table_decl, source, surface)
+        check_temporal_render_requires_anchor(col_decl, anchor)
+        check_date_parse_source_column(col_decl, table_decl, source_table_name, sidecar)
+        check_decimal_source_column(col_decl, table_decl, source_table_name, sidecar)
+        check_json_precision_source_column(
+            col_decl, table_decl, source_table_name, sidecar
+        )
         check_elapsed_columns_exist(col_decl, table_decl, source_table_name, sidecar)
         check_slice_only_column_reads(
             col_decl, table_decl, source, source_table_name, sidecar

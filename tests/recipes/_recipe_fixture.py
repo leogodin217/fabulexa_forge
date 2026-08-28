@@ -7,6 +7,9 @@ never invoked. All values are fixed; no randomness, no clock calls.
 The fixture world:
   - records__patient   : history-tracked ``prop__status`` (type-2 capable)
                          + non-tracked ``prop__name`` (type-1)
+                         + non-tracked ``prop__dob`` (type-1, an ISO date
+                           string minted upstream -- the declared-date-parse
+                           source: p001 "1990-05-14", p002 "1985-11-02")
                          + ``prop__doctor_id`` (references doctor)
                          + ``prop__primary_staff_id`` / ``prop__backup_staff_id``
                            (both reference staff — two edges to one kind, so a
@@ -18,14 +21,34 @@ The fixture world:
                          no history. a001 active (create only); a002 deactivated
                          at 2*DAY (create then delete). Exercises the streaming
                          lifecycle (c / d) and the after-only delete tombstone.
-  - history            : 4 rows — point-grain status changes only:
+  - history            : 10 rows — point-grain property changes:
                          p001 status: pending@1*DAY, active@2*DAY, discharged@3*DAY
                          p002 status: pending@2*DAY
+                         t001 status: forming@1*DAY, active@2*DAY
+                         t001 shift:  day@1*DAY, night@3*DAY
+                         t002 status: forming@2*DAY
+                         t002 shift:  day@2*DAY
                          Records carry the current (latest) value of each tracked
                          property: p001.prop__status='discharged' (latest at 3*DAY),
-                         p002.prop__status='pending' (latest at 2*DAY).
+                         p002.prop__status='pending' (latest at 2*DAY),
+                         t001 status='active' / shift='night', t002 status='forming'
+                         / shift='day'. The two team properties change at
+                         *different* timestamps, so narrowing a stream's change
+                         scope to one of them drops a visible subset of `u` events.
   - membership__patient__visits : one membership row linking patient p001
                          (open interval — left_sim_time NULL)
+  - records__team      : sub-typed dimension (``prop__team_type``: t001
+                         surgical, t002 nursing) carrying TWO history-tracked
+                         properties — ``prop__status`` and ``prop__shift`` — so a
+                         stream's change scope (``only`` / ``ignore``) has more
+                         than one audited property to narrow. Owns the
+                         ``members`` collection. Two records: t001 "Alpha",
+                         t002 "Bravo".
+  - membership__team__members : one interval per team — t001 holds s002 as
+                         "lead" (open), t002 holds s001 as "float" (closed
+                         @3*DAY). The owner kind is sub-typed and has two
+                         records, so a membership stream's owner ``sub_types``
+                         and owner ``where`` each select a proper subset.
   - records__queue     : type-1 dimension owning the ``waiters`` collection;
                          one record q001 ("Triage").
   - membership__queue__waiters : two waiter intervals on owner q001 —
@@ -37,10 +60,14 @@ The fixture world:
                          the join-before-leave order.
   - pinned_ids         : {patient: {alice: p001}}
   - enum_domains       : {patient: {status: [active, discharged, pending]},
-                          staff: {staff_type: [nurse, physician]}}
+                          staff: {staff_type: [nurse, physician]},
+                          team: {team_type: [nursing, surgical],
+                                 status: [active, forming],
+                                 shift: [day, night]}}
   - record_roles       : {patient: dimension, doctor: dimension,
                           staff: {nurse: dimension, physician: dimension},
-                          admission: fact, queue: dimension}
+                          admission: fact, queue: dimension,
+                          team: {nursing: dimension, surgical: dimension}}
                          staff is sub-typed (object-valued role) — its routing
                          leaf is the ``prop__staff_type`` discriminator, so the
                          streaming routing recipes split it into per-sub-type topics.
@@ -83,6 +110,11 @@ _PATIENT_COLUMNS: list[dict[str, object]] = [
     # non-tracked property — type-1 source
     prop_column(
         "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    # non-tracked ISO date string — a declared-date-parse source (an
+    # upstream-minted date, e.g. a date of birth; never sniffed).
+    prop_column(
+        "prop__dob", "VARCHAR", history_tracked=False, temporal_class="constant"
     ),
     # FK to doctor kind
     prop_column(
@@ -197,6 +229,48 @@ _QUEUE_COLUMNS: list[dict[str, object]] = [
     ),
 ]
 
+# Team: the two-tracked-property, sub-typed membership owner. Its second tracked
+# property is what gives a stream's change scope (`only` / `ignore`) something to
+# narrow — every other kind in this world has at most one audited property.
+_TEAM_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    # Sub-type discriminator — as on staff, deliberately left slice_only.
+    prop_column(
+        "prop__team_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="slice_only",
+    ),
+    # Two history-tracked properties, changing at different timestamps.
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__shift", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+# Team members: a scalar element field (elem__role) plus a reference field
+# (member__staff__*). Owner is a team (sub-typed); member is a staff record.
+_TEAM_MEMBERS_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__role", "type": "VARCHAR"},
+    {"name": "member__staff__kind", "type": "VARCHAR"},
+    {"name": "member__staff__id", "type": "VARCHAR"},
+]
+
 # Queue waiters: a scalar element field (elem__priority) plus a reference field
 # (member__patient__*). Owner is a queue; member is a patient.
 _WAITERS_COLUMNS: list[dict[str, object]] = [
@@ -262,6 +336,8 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     conn.execute(_create_ddl("membership__patient__visits", _MEMBERSHIP_COLUMNS))
     conn.execute(_create_ddl("records__queue", _QUEUE_COLUMNS))
     conn.execute(_create_ddl("membership__queue__waiters", _WAITERS_COLUMNS))
+    conn.execute(_create_ddl("records__team", _TEAM_COLUMNS))
+    conn.execute(_create_ddl("membership__team__members", _TEAM_MEMBERS_COLUMNS))
 
     # Two patient records.
     # p001: created before first history event (1*DAY); latest history at 3*DAY.
@@ -273,7 +349,7 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     # together with the NULL reference cell (p002's backup_staff_id).
     conn.execute(
         'INSERT INTO "records__patient" VALUES '
-        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "p001",
@@ -283,6 +359,7 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
             0,
             "discharged",
             "Alice",
+            "1990-05-14",
             "d001",
             0,
             "s001",
@@ -293,7 +370,7 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
     )
     conn.execute(
         'INSERT INTO "records__patient" VALUES '
-        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "(?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         [
             "trunk",
             "p002",
@@ -303,6 +380,7 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
             1,
             "pending",
             "Bob",
+            "1985-11-02",
             "d001",
             0,
             "s002",
@@ -389,15 +467,88 @@ def _populate_db(conn: duckdb.DuckDBPyConnection) -> dict[str, int]:
         ["trunk", "q001", 2 * DAY, "1", "patient", "p002"],
     )
 
+    # Two team records. Each is created at the sim_time of its own genesis
+    # history rows (C13: every tracked property needs a genesis row at the
+    # record's created_sim_time) — t001@1*DAY, t002@2*DAY.
+    # record_index: t001=0, t002=1. Latest tracked values ride the record row:
+    #   t001 status='active' (2*DAY), shift='night' (3*DAY) → last mutation 3*DAY
+    #   t002 status='forming' (2*DAY), shift='day' (2*DAY)  → last mutation 2*DAY
+    conn.execute(
+        'INSERT INTO "records__team" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "t001",
+            DAY,
+            True,
+            3 * DAY,
+            0,
+            "Alpha",
+            "surgical",
+            "active",
+            "night",
+        ],
+    )
+    conn.execute(
+        'INSERT INTO "records__team" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "t002",
+            2 * DAY,
+            True,
+            2 * DAY,
+            1,
+            "Bravo",
+            "nursing",
+            "forming",
+            "day",
+        ],
+    )
+
+    # Team history. The @1*DAY / @2*DAY rows are the genesis pair each record
+    # is created at; they fold into the `c` after-image rather than spawning a
+    # `u`. The later rows change the two properties at *different* timestamps
+    # (status@2*DAY, shift@3*DAY on t001), so a change scope narrowed to one
+    # property drops a visible subset of `u` events:
+    #   t001 status@1*DAY, 2*DAY   |   t001 shift@1*DAY, 3*DAY
+    #   t002 status@2*DAY          |   t002 shift@2*DAY
+    for row in (
+        ("t001", "status", DAY, "forming"),
+        ("t001", "shift", DAY, "day"),
+        ("t001", "status", 2 * DAY, "active"),
+        ("t002", "status", 2 * DAY, "forming"),
+        ("t002", "shift", 2 * DAY, "day"),
+        ("t001", "shift", 3 * DAY, "night"),
+    ):
+        record_id, prop, sim_time, value = row
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "team", record_id, prop, sim_time, value],
+        )
+
+    # Team members — one interval per owner, so an owner-scoping `sub_types`
+    # (surgical vs nursing) or an owner `where` selects a proper subset:
+    #   t001 (surgical): s002 as "lead",  joined@1*DAY, open
+    #   t002 (nursing):  s001 as "float", joined@2*DAY, left@3*DAY
+    conn.execute(
+        'INSERT INTO "membership__team__members" VALUES (?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "t001", DAY, "lead", "staff", "s002"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__team__members" VALUES (?, ?, ?, ?, ?, ?, ?)',
+        ["trunk", "t002", 2 * DAY, 3 * DAY, "float", "staff", "s001"],
+    )
+
     return {
         "records__patient": 2,
         "records__doctor": 1,
         "records__staff": 2,
         "records__admission": 2,
-        "history": 4,
+        "history": 10,
         "membership__patient__visits": 1,
         "records__queue": 1,
         "membership__queue__waiters": 2,
+        "records__team": 2,
+        "membership__team__members": 2,
     }
 
 
@@ -480,6 +631,21 @@ def build_recipe_emit(dest: Path) -> None:
             record_kind="queue",
             property_name="waiters",
         ),
+        _table_spec(
+            "records__team",
+            "records",
+            _TEAM_COLUMNS,
+            row_counts["records__team"],
+            record_kind="team",
+        ),
+        _table_spec(
+            "membership__team__members",
+            "membership",
+            _TEAM_MEMBERS_COLUMNS,
+            row_counts["membership__team__members"],
+            record_kind="team",
+            property_name="members",
+        ),
     ]
 
     write_emit(
@@ -497,6 +663,11 @@ def build_recipe_emit(dest: Path) -> None:
             "enum_domains": {
                 "patient": {"status": ["active", "discharged", "pending"]},
                 "staff": {"staff_type": ["nurse", "physician"]},
+                "team": {
+                    "team_type": ["nursing", "surgical"],
+                    "status": ["active", "forming"],
+                    "shift": ["day", "night"],
+                },
             },
             "record_roles": {
                 "patient": "dimension",
@@ -504,6 +675,7 @@ def build_recipe_emit(dest: Path) -> None:
                 "staff": {"nurse": "dimension", "physician": "dimension"},
                 "admission": "fact",
                 "queue": "dimension",
+                "team": {"nursing": "dimension", "surgical": "dimension"},
             },
         },
     )

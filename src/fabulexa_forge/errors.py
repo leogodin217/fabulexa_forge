@@ -20,9 +20,21 @@ class ConfigError(ExporterError):
     validation (unknown / missing field, or a model validator)."""
 
 
+class ReadmeOverlayInvalid(ConfigError):
+    """The `readme_overlay` file is unreadable, is not UTF-8, or violates the
+    slot grammar — content before the first H2, a heading matching neither
+    slot form, or a duplicate slot key. Names the offending heading or key."""
+
+
 class ExportError(ExporterError):
     """Engine: the config is well-formed but does not fit the emit — the
     multi-branch guard or any business rule fails."""
+
+
+class ReadmeOverlayUnknownTable(ExportError):
+    """An overlay `table:` slot names a table the compiled plan does not
+    produce. Raised post-compile, before any data or artifact is written.
+    Names the slot and lists the plan's output tables."""
 
 
 class ExportRuntimeError(ExporterError):
@@ -398,3 +410,162 @@ class ElectedKeyDuplicate(ExportError):
     COUNT(DISTINCT record_id), and COUNT(DISTINCT elected value) are not
     all equal, or an elected value is NULL; names the table or edge and
     the surface."""
+
+
+class TemporalRenderRequiresAnchor(ExportError):
+    """An explicitly-elected instant rendering (dimensional `as`, the
+    `scd_window` object form, or a source/base `render` entry) has no
+    resolved effective anchor. An elected rendering never falls back to raw
+    integers — without a declared calendar the offset is uninterpretable."""
+
+
+class DateParseSourceColumn(ExportError):
+    """A `date_parse` source does not carry a declared VARCHAR type behind
+    it (the sidecar type for `prop__` columns, or the `history` table's
+    `value` column type on the history_interval grain) — a structural,
+    virtual, or grain-constant source, or a non-VARCHAR declared column."""
+
+
+class RenderKeyResolves(ExportError):
+    """A source declared-table or base-entry `render` key does not name a
+    column in its value form's key domain: the bare shorthand form requires
+    an instant-carrying structural column of the table's category (per the
+    reader's `structural_instant_columns`); a typed election
+    (`date_parse` / `instant` / `decimal` / `json_precision`) requires a
+    payload column of the table's kind (`elem__<f>` element columns on a
+    junction; the member pair columns are outside the domain) — a typed
+    election naming a structural column is refused, so no rendering ever has
+    two spellings. The event log's one legal key is `event_sim_time`
+    (mode-definitional); any other key is refused the same way. A stream's
+    `render` key must likewise resolve to a declared property or
+    element-schema field of that stream's own projection (`decimal` /
+    `json_precision` only; a membership stream's reference-field pair is
+    outside the domain)."""
+
+
+class ElectionKindConflict(ExportError):
+    """Across the declared tables of one `(kind, property)` membership
+    (junction tables share the membership grain) that emit a source
+    property the event log renders, every table must declare the identical
+    render election — a silent emitting table counts as differing, its
+    column asserting the default raw rendering. Scoped to properties inside
+    some `events` source's audited set; tables differing on a property no
+    log renders are legal. Message names the property, the membership, and
+    the two disagreeing tables — either the "conflicting elections" shape
+    (both elect, differently) or the "declares none" shape (one elects, one
+    is silent)."""
+
+
+class DecimalSourceIsDouble(ExportError):
+    """A `decimal` election's source column does not carry a declared DOUBLE
+    type — the contract's one floating-point type; integers and VARCHARs
+    have no precision to elect."""
+
+
+class InstantSourceIsBigint(ExportError):
+    """An `instant` election's source column does not carry a declared
+    BIGINT type — the assertion is checkable only against an integer
+    sim-offset column."""
+
+
+class JsonPrecisionSourceIsVarchar(ExportError):
+    """A `json_precision` election's source column does not carry a declared
+    VARCHAR type — electing the column asserts it is a JSON object payload."""
+
+
+class StreamRenameUnresolvable(ExportError):
+    """A stream's `rename` key names neither a selected property
+    (kind-shaped) or field (membership-shaped) nor a published identity
+    surface's contract column name — rename keys are source identities and
+    must name a member of the stream's own projection or its published
+    identity set. Message, engine-wrapped with the declaring stream's name:
+    `"stream '{name}': rename key '{key}' names no selected property"`
+    (field-variant for membership); when the key is itself a KeySurface name
+    this stream simply does not publish, the message appends the published
+    set."""
+
+
+class StreamOutputNameCollision(ExportError):
+    """Two of a stream's resolved after-image output keys collide — two
+    rename targets, a target vs an unrenamed bare default, a renamed
+    reference pair member vs anything — or an output key equals a reserved
+    name on that stream: a published identity surface's resolved output key,
+    or the membership `event` column. Message, engine-wrapped with the
+    declaring stream's name:
+    `"stream '{name}': output name '{key}' collides with '{other}'"`."""
+
+
+class StreamKindLabelUnknown(ExportError):
+    """A `kind_labels` key names no sidecar kind (no `records__<kind>`
+    table) — the sidecar-facts-gate-declarations posture. Message:
+    `"kind_labels: '{kind}' is not a kind in this emit"`."""
+
+
+class StreamKindLabelCollision(ExportError):
+    """A `kind_labels` label, or a per-stream `kind_label`, equals a
+    *different* kind's rendered name (its label, or its verbatim name when
+    unlabeled) — the masquerade refusal. Two streams sharing one
+    `kind_label` is legal; this is not a cross-stream uniqueness rule.
+    Message: `"kind_labels: label '{label}' collides with kind '{kind}'"`
+    (config-level) or `"stream '{name}': kind_label '{label}' collides with
+    kind '{kind}'"` (per-stream)."""
+
+
+class StreamWhereNotConstant(ExportError):
+    """A `where` key names a resolved payload property of the subject kind
+    (the declared kind for a kind stream, the owner kind for a membership
+    stream) whose `temporal_class` is not `constant` — a stream replays
+    every instant of the tape, so only a value identical at every horizon
+    can select rows without making the event set time-dependent. Message:
+    `"stream '{name}': where key '{key}' is not a constant-class property of
+    kind '{kind}'"`."""
+
+
+class StreamWhereOnDiscriminator(ExportError):
+    """A `where` key names the subject kind's declared discriminator;
+    sub-type selection is `sub_types`' axis (owner `sub_types` on a
+    membership stream). Message: `"stream '{name}': where key '{key}' is the
+    discriminator; use sub_types"`."""
+
+
+class StreamWhereColumnUnresolved(ExportError):
+    """A `where` key names no payload property of the subject kind —
+    structural columns, membership element fields, and unknown columns all
+    land here. Message: `"stream '{name}': where key '{key}' is not a
+    payload property of kind '{kind}'"`."""
+
+
+class StreamWhereValueUncastable(ExportError):
+    """A `where` element does not cast to its resolved column's
+    sidecar-declared DuckDB type — constant-evaluated at plan time, before
+    any fold materializes. Message: `"stream '{name}': where value '{value}'
+    does not cast to {type} for '{key}'"`."""
+
+
+class StreamChangeScopeUnresolvable(ExportError):
+    """An `only` / `ignore` entry names no `prop__` column of the stream's
+    kind. Message: `"stream '{name}': {field} entry '{property}' has no
+    prop__{property} column on kind '{kind}'"` (`field` is `only` or
+    `ignore`)."""
+
+
+class StreamIdentityMissingElected(ExportError):
+    """A stream's declared `identity` omits its own gated elected surface —
+    a topic must publish the surface it keys on. Message:
+    `"stream '{name}': identity omits the elected surface '{surface}'; a
+    topic must publish its own key"`."""
+
+
+class StreamIdentityUnavailable(ExportError):
+    """A stream publishes `presentation_id` on a kind (the owner kind, for a
+    membership stream) that mints no surrogate. Message:
+    `"stream '{name}': the kind '{kind}' mints no presentation_id"`."""
+
+
+class StreamPropertyNotAddressable(ExportError):
+    """A kind-shaped stream's `properties` names an identity surface
+    (`record_id`, `record_index`, `presentation_id`) — identity is projected
+    through `identity`, never selected through `properties`, so a
+    same-named producer payload property is unaddressable, full stop.
+    Message: `"stream '{name}': '{property}' is an identity surface —
+    declare it in identity, not properties"`."""

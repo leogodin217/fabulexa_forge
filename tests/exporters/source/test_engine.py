@@ -372,6 +372,7 @@ def test_export_source_anchor_required(tmp_path: Path) -> None:
                 "duckdb",
                 None,
                 notice_sink=discard_notice_sink,
+                overlay=None,
             )
 
 
@@ -382,10 +383,17 @@ def test_export_source_duckdb_row_counts(tmp_path: Path) -> None:
     out_path = tmp_path / "out.duckdb"
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(
-            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+        report = export_source(
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
+    row_counts = {t.name: t.row_count for t in report.tables}
     assert row_counts == _EXPECTED_ROW_COUNTS
 
     out_conn = duckdb.connect(str(out_path), read_only=True)
@@ -406,10 +414,17 @@ def test_export_source_csv_writes_one_file_per_table(tmp_path: Path) -> None:
     out_dir.mkdir()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(
-            emit, config, out_dir, "csv", anchor, notice_sink=discard_notice_sink
+        report = export_source(
+            emit,
+            config,
+            out_dir,
+            "csv",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
+    row_counts = {t.name: t.row_count for t in report.tables}
     assert row_counts == _EXPECTED_ROW_COUNTS
     for table_name, expected in _EXPECTED_ROW_COUNTS.items():
         csv_path = out_dir / f"{table_name}.csv"
@@ -429,13 +444,27 @@ def test_export_source_zero_row_table_still_emitted(tmp_path: Path) -> None:
     csv_out.mkdir()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        duckdb_counts = export_source(
-            emit, config, duckdb_out, "duckdb", anchor, notice_sink=discard_notice_sink
+        duckdb_report = export_source(
+            emit,
+            config,
+            duckdb_out,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
-        csv_counts = export_source(
-            emit, config, csv_out, "csv", anchor, notice_sink=discard_notice_sink
+        csv_report = export_source(
+            emit,
+            config,
+            csv_out,
+            "csv",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
+    duckdb_counts = {t.name: t.row_count for t in duckdb_report.tables}
+    csv_counts = {t.name: t.row_count for t in csv_report.tables}
     assert duckdb_counts == {"location": 0}
     assert csv_counts == {"location": 0}
 
@@ -487,10 +516,11 @@ def test_export_source_csv_declare_keys_emits_one_notice_before_data(
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(
-            emit, config, out_dir, "csv", anchor, notice_sink=sink
+        report = export_source(
+            emit, config, out_dir, "csv", anchor, notice_sink=sink, overlay=None
         )
 
+    row_counts = {t.name: t.row_count for t in report.tables}
     assert row_counts["consultant"] == 1
     codes = [n.code for n in sink.notices]
     assert codes.count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
@@ -506,7 +536,9 @@ def test_export_source_duckdb_declare_keys_emits_no_csv_notice(
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        export_source(emit, config, out_path, "duckdb", anchor, notice_sink=sink)
+        export_source(
+            emit, config, out_path, "duckdb", anchor, notice_sink=sink, overlay=None
+        )
 
     codes = [n.code for n in sink.notices]
     assert NOTICE_KEYS_NOT_DECLARABLE_CSV not in codes
@@ -524,7 +556,13 @@ def test_export_source_duckdb_declare_keys_carries_constraints(
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         export_source(
-            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     assert "PRIMARY KEY" in constraint_types(out_path, "consultant")

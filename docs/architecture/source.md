@@ -19,7 +19,8 @@ The `mode: source` exporter renders the emit as a **well-architected application
 database** — the normalized OLTP schema a real system runs on, declared table by
 table by the author. The rule of the shape: *things get tables; events get the
 log.* A source config declares every output table — its author-verbatim name, its
-source populations, its columns — through a declared-table grammar: thing tables
+source populations, its row selection, its columns — through a declared-table
+grammar: thing tables
 (`state` render), association tables (`junction` render), and one polymorphic
 audit log (the event-log render). Sidecar facts gate what a declaration may ask
 for (does the kind exist, is the sub-type declared, is the surface electable);
@@ -52,11 +53,12 @@ writers (CSV | DuckDB — both via Emit.query_arrow)
 
 | Module | Owns |
 |---|---|
-| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `ExportConfig.source: SourceConfig \| None`; `SourceConfig` (`tables`, `events`, `declare_keys`), `SourceTableDecl`, `SourceEventsDecl`, `SourceEventSourceDecl`, `MembershipRef`; the `source_section_required` and `table_source_exclusive` parse-time validators |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `ExportConfig.source: SourceConfig \| None`; `SourceConfig` (`tables`, `events`, `declare_keys`), `SourceTableDecl`, `SourceEventsDecl`, `SourceEventSourceDecl`, `MembershipRef`; the `source_section_required`, `table_shape`, `source_shape`, `events_shape`, `kind_labels_shape`, and `table_source_exclusive` parse-time validators |
 | [`exporters/populations.py`](../../src/fabulexa_forge/exporters/populations.py) | `Population` (the sub-type atom) and `resolve_populations` — the shared-layer resolver from a config population address to its atoms. Shared because it resolves the same atoms key election addresses; source mode is its consumer. Election resolution keeps its own resolution gates (`ElectionKindUnknown` / `ElectionSubTypeUnknown`) and is not routed through it |
-| [`exporters/source/plan.py`](../../src/fabulexa_forge/exporters/source/plan.py) | `SourceStateTablePlan`, `SourceJunctionTablePlan`, `SourcePlan`; `build_source_plan` — declaration resolution, column classification through the records-column taxonomy, `columns` / `rename` resolution, the identity and edge gates, the audited-set resolution, the collision and reserved-name checks |
+| [`exporters/source/plan.py`](../../src/fabulexa_forge/exporters/source/plan.py) | `SourceStateTablePlan`, `SourceJunctionTablePlan`, `SourcePlan`; `build_source_plan` — declaration resolution, column classification through the records-column taxonomy, `columns` / `rename` resolution, the identity and edge gates, the row-selection gates and their plan-time predicate-literal casts, the audited-set resolution, the collision and reserved-name checks |
 | [`exporters/source/columns.py`](../../src/fabulexa_forge/exporters/source/columns.py) | The shared `prop__<p>` scalar-property lookup `plan.py` and the renders both need, so neither duplicates it |
 | [`exporters/source/renders.py`](../../src/fabulexa_forge/exporters/source/renders.py) | `build_state_render_sql` / `build_junction_render_sql` — the thing-table renders, each carrying its total `ORDER BY` and wallclock rendering through the shared anchor renderer |
+| [`exporters/selection_spine.py`](../../src/fabulexa_forge/exporters/selection_spine.py) | The mode-neutral row-selection spine source composes — `WhereEntry`, `build_selection_spine_sql` (the parent lookup every owner-keyed narrowing reads through), `needs_population_filter`, `where_predicate_elements`, `check_where_values_observed`. Shared with streaming; its contract is owned by [`selection-spine.md`](selection-spine.md) |
 | [`exporters/source/events.py`](../../src/fabulexa_forge/exporters/source/events.py) | `SourceEventSourcePlan`, `SourceEventLogPlan`, `build_event_log_sql` — the event-log render: the row-state-events and membership-events folds composed with the previous-after-image diff and the deterministic JSON `changes` assembly, all rendered in SQL |
 | [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `export_source`, `build_source_query_specs` — plan → per-table render → optional windowing → dispatch to the shared writer. The compile is connection-free and pure; it carries no `base_relations` parameter — the playback seam applies its truncated-relation mapping as a post-compile SQL rewrite ([`playback.md`](playback.md) § The compile indirection) |
 | [`exporters/source/init.py`](../../src/fabulexa_forge/exporters/source/init.py) | `generate_source_init_config` — the `init --mode source` proposal engine |
@@ -107,7 +109,17 @@ is same-kind-only, because column shape forces it:
 | `kind: K` (sub-typed kind) | Every declared sub-type of `K` — shorthand for the full discriminator domain |
 | `kind: K, sub_types: [a, b]` | `(K, a)` and `(K, b)` |
 | `kind: K, sub_types: […]` where `K` is flat | Error `SourceSubTypesOnFlatKind` — a flat kind has no populations to address |
-| `membership: {kind: K, property: p}` | The one `membership__<K>__<p>` table |
+| `membership: {kind: K, property: p}` | The one `membership__<K>__<p>` table, over the owner kind's full declared population set |
+| `membership: {kind: K, property: p}, sub_types: [a, b]` | The same table, addressing the owner populations `(K, a)` and `(K, b)` — the intervals whose owner falls in those sub-types (§ Row selection) |
+
+A declaration selects on two axes, and they compose. `sub_types` is the
+**population** axis: it narrows the set of `(kind, sub_type)` atoms the unit
+addresses, and every downstream gate and type resolution ranges over that
+narrowed set. `where` is the **value** axis: an optional row predicate over the
+subject kind's `constant`-class payload properties, which changes which rows
+render without changing the addressed population set at all (§ Row selection).
+Both are legal on a records-backed and a membership declaration alike; on a
+membership declaration the subject is the **owner** kind.
 
 | Condition | Result |
 |---|---|
@@ -134,7 +146,8 @@ render for the same source shape ships.
 ### The `state` render
 
 The faithful records relation — the reader's records builder,
-discriminator-filtered to the table's declared populations. One row per record,
+discriminator-filtered to the table's declared populations and narrowed by its
+`where`, if any (§ Row selection). One row per record,
 current state, with soft-delete lifecycle. The column set is classified through
 the reader's records-column taxonomy
 ([`reader.md`](reader.md) § The records-column taxonomy), never enumerated:
@@ -176,9 +189,26 @@ key is the elected surface's contract column name (`record_id` / `record_index`
 election leaves unrendered (`record_id` under a `presentation_id` election) is
 unsatisfiable and errors (`SourceColumnUnresolved`).
 
+**Render elections.** A per-table `render` map is the unified property-first
+election surface: a bare scalar elects a structural instant column's
+rendering — `created_sim_time` → `date`, say — in place of the default
+`created_at` wallclock `TIMESTAMP`; the typed forms address payload columns
+(`prop__<p>`) — `{date_parse: "<format>"}` declares a VARCHAR temporal
+string rendered as its format's denoted type, `{instant: <election>}`
+declares a BIGINT a sim-instant rendered through the anchor,
+`{decimal: [p, s]}` renders a DOUBLE as exact `DECIMAL(p, s)`, and
+`{json_precision: {…}}` rounds named top-level leaves of a JSON payload in
+place. All entries are keyed on source identity, re-render the projected
+column in place, and require the column to be one the render already emits
+([`temporal-elections.md`](temporal-elections.md) § Per-mode attach points;
+[`value-rendering-elections.md`](value-rendering-elections.md) § The
+unified render map).
+
 ### The `junction` render
 
-One association row per membership interval: `record_id` → `<K>_id` (owner,
+One association row per membership interval — every interval of the table, or
+those whose owner satisfies the declaration's `sub_types` / `where` (§ Row
+selection): `record_id` → `<K>_id` (owner,
 rendered in the owner kind's elected surface), `joined_sim_time` /
 `left_sim_time` → `joined_at` / `left_at` wallclock (`left_at` NULL while the
 membership is open — the soft-delete idiom, faithful, never fabricated),
@@ -196,6 +226,118 @@ independently by their own source names — keeping `<f>_id` while omitting
 the kind internally regardless); the pair is atomic only inside the event log's
 `changes` expansion.
 
+The same unified `render` map applies to a junction table: the bare
+shorthand elects `joined_sim_time` / `left_sim_time`'s rendering; the typed
+election forms key the `elem__<f>` element columns — the junction's source
+identities, exactly as `columns` / `rename` address them. The member pair
+columns (`member__<f>__kind` / `member__<f>__id`) are outside the
+typed-election key domain — reference identity is key election's surface
+([`value-rendering-elections.md`](value-rendering-elections.md) § The
+unified render map).
+
+### Row selection
+
+`sub_types` and `where` narrow which rows a declared unit renders — a state
+table, a junction table, or an events source alike. Absent both, a unit renders
+every row its population source carries. A kind whose rows partition on an
+undeclared-but-constant property, and a sub-typed kind's membership estate, are
+each splittable into separate declared tables with separate audit streams.
+
+**The constant-column gate.** A `where` key names a payload property of the
+declaring unit's **subject kind** — the declared kind on a records-backed unit,
+the **owner** kind on a membership unit — whose `temporal_class` is `constant`.
+Key form follows the unit's own addressing convention: the source column name
+(`prop__<p>`) on a records-backed table, the bare property name (`<p>`) on an
+events source and on a membership unit, where the subject is the owner kind and
+owner properties are not columns of the unit at all. Resolution is against the
+subject kind's payload-property set only, so a bare key on a membership unit
+naming both an owner property and an element field resolves to the owner
+property.
+
+| `where` key names | Result |
+|---|---|
+| A `constant`-class payload property of the subject kind | Accepted |
+| A `tracked`-class property | `SourceWhereNotConstant` — under a horizon reconstruction its as-of value and its current value select different rows |
+| A `slice_only` property | `SourceWhereNotConstant` — its past is unknowable, so row selection cannot read it (the [`slice_only`](slice-only.md) posture; `where` keys are this rule's to refuse, not `SourceSliceOnlyRead`'s) |
+| The subject kind's declared discriminator (`prop__<K>_type` / `<K>_type`) | `SourceWhereOnDiscriminator`, pointing at `sub_types` — including the slice-only-exempt sub-typed discriminator, and on membership units, where `sub_types` selects owner sub-types |
+| A structural column (`record_id`, `created_sim_time`, `active`, …) | `SourceWhereColumnUnresolved` — structural columns are not payload properties and are not predicate-addressable |
+| An element field of a membership unit, matching no owner property | `SourceWhereColumnUnresolved` — element fields carry no `temporal_class`; selection reads the owner |
+| A column not on the subject kind | `SourceWhereColumnUnresolved` — as any `columns` / `rename` key |
+
+The gate makes the as-of-which-horizon question unposable rather than answering
+it. A `constant`-class property's value is identical at every horizon — the mode
+renders constant properties current in windowed snapshots as its declared
+temporal-honesty exception — so the full export, every incremental window, and
+every event time select the same rows. The gate reads a column's declared class,
+never its values.
+
+**The key axes error; the value axis notices.** Every key failure above is an
+error: the key names the wrong axis or an unusable column, and no sensible export
+can ship. Predicate *values* follow dimensional's posture instead — an element
+outside a `where` column's declared `enum_domains` entry draws a per-element
+`discriminator-value-unobserved` [notice](notices.md), never an error, and a
+column with no `enum_domains` entry is unchecked. A declared-but-unobserved value
+is a legitimate way to write one config against a family of emits, and the
+zero-match outcome is legal: declared intent drives existence.
+
+The value axis's tolerance ends at the column's declared type. Every `where`
+element is cast to its resolved column's sidecar-declared DuckDB type at plan
+time — the same cast the rendering authority compiles into the predicate,
+constant-evaluated on every `where`-bearing unit, gated or not — and an element
+the type cannot cast is `SourceWhereValueUncastable`, before any write. An
+out-of-domain value is unobserved-but-possible; an uncastable one is impossible
+under the declared type in every emit of the config's family, and the rendered
+`CAST` would otherwise raise at query time, mid-export. The disjointness gate's
+typed-value comparison (§ The event log) reuses exactly these plan-time cast
+results.
+
+**The parent lookup.** A membership unit's rows carry no owner attributes, so its
+selection evaluates against the owner: an identity join from the membership rows'
+owner column (`record_id`) to the owner kind's records spine, where the
+discriminator and the predicate columns live. The join is fan-out-free
+(`record_id` is unique on the spine) and horizon-free
+(the discriminator is creation-constant, `where` columns are constant-gated), so
+it is exactly the per-row records-spine device a records-source `sub_types`
+narrowing composes, applied from the membership side. It is a read for selection
+only: no owner attribute is projected into the unit's columns, and the membership
+surface — interval columns, element fields, member pairs — is untouched. The
+relation is mode-neutral and shared with the streaming exporter, which resolves
+its own row scope through it; its contract lives in
+[`selection-spine.md`](selection-spine.md).
+
+Owner `sub_types` narrows the unit's **addressed owner population set**: the
+membership unit addresses exactly those `(kind, sub_type)` populations, as a
+records-backed declaration does — the set the item-type union-safety gate ranges
+over, and the surface union that types the junction owner column and the log's
+`item_id` under the junction-member-column rule. A mixed-election owner kind is
+therefore splittable per sub-type: each narrowed unit resolves its own
+populations' elections, and a narrowed junction whose populations agree on one
+declared type carries that type rather than falling to `VARCHAR`. `where` never
+narrows the addressed set — it is value-level, not population-level: a
+`where`-only membership unit addresses the owner kind's full declared population
+set for gates and type resolution, whatever rows the predicate then selects.
+
+**Selection outcomes.**
+
+| Condition | Result |
+|---|---|
+| State table with `where` | Renders the rows of its population set satisfying the conjunction; the taxonomy, `columns` / `rename`, lifecycle, and election semantics are unaffected by the selection |
+| Junction table with `sub_types` / `where` | Renders the membership intervals whose owner satisfies the selection, via the parent lookup; every other junction semantic is unaffected by it |
+| `where` and `sub_types` on one unit | AND-composed: the predicate narrows within the selected populations or owner sub-types |
+| Selection matches zero rows | The table is emitted empty — declared intent drives existence, as for an empty population |
+| A row whose predicated column is NULL | Never selected: `=` / `IN` is never satisfied by NULL and the grammar has no null test. Once a kind is split by `where`, a NULL-bearing partition column's rows land in no predicated unit and remain exportable only through an unpredicated declaration — omission-as-exclusion, applied by value |
+| Predicate column absent from `columns` | Legal — selection and projection are orthogonal; the predicate reads the subject relation, not the projected output |
+| Predicate on a reference-valued constant property | Legal, no special case: the comparison is over base-layer values (record ids), literal-typed from the sidecar, whatever surface the column *renders* |
+| Two declarations' selections overlap, or exhaust nothing | Legal — declared tables require neither disjointness nor coverage (two may already share a population); rows matching no declaration are not exported |
+| Events records source with `where` | The fold input narrows to the satisfying records through per-row records-spine resolution; every event of an excluded record is excluded, `create` and `destroy` included |
+| Events membership source with `sub_types` / `where` | The fold input narrows to the intervals of satisfying owners via the parent lookup; every `join` / `leave` of an excluded owner's collection is excluded |
+| `where` beside `only` / `ignore` on one events source | Orthogonal: `where` selects *records* (or owners), `only` / `ignore` select the audited *property set*. A property may be predicated and ignored at once |
+
+Predicates evaluate over source (base-layer) values — before rename, before
+elected-surface rendering — and every condition compiles through the one
+rendering authority the whole package shares
+([`row-predicates.md`](row-predicates.md)).
+
 ### The event log
 
 One declared polymorphic audit table at event grain — the app's own history
@@ -207,8 +349,8 @@ idiom. Fixed columns; the author names the table, not the columns:
 | `item_type` | The population's **resolved** item-type: an events source's declared `item_type` override, else its kind's `source.kind_labels` label (the owner kind's label for a membership source, forming `<label>.<property>`), else the kind name verbatim (`<K>.<property>` for membership) — sidecar-derived by default, independent of which thing-tables are declared, unless an author declares it otherwise (§ Domain vocabulary). The contract identity everywhere item-type governs: this stamped column, the `item_id` dereference key, the union-safety gate's granularity, and the order-key component |
 | `item_id` | For a records source: the record's identity in its own population's elected surface (`record_id` verbatim absent an election); on destroy rows the value comes from the identity join relation, not the fold's nulled after-image, so it is never NULL. For a membership source: the **owner** record's identity in the owner kind's election — the junction-owner-column render, per-row resolved for a sub-typed owner. Column type per the junction-member-column rule over the union of every source's resolved surfaces: the common declared type when all agree, else `VARCHAR` with `record_index` digit-rendered |
 | `event` | `create` / `update` / `destroy` — deterministic recode of the folds' ops (`c`/`u`/`d`; `join` → `create`, `leave` → `destroy` of a membership in the named collection, recorded against the owner — `item_type` is what separates collection changes from the owner's own lifecycle rows) |
-| `occurred_at` | Wallclock `TIMESTAMP` through the anchor renderer |
-| `changes` | Serialized JSON text (codec `VARCHAR`): an object mapping each audited property's **output key** — its bare name, or its source's declared `rename` target (§ Domain vocabulary) — to `[old, new]` pairs — a membership reference field expands in place to its `<f>_kind` / `<f>_id` entry pair (the junction render's names, kind then id, each renamed in place by a `rename` targeting the bare field name; `only` / `ignore` still address the bare field name). Keys in sidecar column-declaration order of the *source* properties — rename relabels, never reorders; values are the folds' `CAST(… AS VARCHAR)` after-image strings verbatim or `null` — the row-state-events / membership-events rendering, the same strings streaming's payloads carry, never the conformance codec — reference-valued entries in the target's elected surface (below), and `<f>_kind` entry values rendered through `source.kind_labels` (§ Domain vocabulary). The JSON assembly (object construction, string escaping) is mode-owned SQL, rendered deterministically in the SELECT |
+| `occurred_at` | Wallclock `TIMESTAMP` through the anchor renderer, or the events block's `render:` election — the log's one legal `render` key is its own instant column `event_sim_time`, a constant of the log's published contract rather than a reader question |
+| `changes` | Serialized JSON text (codec `VARCHAR`): an object mapping each audited property's **output key** — its bare name, or its source's declared `rename` target (§ Domain vocabulary) — to `[old, new]` pairs — a membership reference field expands in place to its `<f>_kind` / `<f>_id` entry pair (the junction render's names, kind then id, each renamed in place by a `rename` targeting the bare field name; `only` / `ignore` still address the bare field name). Keys in sidecar column-declaration order of the *source* properties — rename relabels, never reorders; values are the folds' `CAST(… AS VARCHAR)` after-image strings verbatim or `null` — the row-state-events / membership-events rendering, the same strings streaming's payloads carry, never the conformance codec — reference-valued entries in the target's elected surface (below), render-elected properties in their elected text form (below), and `<f>_kind` entry values rendered through `source.kind_labels` (§ Domain vocabulary). The JSON assembly (object construction, string escaping) is mode-owned SQL, rendered deterministically in the SELECT |
 
 **The audited property set** per source: every `tracked` and `constant`-class
 property of the kind (the temporally honest set — `slice_only` is
@@ -259,6 +401,22 @@ strings, so a digit-rendered `record_index` is just another string. The
 `changes` column is plain `VARCHAR` JSON text rendered in the SELECT, so writers
 serialize it as any other column — no writer extension, no JSON column type.
 
+**Render elections inside `changes`.** A render-elected property — every
+election kind, the temporal spellings included — carries its elected text
+form in its `[old, new]` entries, inherited from the kind's declared tables
+under the per-kind agreement rule (`ElectionKindConflict`); a kind audited
+with no declared table renders raw codec text. The log applies each
+rendering authority to the folds' codec strings cast back to their declared
+source types, at the same site key election renders reference entries; the
+export-time guards (parse mismatch, decimal overflow, the JSON payload
+guards) fire at the log site exactly as at a table site. The audited-property
+diff — changeset membership, update suppression, `id` numbering — compares
+raw, unrendered values, so the event set is election-invariant. In-JSON
+temporal text is pinned to the writers' per-type forms. The full reach rule,
+its scoping to what the log renders, and the pinned forms:
+[`value-rendering-elections.md`](value-rendering-elections.md) § Event-log
+and after-image reach.
+
 **Identity semantics.** `(item_type, item_id)` names the **audited item** — the
 polymorphic-reference idiom: the record for a records source, the owner's
 collection for a membership source. It is a dereference key, not a per-row key:
@@ -287,7 +445,9 @@ contract guarantee or an author's claim ([`declared-keys.md`](declared-keys.md)
 the rows *this* log emits, not an absolute address for an event in the emit.
 Narrowing the audited set with `only` / `ignore` suppresses update rows, and a
 suppressed row consumes no number, so two configs over one emit number
-differently. The guarantee is per-export monotonicity, not cross-export
+differently. A selection-excluded record's events consume no number for the same
+reason — a log numbers what it was configured to audit. The guarantee is
+per-export monotonicity, not cross-export
 identity — an application's audit-table key numbers what that application chose
 to audit and is not comparable to another's.
 
@@ -316,21 +476,51 @@ entry does (whole kind, `sub_types` subset, or membership) and resolves with the
 same errors. A `sub_types` subset narrows the fold's rows per record through the
 records-spine discriminator (per-row population resolution — the discriminator
 is creation-constant, so the filter is temporally honest at every event time),
-the same device the `state` render's population filter composes. Sources resolve
-to **pairwise-disjoint** population sets (membership sources distinct by
-`(kind, property)`) — one audit stream per population, so no event is
+the same device the `state` render's population filter composes. A source's
+`where` — and, for a membership source, its owner `sub_types` — narrows which
+records (or which owners' intervals) feed the stream by the same per-row device,
+temporally honest at every event time because discriminators are
+creation-constant and `where` columns are constant-gated (§ Row selection).
+Sources resolve to **pairwise-disjoint** population sets (membership sources
+distinct by `(kind, property)`) — one audit stream per population, so no event is
 double-logged and no two *sources* contribute rows colliding on the order key.
 Within one source the key still ties exactly where the input permits duplicate
 rows (the contract's byte-identical membership intervals; a corrupter's
 duplicated records rows), which is why the log's key is `id` and not a composite
-of the rendered columns. An overlap is
-`SourceEventSourceOverlap` at plan time. A kind may be audited without having a
+of the rendered columns. A kind may be audited without having a
 declared state table and vice versa — the log is its own declaration. Absent
 `events` block: no log, and the emit's history is dropped from the export —
 legal, author-declared dropping (a Type-1-only app), never an error. No new
 derivation resident backs the log: it composes the existing row-state-events and
 membership-events folds; the changeset diff and JSON serialization are source
 render concerns, single-consumer, and live in the mode.
+
+**Selection-aware disjointness.** Two sources can collide only where they audit
+one item space — two records sources of one kind with overlapping population
+sets, or two membership sources of one `(kind, property)`. Disjointness is
+decidable from the config alone, so exactly these shapes establish it:
+
+| Two sources auditing one item space | Result |
+|---|---|
+| Both declare a `where` entry on at least one **common column** whose two value sets are disjoint as **typed values** (a scalar is a one-element set) | Legal — no record can satisfy both, whatever their other entries do |
+| Membership sources of one `(kind, property)` with both-declared, disjoint owner `sub_types` sets | Legal — the owner sub-type is the population axis, read per row through the parent lookup |
+| Population sets already disjoint (records sources) | Legal — predicates are irrelevant to the gate |
+| Any other shape — no common predicated column, every common column's value sets intersecting, or only one source carrying a selection | `SourceEventSourceOverlap` at plan time |
+
+Legality is existential: one common column with typed-disjoint value sets
+suffices, and entries the sources do not share — or shared columns whose sets
+intersect — do not defeat a disjointness another common column establishes.
+Value-set disjointness compares typed values, never written strings: each
+element's plan-time cast result (§ Row selection) compares under the common
+column's sidecar-declared type. Two spellings of one value (`'5'` and `'05'` on a
+`BIGINT`) are one value, never a disjoint pair — string comparison would silently
+license double-logging — and an element the declared type cannot cast never
+reaches the gate, having already been refused as `SourceWhereValueUncastable`.
+The gate consults no row data: it reads config literals and the sidecar's type
+declaration only, so two predicates that happen to select disjoint rows while
+sharing a typed value are still refused. Disjointness never implies coverage — a
+record NULL on every common predicated column satisfies neither source and is
+audited by neither.
 
 ### Domain vocabulary
 
@@ -461,7 +651,9 @@ exempt sub-typed discriminator, per the export-wide policy
 per unit (per events source for the log), in plan order. A *declaration* entry —
 `columns`, `rename`, `only`, `ignore` — naming a non-exempt `slice_only` column
 is refused (`SourceSliceOnlyRead`): the entry is unsatisfiable, an error rather
-than a silent ignore.
+than a silent ignore. A `where` key is refused by the stricter constant-class
+gate instead (`SourceWhereNotConstant`, § Row selection), which admits only
+`constant` and so covers `slice_only` and `tracked` under one message.
 
 Omission is column-projection-only: row sets, ordering, and incremental window
 membership are identical with or without it. The junction render is untouched
@@ -502,15 +694,28 @@ reserved-output-name check on its author-named columns.
 ### Wallclock timestamps: the anchor is required
 
 Every structural sim-time column renders through the effective anchor via the
-shared renderer (`render_anchor_timestamp_expr`) — byte-identical rendering
+shared renderer (`render_anchor_temporal_expr`) — byte-identical rendering
 semantics to every other wallclock mode, same precedence (CLI → config `rebase`
 → sidecar `runtime`), same DST and ambiguity failure rules
-(see [`anchor.md`](anchor.md)). Source **requires** a resolved anchor:
+(see [`anchor.md`](anchor.md)). Source **requires** a resolved anchor — a
+requirement independent of, and stricter than, the general anchor-required-
+for-an-explicit-election rule ([`temporal-elections.md`](temporal-elections.md)
+§ Anchor requirement): source has no default-rendering fallback path at all:
 
 | Anchor resolution outcome | Result |
 |---|---|
 | `EffectiveAnchor` resolves (sidecar runtime, possibly overridden) | Export proceeds; all structural sim-time columns are wallclock `TIMESTAMP` |
 | No anchor resolves (`None`) | Error `SourceAnchorRequired` — an operational dump never shows ns offsets; silently emitting raw integers would be a fallback |
+
+A bare-shorthand `render` key on a declared table (`state` / `junction`)
+must name an instant-carrying structural column of the table's category,
+resolved through the reader's structural-temporal surface
+([`reader.md`](reader.md) § The structural-temporal surface) — never a
+hardcoded list — and must name a column the render actually emits;
+`last_mutation_sim_time` is outside the key domain under a windowed
+invocation, where the render omits `updated_at`
+(`RenderKeyResolves`, [`temporal-elections.md`](temporal-elections.md)
+§ Validation Rules).
 
 ### Ordering and determinism
 
@@ -583,6 +788,17 @@ membership tests run on raw sim-time ns, half-open `[start_ns, end_ns)`.
 | event log | `event_sim_time` | Append event rows with key ∈ window, computed over the full fold — the `changes` lag's previous after-image may predate the window; window membership selects rows, never alters their content (events are immutable and final). `id` is assigned over the whole tape beneath the window predicate, so a window's rows carry the `id` values a full export of the same tape gives them; because the order is time-major, those values form a contiguous ascending block (§ `id` under incremental below) |
 | `junction` | activity (`joined_sim_time`, `left_sim_time`) | Extract-on-change, `left_at` horizon-masked (below) |
 
+Row selection is window-invariant across all three renders, because the columns
+it reads are constant-gated (§ Row selection). The per-window state snapshot
+applies the same predicate at every window, so a record's presence across windows
+varies only by its lifecycle (`created_sim_time`), never by predicate
+re-evaluation. Junction extract-on-change runs over the narrowed interval set,
+with activity keys and `left_at` horizon-masking unaffected by it, so an interval's
+membership in the table never varies by window. The event log's window membership
+selects among the selection-narrowed event set, with `id` assigned over that
+whole-tape narrowed set beneath the window predicate — numbering stays dense,
+tape-anchored, and invocation-invariant.
+
 A full (non-incremental) export renders `state` as the current records read
 *with* `updated_at`; the windowed shape differs by exactly that one omitted
 column, a documented consequence of horizon honesty. An explicit `columns` /
@@ -649,14 +865,19 @@ proposed. Proposal order follows the sidecar's table declaration order. Proposed
 names are verbatim; when two proposals resolve one name (underscore-bearing
 identifiers), the later proposal (sidecar declaration order) is emitted
 commented-out with a comment naming the collision — the emitted config always
-parses and plans clean, the key-election `init` self-gating posture.
+parses and plans clean, the key-election `init` self-gating posture. Splits are
+proposed exactly where the sidecar declares the partition — deterministic from
+the discriminator domain, with no value read — and nowhere else: no `where` is
+proposed on any unit.
 
 | Emit condition | Proposal |
 |---|---|
 | Each `records__<kind>` table, flat (no declared `<kind>_type` domain) | One state table: `name: <kind>`, `kind: <kind>` |
 | Each `records__<kind>` table, sub-typed (`Sidecar.subtype_values(kind)` non-empty) | One state table per declared sub-type — `name: <kind>_<sub_type>`, `sub_types: [<sub_type>]` — `init`'s default split, matching dimensional's per-sub-type stubs. The first sub-type's stub carries a header comment naming the full domain; the last carries a commented combine-alternative (one shared table across every sub-type, `sub_types:` omitted) for a kind whose sub-types share an identical column set |
-| Each `membership__<K>__<p>` table | One junction table: `name: <K>_<p>` |
+| Each `membership__<K>__<p>` table, `K` flat | One junction table: `name: <K>_<p>` |
+| Each `membership__<K>__<p>` table, `K` sub-typed | One junction stub per declared sub-type — `name: <K>_<sub_type>_<p>`, `sub_types: [<sub_type>]` — aligned with the owner's per-sub-type state stubs; the last stub carries a commented combine-alternative (one whole junction, `sub_types:` omitted), mirroring the state stubs' posture |
 | ≥ 1 kind with a class-`tracked` property | One `events` stub named `versions`, one active source entry per such kind; membership sources and lifecycle-only kinds (no tracked property — spine `create` / `destroy` only) appended as commented-out source entries |
+| Membership event-source entries (commented-out), owner sub-typed | One commented entry per declared sub-type (`sub_types: [<sub_type>]`). Uncommenting the full set is plan-clean: the entries share the default item-type `<K>.<p>` under the item-type sharing exception, and their both-declared disjoint `sub_types` sets satisfy the overlap gate |
 | No kind carries a tracked property | The `events` stub is emitted fully commented out (name and every per-kind source), under a comment noting the emit's auditable history is lifecycle-only; uncommenting opts in |
 | The registry declares a population | The `keys` proposal per the key-election `init` contract ([`key-election.md`](key-election.md) § `init` proposals), aligned with the declared tables |
 | Non-exempt `slice_only` columns | Never proposed; one `slice-only-column-omitted` notice each |
@@ -722,6 +943,24 @@ parses and plans clean, the key-election `init` self-gating posture.
 11. **`slice_only` omission is column-projection-only.** Row sets, ordering, and
     window membership are invariant under the policy; omission never suppresses
     an output table ([`slice-only.md`](slice-only.md)).
+12. **Row membership is horizon-invariant.** No output row's membership in a
+    declared table, junction, or audit stream depends on the horizon, the
+    window, or the invocation. Over a conformant emit the constant-column gate
+    and the creation-constant discriminator guarantee it, not evaluation
+    discipline. Every narrowing path nonetheless evaluates the records spine's
+    current values — the state-at type-1 render, the per-row spine resolution,
+    the parent lookup — so even over a corrupted emit, where a mutated
+    "constant" falsifies current-equals-genesis, selection stays consistent
+    across windows and invocations: a corrupter can change *which* rows a
+    predicate selects, never make the selection horizon-dependent.
+13. **Selection is value-blind at plan time.** Every `where` check — the class,
+    discriminator, castability, and disjointness gates, and the domain notice —
+    reads sidecar declarations and config literals only. The casts included:
+    they type config literals by the sidecar's declaration and read no rows.
+14. **Selection filters, never transforms.** A `where` or an owner `sub_types`
+    changes which rows render; it never changes a rendered value, an ordering
+    key, or the log's tape-anchored numbering rule. The parent lookup in
+    particular projects nothing.
 
 ## Validation Rules
 
@@ -736,7 +975,9 @@ The rules below state *what* is rejected and *when*.
 | Validator | Rejects |
 |---|---|
 | `source_section_required` (`SourceConfig`) | A `mode: source` config declaring no output — no `tables` entry and no `events` block (two-sided with the other modes' sections; there is no bare zero-config dump) |
-| `table_source_exclusive` | Anything but exactly one of `kind` / `membership` per table declaration and per events-source declaration alike; `sub_types` without `kind` (both shapes); empty `name` / `columns` / `rename` / `sub_types` / `sources` / `only` / `ignore`; non-distinct entries; non-distinct `rename` values; `only` and `ignore` together; non-distinct table names across the declaration list; more than one `events` block (single log); an events source's empty `item_type`; an events source's `rename` present-but-empty or carrying an empty key or value |
+| `table_shape` (`SourceTableDecl`) · `source_shape` (`SourceEventSourceDecl`) | Anything but exactly one of `kind` / `membership` per declaration; empty `name` / `columns` / `rename` / `sub_types` / `only` / `ignore`; non-distinct entries; non-distinct `rename` values; `only` and `ignore` together; an events source's empty `item_type`; a `rename` or `where` mapping present-but-empty or carrying an empty key (and, for `rename`, an empty value). `sub_types` is valid with either population source; per-entry `where` value emptiness and duplication ride `PredicateValue` ([`row-predicates.md`](row-predicates.md)) and are reported at the offending entry's path |
+| `events_shape` (`SourceEventsDecl`) | An empty log `name`; an empty `sources` list. The single log is structural — `events` is one optional field, never a list |
+| `table_source_exclusive` (`SourceConfig`) | Two `tables` entries sharing one `name` — the cross-declaration check the per-declaration validators cannot see |
 | `kind_labels_shape` (`SourceConfig`) | An empty `kind_labels` map; an empty key or value; two kinds mapping to one label |
 
 **Business rules.** Run at plan time against the open emit, before any write;
@@ -748,23 +989,32 @@ for a `tables` entry, `events source #<n>` (1-based, declaration order) for an
 | Rule | Checks | Error |
 |---|---|---|
 | `SourceTableKindUnknown` | Every declared `kind` has a `records__<kind>` table | `"{owner}: kind '{kind}' not in this emit"` |
-| `SourceTableSubTypeUnknown` | Every `sub_types` entry is in the kind's discriminator domain | `"{owner}: sub_type '{sub_type}' not declared for kind '{kind}'"` |
-| `SourceSubTypesOnFlatKind` | `sub_types` only on a sub-typed kind | `"{owner}: kind '{kind}' declares no sub-types"` |
+| `SourceTableSubTypeUnknown` | Every `sub_types` entry is in the kind's discriminator domain — the **owner** kind's for a `membership:` declaration | `"{owner}: sub_type '{sub_type}' not declared for kind '{kind}'"` |
+| `SourceSubTypesOnFlatKind` | `sub_types` only on a sub-typed kind — the owner kind for a `membership:` declaration | `"{owner}: kind '{kind}' declares no sub-types"` |
+| `SourceWhereColumnUnresolved` | Every `where` key resolves to a payload property of the declaring unit's subject kind (source-name form on records-backed tables, bare form on events sources and membership units). Structural columns and membership element fields are not payload properties and fail here | `"{owner}: where key '{key}' not a payload property of kind '{kind}'"` |
+| `SourceWhereNotConstant` | Every resolved `where` column's `temporal_class` is `constant` | `tracked`: `"{owner}: where key '{key}' is temporal_class: tracked; under a horizon reconstruction its as-of and current values select different rows — row selection requires a constant column"`. `slice_only`: `"{owner}: where key '{key}' is temporal_class: slice_only; its past is unknowable, so row selection cannot read it"` |
+| `SourceWhereOnDiscriminator` | No `where` key names the subject kind's declared discriminator | `"{owner}: '{key}' is the sub-type discriminator; select sub-types via sub_types, not where"` |
+| `SourceWhereValueUncastable` | Every `where` element casts to its resolved column's sidecar-declared DuckDB type, constant-evaluated on every `where`-bearing unit (§ Row selection); the disjointness gate reuses these typed results | `"{owner}: where value '{element}' for '{key}' does not cast to {type}"` |
+| `discriminator-value-unobserved` (notice, per element) | For a `where` column with a declared `enum_domains` entry, each predicate element outside the domain draws one notice in config element order — never an error; a column with no entry is unchecked. Message granularity as dimensional's: a scalar, or a list no element of which is in the domain, states the unit will render no rows; a partially-covered list states only that the element contributes none | Through the [notice channel](notices.md), naming `{owner}`, `{key}`, and the element |
 | `SourceTableMembershipUnknown` | Every `membership` reference resolves to a sidecar membership table | `"{owner}: no membership table for ({kind}, {property})"` |
 | `SourceColumnUnresolved` | Every `columns` / `rename` key resolves on the table's source surface — a state table's identity column by its elected surface's contract name only, the junction owner column by its source name `record_id` whatever surface it carries, and `last_mutation_sim_time` only on a non-windowed invocation (the windowed state render omits it); every `only` / `ignore` entry names a property (element field) of its source; an events source's `rename` key names an audited property (element field) of its source, surviving `only` / `ignore` narrowing | `"{owner}: '{entry}' not a column of its source"` (the unrendered-surface, windowed-`updated_at`, and narrowed-away-rename-key cases name the election / omission / `only`-or-`ignore` entry) |
 | `SourceColumnNotAddressable` | No `columns` / `rename` entry names `fork_path` / `ref_index__*`, or `record_index` other than as the table's elected surface; no `columns` entry names the table's elected surface (identity is election-governed) — a non-elected, unrendered surface name (`record_id` under a `presentation_id` election) is `SourceColumnUnresolved` instead | `"table '{name}': '{column}' is not addressable here"`, naming why |
-| `SourceEventSourceOverlap` | `events.sources` resolve pairwise-disjoint population sets (membership sources distinct by `(kind, property)`) | `"events: sources overlap on population '{population}'"` |
+| `SourceEventSourceOverlap` | `events.sources` resolve pairwise-disjoint population sets (membership sources distinct by `(kind, property)`); two sources auditing one item space are disjoint only via both-declared disjoint owner `sub_types` sets or a common predicated column with typed-value-disjoint value sets (§ The event log — selection-aware disjointness) | `"events: sources overlap on population '{population}'"`; the selection case appends `"; selections do not establish disjointness"` |
 | `SourceKindLabelUnknown` | Every `kind_labels` key has a `records__<kind>` table in the sidecar | `"kind_labels: kind '{kind}' not in this emit"` |
 | `SourceKindLabelCollision` | After labeling, kind → rendered name is injective over the emit's whole kind universe (a label equals no other kind's label and no unlabeled kind's own name) | `"kind_labels: label '{label}' collides with kind '{kind}'"` |
-| `SourceItemTypeCollision` | Resolved item-types are pairwise distinct across sources, except records sources of one kind may share one; and no resolved item-type equals the rendered name of another kind (of any kind, for a membership source) — ranged over the emit's whole kind universe (§ Domain vocabulary) | `"events: sources #{m} and #{n} resolve one item_type '{item_type}' over two audited item spaces"`; the rendered-name clause: `"events source #{n}: item_type '{item_type}' collides with kind '{kind}'"` |
-| `SourceSliceOnlyRead` | No declaration entry names a non-exempt `slice_only` column | Names the entry, the column, and the omission reason |
+| `SourceItemTypeCollision` | Resolved item-types are pairwise distinct across sources, except that sources auditing one item space may share one — records sources of one kind, and membership sources of one `(kind, property)`; and no resolved item-type equals the rendered name of another kind (of any kind, for a membership source) — ranged over the emit's whole kind universe (§ Domain vocabulary) | `"events: sources #{m} and #{n} resolve one item_type '{item_type}' over two audited item spaces"`; the rendered-name clause: `"events source #{n}: item_type '{item_type}' collides with kind '{kind}'"` |
+| `SourceSliceOnlyRead` | No `columns` / `rename` / `only` / `ignore` entry names a non-exempt `slice_only` column. `where` keys are outside this rule's population — `SourceWhereNotConstant` refuses them, with the message the selection surface needs | Names the entry, the column, and the omission reason |
 | `SourceUnclassifiedColumn` | Every projected records column classifies to a taxonomy role ([`reader.md`](reader.md) § The records-column taxonomy) | Names the table and column |
 | `SourceAnchorRequired` | An `EffectiveAnchor` resolved | `"source export renders wallclock timestamps and requires a resolved anchor: the emit declares no runtime block; supply rebase.base_date/timezone or --base-date/--timezone"` |
+| `RenderKeyResolves` | A declared-table `render` key resolves in its value form's domain: the bare shorthand names an instant-carrying structural column of the table's category (reader-sourced); the typed forms name payload columns of the table's kind (`elem__<f>` element columns on a junction; the member pair columns are outside the domain); the event log's key domain is mode-definitional (`event_sim_time` only). A key must also name a column the render emits ([`temporal-elections.md`](temporal-elections.md); [`value-rendering-elections.md`](value-rendering-elections.md)) | Per-form message shapes, e.g. `"render key '{column}' on '{table}': not an instant-carrying structural column of this table"` |
+| `DateParseSourceColumn` | A declared `{date_parse: …}` source is a declared VARCHAR payload column, read from the sidecar type directly, and not `slice_only` ([`temporal-elections.md`](temporal-elections.md)) | `"date_parse column '{column}' on '{table}': source must be an existing VARCHAR column (got {type})"` |
+| `DecimalSourceIsDouble` / `InstantSourceIsBigint` / `JsonPrecisionSourceIsVarchar` | Each typed value election's source column carries its admitted declared type — DOUBLE / BIGINT / VARCHAR respectively ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | Per rule, e.g. `"render key '{column}' on '{table}': decimal rendering requires a DOUBLE source (got {type})"` |
+| `ElectionKindConflict` | Across the declared tables of one kind that emit a property the event log renders, every table declares the identical render election — a silent emitting table counts as differing ([`value-rendering-elections.md`](value-rendering-elections.md) § Event-log and after-image reach) | `"property '{column}' of kind '{kind}': '{a}' and '{b}' declare conflicting render elections"` (silent-table variant names the electing and silent tables) |
 | `SourceNameCollision` | Output table names (the event log's included) and per-table column names unique after defaults + renames; within one events source, resolved `changes` keys are distinct after renames (a membership pair's expanded `_kind` / `_id` names included) | `"output name collision: {names}; resolve via rename"`; the `changes`-key case: `"{owner}: changes key collision: {keys}; resolve via rename"` |
 | Reserved-name check (`exporters/reserved_names.py`, raised as `ExportError`) | No output table name collides with bookkeeping names / suffixes; no output column named `last_mutation_sim_time` (§ Presentation-name posture) — checked at plan build over all output names, so a full export and a later `--next` on the same target agree | — |
 | `ElectionMixedIdentity` / `ElectionUnionUnsafe` | Identity gates per declared table; edge gates per referencing column, per event-log **resolved** item-type (over the union of its sources' addressed populations; the owner kind's for a membership item-type), and per audited reference property; no gate across item-types (polymorphic identity) | Per [`key-election.md`](key-election.md) |
 | `SourceHistoryTrackedRequired` | The sidecar carries `history_tracked` flags (the events render and the windowed state snapshot consume them) | `"source export requires per-column history_tracked flags; this emit predates them"` |
-| `TemporalClassUnavailableError` (reader-owned; see [`reader.md`](reader.md)) | Every consulted flagged column declares an in-enum `temporal_class` (audited-set resolution) — a C13 breach surfaced on the consuming path | `"… declares history_tracked but no temporal_class; the emit is non-conformant (C13). Run \`fabulexa-forge validate\`."` |
+| `TemporalClassUnavailableError` (reader-owned; see [`reader.md`](reader.md)) | Every consulted flagged column declares an in-enum `temporal_class` — audited-set resolution and the row-selection gate alike — a C13 breach surfaced on the consuming path | `"… declares history_tracked but no temporal_class; the emit is non-conformant (C13). Run \`fabulexa-forge validate\`."` |
 | Single-branch guard (`derivations/guard.py`, cross-mode) | Exactly one branch | — |
 
 `declare_keys` (`SourceConfig`, optional boolean, default false) is the opt-in
@@ -785,6 +1035,54 @@ writer semantics, CSV posture, and incremental gating are owned by
   two sub-types into one table, split a kind, or choose which tables exist.
   The declared-table grammar puts the lever in the config; sidecar facts answer
   only "may this declaration resolve?".
+- **The partition line is author-declared, not sidecar-declared.** A producer's
+  declared sub-type domain marks structurally different things, and where it
+  exists `sub_types` expresses the split. But a kind can carry a de facto
+  discriminator the producer never declared — an interleaved table whose rows
+  belong to different subsystems with different lifecycles and different
+  consumers — and a mode whose thesis is output-that-looks-like-a-real-system
+  cannot call that shape someone else's problem. Realism decides: the split must
+  be expressible, and the author, who knows which constant properties are de
+  facto discriminators, is the one who draws it. What that costs is bounded by
+  what the sidecar keeps: layout is author-declared, the sidecar's
+  contribution is a gate (the constant class) and never a decision, and `init`
+  proposes no `where`, so the mode never manufactures a value-drawn split. The
+  line is determinism — propose from declared structure, never from observed
+  values. Nothing forces a split either, so the analytical anti-pattern
+  (table-per-enum-value over a genuine enum axis) requires an author to spell it
+  out deliberately, the same trust the mode already extends over table naming
+  and `columns` selection.
+- **The gate is on the column's class, not on the horizon.** A predicate on a
+  `tracked` property is ambiguous under horizon reconstruction — the
+  as-of-the-horizon value and the current records value select different row
+  sets — and the mode's windowed state snapshots pose that question where
+  dimensional's records grain never does. Restricting keys to `constant`-class
+  properties makes the question unposable rather than picking an answer, and it
+  is what buys horizon-invariant row membership (invariant 12) by construction
+  instead of by evaluation discipline.
+- **Selection splits the estate, not just the table.** State tables, junctions,
+  and events sources all take selection because splitting one without the others
+  leaves an undivided surface covering both halves — an association table whose
+  owner column points into a different table row by row, or one audit stream
+  spanning two concepts — the exact incoherence row selection exists to remove.
+  Membership units read the owner because their rows carry no owner attributes;
+  discriminator splits spell `sub_types` and constant-property splits spell
+  `where` on every declaring unit, one rule with no membership-only carve-out.
+- **The key axes error; the value axis notices.** Whether a `where` value is
+  checkable at all is a producer choice: `enum_domains` covers a constant
+  property only where the scenario declared it closed-domain, and a de facto
+  discriminator typically declares none — the same non-declaration that left it
+  without sub-types. A hard out-of-domain error would make the mode's strictness
+  lottery-shaped (a typo on a registered column refuses the export while a typo
+  on an unregistered one silently empties a table) and would diverge from
+  dimensional's posture that a declared-but-unobserved value is a legitimate way
+  to write one config against a family of emits. Castability is the one
+  value-shaped error and is not an exception to that: out-of-domain is
+  unobserved-but-possible, uncastable is impossible under the declared type in
+  every emit of the family, and deferring it to the rendered `CAST` would crash
+  the export at query time, after "plan time, before any write". The residual
+  net for unregistered columns is the run-and-profile authoring workflow, not
+  the gate.
 - **The log publishes its order in a column.** A relation has no inherent row
   order, so an order expressed only as physical row order is lost the moment a
   consumer loads the export and re-`SELECT`s it. None of the rendered values
@@ -929,10 +1227,21 @@ writer semantics, CSV posture, and incremental gating are owned by
   labels.
 - **No per-table label scoping.** `kind_labels` is one vocabulary per
   export, not per declared table.
-- **No row-predicate addressing.** The analytical partition is the star's
-  job; source's population grammar tracks only the structural partition the
-  sidecar declares (decision note
-  `source-mode-narrows-rows-by-sub-types-only-no-row-predicate-surface`).
+- **Row selection reads constant columns only.** A `where` key on a `tracked`
+  or `slice_only` property is refused, not resolved to a horizon (§ Row
+  selection); the grammar itself stops at equality and set membership
+  ([`row-predicates.md`](row-predicates.md)).
+- **`sub_types` is the discriminator surface, uniformly.** A `where` key naming
+  the declared discriminator is refused with a pointer to `sub_types`, on
+  membership units exactly as on records-backed ones — one selection per
+  partition axis, no second spelling to drift.
+- **Element fields are never predicate-addressable.** Membership-unit selection
+  reads the owner, never the element schema: element fields carry no
+  `temporal_class`, so a `where` key naming one is unresolved.
+- **No owner-attribute projection into junction rows.** The parent lookup is a
+  selection read; junction columns are exactly the membership surface. Merging
+  a split kind's memberships into one polymorphic junction enriched with an
+  owner-type column is a different shape, and splitting is expressible instead.
 
 ## Related
 
@@ -950,7 +1259,11 @@ writer semantics, CSV posture, and incremental gating are owned by
 | [`writers.md`](writers.md) | The CSV / DuckDB adapters source shares with every mode |
 | [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — per-render declared primary-key / uniqueness constraints |
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — elected identity and edge rendering, the identity and edge gates source's plan runs |
-| [`slice-only.md`](slice-only.md) | The export-wide `slice_only` policy source's omit-with-notice and `SourceSliceOnlyRead` refusal instantiate |
+| [`temporal-elections.md`](temporal-elections.md) | The cross-mode temporal election vocabulary the unified `render` map's temporal spellings render through |
+| [`value-rendering-elections.md`](value-rendering-elections.md) | The unified `render` map's grammar, the typed value elections (`instant` / `decimal` / `json_precision`), and the event-log election-reach rule |
+| [`slice-only.md`](slice-only.md) | The export-wide `slice_only` policy source's omit-with-notice, `SourceSliceOnlyRead` refusal, and row-selection class gate instantiate |
+| [`row-predicates.md`](row-predicates.md) | The scalar-or-list grammar, `PredicateValue` well-formedness rule, and rendering authority the mode's `where` surfaces share with dimensional's five and streaming's two |
+| [`selection-spine.md`](selection-spine.md) | The mode-neutral parent-lookup relation the mode's owner-keyed narrowing composes, shared with streaming |
 | [`config-docstrings.md`](config-docstrings.md) | The docstring convention the `SourceConfig` family follows |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Source-mode feature inventory and status |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap |

@@ -30,9 +30,11 @@ if TYPE_CHECKING:
 
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig, TableDecl
+    from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
     from fabulexa_forge.exporters.dimensional.populations import DimSourcePopulations
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
+    from fabulexa_forge.exporters.query_spec import ExportReport
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -40,6 +42,10 @@ if TYPE_CHECKING:
 from fabulexa_forge.config.models import DimensionalConfig
 from fabulexa_forge.derivations import require_single_branch
 from fabulexa_forge.exporters.base_relations import apply_base_relations
+from fabulexa_forge.exporters.companion import (
+    validate_overlay_tables,
+    write_companion_artifacts,
+)
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
 from fabulexa_forge.exporters.dimensional.grains import build_grain_sql
 from fabulexa_forge.exporters.dimensional.populations import (
@@ -323,7 +329,13 @@ def build_query_specs(
 
     for table_decl in config.tables:
         source_table_name = validate_table(
-            table_decl, config, sidecar, window, notice_sink, election=resolved_election
+            table_decl,
+            config,
+            sidecar,
+            window,
+            notice_sink,
+            anchor=anchor,
+            election=resolved_election,
         )
         sql, write_mode, view_name, view_sql = build_grain_sql(
             table_decl,
@@ -375,13 +387,18 @@ def export_dimensional(
     fmt: Literal["csv", "duckdb"],
     anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
-) -> dict[str, int]:
+    overlay: "ReadmeOverlay | None",
+) -> "ExportReport":
     """Run the dimensional exporter and write the star schema.
 
     Resolves the election from `config.keys` and builds the QuerySpecs
-    (threading notice_sink and the resolved election to the compile), then
-    dispatches by `fmt` to the matching writer, handing it the open `emit`
-    (the writer materializes each spec through `Emit.query_arrow`).
+    (threading notice_sink and the resolved election to the compile).
+    Immediately after compiling — before any write — validates `overlay`'s
+    `table:` slots against the compiled plan's output tables when `overlay`
+    is present. Dispatches by `fmt` to the matching writer, handing it the
+    open `emit` (the writer materializes each spec through
+    `Emit.query_arrow`), then writes the companion README + manifest and
+    returns the report.
 
     Args:
         emit: The open emit.
@@ -395,16 +412,21 @@ def export_dimensional(
             `{'csv','duckdb'}` before this is reached (see `cmd_export`).
         anchor: The resolved EffectiveAnchor, or None for raw sim_time integers.
         notice_sink: Receiver for plan notices.
+        overlay: The parsed README overlay, or None.
 
     Returns:
-        Mapping of **every** declared table name -> row count written (`0` for a
-        table whose grain resolved to no rows; such a table is still emitted —
-        empty typed DuckDB table or header-only CSV — never dropped). Both
-        writers obey this rule identically.
+        The invocation's `ExportReport`: one `TableReport` per declared table,
+        in declaration order (`0` row count for a table whose grain resolved
+        to no rows; such a table is still emitted — empty typed DuckDB table
+        or header-only CSV — never dropped). Both writers obey this rule
+        identically.
 
     Raises:
         ExportError: Branch guard or a business rule fails.
-        ExportRuntimeError: A writer fails.
+        ReadmeOverlayUnknownTable: `overlay` names a table the compiled plan
+            does not produce.
+        ExportRuntimeError: A writer fails, or the companion artifacts fail
+            to write.
         TemporalClassUnavailableError: Non-conformant temporal pair.
     """
     assert config.dimensional is not None
@@ -418,4 +440,8 @@ def export_dimensional(
         base_relations=None,
         election=election,
     )
-    return write_query_specs(emit, specs, out, fmt)
+    if overlay is not None:
+        validate_overlay_tables(overlay, [spec.table_name for spec in specs])
+    report = write_query_specs(emit, specs, out, fmt)
+    write_companion_artifacts(emit, config, fmt, anchor, report, overlay, out, None)
+    return report

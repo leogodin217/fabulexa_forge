@@ -313,7 +313,9 @@ def test_corrupted_key_fails_before_any_writer_runs(tmp_path: Path) -> None:
     out_path = tmp_path / "out.duckdb"
     with open_emit(emit_dir) as emit:
         with pytest.raises(ElectedKeyDuplicate):
-            export_base(emit, config, out_path, "duckdb", None, discard_notice_sink)
+            export_base(
+                emit, config, out_path, "duckdb", None, discard_notice_sink, None
+            )
     assert not out_path.exists()
 
 

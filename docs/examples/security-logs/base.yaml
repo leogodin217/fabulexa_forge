@@ -1,0 +1,48 @@
+# ExportConfig — security-logs bundle, base mode (flat current-state dump)
+# ============================================================
+# `fabulexa-forge export docs/examples/security-logs/bundle docs/examples/security-logs/base.yaml <out> --fmt duckdb`
+#
+# Base mode reconstructs one flat table per records kind at the tape's end:
+# every tracked property carries its LATEST history value. No sub-type split,
+# no FK joins, no row filtering — the faithful landing shape.
+#
+# THIS IS THE GROUND-TRUTH DATASET. The dimensional and source exports are
+# SIEM-realistic on purpose — they hide every column that labels the attack
+# (host.role='external', breadth, journey_type='approach_*', the binding role
+# names). Base mode hides nothing: host carries role / breadth /
+# auth_reliability / stale_service / failed_attempts, session carries
+# journey_type and current_state. This is the instructor's answer key beside
+# the students' logs — hand it out accordingly.
+#
+# Author decisions:
+#
+#   RENAME   engine-ontology kind names to the domain's:
+#              actor            -> host
+#              journey_instance -> session
+#              tick_decision    -> security_event
+#            `entity` keeps its name: it is a genuinely polymorphic catalogue
+#            (server / account / fw_rule behind `entity_type`), and base mode
+#            is one-table-per-kind — the per-sub-type split into servers /
+#            accounts / firewall_rules is the source and dimensional configs'
+#            job.
+#   EXCLUDE  nothing. All four kinds are domain data; the bundle declares no
+#            queue / resource mechanism kinds.
+#   RENDER   nothing. No prop__ column holds a date string or a raw
+#            sim-instant (the pending_* / port / octet BIGINTs are ports and
+#            address parts, not times); the lifecycle instants render as
+#            wallclock TIMESTAMP through the sidecar anchor by default.
+#
+# Columns dropped, but not by us: a non-exempt `temporal_class: slice_only`
+# column is ALWAYS auto-omitted with a notice, in every mode — here
+# session.state_entry_time / complete. Watch the export's `notice:` lines.
+#
+# Timestamps: no `rebase:` block — the anchor is the sidecar runtime
+# (2026-01-05T08:00:00 UTC).
+
+mode: base
+
+base:
+  rename:
+    - {table: records__actor, name: host}
+    - {table: records__journey_instance, name: session}
+    - {table: records__tick_decision, name: security_event}

@@ -66,12 +66,19 @@ class RecordAtomSelection:
     record_ids: the instance axis — restrict to these record ids; None means
         no instance restriction. Must be non-empty when given. Unknown ids
         select nothing (never an error).
+    identity: the identity surfaces the event `after` map and the
+        `record_state` table carry; must contain 'record_id'. None means the
+        full available set — the seam's established convention. Admissible:
+        'record_id', 'presentation_id' ('record_index' is outside the tier-1
+        domain). Projection only — never the typed PlaybackEvent fields,
+        never the fold invocation, never the event row set or seq.
     """
 
     kind: str
     sub_types: tuple[str, ...]
     properties: tuple[str, ...] | None
     record_ids: frozenset[str] | None
+    identity: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

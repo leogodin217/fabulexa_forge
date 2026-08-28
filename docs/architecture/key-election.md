@@ -101,7 +101,7 @@ source's and base's and dimensional runs only the edge gates).
 | Kind exists | resolution | Every `keys` key names a kind with a declared `records__<kind>` table | `ElectionKindUnknown` |
 | Sub-type exists | resolution | Every map key is in the kind's discriminator domain | `ElectionSubTypeUnknown` |
 | `presentation_id` declared | resolution | A population electing `presentation_id` has a registry entry — the flat kind's `key`, or the sub-type's `sub_types` entry (`key_for` presence). The uniform-scalar shorthand on a sub-typed kind requires *every* domain sub-type declared | `ElectionPresentationUndeclared`, naming kind, population, and (when the block is absent entirely) that the emit carries no claims |
-| Identity uniformity | mode plan (source, base, streaming) | An output table — or a declared stream: a topic's key is one identity space — whose rows span several populations of one kind requires every spanned population to elect the **same surface**. One table, one identity surface; one stream, one key surface (kind-shaped: the spanned populations; membership-shaped: the owner kind's full domain, its owners span it) | `ElectionMixedIdentity`, naming the table or stream and the differing (population, surface) pairs |
+| Identity uniformity | mode plan (source, base, streaming) | An output table — or a declared stream: a topic's key is one identity space — whose rows span several populations of one kind requires every spanned population to elect the **same surface**. One table, one identity surface; one stream, one key surface (kind-shaped: the spanned populations; membership-shaped: the addressed owner population set — the declared owner `sub_types`, else the owner kind's full domain) | `ElectionMixedIdentity`, naming the table or stream and the differing (population, surface) pairs |
 | Identity union safety | mode plan (source, base, streaming) | Under a uniform `presentation_id` election, the spanned populations' key spaces must additionally be pairwise union-safe (`union_safe` over the table above) — two bare-counter siblings collide even on one surface | `ElectionUnionUnsafe`, naming the table or stream and the unsafe pair |
 | Edge union safety | mode plan | Every referencing column — a reference edge, a junction owner column, a junction member column, a streaming after-image reference column, or a membership member field — requires its **admitted** target populations' key spaces pairwise union-safe, applied per column. The admitted set is the target kind's full declared domain in the kind-targeted modes — source, base, and streaming (the owner kind's domain for a junction owner column; per member kind for a junction/membership member column; a stream's `sub_types` scope narrows its own rows, never which target populations an edge admits) — and the destination dim's source population set in dimensional. The spaces range over the edge's **resolved surfaces**: the populations' own elections in the kind-targeted modes; in dimensional, the FK's one resolved surface (inherited, or the explicit `target_key`) applied to every admitted population | `ElectionUnionUnsafe`, naming the referencing table/stream · column and the unsafe pair |
 | Edge `presentation_id` declared | mode plan (dimensional) | An FK resolving `presentation_id` — inherited or explicit `target_key` — requires every population of the destination dim's source set registry-declared | `ElectionPresentationUndeclared`, naming the edge and the uncovered population |
@@ -371,7 +371,16 @@ any data is read.
 Streaming's declared streams are topics, and the elected surface is the
 **message key** ([`streaming.md`](streaming.md) § Message key). The
 identity-uniformity gate runs per declared stream (one stream, one key
-surface), and the render sites are:
+surface) over the populations that stream's keys draw from: for a kind-shaped
+stream the spanned populations, and for a membership-shaped stream the
+**addressed owner population set** — the declared owner `sub_types`, or the
+owner kind's full declared domain when they are omitted. The granularity is
+source's narrowed-unit resolution: a stream that addresses part of an owner
+kind is gated over that part, so a mixed-election owner kind is splittable per
+sub-type across streams rather than refusing every stream over it. `where`
+never narrows the addressed set — it is value-level, not population-level, so
+the gate and per-row election resolution see the full declared scope whatever
+rows the predicate selects. The render sites are:
 
 | Render site | Rendering |
 |---|---|

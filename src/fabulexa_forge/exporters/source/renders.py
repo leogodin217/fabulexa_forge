@@ -14,11 +14,12 @@ Both renders wrap a faithful reader relation (`build_records_relation_sql`,
 `build_membership_relation_sql`) at full export, or a reconstruction
 (`build_state_at_sql`, `state` only) when windowed; every structural sim-time
 column renders wallclock through the shared anchor renderer
-(`render_anchor_timestamp_expr`); every render carries its own total
+(`render_anchor_temporal_expr`); every render carries its own total
 `ORDER BY` over raw sim-time keys and identity — never a rendered timestamp
-(§ Ordering and determinism). `build_selection_spine_sql` is the one row-
-selection seam (source-row-selection sprint § The parent lookup): a
-`record_id`-producing SELECT over a kind's records spine, AND-composing a
+(§ Ordering and determinism). `build_selection_spine_sql` (promoted to
+`exporters.selection_spine`, streaming's shared row-selection device too) is
+the one row-selection seam (source-row-selection sprint § The parent lookup):
+a `record_id`-producing SELECT over a kind's records spine, AND-composing a
 population filter with a resolved `where` conjunction — `build_state_render_sql`
 composes its own predicate inline (over its own base relation), while
 `build_junction_render_sql` semi-joins the membership rows' owner `record_id`
@@ -42,17 +43,25 @@ via `build_state_at_sql` (windowed `state` reconstruction), the mode-neutral
 election module (`build_identity_translation_sql`, and the record-index /
 presentation-key horizon dispatchers `_record_index_sql` / `_presentation_key_sql`
 the self-identity join composes, shared with base's renders — doc § module
-placement), fabulexa_forge.anchor, fabulexa_forge._sql (`render_predicate_condition`
-composes a `where` entry's condition), the sibling source.columns
-(`_PROP_PREFIX`, and the one labeling authority `build_kind_label_expr` the
-junction render's `member__<f>__kind` column renders through) and source.plan
-modules (`_column_types` and the latter's `_MEMBER_PREFIX` /
-`_MEMBER_ID_SUFFIX` / `_MEMBER_KIND_SUFFIX` / `_RECORDS_TABLE_PREFIX` name
-constants at runtime, mirroring base's runtime import of `_self_identity`;
-`SourceEdgeSurface` / `SourceStateTablePlan` / `SourceJunctionTablePlan` /
-`SourceWhereEntry` TYPE_CHECKING only), `exporters.populations` (`Population`,
-TYPE_CHECKING only), config.models (TYPE_CHECKING only), and stdlib. Never
-imports exporters.dimensional.* or exporters.streaming.*.
+placement), fabulexa_forge.anchor, fabulexa_forge._sql
+(`render_predicate_condition` composes a `where` entry's condition;
+`render_date_parse_expr` / `render_decimal_expr` / `render_json_precision_expr`
+are the three typed-election authorities `_render_elected_column` dispatches
+to — the one dispatch every render composes), the mode-neutral
+`exporters.selection_spine` (`build_selection_spine_sql`,
+`needs_population_filter` — the promoted row-selection device), the sibling
+source.columns (`_PROP_PREFIX`, and the
+one labeling authority `build_kind_label_expr` the junction render's
+`member__<f>__kind` column renders through) and source.plan modules
+(`_column_types` and the latter's `_MEMBER_PREFIX` / `_MEMBER_ID_SUFFIX` /
+`_MEMBER_KIND_SUFFIX` / `_RECORDS_TABLE_PREFIX` name constants at runtime,
+mirroring base's runtime import of `_self_identity`; `SourceEdgeSurface` /
+`SourceStateTablePlan` / `SourceJunctionTablePlan` TYPE_CHECKING only),
+`exporters.populations` (`Population`, TYPE_CHECKING only), config.models
+(the `RenderElection` typed-election classes — `DateParseElection` /
+`InstantElection` / `DecimalElection` / `JsonPrecisionElection` — imported
+at runtime for the render-map form dispatch; TYPE_CHECKING only otherwise),
+and stdlib. Never imports exporters.dimensional.* or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -60,25 +69,41 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import KeySurface
-    from fabulexa_forge.exporters.populations import Population
+    from collections.abc import Mapping
+
+    from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
+    from fabulexa_forge.config.models import KeySurface, RenderElection
     from fabulexa_forge.exporters.source.plan import (
         SourceEdgeSurface,
         SourceJunctionTablePlan,
         SourceStateTablePlan,
-        SourceWhereEntry,
     )
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import _sql_literal, render_predicate_condition
-from fabulexa_forge.anchor import render_anchor_timestamp_expr
+from fabulexa_forge._sql import (
+    _sql_literal,
+    render_date_parse_expr,
+    render_decimal_expr,
+    render_json_precision_expr,
+    render_predicate_condition,
+)
+from fabulexa_forge.anchor import render_anchor_temporal_expr
+from fabulexa_forge.config.models import (
+    DateParseElection,
+    DecimalElection,
+    InstantElection,
+    JsonPrecisionElection,
+)
 from fabulexa_forge.derivations.state_at import build_state_at_sql
 from fabulexa_forge.exporters.election import (
     _presentation_key_sql,
     _record_index_sql,
     build_identity_translation_sql,
+)
+from fabulexa_forge.exporters.selection_spine import (
+    build_selection_spine_sql,
+    needs_population_filter,
 )
 from fabulexa_forge.exporters.source.columns import _PROP_PREFIX, build_kind_label_expr
 from fabulexa_forge.exporters.source.plan import (
@@ -123,18 +148,44 @@ _JUNCTION_FIXED_COLUMNS: frozenset[str] = frozenset(
 _STATE_AT_VERBATIM_COLUMNS: frozenset[str] = frozenset({"record_id", "active"})
 
 
+def _shorthand_render(
+    render_map: "Mapping[str, RenderElection]", key: str
+) -> "TemporalRender":
+    """The bare-shorthand rendering elected for a structural instant column key.
+
+    A structural key's `render` entry is always the bare shorthand form —
+    the `RenderKeyResolves` domain gate admits no other form there — so this
+    narrows the map's mixed-form value type back to `TemporalRender` for
+    callers that only ever address structural keys.
+
+    Args:
+        render_map: The table's resolved `render` map.
+        key: A structural instant column's source identity.
+
+    Returns:
+        The elected rendering, or the mode-definitional default `timestamp`
+        when `key` carries no entry.
+    """
+    value = render_map.get(key, "timestamp")
+    assert isinstance(value, str), f"structural render key {key!r} must be shorthand"
+    return value
+
+
 def _render_wallclock_column(
     src: str,
     out: str,
     alias: str,
     anchor: "EffectiveAnchor",
     wallclock_columns: "frozenset[str]",
+    render_map: "Mapping[str, RenderElection]",
 ) -> str:
     """Render one faithful-read column expression.
 
     A structural sim-time column (a member of `wallclock_columns`) renders
-    wallclock through the shared anchor renderer; every other column is a
-    verbatim, aliased passthrough of the source relation's value.
+    wallclock through the shared anchor renderer, in `render_map`'s elected
+    rendering for that source identity (the mode-definitional default
+    `timestamp` absent an entry); every other column is a verbatim, aliased
+    passthrough of the source relation's value.
 
     Args:
         src: The source column name (on the wrapped relation aliased `alias`).
@@ -142,14 +193,62 @@ def _render_wallclock_column(
         alias: The SQL alias of the wrapped source relation.
         anchor: The resolved effective anchor.
         wallclock_columns: The structural sim-time column names for this render.
+        render_map: The table's resolved `render` map (source identity ->
+            elected form; § `SourceStateTablePlan.render` /
+            `SourceJunctionTablePlan.render`), as a dict.
 
     Returns:
         A SQL SELECT-list expression fragment ending in `AS "<out>"`.
     """
     qualified = f'"{alias}"."{src}"'
     if src in wallclock_columns:
-        return render_anchor_timestamp_expr(anchor, qualified, out)
+        return render_anchor_temporal_expr(
+            anchor, qualified, out, _shorthand_render(render_map, src)
+        )
     return f'{qualified} AS "{out}"'
+
+
+def _render_elected_column(
+    qualified_source: str,
+    out: str,
+    src: str,
+    value: "RenderElection",
+    anchor: "EffectiveAnchor",
+    table_name: str,
+) -> str:
+    """Render one typed-election column's SQL fragment — the one dispatch
+    every render composes for a `render`-map entry outside the bare
+    shorthand form (state's payload columns, junction's `elem__<f>`
+    columns).
+
+    Args:
+        qualified_source: The fully table-qualified source column SQL.
+        out: The resolved output column name.
+        src: The source identity, for guard attribution (`column_label`).
+        value: The elected typed election (never the bare shorthand form).
+        anchor: The resolved wallclock anchor.
+        table_name: The output table name, for guard attribution.
+
+    Returns:
+        A SQL SELECT-list expression fragment ending in `AS "<out>"`.
+    """
+    if isinstance(value, DateParseElection):
+        return render_date_parse_expr(
+            qualified_source, value.date_parse, out, table_name
+        )
+    if isinstance(value, InstantElection):
+        return render_anchor_temporal_expr(anchor, qualified_source, out, value.instant)
+    if isinstance(value, DecimalElection):
+        precision, scale = value.decimal
+        expr = render_decimal_expr(qualified_source, precision, scale, src, table_name)
+        return f'{expr} AS "{out}"'
+    assert isinstance(value, JsonPrecisionElection), (
+        f"unrecognized RenderElection form for {src!r}: {value!r}"
+    )
+    expr = render_json_precision_expr(
+        qualified_source, value.json_precision, src, table_name
+    )
+    return f'{expr} AS "{out}"'
 
 
 def _half_open_predicate(alias: str, column: str, window: "Window") -> str:
@@ -176,6 +275,7 @@ def _junction_masked_left_at_expr(
     alias: str,
     anchor: "EffectiveAnchor",
     window: "Window",
+    render: "TemporalRender",
 ) -> str:
     """Render `left_at` horizon-masked to the window's exclusive end.
 
@@ -191,6 +291,8 @@ def _junction_masked_left_at_expr(
         alias: The SQL alias of the wrapped source relation.
         anchor: The resolved effective anchor.
         window: The window whose end_ns is the masking horizon.
+        render: The column's elected rendering (`table.render`'s entry for
+            `left_sim_time`, or the mode-definitional default `timestamp`).
 
     Returns:
         A SQL SELECT-list expression fragment ending in `AS "<out>"`.
@@ -200,7 +302,7 @@ def _junction_masked_left_at_expr(
         f"CASE WHEN {qualified} IS NULL OR {qualified} >= {window.end_ns}"
         f" THEN NULL ELSE {qualified} END"
     )
-    return render_anchor_timestamp_expr(anchor, masked_source, out)
+    return render_anchor_temporal_expr(anchor, masked_source, out, render)
 
 
 # ---------------------------------------------------------------------------
@@ -349,83 +451,6 @@ def _edge_join_and_expr(
 # ---------------------------------------------------------------------------
 
 
-def _needs_population_filter(
-    sidecar: "Sidecar", kind: str, populations: "tuple[Population, ...]"
-) -> bool:
-    """Whether an addressed population set needs a discriminator filter.
-
-    Shared by the `state` render's own population filter and
-    `build_selection_spine_sql`'s owner-narrowing (doc § The parent lookup):
-    false for a flat kind (single population, `sub_type=None` — no
-    discriminator column exists) or when `populations` addresses the kind's
-    full declared domain (the design doc's no-op-filter-not-composed rule).
-
-    Args:
-        sidecar: The open emit's sidecar.
-        kind: The addressed kind.
-        populations: The resolved population set.
-
-    Returns:
-        True iff a discriminator IN-predicate must be composed.
-    """
-    if populations[0].sub_type is None:
-        return False
-    domain = set(sidecar.subtype_values(kind))
-    return {p.sub_type for p in populations} != domain
-
-
-def build_selection_spine_sql(
-    sidecar: "Sidecar",
-    fork_path: str,
-    kind: str,
-    populations: "tuple[Population, ...]",
-    where: "tuple[SourceWhereEntry, ...]",
-) -> str | None:
-    """The per-row selection spine: a `record_id`-producing SELECT over the
-    kind's records spine of the records satisfying the population set AND
-    the predicate conjunction (each entry via `render_predicate_condition`
-    on its `source_column` / `sql_type`), or None when neither restricts
-    (`populations` covers the declared domain or the kind is flat, and
-    `where` is empty). Fan-out-free (`record_id` is unique on the spine);
-    evaluates current spine values (doc § Invariants #1). One seam for both
-    directions: records-source narrowing, and the parent lookup when callers
-    pass the owner kind of a membership unit.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        fork_path: The sole branch.
-        kind: The subject kind (the owner kind for a membership caller).
-        populations: The unit's addressed populations.
-        where: The unit's resolved predicate entries; empty = none.
-
-    Returns:
-        The spine SELECT for an `IN`-semi-join, or None when no restriction
-        applies.
-    """
-    needs_filter = _needs_population_filter(sidecar, kind, populations)
-    if not needs_filter and not where:
-        return None
-
-    relation_sql = build_records_relation_sql(sidecar, fork_path, kind, {})
-    conditions: list[str] = []
-    if needs_filter:
-        values = ", ".join(
-            _sql_literal(p.sub_type) for p in populations if p.sub_type is not None
-        )
-        conditions.append(f'"_spine"."{_PROP_PREFIX}{kind}_type" IN ({values})')
-    conditions.extend(
-        render_predicate_condition(
-            entry.source_column, entry.value, entry.sql_type, "_spine"
-        )
-        for entry in where
-    )
-    return (
-        'SELECT "record_id" FROM ('
-        f"{relation_sql}"
-        f') AS "_spine" WHERE {" AND ".join(conditions)}'
-    )
-
-
 def build_state_render_sql(
     sidecar: "Sidecar",
     fork_path: str,
@@ -460,6 +485,16 @@ def build_state_render_sql(
     row membership is window-invariant. Total ORDER BY
     `(created_sim_time, record_id)` — raw keys, never rendered timestamps.
     A table with every surface at its default composes join-free SQL.
+    `table.render` elects each structural instant's rendering (the
+    mode-definitional default `timestamp` for an unelected one), and each
+    keyed payload column's typed election through `_render_elected_column`
+    in place — the same raw (or, windowed, codec-VARCHAR) source feeds every
+    election's authority in both shapes, since `render_date_parse_expr` /
+    `render_decimal_expr` / `render_json_precision_expr` each accept the
+    codec-VARCHAR after-image directly (a VARCHAR source is unaffected; a
+    numeric source's VARCHAR text CASTs through DuckDB's implicit
+    string-to-typed conversion, identically to the `where` predicate's own
+    posture above).
 
     Args:
         sidecar: The plan's sidecar.
@@ -474,7 +509,7 @@ def build_state_render_sql(
         The render SELECT.
     """
     kind = table.kind
-    needs_filter = _needs_population_filter(sidecar, kind, table.populations)
+    needs_filter = needs_population_filter(sidecar, kind, table.populations)
 
     horizon_ns: int | None
     if window is None:
@@ -521,6 +556,7 @@ def build_state_render_sql(
             edge_exprs[edge.source_column] = value_expr
     joins_sql = "".join(joins)
 
+    render_map = dict(table.render)
     select_parts: list[str] = []
     for src, out in table.columns:
         if src == table.identity_surface and table.identity_surface != "record_id":
@@ -529,6 +565,17 @@ def build_state_render_sql(
             )
         elif src in edge_exprs:
             select_parts.append(f'{edge_exprs[src]} AS "{out}"')
+        elif src in render_map and not isinstance(render_map[src], str):
+            select_parts.append(
+                _render_elected_column(
+                    f'"{base_alias}"."{src}"',
+                    out,
+                    src,
+                    render_map[src],
+                    anchor,
+                    table.name,
+                )
+            )
         elif (
             window is not None
             and src not in _STATE_AT_VERBATIM_COLUMNS
@@ -542,7 +589,7 @@ def build_state_render_sql(
         else:
             select_parts.append(
                 _render_wallclock_column(
-                    src, out, base_alias, anchor, _RECORDS_WALLCLOCK_COLUMNS
+                    src, out, base_alias, anchor, _RECORDS_WALLCLOCK_COLUMNS, render_map
                 )
             )
     select_list = ", ".join(select_parts)
@@ -602,7 +649,10 @@ def build_junction_render_sql(
     `window.end_ns`; owner selection is window-invariant (constant-gated), so
     it applies identically at every horizon. Total ORDER BY `(record_id,
     joined_sim_time, element fields in element-schema declaration order,
-    VARCHAR-compared, NULLS FIRST)`.
+    VARCHAR-compared, NULLS FIRST)`. `table.render` elects each interval
+    column's rendering (the masked `left_at` included) and each keyed
+    `elem__<f>` payload column's typed election through
+    `_render_elected_column` in place.
 
     Args:
         sidecar: The plan's sidecar.
@@ -635,13 +685,22 @@ def build_junction_render_sql(
             edge_exprs[edge.source_column] = value_expr
     joins_sql = "".join(joins)
 
+    render_map = dict(table.render)
     select_parts: list[str] = []
     for src, out in table.columns:
         if src in edge_exprs:
             select_parts.append(f'{edge_exprs[src]} AS "{out}"')
         elif src == "left_sim_time" and window is not None:
             select_parts.append(
-                _junction_masked_left_at_expr(src, out, "_mem", anchor, window)
+                _junction_masked_left_at_expr(
+                    src, out, "_mem", anchor, window, _shorthand_render(render_map, src)
+                )
+            )
+        elif src in render_map and not isinstance(render_map[src], str):
+            select_parts.append(
+                _render_elected_column(
+                    f'"_mem"."{src}"', out, src, render_map[src], anchor, table.name
+                )
             )
         elif src.startswith(_MEMBER_PREFIX) and src.endswith(_MEMBER_KIND_SUFFIX):
             labeled_expr = build_kind_label_expr(f'"_mem"."{src}"', table.kind_labels)
@@ -649,7 +708,7 @@ def build_junction_render_sql(
         else:
             select_parts.append(
                 _render_wallclock_column(
-                    src, out, "_mem", anchor, _JUNCTION_WALLCLOCK_COLUMNS
+                    src, out, "_mem", anchor, _JUNCTION_WALLCLOCK_COLUMNS, render_map
                 )
             )
     select_list = ", ".join(select_parts)

@@ -42,5 +42,15 @@
 # override that origin instant or timezone; an emit with NO sidecar anchor and no
 # `rebase:` is the case where lifecycle columns stay raw BIGINT ns — see
 # docs/examples/parent-child/base.yaml for that contrast.
+#
+# ELECTED: actor.prop__date_of_birth is a plain upstream-minted date string
+# (clean `%Y-%m-%d`, both riders and drivers) — declared via `date_parse` and
+# reinterpreted as a real DATE.
 
 mode: base
+
+base:
+  render:
+    - table: records__actor
+      render:
+        prop__date_of_birth: {date_parse: "%Y-%m-%d"}

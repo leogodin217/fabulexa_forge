@@ -10,5 +10,5 @@ streams:
       - seq: 4
         op: u
         record_id: p001
-        after.prop__status: discharged
+        after.status: discharged
         ts: "2030-06-04T00:00:00+05:30"

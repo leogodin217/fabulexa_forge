@@ -1,46 +1,28 @@
-"""Shared `keys:` proposal primitives for the cross-mode `init` engines.
+"""Shared `keys:` election-menu primitives for the cross-mode `init` engines.
 
 The key-election `init` contract (docs/architecture/key-election.md §
-`init` proposals) is one natural rule — declared population -> presentation_id,
-undeclared -> record_index — shared verbatim by every mode's proposal engine.
-Both dimensional's dims and source's `state` tables (since source's
-per-sub-type split became `init`'s default) propose only single-population
-output tables, so the one gate either mode's proposal needs is edge safety —
-`check_edge_union_safety` over the sidecar's reference graph, never the
-identity-mixing gate (`check_identity_election`), which only ever fires for a
-table spanning more than one population of a kind. This module holds the
-mode-neutral pieces — natural-surface computation, the reference graph, the
-shared self-gate, the `ExportConfig.keys`-shaped assembly, and the block
-writer — so each mode's own `init` module composes them rather than
-reimplementing the shared half.
+`init` proposals) is one natural rule shared verbatim by every mode's
+proposal engine: the active election is uniformly `record_index` for every
+population of every kind — always present, one shared space per kind, so no
+mode-specific gate can ever reject it. Alongside the active line, `init`
+offers each population's resolvable alternatives as comments: `record_id`
+always, `presentation_id` only where the presentation-key registry declares
+that population. Because the active election never varies by population,
+`propose_key_election` needs nothing from a specific mode — one proposal,
+consulted only against the sidecar, served identically to dimensional,
+source, and streaming's `init` engines through `render_keys_block`.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Callable, Iterable
-
-from fabulexa_forge.errors import ElectionUnionUnsafe
-from fabulexa_forge.exporters.election import check_edge_union_safety, resolve_election
-from fabulexa_forge.reader.sidecar import TableSpec
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from typing import Mapping, Sequence
+
     from fabulexa_forge.config.models import KeySurface
     from fabulexa_forge.reader.sidecar import PresentationKeys, Sidecar
-
-
-def domains_for_kinds(
-    sidecar: "Sidecar", kinds: Iterable[str]
-) -> dict[str, tuple[str, ...]]:
-    """Every named kind's declared sub-type domain, `()` for a flat kind.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        kinds: The kinds the caller's proposal covers.
-
-    Returns:
-        kind -> `sidecar.subtype_values(kind)`, over `kinds`.
-    """
-    return {kind: sidecar.subtype_values(kind) for kind in kinds}
 
 
 def population_declared(
@@ -73,169 +55,122 @@ def population_declared(
     return True
 
 
-def natural_expanded_surfaces(
-    presentation_keys: "PresentationKeys | None",
-    domains: "dict[str, tuple[str, ...]]",
-) -> "dict[tuple[str, str | None], KeySurface]":
-    """The doc's natural per-population proposal: declared -> presentation_id,
-    undeclared -> record_index — total over every population `domains` covers.
+@dataclass(frozen=True)
+class KeyElectionProposal:
+    """An `init` keys proposal: the active election plus its alternatives."""
 
-    Args:
-        presentation_keys: The open emit's `presentation_keys` view, or None.
-        domains: Every proposed kind's sub-type domain, from `domains_for_kinds`.
+    active: "Mapping[str, KeySurface | Mapping[str, KeySurface]]"
+    """Per kind, the active election — a scalar for a flat kind, or for a
+    partitioned kind no population of which carries a presentation_id
+    alternative; a per-sub-type map otherwise. Uniformly record_index."""
 
-    Returns:
-        (kind, sub_type) -> the natural election, one entry per population.
-    """
-    expanded: "dict[tuple[str, str | None], KeySurface]" = {}
-    for kind, domain in domains.items():
-        sub_types: tuple[str | None, ...] = domain if domain else (None,)
-        for sub_type in sub_types:
-            expanded[(kind, sub_type)] = (
-                "presentation_id"
-                if population_declared(presentation_keys, kind, sub_type)
-                else "record_index"
-            )
-    return expanded
+    alternatives: "Mapping[str, Sequence[KeySurface]]"
+    """Population address -> the surfaces offered as commented alternatives,
+    in surface order. Address: the kind, or '<kind>.<sub_type>'."""
 
 
-def build_keys_config(
-    expanded: "dict[tuple[str, str | None], KeySurface]",
-    domains: "dict[str, tuple[str, ...]]",
-) -> "dict[str, KeySurface | dict[str, KeySurface]]":
-    """The config `keys` block shape from an expanded per-population map.
+def propose_key_election(sidecar: "Sidecar") -> KeyElectionProposal:
+    """The cross-mode keys proposal: uniform record_index plus per-population
+    alternatives.
 
-    Mirrors the registry's own shape (doc § `init` proposals): a flat kind
-    proposes the scalar; a partitioned kind the per-sub-type map, collapsed
-    to the scalar when every sub-type agrees.
-
-    Args:
-        expanded: (kind, sub_type) -> elected surface, total over `domains`.
-        domains: Every proposed kind's sub-type domain.
-
-    Returns:
-        The `ExportConfig.keys`-shaped proposal.
-    """
-    config: "dict[str, KeySurface | dict[str, KeySurface]]" = {}
-    for kind, domain in domains.items():
-        if not domain:
-            config[kind] = expanded[(kind, None)]
-            continue
-        sub_map: "dict[str, KeySurface]" = {
-            sub_type: expanded[(kind, sub_type)] for sub_type in domain
-        }
-        values = set(sub_map.values())
-        config[kind] = next(iter(values)) if len(values) == 1 else sub_map
-    return config
-
-
-def reference_edges(all_tables: tuple[TableSpec, ...]) -> list[tuple[str, str, str]]:
-    """Every `references` column across every records table — the reference graph.
-
-    Args:
-        all_tables: All sidecar TableSpec objects.
-
-    Returns:
-        (source_kind, column_name, target_kind) triples, in sidecar order.
-    """
-    edges: list[tuple[str, str, str]] = []
-    for table in all_tables:
-        if not isinstance(table, TableSpec):
-            continue
-        if not table.name.startswith("records__"):
-            continue
-        kind = table.name[len("records__") :]
-        for col in table.columns:
-            if col.references:
-                edges.append((kind, col.name, col.references))
-    return edges
-
-
-def self_gate_edge_safety(
-    sidecar: "Sidecar",
-    all_tables: tuple[TableSpec, ...],
-    domains: "dict[str, tuple[str, ...]]",
-    expanded: "dict[tuple[str, str | None], KeySurface]",
-) -> "tuple[dict[str, KeySurface | dict[str, KeySurface]], dict[str, str]]":
-    """Gate the natural proposal through `resolve_election` + edge union safety.
-
-    Shared by dimensional and source's `init`: `init` runs its own proposal
-    through the exact machinery the export would run. Neither mode's
-    proposal ever combines two populations of one kind into one output table
-    (dimensional's dims never did; source's `state` tables don't since the
-    per-sub-type split became `init`'s default), so `check_edge_union_safety`
-    over the reference graph is the one gate needed — per `references`
-    column, gated against the target kind's full declared domain with no
-    `target_key` / surface override. A kind implicated in a failure degrades
-    to uniform `record_index` — always passing, by construction. One pass
-    suffices: each edge's verdict depends only on its own target kind's
-    populations, so degrading the implicated kinds cannot newly break an
-    edge that previously passed.
+    Alternatives by resolvability alone: record_id always; presentation_id
+    only where the presentation-key registry declares the population.
+    Consults the strict registry accessor and shares its refusal behavior.
 
     Args:
         sidecar: The open emit's sidecar.
-        all_tables: All sidecar TableSpec objects.
-        domains: Every proposed kind's sub-type domain.
-        expanded: The natural per-population proposal, mutated in place with
-            any degradations.
 
     Returns:
-        (keys_config, degraded) — the gated `ExportConfig.keys`-shaped
-        proposal, and kind -> a one-line reason naming the forcing gate, for
-        every kind the gate degraded.
+        The proposal, one active entry and one alternatives entry per known
+        kind (per population for the alternatives).
+
+    Raises:
+        PresentationKeysInvalidError: The emit carries an incoherent
+            presentation-key block (propagated from `sidecar.presentation_keys()`).
     """
-    election = resolve_election(sidecar, build_keys_config(expanded, domains))
-    degraded: dict[str, str] = {}
-    for source_kind, column, target_kind in reference_edges(all_tables):
-        if target_kind not in domains:
-            continue
-        if target_kind in degraded:
-            continue
-        edge_name = f"{source_kind}.{column}"
-        try:
-            check_edge_union_safety(
-                election,
-                target_kind,
-                domains[target_kind],
-                edge_name,
-                surface_override=None,
-            )
-        except ElectionUnionUnsafe as exc:
-            degraded[target_kind] = f"ElectionUnionUnsafe: {exc}"
-
-    if not degraded:
-        return build_keys_config(expanded, domains), degraded
-
-    for kind in degraded:
-        sub_types: tuple[str | None, ...] = domains[kind] if domains[kind] else (None,)
-        for sub_type in sub_types:
-            expanded[(kind, sub_type)] = "record_index"
-    return build_keys_config(expanded, domains), degraded
+    presentation_keys = sidecar.presentation_keys()
+    active: "dict[str, KeySurface | dict[str, KeySurface]]" = {}
+    alternatives: "dict[str, list[KeySurface]]" = {}
+    for kind in sidecar.record_kinds():
+        domain = sidecar.subtype_values(kind)
+        sub_types: tuple[str | None, ...] = domain if domain else (None,)
+        declared = [
+            population_declared(presentation_keys, kind, sub_type)
+            for sub_type in sub_types
+        ]
+        collapse = not domain or not any(declared)
+        for sub_type, is_declared in zip(sub_types, declared):
+            address = kind if collapse else f"{kind}.{sub_type}"
+            surfaces: "list[KeySurface]" = ["record_id"]
+            if is_declared:
+                surfaces.append("presentation_id")
+            alternatives[address] = surfaces
+        if collapse:
+            active[kind] = "record_index"
+        else:
+            active[kind] = {sub_type: "record_index" for sub_type in domain}
+    return KeyElectionProposal(active=active, alternatives=alternatives)
 
 
-def write_keys_block(
-    w: Callable[[str], None],
-    keys_config: "dict[str, KeySurface | dict[str, KeySurface]]",
-    degraded: dict[str, str],
-) -> None:
-    """Write the proposed `keys:` block, one line per kind (or per sub-type).
-
-    A degraded kind always renders as a scalar `record_index` (uniform
-    election collapses by construction) with a trailing comment naming the
-    forcing gate.
+def _render_population(
+    key: str,
+    active_surface: "KeySurface",
+    alternatives: Sequence["KeySurface"],
+    indent: str,
+) -> list[str]:
+    """Render one population's alternative comments, then its active line.
 
     Args:
-        w: Line-writing callable.
-        keys_config: The gated `ExportConfig.keys`-shaped proposal.
-        degraded: kind -> reason, for every kind the self-gate forced.
+        key: The YAML mapping key this population's active line uses — the
+            kind name at top level, the sub-type value inside a per-sub-type map.
+        active_surface: The active election (always `record_index`).
+        alternatives: The population's offered alternatives, surface order.
+        indent: The line-leading whitespace for this population's nesting depth.
+
+    Returns:
+        Comment lines (swap-not-join header, then one commented `key:
+        surface` line per alternative) followed by the uncommented active line.
     """
-    w("keys:")
-    for kind, election in keys_config.items():
-        if isinstance(election, dict):
-            w(f"  {kind}:")
-            for sub_type, surface in election.items():
-                w(f"    {sub_type}: {surface}")
-        else:
-            reason = f"  # NOTE: {degraded[kind]}" if kind in degraded else ""
-            w(f"  {kind}: {election}{reason}")
-    w("")
+    lines = [
+        f"{indent}# NOTE: an uncommented alternative below SWAPS the active"
+        " line for this population -- delete the active line, don't just"
+        " uncomment"
+    ]
+    lines.extend(f"{indent}# {key}: {surface}" for surface in alternatives)
+    lines.append(f"{indent}{key}: {active_surface}")
+    return lines
+
+
+def render_keys_block(proposal: KeyElectionProposal) -> list[str]:
+    """Render the keys block: active lines and commented alternatives.
+
+    The single renderer, spliced verbatim by the dimensional, source, and
+    streaming init engines. Each population's alternatives precede its active
+    line as comments, headed by one line stating an alternative replaces the
+    active line rather than joining it.
+
+    Args:
+        proposal: The proposal to render.
+
+    Returns:
+        YAML lines, `keys:` first, ready to splice into a candidate config.
+    """
+    lines: list[str] = ["keys:"]
+    for kind, election in proposal.active.items():
+        if isinstance(election, str):
+            lines.extend(
+                _render_population(kind, election, proposal.alternatives[kind], "  ")
+            )
+            continue
+        lines.append(f"  {kind}:")
+        for sub_type, surface in election.items():
+            lines.extend(
+                _render_population(
+                    sub_type,
+                    surface,
+                    proposal.alternatives[f"{kind}.{sub_type}"],
+                    "    ",
+                )
+            )
+    lines.append("")
+    return lines

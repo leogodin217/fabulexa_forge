@@ -43,6 +43,34 @@ class TableKeys:
 
 
 @dataclass(frozen=True)
+class TableReport:
+    """One output table as written.
+
+    `columns` are (output name, type-text) pairs in output order, transcribed
+    from the materialized relation via the writers' DESCRIBE authority.
+    `row_count` is None on windowed invocations. `keys` is the table's
+    declared `TableKeys`, or None when nothing was declared or the
+    declaration was CSV-dropped.
+    """
+
+    name: str
+    columns: tuple[tuple[str, str], ...]
+    row_count: int | None
+    keys: TableKeys | None
+
+
+@dataclass(frozen=True)
+class ExportReport:
+    """Per-table reports for one export invocation, in plan iteration order.
+
+    Returned by every file-writing export entry point in place of the bare
+    table -> row-count mapping.
+    """
+
+    tables: tuple[TableReport, ...]
+
+
+@dataclass(frozen=True)
 class QuerySpec:
     """A compiled output table: name, SELECT, write mode, optional view pair.
 
@@ -132,13 +160,14 @@ def write_query_specs(
     specs: list[QuerySpec],
     out: "Path",
     fmt: Literal["csv", "duckdb"],
-) -> dict[str, int]:
+) -> ExportReport:
     """Dispatch a full-export QuerySpec list to the writer selected by fmt.
 
-    Every mode's full-export path (dimensional, source) compiles to this one
-    shape and shares this dispatch: flattens to name -> SQL and hands off to
-    `writers.duckdb.write_duckdb`, or one `writers.csv.write_csv` call per
-    table.
+    Every mode's full-export path (dimensional, source, base) compiles to
+    this one shape and shares this dispatch: flattens to name -> SQL and
+    hands off to `writers.duckdb.write_duckdb`, or one `writers.csv.write_csv`
+    call per table. Every full-export spec is `write_mode='create'` with no
+    view, so a spec's `table_name` is already its author-facing output name.
 
     Args:
         emit: The open emit.
@@ -149,9 +178,12 @@ def write_query_specs(
         fmt: Output format.
 
     Returns:
-        Mapping of every table name -> row count written (0 for a table whose
-        query resolved to no rows; such a table is still emitted — empty
-        typed DuckDB table or header-only CSV — never dropped).
+        One `TableReport` per spec, in plan iteration order — row count and
+        columns from the writer's `WrittenRelation`, `keys` the spec's
+        declared keys under `fmt='duckdb'`, always None under `fmt='csv'`
+        (CSV carries no constraint surface). A table whose query resolved to
+        no rows is still reported — empty typed DuckDB table or header-only
+        CSV — never dropped.
 
     Raises:
         ExportRuntimeError: A writer fails.
@@ -162,11 +194,30 @@ def write_query_specs(
         from fabulexa_forge.writers.duckdb import write_duckdb
 
         keys = {spec.table_name: spec.keys for spec in specs if spec.keys is not None}
-        return write_duckdb(emit, queries, out, keys)
+        written = write_duckdb(emit, queries, out, keys)
+        return ExportReport(
+            tables=tuple(
+                TableReport(
+                    name=spec.table_name,
+                    columns=written[spec.table_name].columns,
+                    row_count=written[spec.table_name].row_count,
+                    keys=spec.keys,
+                )
+                for spec in specs
+            )
+        )
 
     from fabulexa_forge.writers.csv import write_csv
 
-    row_counts: dict[str, int] = {}
-    for table_name, sql in queries.items():
-        row_counts[table_name] = write_csv(emit, table_name, sql, out)
-    return row_counts
+    tables: list[TableReport] = []
+    for spec in specs:
+        relation = write_csv(emit, spec.table_name, spec.sql, out)
+        tables.append(
+            TableReport(
+                name=spec.table_name,
+                columns=relation.columns,
+                row_count=relation.row_count,
+                keys=None,
+            )
+        )
+    return ExportReport(tables=tuple(tables))

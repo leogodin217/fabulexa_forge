@@ -1,0 +1,70 @@
+# Recipe: derived-timestamp-election
+# ============================================================
+# Demonstrates the temporal-rendering election on the timestamp derived
+# column: elect DATE or TIMESTAMP WITH TIME ZONE in place of the default
+# naive TIMESTAMP, all three rendering the SAME resolved instant.
+#
+# The base layer measures time as `sim_time` — an integer nanosecond
+# offset from a run anchor. The timestamp derived column renders that
+# offset through the effective anchor (here timezone=UTC,
+# start=2024-01-01T00:00:00). By default it renders a naive TIMESTAMP;
+# the `as` field elects a different output type for the same instant.
+#
+# The timestamp derived column's election:
+#   source: the base-layer sim_time column to convert (e.g. sim_time)
+#   as:     timestamp (default) | date | time | timestamptz
+#           date and timestamptz are pure projections of the same local
+#           wall clock `timestamp` renders — this is the family identity:
+#           the three elections never disagree about what instant an
+#           event maps to. An explicit `as` (timestamp included) requires
+#           a resolved anchor; with none, the column is refused at
+#           validation rather than silently falling back to raw sim_time.
+#
+# Fixture world (recipe emit):
+#   runtime anchor — 2024-01-01T00:00:00 UTC
+#   history        — patient status changes at 1/2/3*DAY ns offsets
+#
+# Output:
+#   fact_status_event — 4 rows; three renderings of the same event instant
+#     1*DAY → event_ts 2024-01-02 00:00:00 | event_date 2024-01-02 | event_tz 2024-01-02 00:00:00+00
+#     2*DAY → event_ts 2024-01-03 00:00:00 | event_date 2024-01-03 | event_tz 2024-01-03 00:00:00+00
+#     3*DAY → event_ts 2024-01-04 00:00:00 | event_date 2024-01-04 | event_tz 2024-01-04 00:00:00+00
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_status_event
+      role: fact
+      source:
+        grain: history_point
+        kind: patient
+        property: status
+      key: [patient_id, event_time]
+      columns:
+        - name: patient_id
+          from: record_id
+        # The raw nanosecond offset, kept alongside for comparison.
+        - name: event_time
+          from: sim_time
+        - name: status_value
+          from: value
+        # Default rendering: naive TIMESTAMP (no `as`).
+        - name: event_ts
+          derived:
+            timestamp:
+              source: sim_time
+        # Elected rendering: DATE — the calendar date of that same local
+        # wall clock event_ts renders.
+        - name: event_date
+          derived:
+            timestamp:
+              source: sim_time
+              as: date
+        # Elected rendering: TIMESTAMP WITH TIME ZONE — the absolute
+        # instant itself, zone-aware.
+        - name: event_tz
+          derived:
+            timestamp:
+              source: sim_time
+              as: timestamptz

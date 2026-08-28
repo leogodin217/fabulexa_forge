@@ -8,7 +8,7 @@ from fabulexa_forge.reader.conformance import (
     run_check,
     validate,
 )
-from fabulexa_forge.reader.emit import Emit, open_emit
+from fabulexa_forge.reader.emit import Emit, open_emit, pin_session_timezone
 from fabulexa_forge.reader.errors import (
     ColumnNotFoundError,
     EmitNotFoundError,
@@ -92,6 +92,7 @@ __all__ = [
     "combined_claim",
     "distinct_prop_values",
     "open_emit",
+    "pin_session_timezone",
     "records_column_role",
     "records_structural_column_is_mutable",
     "ref_index_sibling",

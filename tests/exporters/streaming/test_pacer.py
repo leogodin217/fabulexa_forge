@@ -25,7 +25,6 @@ def make_event(seq: int, event_sim_time: int) -> StreamEvent:
         op="c",
         kind="patient",
         record_id=f"r{seq}",
-        presentation_id=None,
         event_sim_time=event_sim_time,
         ts=event_sim_time,
         after={"id": f"r{seq}"},

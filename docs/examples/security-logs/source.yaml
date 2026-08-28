@@ -1,0 +1,145 @@
+# ExportConfig — security-logs bundle, source mode (SIEM backing store)
+# ============================================================
+# `fabulexa-forge export docs/examples/security-logs/bundle docs/examples/security-logs/source.yaml <out> --fmt duckdb`
+#
+# Source mode DECLARES its own output shape (docs/architecture/source.md):
+# each `tables[]` entry is a `state` table (current-state, one row per record)
+# over a `kind:`, or a `junction` over a `membership:`. The declared shape here
+# is the normalized backing store of a SIEM / log platform: an event table,
+# an event->entity link table, and the four inventory tables analysts join
+# against. Naming follows the atlas, never the engine ontology:
+#
+#   actor              -> hosts
+#   entity/server      -> servers
+#   entity/account     -> accounts
+#   entity/fw_rule     -> firewall_rules
+#   journey_instance   -> sessions        (the correlation table)
+#   tick_decision      -> security_events (the log itself)
+#   ...bindings        -> event_entities  (polymorphic event->entity link)
+#
+#   SPLIT    entity -> servers / accounts / firewall_rules via `sub_types:`.
+#            `sub_types:` narrows ROWS, not columns, so each table enumerates
+#            `columns:` from its own sub_type_columns partition — without
+#            this, servers would carry account_name etc. at 100% NULL.
+#   SIEM-REALISTIC (the bundle's premise: the attack signal is behavioral,
+#            never a label). Dropped everywhere:
+#            - hosts: role ('external' flat labels the four attackers),
+#              home_service / stale_service / breadth / auth_reliability /
+#              failed_attempts / pending_dst_zone / pending_dst_port (the
+#              connection being resolved is engine state, not inventory),
+#              last_octet / subnet_octet (IP-minting internals; ip_address
+#              carries the result).
+#            - sessions: journey_type (approach_* values label the intrusion
+#              journeys) and current_state (probing / staging / moving —
+#              engine narration that would hand students the answer).
+#              sessions keeps host_id + lifecycle: a correlation table.
+#            - event_entities: elem__role_name (dest_stale / probe_target /
+#              victim_account are generator ground truth) and
+#              member__entity__kind (constant 'entity' — the linked table is
+#              told apart by id, all three inventories share the entity id
+#              space). elem__pick_index is dropped as constant 0 across all
+#              327,622 rows.
+#            Ground truth stays in the base export, deliberately.
+#   EVENTS   security_events keeps the decision lifecycle OUT: a log row is
+#            immutable, so active / deactivated_at / last_mutation_sim_time
+#            are noise there; created_sim_time renames to occurred_at. The
+#            inventory tables keep the created_at/active/deactivated_at/
+#            updated_at quartet — the source archetype's soft-delete shape.
+#   FAITHFUL  deactivated_at is NULL on every host / account / rule — nothing
+#            retires them — but NOT on servers: metrics01..03 are soft-deleted
+#            (active=false, deactivated 2026-02-14). The metrics tier really
+#            is decommissioned mid-run; hosts with the stale metrics habit
+#            keep dialing it. Do not "fix" the sparse column.
+#   NO AUDIT LOG. The `events:` block is a Rails-style field-change audit
+#            stream; a security store has no such surface, and the tracked
+#            actor properties it would audit (breadth, failed_attempts, ...)
+#            are exactly the ground truth this config excludes. Tables-only
+#            is a legal source config.
+#
+# KEYS: every kind elects `record_index` — each table's id is a compact
+# BIGINT and every reference column (sessions.host_id,
+# security_events.session_id, event_entities ids) renders its target's index.
+# The engine record_id is simulator identity no app database would key on;
+# the sidecar registers no presentation_keys.
+#
+# A `temporal_class: slice_only` column is auto-omitted with a notice
+# whatever this config says — here journey_instance's state_entry_time /
+# complete. The export's `notice:` lines are the authoritative list.
+#
+# Timestamps: no `rebase:` block — the anchor is the sidecar runtime
+# (2026-01-05T08:00:00 UTC).
+
+mode: source
+
+keys:
+  actor: record_index
+  entity: record_index
+  journey_instance: record_index
+  tick_decision: record_index
+
+source:
+  tables:
+    - name: hosts
+      kind: actor
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__name, prop__ip_address, prop__zone, prop__subnet]
+      rename:
+        prop__name: hostname
+
+    - name: servers
+      kind: entity
+      sub_types: [server]
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__hostname, prop__ip_address, prop__zone, prop__port,
+                prop__service]
+
+    - name: accounts
+      kind: entity
+      sub_types: [account]
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__account_name, prop__account_type, prop__owner_host,
+                prop__owner_first, prop__owner_last]
+      rename:
+        prop__owner_host: owner_hostname
+
+    - name: firewall_rules
+      kind: entity
+      sub_types: [fw_rule]
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__rule_name, prop__src_zone, prop__dst_zone, prop__dst_port,
+                prop__action]
+
+    # correlation table: one row per session / probe sequence; every
+    # security_events row carries its id as session_id
+    - name: sessions
+      kind: journey_instance
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__actor]
+      rename:
+        prop__actor: host_id
+
+    # the log itself: one immutable row per event
+    - name: security_events
+      kind: tick_decision
+      columns: [created_sim_time, prop__journey_instance, prop__decision_type,
+                prop__context]
+      rename:
+        created_sim_time: occurred_at
+        prop__journey_instance: session_id
+        prop__decision_type: event_type
+        prop__context: context
+
+    # polymorphic event -> entity link: which server / rule / account an
+    # event involved (the entity's own table tells which it is). entity_id
+    # carries the elected record_index values but is VARCHAR-typed — a
+    # junction member column is inherently VARCHAR under any non-default
+    # election (member kind is per-row, so the planner types the column
+    # over the full kind universe; source.md § The junction render). Join
+    # with CAST(entity_id AS BIGINT); verified all 327,622 values resolve
+    # into servers/accounts/firewall_rules ids.
+    - name: event_entities
+      membership: {kind: tick_decision, property: bindings}
+      columns: [member__entity__id]
+      rename:
+        record_id: event_id
+        member__entity__id: entity_id

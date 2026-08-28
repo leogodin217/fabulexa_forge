@@ -34,7 +34,9 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.exporters.base.plan import BaseTableSpec, ReferenceKey
+    from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
     from fabulexa_forge.exporters.notices import NoticeSink
+    from fabulexa_forge.exporters.query_spec import ExportReport
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -42,6 +44,10 @@ if TYPE_CHECKING:
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.exporters.base.plan import build_base_plan, resolve_base_table_keys
 from fabulexa_forge.exporters.base.renders import build_base_render_sql
+from fabulexa_forge.exporters.companion import (
+    validate_overlay_tables,
+    write_companion_artifacts,
+)
 from fabulexa_forge.exporters.election import (
     _presentation_key_sql,
     _record_index_sql,
@@ -252,15 +258,23 @@ def build_base_query_specs(
             pairwise-unsafe key-space pair.
         ExportError: A base business rule fails (rename resolution or
             collision).
+        DateParseSourceColumn: A `date_parse` key does not resolve to a
+            declared VARCHAR column.
         PresentationKeysInvalidError: `declare_keys` is true, or some
             population elects presentation_id, and the sidecar's
             `presentation_keys` block is present and incoherent.
+        RenderKeyIsInstantColumn: A `render` key does not name an
+            instant-carrying structural column of the records category.
         TableNotFoundError: A declared `records__<kind>` table is absent.
+        TemporalRenderRequiresAnchor: A `render` entry elects a rendering and
+            no anchor resolved.
     """
     sidecar = emit.sidecar
     fork_path = require_single_branch(sidecar)
     election = resolve_election(sidecar, config.keys)
-    plan = build_base_plan(sidecar, config.base, notice_sink, election=election)
+    plan = build_base_plan(
+        sidecar, config.base, notice_sink, election=election, anchor=anchor
+    )
 
     horizon_ns = _resolve_horizon_ns(config, window)
     write_mode: Literal["create", "replace"] = (
@@ -300,18 +314,22 @@ def export_base(
     fmt: Literal["csv", "duckdb"],
     anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
-) -> dict[str, int]:
+    overlay: "ReadmeOverlay | None",
+) -> "ExportReport":
     """
     Run the base exporter and write the flat projection.
 
     Builds the full-export base query specs (window=None, so the horizon is
-    `config.base.slice_at + 1` when set, else the tape's end), then dispatches
-    to the fmt-selected writer via the shared `write_query_specs` — mirroring
-    `export_source`, minus the anchor requirement. When `config.base.
-    declare_keys` is true and `fmt == 'csv'`, emits
-    `keys_not_declarable_csv_notice()` to `notice_sink` once, before any data
-    is written — CSV carries no constraint surface, so the DuckDB-only
-    declaration is dropped for this invocation.
+    `config.base.slice_at + 1` when set, else the tape's end). Immediately
+    after compiling — before any write — validates `overlay`'s `table:`
+    slots against the compiled plan's output tables when `overlay` is
+    present. Dispatches to the fmt-selected writer via the shared
+    `write_query_specs` — mirroring `export_source`, minus the anchor
+    requirement. When `config.base.declare_keys` is true and `fmt == 'csv'`,
+    emits `keys_not_declarable_csv_notice()` to `notice_sink` once, before
+    any data is written — CSV carries no constraint surface, so the
+    DuckDB-only declaration is dropped for this invocation. Writes the
+    companion README + manifest after data delivery and returns the report.
 
     Args:
         emit: The open emit.
@@ -325,19 +343,27 @@ def export_base(
             one — None renders lifecycle timestamps as raw sim-time ns.
         notice_sink: Receiver for plan notices (slice-only-column-omitted,
             keys-not-declarable-csv).
+        overlay: The parsed README overlay, or None.
 
     Returns:
-        Mapping of every output table name -> row count written (0-row
-        tables are still emitted, never dropped).
+        The invocation's `ExportReport`: one `TableReport` per output table
+        (0-row tables are still emitted, never dropped).
 
     Raises:
         ExportError: The single-branch guard or a base business rule fails.
-        ExportRuntimeError: A writer fails.
+        ReadmeOverlayUnknownTable: `overlay` names a table the compiled plan
+            does not produce.
+        ExportRuntimeError: A writer fails, or the companion artifacts fail
+            to write.
         PresentationKeysInvalidError: `declare_keys` is true and the
             sidecar's `presentation_keys` block is present and incoherent.
         TableNotFoundError: A declared `records__<kind>` table is absent.
     """
     specs = build_base_query_specs(emit, config, anchor, None, notice_sink)
+    if overlay is not None:
+        validate_overlay_tables(overlay, [spec.table_name for spec in specs])
     if declare_keys_active(config) and fmt == "csv":
         notice_sink(keys_not_declarable_csv_notice())
-    return write_query_specs(emit, specs, out, fmt)
+    report = write_query_specs(emit, specs, out, fmt)
+    write_companion_artifacts(emit, config, fmt, anchor, report, overlay, out, None)
+    return report

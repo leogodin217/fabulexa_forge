@@ -48,6 +48,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 
 import duckdb
 import yaml
@@ -103,12 +104,74 @@ def dimensional_column_maps(cfg: dict) -> list[tuple[str, dict, dict[str, str]]]
     return out
 
 
+def resolve_elections(cfg: dict) -> dict[str, str]:
+    """Per-kind key election from the config's top-level `keys:` block.
+
+    Returns {kind: 'record_id' | 'record_index' | 'presentation_id' | 'mixed'}.
+    A scalar elects the whole kind; a per-sub-type map resolves to its single
+    distinct surface, else 'mixed' (untraceable mechanically -- the caller
+    skips those columns rather than misjudging them). Absent kinds default to
+    'record_id' via the caller's .get(..., 'record_id').
+    """
+    out: dict[str, str] = {}
+    for kind, surface in (cfg.get("keys") or {}).items():
+        if isinstance(surface, dict):
+            values = set(surface.values())
+            out[kind] = values.pop() if len(values) == 1 else "mixed"
+        else:
+            out[kind] = surface
+    return out
+
+
+def load_reference_targets(bundle_run_duckdb: str) -> dict[tuple[str, str], str]:
+    """{(kind, prop_column): target_kind} from the bundle's sidecar.
+
+    The sidecar (`base.json` beside `run.duckdb`) is part of the bundle, so
+    reading it keeps this checker data-only. Needed because a key-elected
+    reference column legitimately carries the TARGET kind's elected surface
+    (key-election.md § Rendering: base / source), so its trace domain is the
+    target's surface column, not the verbatim reference value. Missing or
+    unreadable sidecar -> empty map (elected reference columns are then
+    reported as fabricated, exactly as before this map existed).
+    """
+    sidecar = os.path.join(os.path.dirname(bundle_run_duckdb), "base.json")
+    try:
+        with open(sidecar) as f:
+            doc = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    refs: dict[tuple[str, str], str] = {}
+    for table in doc.get("tables", []):
+        name = table.get("name", "")
+        if not name.startswith("records__"):
+            continue
+        kind = name.removeprefix("records__")
+        for col in table.get("columns", []):
+            target = col.get("references")
+            if target:
+                refs[(kind, col["name"])] = target
+    return refs
+
+
+#: Marker separating a cross-table domain override's table from its column.
+_XTABLE = "::"
+
+
 def auto_column_maps(
-    cfg: dict, mode: str, con: duckdb.DuckDBPyConnection
+    cfg: dict, mode: str, con: duckdb.DuckDBPyConnection, bundle_path: str
 ) -> list[tuple[str, dict, dict[str, str]]]:
     """Return [(output_table, source_decl, {output_col: source_col})] for base/source
     auto modes. `con` must have the bundle attached as `src` and the dataset as
-    `out`. Auto modes are always a records grain."""
+    `out`. Auto modes are always a records grain.
+
+    Key election (the config's `keys:` block) changes what the output's
+    identity and reference columns legitimately carry, so the map follows it:
+    `id` maps to the kind's elected surface column, and a reference column
+    whose target elects a non-record_id surface maps cross-table to
+    `records__<target>::<surface>`. A 'mixed' election is skipped, never
+    guessed."""
+    elections = resolve_elections(cfg)
+    refs = load_reference_targets(bundle_path) if elections else {}
     exclude = set(cfg.get(mode, {}).get("exclude", {}).get("kinds", []) or [])
     bundle_tables = [
         row[0]
@@ -140,14 +203,30 @@ def auto_column_maps(
         out_cols = [
             row[0] for row in con.execute(f"describe out.{output_table}").fetchall()
         ]
+        surface = elections.get(kind, "record_id")
         col_map = {}
         for oc in out_cols:
+            source_col = None
             if oc == "id":
-                col_map[oc] = "record_id"
+                if surface == "mixed":
+                    continue  # untraceable without per-row population resolution
+                source_col = surface if surface != "record_id" else "record_id"
             elif oc.startswith("prop__") and oc in bundle_cols:
-                col_map[oc] = oc  # base mode: identity, prop__ prefix kept
+                source_col = oc  # base mode: identity, prop__ prefix kept
             elif f"prop__{oc}" in bundle_cols:
-                col_map[oc] = f"prop__{oc}"  # source mode: prefix stripped
+                source_col = f"prop__{oc}"  # source mode: prefix stripped
+            if source_col is None:
+                continue
+            # A reference column renders its TARGET kind's elected surface, so
+            # its domain is the target's surface column, not the verbatim ref.
+            target = refs.get((kind, source_col))
+            if target is not None:
+                target_surface = elections.get(target, "record_id")
+                if target_surface == "mixed":
+                    continue
+                if target_surface != "record_id":
+                    source_col = f"records__{target}{_XTABLE}{target_surface}"
+            col_map[oc] = source_col
         result.append((output_table, {"grain": "records", "kind": kind}, col_map))
     return result
 
@@ -161,6 +240,11 @@ def check_column(
 ) -> dict:
     kind = source["kind"]
     src_table, hist_prop = grain_source(source)
+    if _XTABLE in source_col:
+        # Cross-table domain override (a key-elected reference column): the
+        # domain is the target kind's elected-surface column. Elected surfaces
+        # are creation-constant identity columns, so no history union applies.
+        src_table, source_col = source_col.split(_XTABLE, 1)
     where = ""
     if src_table == "history":
         where = f" where kind = '{kind}'" + (
@@ -232,7 +316,7 @@ def main() -> int:
     if mode == "dimensional":
         table_maps = dimensional_column_maps(cfg)
     elif mode in ("base", "source"):
-        table_maps = auto_column_maps(cfg, mode, con)
+        table_maps = auto_column_maps(cfg, mode, con, args.bundle)
     else:
         raise SystemExit(f"trace_domain.py: unsupported export mode {mode!r}")
 

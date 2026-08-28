@@ -82,11 +82,17 @@ def test_corrupt_then_source_export_surfaces_declared_defect(tmp_path: Path) -> 
     out_dir.mkdir()
     with open_emit(corrupt_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        row_counts = export_source(
-            emit, config, out_dir, "csv", anchor, notice_sink=discard_notice_sink
+        report = export_source(
+            emit,
+            config,
+            out_dir,
+            "csv",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
-    assert "doctor" in row_counts
+    assert "doctor" in {table.name for table in report.tables}
 
     with (out_dir / "doctor.csv").open(newline="", encoding="utf-8") as fh:
         doctor_rows = list(csv.DictReader(fh))

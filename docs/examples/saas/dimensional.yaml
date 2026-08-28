@@ -54,32 +54,55 @@
 #            (company_fk / user_fk) rather than a single ambiguous column —
 #            exactly one of the pair is populated per row, discriminated by
 #            journey_type.
-#   OPAQUE   tick_decision.prop__context is a genuine, well-formed value
-#            (declared `tuple[tuple[str, scalar], ...]`, repr-encoded per
-#            the base-format contract's round-trip convention) — confirmed
-#            via consult(composite) NOT to be engine noise. But this
-#            package's config grammar has no derived-column mode that
-#            parses a repr'd string, so it is carried through opaque as
-#            `context` (VARCHAR) on fact_usage_event rather than fabricated
-#            into a numeric column the grammar cannot actually produce.
-#            Key names inside it (e.g. `volume`) are this scenario's own
-#            authoring, not a base-format vocabulary — do not assume they
-#            generalize to other emits.
+#   ELECTED  tick_decision.prop__context is a genuine, well-formed JSON
+#            payload — confirmed via consult(composite) NOT to be engine
+#            noise. It stays a single `context` column on fact_usage_event
+#            (not fabricated into numeric columns), but its `volume` leaf
+#            carries raw float64 noise (16 fraction digits), so
+#            `derived: {json_precision: ...}` rounds it in place to 2dp;
+#            every other payload byte is preserved verbatim. Key names
+#            inside it (e.g. `volume`) are this scenario's own authoring,
+#            not a base-format vocabulary — do not assume they generalize.
+#   ELECTED  entity.prop__engagement_score (a 1-100 score) carries the same
+#            float64 noise, so dim_account elects `derived: decimal` [5, 2] —
+#            the same DECIMAL(5,2) the source config's state table elects for
+#            this kind (per-kind agreement). dim_account is `scd: type2` and
+#            the score is tracked, so the rendering is evaluated per version
+#            off the versioned reconstruction's value (see
+#            architecture/dimensional.md § SCD-2 wide reconstruction).
+#            Versions stay boundary-faithful: adjacent versions whose rounded
+#            values collide (e.g. 4.800000000000001 and 4.804 both render
+#            4.80) remain separate rows — the election changes presentation
+#            only, never version structure.
 #   RENAMED  actor.company -> dim_company, entity.company_hub -> dim_account,
 #            entity.sku -> dim_sku, actor.user -> dim_user, tick_decision ->
 #            fact_usage_event: output names are the domain's, never the
 #            engine ontology's.
 #   SPLIT    dim_user -> dim_user (Type-1 identity: name/email/account FK)
-#            + dim_user_status (SCD-2 satellite: status only). The SCD-2
-#            builder implements exactly three column modes on a `scd: type2`
-#            table — `from`, `null`, `derived: scd_window` — so an `fk`
-#            column (dim_user's account_id) cannot live on the same table as
-#            the tracked `status` column today. This is a real engine
+#            + dim_user_status (SCD-2 satellite: status only). A `scd: type2`
+#            table refuses `fk` — a cross-row read the type2 build does not
+#            define — so dim_user's account_id cannot live on the same table
+#            as the tracked `status` column. This is a real engine
 #            constraint, not a style choice; the split is the standard
-#            mini-dimension/satellite pattern, not a fidelity loss. The same
-#            constraint drops `created_at` from dim_company/dim_account
-#            (their `valid_from` already carries the wallclock version
-#            start).
+#            mini-dimension/satellite pattern, not a fidelity loss.
+#   ELECTED  dim_company and dim_account carry `created_at`, a `derived:
+#            timestamp` off the structural `created_sim_time`. A structural
+#            column is untracked, so its rendering reads per record from the
+#            records relation. The value is per-record: identical
+#            on every version row, unlike `valid_from`, which moves with each
+#            version. The two answer different questions — when the record was
+#            born vs. when this version began.
+#   ELECTED  dim_company and dim_user_status's valid_from/valid_to elect a
+#            date-grained `scd_window` (`{bound, as: date}`) instead of the
+#            default TIMESTAMP window. Both track coarse CRM/seat-lifecycle
+#            milestones (onboarding -> active -> churned; provisioned ->
+#            active -> using -> offboarded) — status-change dates a
+#            warehouse reports on, not intraday-sensitive moments.
+#            dim_account's own valid_from/valid_to stay the default
+#            TIMESTAMP: its versions mix a daily engagement-score batch
+#            recompute with genuine same-day pricing changes (544 collision
+#            days measured), so collapsing to date grain would blend a
+#            cosmetic update with a real billing change.
 
 mode: dimensional
 
@@ -103,12 +126,16 @@ dimensional:
           from: presentation_id
         - name: status
           from: prop__status
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
         - name: valid_from
           derived:
-            scd_window: valid_from
+            scd_window: {bound: valid_from, as: date}
         - name: valid_to
           derived:
-            scd_window: valid_to
+            scd_window: {bound: valid_to, as: date}
 
     # --- dim_account: billing/workspace tenant (entity.company_hub) ---
     - name: dim_account
@@ -135,7 +162,12 @@ dimensional:
         - name: churn_flag
           from: prop__churn_flag
         - name: engagement_score
-          from: prop__engagement_score
+          derived:
+            decimal: {from: prop__engagement_score, as: [5, 2]}
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
         - name: valid_from
           derived:
             scd_window: valid_from
@@ -214,10 +246,10 @@ dimensional:
           from: prop__status
         - name: valid_from
           derived:
-            scd_window: valid_from
+            scd_window: {bound: valid_from, as: date}
         - name: valid_to
           derived:
-            scd_window: valid_to
+            scd_window: {bound: valid_to, as: date}
 
     # --- fact_usage_event: one row per product usage event (tick_decision) ---
     - name: fact_usage_event
@@ -246,7 +278,10 @@ dimensional:
             member_field: entity
             where: {elem__role_name: sku}
         - name: context
-          from: prop__context
+          derived:
+            json_precision:
+              from: prop__context
+              leaves: {volume: 2}
 
     # --- fact_lifecycle_interval: state-occupancy timeline (journey_instance) ---
     - name: fact_lifecycle_interval

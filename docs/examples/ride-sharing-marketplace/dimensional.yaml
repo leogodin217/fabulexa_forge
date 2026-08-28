@@ -12,8 +12,8 @@
 #
 #   SPLIT    actor -> dim_rider + dim_driver. `sub_type_columns.actor` partitions
 #            into rider (23 columns) and driver (20), sharing only identity,
-#            status, zone, loyalty_band and basic contact. Measured 2,552 riders
-#            and 1,987 drivers. One conformed actor dim would be NULL for the
+#            status, zone, loyalty_band and basic contact. Measured 2,533 riders
+#            and 2,048 drivers. One conformed actor dim would be NULL for the
 #            other side's columns on every row.
 #   DIM      ...and both sides are DIMENSIONS, not facts. `record_roles` declares
 #            actor `{driver: fact, rider: fact}` — that is the simulation's
@@ -31,47 +31,72 @@
 #            An SCD-2 dim versions on every tracked change the RECORD makes, not
 #            merely on the columns the table happens to project — so it cannot be
 #            narrowed by leaving churny columns out. Measured directly: SCD-2 over
-#            these agents yields 20,801 rows for 2,552 riders (8.2 versions each)
-#            and 11,964 for 1,987 drivers, and removing `ride_count` /
-#            `session_earnings` from the projection changes neither number. The
-#            versions are driven by `status` (29,623 changes) and `zone` (7,642) —
-#            operational state, exactly the NHS `resource.allocated` judgment.
+#            these agents yields 20,643 versions for 2,533 riders (8.1 each) and
+#            12,105 for 2,048 drivers, and removing the running counters from the
+#            projection changes neither number. The versions are driven by
+#            `status` (29,642 history rows) and `zone` (7,691) — operational
+#            state, exactly the NHS `resource.allocated` judgment.
 #            So the agents are Type-1 reference data and their timelines become
 #            facts: lifecycle state in fact_journey_state, tier movement in
 #            fact_loyalty_band. Nothing is lost — every version still exists, at
 #            the grain where it belongs.
+#   KEYS     actor and entity elect `record_index`. The engine's `record_id` for
+#            actor is a 64-hex content hash — simulator identity, not anything an
+#            operator's database would key riders on — and the registry's
+#            presentation keys for rider and driver are bare prefixless counters,
+#            union-unsafe with each other (both count 1,2,3...), so
+#            `presentation_id` cannot serve either a combined edge or a uniform
+#            election. `record_index` gives every agent and zone a compact
+#            integer key; the dims key on it and every FK edge inherits it. The
+#            bare-counter presentation columns (rider_code / driver_code /
+#            zone_code) are dropped outright — a second integer spelling of the
+#            same identity, carrying no domain information beside the elected key.
+#   HYGIENE  Dropped from the star: the zone selection weights (origin_weight /
+#            dest_weight / base_weight — the generator's draw weights, not zone
+#            attributes; measured origin_weight == base_weight on all 3 zones),
+#            rider `propensity` and driver `strategy` (the generator's behavior
+#            classes steering loyalty accrual and dispatch acceptance — simulation
+#            machinery, invisible to an operator), and rider `home_subdivision`
+#            (measured equal to `home_state` on all 2,533 riders; the survivor
+#            keeps the domain name home_state). The raw `*_ns` sim-epoch twins
+#            are gone too: every instant renders once, as a TIMESTAMP via the
+#            anchor, and the interval facts key on `entered_at` — measured zero
+#            journeys or agents with two state changes in the same microsecond,
+#            so the truncation from nanoseconds costs no key uniqueness.
 #   FACT     actor.loyalty_band -> fact_loyalty_band, history_interval grain. The
 #            loyalty ladder is the churn story the atlas is built around ("bad
 #            service drives churn"), and at interval grain each row is one tenure
-#            in one band, with entered/exited. Measured 1,997 band changes beyond
-#            genesis across 4,539 agents.
-#            `ride_count` (riders, measured range 0..14) and `session_earnings`
-#            (drivers, 0..16) stay out of the star entirely: they are running
-#            counters advancing once per completed trip (3,089 changes each) —
+#            in one band, with entered/exited. Measured 1,940 band changes beyond
+#            genesis across 4,581 agents.
+#            `ride_count` (riders, measured range 0..17) and `session_rides`
+#            (drivers, 0..9) stay out of the star entirely: they are running
+#            counters advancing once per completed trip (3,118 changes each) —
 #            measures recoverable by counting facts, not descriptive attributes.
 #   FACT     journey_instance -> fact_journey_state, NOT a dimension. Measured:
-#            8,569 journeys against 53,268 `current_state` history rows — 6.2
+#            8,574 journeys against 53,253 `current_state` history rows — 6.2
 #            versions each. Its only tracked property is a state-machine position,
 #            so its value is the timeline. This is where the market's emergent
 #            quantities live — measured off this fact: rider wait is time in
-#            `waiting` (2,180 occupancies, mean 612s), idle supply is driver time
-#            in `available` (8,220, mean 1,325s), dispatch hesitation is
-#            `reviewing` (4,969 — exactly one per match, mean 10s), and churn is
-#            arrival in `lapsed` (3,491).
+#            `waiting` (2,147 occupancies, mean 594s), idle supply is driver time
+#            in `available` (8,302, mean 1,245s), dispatch hesitation is
+#            `reviewing` (4,963 — exactly one per match, mean 10s), and churn is
+#            arrival in `lapsed` (3,408).
 #            NOTE the atlas documents a rider `seeking` state, but this run never
 #            enters it: the 14 state values actually present are requesting,
 #            waiting, enroute, arrived, on_trip, tally, idle, penalty, lapsed and
 #            the five driver states. Read the data, not only the atlas.
 #   ONE      fact_journey_state is ONE table, not one per side. The two journeys
-#            have disjoint state vocabularies (measured: 1,987 driver_journey and
-#            6,582 rider_journey rows) but an identical shape — id, state, entered,
+#            have disjoint state vocabularies (measured: 2,048 driver_journey and
+#            6,526 rider_journey rows) but an identical shape — id, state, entered,
 #            exited — so conforming them costs no NULL columns. `journey_type`
 #            rides on the fact to separate them, and `filter` is records-only so it
-#            could not split them at this grain anyway. Its `actor_id` is a rider
-#            on rider_journey rows and a driver on driver_journey rows; join the
-#            side you filtered to.
+#            could not split them at this grain anyway. Its agent identity is the
+#            rider_id / driver_id FK pair over the journey's `prop__actor` edge:
+#            each edge resolves only inside its own dim's population, so exactly
+#            one of the pair is set per row — filter by journey_type (or by which
+#            FK is non-NULL) and join that side's dim.
 #   FACT     pairing -> fact_pairing, the rider<->driver match — the distinctive
-#            join of this marketplace. Measured 4,969 matches; every one has a
+#            join of this marketplace. Measured 4,963 matches; every one has a
 #            rider as `requester` and a driver as `counterpart`, so both FKs are
 #            safe and neither dangles.
 #   DIM->T1  entity -> dim_zone, Type-1. init proposed SCD-2 because
@@ -89,17 +114,28 @@
 # `rebase:` block is needed. A records grain accepts three structural instant
 # sources — `created_sim_time`, `deactivated_at` and `last_mutation_sim_time` — so
 # fact_pairing carries both the instant a match opened and the instant it closed,
-# and their difference is match duration. Measured: 4,968 of 4,969 matches are
-# closed at tape's end; 1 is still open, so its `closed_at` is NULL.
+# and their difference is match duration. Measured: all 4,963 matches are closed
+# at tape's end, so `closed_at` is never NULL in this emit.
 #
 # Because the agent dims are Type-1, joining a fact to them is a plain equi-join
 # on the agent key — no point-in-time predicate needed. Where an analyst wants the
 # tier an agent held AT the moment of a match, that is the interval fact:
-#   JOIN fact_loyalty_band b ON b.actor_id = f.rider_id
+#   JOIN fact_loyalty_band b ON b.rider_id = f.rider_id
 #                           AND f.matched_at >= b.entered_at
 #                           AND (b.exited_at IS NULL OR f.matched_at < b.exited_at)
+#
+# ELECTED: dim_rider.date_of_birth / dim_driver.date_of_birth are plain VARCHAR
+# properties, not derived timestamps — minted upstream as date strings, never
+# touching sim_time or the anchor. Verified clean `%Y-%m-%d` values for both
+# populations, so each is declared via `date_parse` and reinterpreted as a real
+# DATE. Both dims are Type-1, so the election is the plain records-grain case;
+# retail's dim_customer applies the same election on a `scd: type2` table.
 
 mode: dimensional
+
+keys:
+  actor: record_index
+  entity: record_index
 
 dimensional:
   tables:
@@ -112,14 +148,8 @@ dimensional:
         kind: entity
       key: [zone_id]
       columns:
-        - {name: zone_id, from: record_id}
-        - {name: zone_code, from: presentation_id}
+        - {name: zone_id, from: record_index}
         - {name: zone_name, from: prop__name}
-        # selection weights: where riders originate, where trips end, where
-        # drivers are based
-        - {name: origin_weight, from: prop__origin_weight}
-        - {name: dest_weight, from: prop__dest_weight}
-        - {name: base_weight, from: prop__base_weight}
         - {name: place_city, from: prop__place_city}
         - {name: place_subdivision, from: prop__place_subdivision}
         - {name: place_postal_code, from: prop__place_postal_code}
@@ -135,24 +165,21 @@ dimensional:
         filter: {prop__actor_type: rider}
       key: [rider_id]
       columns:
-        - {name: rider_id, from: record_id}
-        - {name: rider_code, from: presentation_id}
+        - {name: rider_id, from: record_index}
         - {name: account_id, from: prop__account_id}
         - {name: first_name, from: prop__first_name}
         - {name: last_name, from: prop__last_name}
         - {name: email, from: prop__email}
         - {name: phone, from: prop__phone}
-        - {name: date_of_birth, from: prop__date_of_birth}
+        - name: date_of_birth
+          derived: {date_parse: {from: prop__date_of_birth, format: "%Y-%m-%d"}}
         - {name: home_street, from: prop__home_street}
         - {name: home_state, from: prop__home_state}
         - {name: home_city, from: prop__home_place_city}
-        - {name: home_subdivision, from: prop__home_place_subdivision}
         - {name: home_postal_code, from: prop__home_place_postal_code}
         - {name: home_area_code, from: prop__home_place_area_code}
         - {name: payment_card, from: prop__payment_card}
         - {name: app_user_agent, from: prop__app_user_agent}
-        # intrinsic class steering how fast loyalty is earned
-        - {name: propensity, from: prop__propensity}
         # current tier; its history is fact_loyalty_band
         - {name: loyalty_band, from: prop__loyalty_band}
         # habitual destination zone (constant)
@@ -168,22 +195,20 @@ dimensional:
         filter: {prop__actor_type: driver}
       key: [driver_id]
       columns:
-        - {name: driver_id, from: record_id}
-        - {name: driver_code, from: presentation_id}
+        - {name: driver_id, from: record_index}
         # the operator's own driver reference, distinct from the record identity
         - {name: driver_reference, from: prop__driver_id}
         - {name: full_name, from: prop__full_name}
         - {name: first_name, from: prop__first_name}
         - {name: last_name, from: prop__last_name}
         - {name: phone, from: prop__phone}
-        - {name: date_of_birth, from: prop__date_of_birth}
+        - name: date_of_birth
+          derived: {date_parse: {from: prop__date_of_birth, format: "%Y-%m-%d"}}
         - {name: vehicle_make, from: prop__vehicle_make}
         - {name: vehicle_model, from: prop__vehicle_model}
         - {name: vehicle_year, from: prop__vehicle_year}
         - {name: vehicle_color, from: prop__vehicle_color}
         - {name: license_plate, from: prop__license_plate}
-        # intrinsic dispatch-acceptance class
-        - {name: strategy, from: prop__strategy}
         # current tier; its history is fact_loyalty_band
         - {name: loyalty_band, from: prop__loyalty_band}
         # home base zone (constant)
@@ -197,41 +222,38 @@ dimensional:
         kind: pairing
       key: [pairing_id]
       columns:
-        - {name: pairing_id, from: record_id}
+        - {name: pairing_id, from: record_index}
         # requester is always a rider, counterpart always a driver (measured
-        # across all 4,969 matches), so both edges resolve
+        # across all 4,963 matches), so both edges resolve
         - {name: rider_id, fk: {to: dim_rider, via: reference, path: [prop__requester]}}
         - {name: driver_id, fk: {to: dim_driver, via: reference, path: [prop__counterpart]}}
         - {name: match_type, from: prop__match_type}
         # opened and closed — their difference is how long the match was held
         - {name: matched_at, derived: {timestamp: {source: created_sim_time}}}
         - {name: closed_at, derived: {timestamp: {source: deactivated_at}}}
-        - {name: matched_at_ns, from: created_sim_time}
-        - {name: closed_at_ns, from: deactivated_at}
 
     # --- fact: journey state (history_interval grain) — one row per state
-    #     occupancy, both sides of the market. Rider wait = time in seeking +
-    #     waiting; idle supply = driver time in available; churn = reaching lapsed.
+    #     occupancy, both sides of the market. Rider wait = time in waiting;
+    #     idle supply = driver time in available; churn = reaching lapsed.
     - name: fact_journey_state
       role: fact
       source:
         grain: history_interval
         kind: journey_instance
         property: current_state
-      key: [journey_id, entered_ns]
+      key: [journey_id, entered_at]
       columns:
         - {name: journey_id, from: record_id}
-        # zero-hop self-lookups on type-1 properties of the journey itself.
-        # actor_id is a rider on rider_journey rows and a driver on driver_journey
-        # rows — filter by journey_type, then join the matching dim.
-        - {name: actor_id, lookup: {property: actor}}
+        # the journey's agent, rendered in its own dim's elected key: exactly one
+        # of the pair is set per row (a rider on rider_journey rows, a driver on
+        # driver_journey rows) — filter by journey_type, then join that dim.
+        - {name: rider_id, fk: {to: dim_rider, via: reference, path: [prop__actor]}}
+        - {name: driver_id, fk: {to: dim_driver, via: reference, path: [prop__actor]}}
         - {name: journey_type, lookup: {property: journey_type}}
         - {name: state, from: value}
         - {name: entered_at, derived: {timestamp: {source: sim_time}}}
         # lead_sim_time = LEAD(sim_time): NULL on the journey's last (open) state
         - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
-        - {name: entered_ns, from: sim_time}
-        - {name: exited_ns, from: lead_sim_time}
 
     # --- fact: loyalty band (history_interval grain) — one row per tenure in one
     #     tier. The churn ladder: how long an agent held a band, which band it fell
@@ -242,14 +264,16 @@ dimensional:
         grain: history_interval
         kind: actor
         property: loyalty_band
-      key: [actor_id, entered_ns]
+      key: [rider_id, driver_id, entered_at]
       columns:
-        - {name: actor_id, from: record_id}
+        # the agent itself, rendered in its own dim's elected key: the fk is the
+        # zero-hop self edge, resolving only inside each dim's population, so
+        # exactly one of the pair is set per row
+        - {name: rider_id, fk: {to: dim_rider, via: reference}}
+        - {name: driver_id, fk: {to: dim_driver, via: reference}}
         # rider or driver — join the matching dim
         - {name: actor_type, lookup: {property: actor_type}}
         - {name: loyalty_band, from: value}
         - {name: entered_at, derived: {timestamp: {source: sim_time}}}
         # NULL on the agent's current (open) band
         - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
-        - {name: entered_ns, from: sim_time}
-        - {name: exited_ns, from: lead_sim_time}

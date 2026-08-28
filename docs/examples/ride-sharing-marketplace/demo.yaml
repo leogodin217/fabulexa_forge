@@ -4,21 +4,22 @@
 # by `fabulexa-forge`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
 # See dev/demo/README.md.
 #
-# The joins reference TOPIC names produced by stream.yaml's routing (driver, rider,
-# zone_market, pairing), not kinds. Both are contract-true fact->dimension edges:
-#   driver/rider -> zone_market : actor.prop__zone references the zone-market entity.
-#   pairing -> driver/rider     : the match fact references both sides of the market.
-# Mute `zone_market` to stall the surge joins; mute `driver` to stall match joins.
+# The joins reference TOPIC names declared by stream.yaml (driver, rider, zone,
+# match — source.yaml's table names), not kinds. Both are contract-true
+# fact->dimension edges:
+#   driver/rider -> zone   : actor.prop__zone references the zone-market entity.
+#   match -> driver/rider  : the match fact references both sides of the market.
+# Mute `zone` to stall the surge joins; mute `driver` to stall match joins.
 
 windows:
   - 3600000                 # 1h tumbling — ~720 firings over the 30-day span
 joins:
   - fact: driver
-    dim: zone_market
+    dim: zone
   - fact: rider
-    dim: zone_market
-  - fact: pairing
+    dim: zone
+  - fact: match
     dim: driver
-  - fact: pairing
+  - fact: match
     dim: rider
 consumer_offset: earliest

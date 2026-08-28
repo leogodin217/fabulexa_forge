@@ -218,7 +218,13 @@ def test_utc_identity_anchor_same_values(tmp_path: Path) -> None:
         sidecar_runtime = emit.sidecar.runtime()
         anchor = resolve_effective_anchor(sidecar_runtime, None, None, None)
         export_dimensional(
-            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     timestamps = _query_timestamps(out_path, "dim_entity", "ts")
@@ -257,7 +263,13 @@ def test_dst_zone_renders_correct_offset(tmp_path: Path) -> None:
         sidecar_runtime = emit.sidecar.runtime()
         anchor = resolve_effective_anchor(sidecar_runtime, None, None, None)
         export_dimensional(
-            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     valid_froms = _query_timestamps(out_path, "dim_actor", "valid_from")
@@ -298,6 +310,7 @@ def test_rebase_origin_shift_moves_all_timestamps(tmp_path: Path) -> None:
             "duckdb",
             anchor_original,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     # Rebased: 7 days later (still UTC)
@@ -314,6 +327,7 @@ def test_rebase_origin_shift_moves_all_timestamps(tmp_path: Path) -> None:
             "duckdb",
             anchor_rebased,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     ts_original = _query_timestamps(out_original, "dim_entity", "ts")
@@ -384,7 +398,13 @@ def test_rezone_same_instant_different_wall_clock(tmp_path: Path) -> None:
         sidecar_runtime = emit.sidecar.runtime()
         anchor_utc = resolve_effective_anchor(sidecar_runtime, None, None, None)
         export_dimensional(
-            emit, config, out_utc, "duckdb", anchor_utc, notice_sink=discard_notice_sink
+            emit,
+            config,
+            out_utc,
+            "duckdb",
+            anchor_utc,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     # Re-zone to America/New_York (no base_date override)
@@ -394,7 +414,13 @@ def test_rezone_same_instant_different_wall_clock(tmp_path: Path) -> None:
             sidecar_runtime, None, None, "America/New_York"
         )
         export_dimensional(
-            emit, config, out_ny, "duckdb", anchor_ny, notice_sink=discard_notice_sink
+            emit,
+            config,
+            out_ny,
+            "duckdb",
+            anchor_ny,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     ts_utc = _query_timestamps(out_utc, "dim_entity", "ts")
@@ -428,7 +454,7 @@ def test_rezone_same_instant_different_wall_clock(tmp_path: Path) -> None:
 def test_scd_window_rebases_same_as_timestamp(tmp_path: Path) -> None:
     """scd_window valid_from / valid_to rebase identically to derived: timestamp.
 
-    Both use render_anchor_timestamp_expr under the hood, so the same anchor
+    Both use render_anchor_temporal_expr under the hood, so the same anchor
     applied to version_start/version_end must shift by the same delta.
     """
     runtime_block = {"timezone": "UTC", "start_datetime": "2024-01-01T00:00:00+00:00"}
@@ -450,6 +476,7 @@ def test_scd_window_rebases_same_as_timestamp(tmp_path: Path) -> None:
             "duckdb",
             anchor,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     # Rebased 30 days later
@@ -466,6 +493,7 @@ def test_scd_window_rebases_same_as_timestamp(tmp_path: Path) -> None:
             "duckdb",
             anchor_rebased,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     vf_identity = _query_timestamps(out_identity, "dim_actor", "valid_from")
@@ -556,7 +584,13 @@ def test_no_anchor_yields_raw_integers(tmp_path: Path) -> None:
         anchor = resolve_effective_anchor(sidecar_runtime, None, None, None)
         assert anchor is None  # no runtime, no rebase → no anchor
         export_dimensional(
-            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     conn = duckdb.connect(str(out_path), read_only=True)

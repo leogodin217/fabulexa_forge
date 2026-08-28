@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
+from fabulexa_forge.config.models import scd_window_bound
 from fabulexa_forge.derivations.versioned_intervals import (
     build_versioned_intervals_sql,
 )
@@ -683,7 +684,8 @@ def build_grain_sql(
     # SCD-2 dim
     if table_decl.scd == "type2":
         has_valid_to = any(
-            col.derived is not None and col.derived.scd_window == "valid_to"
+            col.derived is not None
+            and scd_window_bound(col.derived.scd_window) == "valid_to"
             for col in table_decl.columns
         )
 

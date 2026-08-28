@@ -53,8 +53,23 @@
 # whatever units the scenario wrote them. Add a `rebase:` block (see source.yaml)
 # only to override the origin instant or timezone; an emit with NO sidecar anchor
 # and no `rebase:` is the case where lifecycle columns stay raw BIGINT ns.
+#
+# ELECTED: actor.prop__birth_date is a plain upstream-minted date string
+# (verified all 11,468 values match `%Y-%m-%d`, no NULLs) — declared via
+# `date_parse` and reinterpreted as a real DATE.
 
 mode: base
+
+base:
+  render:
+    - table: records__actor
+      render:
+        prop__birth_date: {date_parse: "%Y-%m-%d"}
+    # context.discount_pct rounded in place to 4dp (raw float64 noise
+    # otherwise); every other payload byte verbatim.
+    - table: records__tick_decision
+      render:
+        prop__context: {json_precision: {discount_pct: 4}}
 
 # Uniform shorthand: every declared sub-type of the kind elects the surface.
 keys:

@@ -25,18 +25,12 @@ here; non-exempt `slice_only` columns are never proposed and each gets one
 (underscore-bearing identifiers) emit the later proposal commented, with a
 collision note — the emitted config always parses and plans clean.
 
-The `keys:` proposal shares the key-election `init` contract's natural rule
-(`exporters.keys_init`: declared population -> presentation_id, undeclared
--> record_index) with dimensional's engine, self-gated through
-`exporters.keys_init.self_gate_edge_safety` before a line is written. Every
-proposed `state` table is single-population (one sub-type, or a flat kind's
-whole domain), so — exactly like dimensional's always-single-population dim
-stubs — `check_edge_union_safety` over the reference graph is the only gate
-needed; `check_identity_election` (which gates a table spanning more than one
-population) never applies to a proposal that never combines populations. It
-still runs at real export time, in `source/plan.py`, over an
-author-edited config that reintroduces a combined table — `init`'s proposal
-just never needs to protect against its own output triggering it.
+The `keys:` proposal shares the key-election `init` contract's cross-mode
+menu (`exporters.keys_init.propose_key_election` / `render_keys_block`) with
+dimensional and streaming's engines: uniform `record_index` active for every
+population, with each population's resolvable alternatives (`record_id`
+always, `presentation_id` where the registry declares the population)
+offered as swap-not-join comments.
 """
 
 from __future__ import annotations
@@ -46,12 +40,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 from fabulexa_forge.errors import SourceHistoryTrackedRequired
-from fabulexa_forge.exporters.keys_init import (
-    domains_for_kinds,
-    natural_expanded_surfaces,
-    self_gate_edge_safety,
-    write_keys_block,
-)
+from fabulexa_forge.exporters.keys_init import propose_key_election, render_keys_block
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
 
@@ -96,29 +85,6 @@ class _JunctionUnit:
     sub_type: str | None
     """The owner sub-type this stub addresses, or None for a flat owner /
     whole junction."""
-
-
-# ---------------------------------------------------------------------------
-# Sidecar-driven kind/unit enumeration
-# ---------------------------------------------------------------------------
-
-
-def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
-    """Every kind with a declared `records__<kind>` table, sidecar table order.
-
-    Args:
-        sidecar: The open emit's sidecar.
-
-    Returns:
-        Record kinds, in sidecar table-declaration order.
-    """
-    kinds: list[str] = []
-    for table in sidecar.tables():
-        if table.category == "records":
-            kind = table.record_kind
-            assert kind is not None, "records table must declare record_kind"
-            kinds.append(kind)
-    return tuple(kinds)
 
 
 def _proposed_units(sidecar: "Sidecar") -> "tuple[_StateUnit | _JunctionUnit, ...]":
@@ -469,14 +435,8 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
         A YAML string with candidate config and inline comments.
     """
     sidecar = emit.sidecar
-    all_tables = sidecar.tables()
-    known_kinds = _known_records_kinds(sidecar)
-    domains = domains_for_kinds(sidecar, known_kinds)
-    presentation_keys = sidecar.presentation_keys()
-    expanded = natural_expanded_surfaces(presentation_keys, domains)
-    keys_config, degraded = self_gate_edge_safety(
-        sidecar, all_tables, domains, expanded
-    )
+    known_kinds = sidecar.record_kinds()
+    proposal = propose_key_election(sidecar)
 
     buf = io.StringIO()
 
@@ -492,7 +452,8 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     w("")
     w("mode: source")
     w("")
-    write_keys_block(w, keys_config, degraded)
+    for line in render_keys_block(proposal):
+        w(line)
     w("source:")
     _write_tables_block(w, sidecar, notice_sink)
     _write_events_block(w, sidecar, known_kinds)

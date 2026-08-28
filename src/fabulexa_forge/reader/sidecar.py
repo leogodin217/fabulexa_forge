@@ -1415,6 +1415,25 @@ class Sidecar:
                 return t
         raise TableNotFoundError(f"no table named '{name}' in sidecar")
 
+    def record_kinds(self) -> tuple[str, ...]:
+        """Every kind with a declared `records__<kind>` table, sidecar table order.
+
+        The shared sidecar-scan every exporter layer (dimensional, source,
+        streaming) consults for the closed universe of record kinds — reads
+        the structured `TableSpec.category` / `record_kind` fields, never the
+        table name.
+
+        Returns:
+            Record kinds, in sidecar table-declaration order.
+        """
+        kinds: list[str] = []
+        for table in self._tables:
+            if table.category == "records":
+                kind = table.record_kind
+                assert kind is not None, "records table must declare record_kind"
+                kinds.append(kind)
+        return tuple(kinds)
+
     def columns(self, table_name: str) -> tuple[ColumnSpec, ...]:
         """Columns of `table_name` in catalog order.
 

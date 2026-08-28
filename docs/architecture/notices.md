@@ -20,7 +20,10 @@ tests in [`tests/exporters/test_notices.py`](../../tests/exporters/test_notices.
 - Every entry point that can emit a notice takes a **required** `notice_sink`
   parameter — no default (Principle #7 applied to an output channel). A caller
   that wants silence passes a discarding sink; the library never chooses silence
-  for it. Streaming entry points carry no sink: the mode emits no notices.
+  for it. The rule is total across the package: the streaming engine
+  (`iter_stream_events`) and the mixer's `seed_mixer_run` carry the same required
+  parameter, and every consumer threads it — the CLI verbs pass the stderr
+  renderer.
 
 ## Semantics
 
@@ -39,7 +42,7 @@ tests in [`tests/exporters/test_notices.py`](../../tests/exporters/test_notices.
 | `code` | Emitted by | Meaning |
 |---|---|---|
 | `slice-only-column-omitted` | source plan (per unit × column), base plan (per kind × column), `init` (per kind × column) | A `slice_only` column was dropped from an auto-projected surface (see [`slice-only.md`](slice-only.md)) |
-| `discriminator-value-unobserved` | dimensional validation (per unobserved predicate element) | A records `filter` element is not among the kind's observed `enum_domains` values. The message states the table will be empty when no element was observed; when a list's other elements were observed, it states only that this element contributes no rows (see [`dimensional.md`](dimensional.md) § Validation Rules) |
+| `discriminator-value-unobserved` | dimensional validation, the source plan, and the streaming eager pass (each per unobserved predicate element) | A predicate element is not among the column's observed `enum_domains` values — a records `filter` element in dimensional, a `where` element in source and streaming. The message states the output will be empty when no element of the entry was observed; when the entry's other elements were observed, it states only that this element contributes no rows or events. Dimensional renders its own message; source and streaming share the two-case structure and supply their own nouns ([`selection-spine.md`](selection-spine.md)) |
 | `reference-key-target-absent` | base plan (per kind × property) | A reference property's target kind has no records table in the emit, so no index-space key column is produced for that edge; the id-space column is unaffected (see [`base.md`](base.md) § Record-index key columns) |
 | `keys-not-declarable-csv` | base / source full-export entry path, each incremental driver invocation (once per invocation, before data) | `declare_keys` met a resolved `csv` format: the data is identical and the key declaration undeliverable — CSV carries no constraint surface (see [`declared-keys.md`](declared-keys.md)) |
 
@@ -70,7 +73,9 @@ tests in [`tests/exporters/test_notices.py`](../../tests/exporters/test_notices.
 |---|---|
 | [`slice-only.md`](slice-only.md) | The policy whose omissions the channel reports |
 | [`dimensional.md`](dimensional.md) | Emits `discriminator-value-unobserved`; `init` emits skip notices |
-| [`source.md`](source.md) | Emits `slice-only-column-omitted` per unit × column |
+| [`source.md`](source.md) | Emits `slice-only-column-omitted` per unit × column and the per-element unobserved-value notice |
+| [`streaming.md`](streaming.md) | Emits the per-element unobserved-value notice from the eager pass; `iter_stream_events` and `seed_mixer_run` take the required sink |
+| [`selection-spine.md`](selection-spine.md) | The shared device that renders the two-case unobserved-value notice for source and streaming |
 | [`base.md`](base.md) | Emits `slice-only-column-omitted` per kind × column and `reference-key-target-absent` per kind × property |
 | [`declared-keys.md`](declared-keys.md) | The capability whose CSV posture `keys-not-declarable-csv` reports |
 | [`incremental.md`](incremental.md) | Threads the sink through windowed compiles |

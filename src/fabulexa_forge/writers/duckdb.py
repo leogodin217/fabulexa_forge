@@ -19,6 +19,7 @@ if TYPE_CHECKING:
 
 from fabulexa_forge._sql import quote_identifier
 from fabulexa_forge.errors import ExportRuntimeError
+from fabulexa_forge.writers.relation import WrittenRelation, describe_arrow_columns
 
 # Bookkeeping schema version written to _export_meta.
 _CURSOR_FORMAT_VERSION = 1
@@ -29,7 +30,7 @@ def write_duckdb(
     queries: dict[str, str],
     output_path: Path,
     keys: "Mapping[str, TableKeys]",
-) -> dict[str, int]:
+) -> dict[str, WrittenRelation]:
     """Materialize each query into a new DuckDB file, declaring keys.
 
     Unchanged Arrow materialization path. A table named in `keys` is created
@@ -46,7 +47,8 @@ def write_duckdb(
             simply absent. Names must be a subset of `queries`' names.
 
     Returns:
-        Mapping of every table name -> row count (0 for an empty table).
+        Mapping of every table name -> its written relation (0 rows for an
+        empty table).
 
     Raises:
         ExportRuntimeError: DuckDB creation or table load fails — including
@@ -68,17 +70,17 @@ def write_duckdb(
             f"failed to open output DuckDB at {output_path}: {exc}"
         ) from exc
 
-    row_counts: dict[str, int] = {}
+    written: dict[str, WrittenRelation] = {}
     try:
         for table_name, sql in queries.items():
             try:
                 table_keys = keys.get(table_name)
                 if table_keys is not None:
-                    row_counts[table_name] = _create_keyed_table_from_arrow(
+                    written[table_name] = _create_keyed_table_from_arrow(
                         out_conn, emit, table_name, sql, table_keys
                     )
                 else:
-                    row_counts[table_name] = _create_table_from_arrow(
+                    written[table_name] = _create_table_from_arrow(
                         out_conn, emit, table_name, sql
                     )
             except Exception as exc:
@@ -88,7 +90,7 @@ def write_duckdb(
     finally:
         out_conn.close()
 
-    return row_counts
+    return written
 
 
 def _ensure_bookkeeping_tables(conn: "duckdb_mod.DuckDBPyConnection") -> None:
@@ -127,30 +129,16 @@ def _create_table_from_arrow(
     emit: "Emit",
     table_name: str,
     sql: str,
-) -> int:
-    """Create *table_name* from the Arrow result of *sql* on *emit*.
-
-    Returns the number of rows written.
-    """
+) -> WrittenRelation:
+    """Create *table_name* from the Arrow result of *sql* on *emit*."""
     arrow_table = emit.query_arrow(sql, ())
     conn.register("_arrow_src", arrow_table)
     conn.execute(
         f"CREATE TABLE {quote_identifier(table_name)} AS SELECT * FROM _arrow_src"
     )
+    columns = describe_arrow_columns(conn, "_arrow_src")
     conn.unregister("_arrow_src")
-    return int(arrow_table.num_rows)
-
-
-def _describe_arrow_columns(
-    conn: "duckdb_mod.DuckDBPyConnection", registered_name: str
-) -> list[tuple[str, str]]:
-    """Return (column_name, duckdb_type) pairs for a registered Arrow relation.
-
-    Reads DuckDB's own `DESCRIBE` output — the type strings are DuckDB's,
-    never re-derived from the Arrow schema by hand.
-    """
-    rows = conn.execute(f"DESCRIBE {quote_identifier(registered_name)}").fetchall()
-    return [(str(row[0]), str(row[1])) for row in rows]
+    return WrittenRelation(row_count=int(arrow_table.num_rows), columns=columns)
 
 
 def _quoted_column_list(columns: tuple[str, ...]) -> str:
@@ -171,17 +159,16 @@ def _create_keyed_table_from_arrow(
     table_name: str,
     sql: str,
     keys: "TableKeys",
-) -> int:
+) -> WrittenRelation:
     """Create *table_name* with explicit column DDL plus declared constraints.
 
     Column names/types are transcribed from the Arrow result's DuckDB
-    schema; the row data is then loaded by insert. Returns the number of
-    rows loaded.
+    schema; the row data is then loaded by insert.
     """
     arrow_table = emit.query_arrow(sql, ())
     conn.register("_arrow_src", arrow_table)
     try:
-        columns = _describe_arrow_columns(conn, "_arrow_src")
+        columns = describe_arrow_columns(conn, "_arrow_src")
         column_defs = [
             f"{quote_identifier(name)} {column_type}" for name, column_type in columns
         ]
@@ -192,7 +179,7 @@ def _create_keyed_table_from_arrow(
         )
     finally:
         conn.unregister("_arrow_src")
-    return int(arrow_table.num_rows)
+    return WrittenRelation(row_count=int(arrow_table.num_rows), columns=columns)
 
 
 def _append_rows_from_arrow(
@@ -200,16 +187,14 @@ def _append_rows_from_arrow(
     emit: "Emit",
     table_name: str,
     sql: str,
-) -> int:
-    """Append rows from the Arrow result of *sql* into existing *table_name*.
-
-    Returns the number of rows appended.
-    """
+) -> WrittenRelation:
+    """Append rows from the Arrow result of *sql* into existing *table_name*."""
     arrow_table = emit.query_arrow(sql, ())
     conn.register("_arrow_src", arrow_table)
     conn.execute(f"INSERT INTO {quote_identifier(table_name)} SELECT * FROM _arrow_src")
+    columns = describe_arrow_columns(conn, "_arrow_src")
     conn.unregister("_arrow_src")
-    return int(arrow_table.num_rows)
+    return WrittenRelation(row_count=int(arrow_table.num_rows), columns=columns)
 
 
 def _replace_table_from_arrow(
@@ -217,28 +202,29 @@ def _replace_table_from_arrow(
     emit: "Emit",
     table_name: str,
     sql: str,
-) -> int:
+) -> WrittenRelation:
     """Replace *table_name* contents with the Arrow result of *sql* on *emit*.
 
-    The table must already exist (created on the first window). Returns the
-    number of rows in the replacement snapshot.
+    The table must already exist (created on the first window).
     """
     arrow_table = emit.query_arrow(sql, ())
     conn.register("_arrow_src", arrow_table)
     conn.execute(f"DELETE FROM {quote_identifier(table_name)}")
     conn.execute(f"INSERT INTO {quote_identifier(table_name)} SELECT * FROM _arrow_src")
+    columns = describe_arrow_columns(conn, "_arrow_src")
     conn.unregister("_arrow_src")
-    return int(arrow_table.num_rows)
+    return WrittenRelation(row_count=int(arrow_table.num_rows), columns=columns)
 
 
 def _apply_spec(
     conn: "duckdb_mod.DuckDBPyConnection",
     emit: "Emit",
     spec: "QuerySpec",
-) -> int:
+) -> WrittenRelation:
     """Apply one QuerySpec to the warehouse connection within the active transaction.
 
-    Returns rows written this window (for 'replace', the full snapshot count).
+    The written relation's row_count is rows written this window (for
+    'replace', the full snapshot count).
     """
     exists = _table_exists(conn, spec.table_name)
 
@@ -269,7 +255,7 @@ def write_duckdb_window(
     output_path: Path,
     window: "Window",
     fingerprint: str | None,
-) -> dict[str, int]:
+) -> dict[str, WrittenRelation]:
     """Apply one window to the warehouse file in a single transaction.
 
     Create-if-missing: a fresh file gets each table created per its spec,
@@ -295,7 +281,8 @@ def write_duckdb_window(
             bookkeeping tables are written.
 
     Returns:
-        Mapping of every table name -> rows written this window.
+        Mapping of every spec's physical table_name -> its written relation
+        (rows written this window, and its column types).
 
     Raises:
         ExportRuntimeError: Connection, write, or commit failure (after
@@ -310,7 +297,7 @@ def write_duckdb_window(
             f"failed to open warehouse DuckDB at {output_path}: {exc}"
         ) from exc
 
-    row_counts: dict[str, int] = {}
+    written_relations: dict[str, WrittenRelation] = {}
     try:
         conn.begin()
         try:
@@ -324,8 +311,7 @@ def write_duckdb_window(
                     )
 
             for spec in specs:
-                rows = _apply_spec(conn, emit, spec)
-                row_counts[spec.table_name] = rows
+                written_relations[spec.table_name] = _apply_spec(conn, emit, spec)
                 if spec.view_name is not None and spec.view_sql is not None:
                     _install_view(conn, spec.view_name, spec.view_sql)
 
@@ -350,4 +336,4 @@ def write_duckdb_window(
     finally:
         conn.close()
 
-    return row_counts
+    return written_relations

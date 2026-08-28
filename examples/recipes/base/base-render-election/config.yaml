@@ -1,0 +1,33 @@
+# Recipe: base-render-election
+# ============================================================
+# `base: {render: [...]}` elects the rendering of a lifecycle-instant
+# column and declares a payload VARCHAR column a date string, per table —
+# the base mode's mirror of `rename`'s per-table structure, keyed on the
+# same pre-default column identities.
+#
+# `table` is sidecar identity (`records__<kind>`), same as `rename`.
+# The per-table `render` map elects both lifecycle-instant renderings
+# (source identities, e.g. `created_sim_time`, keyed to a bare temporal
+# literal) and payload `prop__<p>` parses (keyed to a `date_parse: <fmt>`
+# election) in one unified map. Both re-render the projected column in
+# place — output naming still follows base's usual prefix-stripped
+# defaults, unaffected by the election.
+#
+# Fixture world (recipe emit):
+#   records__patient — created_sim_time (1*DAY for p001, 2*DAY for p002);
+#                      prop__dob (non-tracked ISO date string, minted
+#                      upstream): p001 "1990-05-14", p002 "1985-11-02"
+#
+# Output: identical to base-current-state, except patient's
+#   created_sim_time is DATE (not TIMESTAMP) and prop__dob is DATE
+#   (not VARCHAR text).
+
+mode: base
+
+base:
+  render:
+    - table: records__patient
+      render:
+        created_sim_time: date
+        prop__dob:
+          date_parse: "%Y-%m-%d"

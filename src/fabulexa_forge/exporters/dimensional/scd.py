@@ -15,9 +15,18 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from fabulexa_forge.anchor import render_anchor_timestamp_expr
+from fabulexa_forge.anchor import render_anchor_temporal_expr
+from fabulexa_forge.config.models import scd_window_bound, scd_window_render
 from fabulexa_forge.derivations.versioned_intervals import (
     build_versioned_intervals_sql,
+)
+from fabulexa_forge.exporters.dimensional.columns import (
+    build_date_parse_expr,
+    build_decimal_expr,
+    build_json_precision_expr,
+    build_timestamp_expr,
+    build_value_map_expr,
+    resolve_source_column_type,
 )
 from fabulexa_forge.reader.relations import build_records_relation_sql
 
@@ -32,56 +41,161 @@ _VERSIONS_ALIAS = "_versions"
 _RECORDS_ALIAS = "_records"
 
 
+def _column_source_name(col_decl: "ColumnDecl") -> str | None:
+    """Resolve the single source column a ColumnDecl reads its value from.
+
+    The mapping across the source-bearing spellings the type2 build admits:
+    `from` -> col_decl.from_; `derived: decimal` -> decimal.from_;
+    `derived: json_precision` -> json_precision.from_;
+    `derived: date_parse` -> date_parse.from_;
+    `derived: value_map` -> value_map.from_;
+    `derived: timestamp` -> timestamp.source. Modes with no source column
+    (`null`, `derived: scd_window`) return None.
+
+    Callers pass only ColumnDecls the type2 mode gate
+    (Scd2ColumnModeSupported) admits; other modes are out of contract.
+
+    Args:
+        col_decl: The output column declaration.
+
+    Returns:
+        The source column name as declared (e.g. "prop__status",
+        "sim_time_created", "presentation_id"), or None when the mode reads
+        no source column.
+    """
+    if col_decl.derived is None:
+        return col_decl.from_
+    derived = col_decl.derived
+    if derived.decimal is not None:
+        return derived.decimal.from_
+    if derived.json_precision is not None:
+        return derived.json_precision.from_
+    if derived.date_parse is not None:
+        return derived.date_parse.from_
+    if derived.value_map is not None:
+        return derived.value_map.from_
+    if derived.timestamp is not None:
+        return derived.timestamp.source
+    return None
+
+
 def build_scd2_column_expr_flag(
     col_decl: "ColumnDecl",
     version_alias: str,
     records_alias: str,
-    is_tracked: bool,
+    tracked_props: frozenset[str],
     anchor: "EffectiveAnchor | None",
-    source_col_type: str = "VARCHAR",
+    sidecar: "Sidecar",
+    source_table_name: str,
+    table_label: str,
 ) -> str:
-    """Build a SQL expression for one SCD-2 column from the derivation.
+    """Build a SQL expression for one SCD-2 column.
 
-    Tracked columns project directly from the derivation's pre-computed prop__<p>
-    column (cast to the source column's DuckDB type). Static columns project from
-    the reader records relation. scd_window columns come from the version bounds.
-    null columns are typed NULL.
+    Resolves the column's source column (_column_source_name) and its class:
+    a source named `prop__<p>` with `<p>` in tracked_props is tracked and
+    reads per version from version_alias; every other source (constant
+    prop__, structural, projection-introduced, exempt discriminator) reads
+    per record from records_alias. Structural sources are never tracked —
+    they never carry the prop__ prefix.
+
+    Compilation per mode:
+    - `derived: scd_window` renders the version bounds
+      (version_start / version_end) through render_anchor_temporal_expr.
+    - `null` emits a typed NULL.
+    - A pure per-row value rendering (`derived: timestamp` / `date_parse` /
+      `value_map` / `decimal` / `json_precision`) compiles through the same
+      per-column builder every records-grain column uses
+      (build_timestamp_expr / build_date_parse_expr / build_value_map_expr /
+      build_decimal_expr / build_json_precision_expr), handed a source
+      expression per the source class: tracked ->
+      CAST("<version_alias>"."prop__<p>" AS <sidecar declared type>) — the
+      derivation serves tracked values as codec VARCHAR; the cast is the
+      same representation step the tracked `from` path performs — untracked
+      -> "<records_alias>"."<src>". The rendered SQL for an untracked
+      source is byte-identical to the records grain's modulo alias; for the
+      same source value the rendered output is byte-identical across source
+      classes (source-class-blind rendering). value_map's WHEN-predicate
+      literal typing uses the source's sidecar declared type for both
+      classes — matching the tracked cast.
+    - `from` projects the tracked cast or the records-relation column.
+
+    No election reads or renumbers version rows: version bounds come from
+    version_alias regardless of any value election on the table
+    (version structure is election-invariant).
 
     Args:
-        col_decl: The output column declaration.
-        version_alias: The alias of the versioned-intervals derivation subquery.
-        records_alias: The alias of the reader records-relation subquery.
-        is_tracked: Whether this column is history-tracked.
+        col_decl: The output column declaration (a type2-admitted mode).
+        version_alias: Alias of the versioned-intervals derivation subquery.
+        records_alias: Alias of the records-relation subquery.
+        tracked_props: History-tracked property names (without the prop__
+            prefix), from _collect_tracked_props.
         anchor: The resolved EffectiveAnchor, or None.
-        source_col_type: DuckDB type of the source column (for CAST in tracked path).
-            Defaults to VARCHAR (no-op cast for VARCHAR columns).
+        sidecar: The emit's typed sidecar, for source-column declared-type
+            reads (tracked-path casts, value_map literal typing).
+        source_table_name: The dim's source records table, for sidecar
+            column reads.
+        table_label: The output table name for renderer error messages.
 
     Returns:
         A SQL expression fragment: `<expr> AS "<col_name>"`.
+
+    Raises:
+        ExportError: source_table_name is not found in the sidecar
+            (resolve_source_column_type, on paths that read a declared
+            type).
     """
     if col_decl.derived is not None and col_decl.derived.scd_window is not None:
-        bound = col_decl.derived.scd_window  # "valid_from" or "valid_to"
+        bound = scd_window_bound(col_decl.derived.scd_window)
+        render = scd_window_render(col_decl.derived.scd_window)
         col_name = "version_start" if bound == "valid_from" else "version_end"
         qualified_source = f'"{version_alias}"."{col_name}"'
-        return render_anchor_timestamp_expr(anchor, qualified_source, col_decl.name)
+        return render_anchor_temporal_expr(
+            anchor, qualified_source, col_decl.name, render
+        )
 
     if col_decl.null is not None:
         return f'CAST(NULL AS VARCHAR) AS "{col_decl.name}"'
 
-    if col_decl.from_ is None:
-        return f'NULL AS "{col_decl.name}"'
+    src = _column_source_name(col_decl)
+    assert src is not None, f"column '{col_decl.name}': no source column resolved"
+
+    is_value_map = (
+        col_decl.derived is not None and col_decl.derived.value_map is not None
+    )
+    is_tracked = src.startswith("prop__") and src[len("prop__") :] in tracked_props
 
     if is_tracked:
-        # Project the pre-computed prop__<p> value from the derivation.
-        prop_col = col_decl.from_  # e.g. "prop__status"
-        return (
-            f'CAST("{version_alias}"."{prop_col}"'
-            f" AS {source_col_type})"
-            f' AS "{col_decl.name}"'
+        source_col_type = resolve_source_column_type(
+            sidecar, source_table_name, src, f"tracked column '{col_decl.name}'"
+        )
+        source_expr = f'CAST("{version_alias}"."{src}" AS {source_col_type})'
+    else:
+        source_expr = f'"{records_alias}"."{src}"'
+        source_col_type = (
+            resolve_source_column_type(
+                sidecar, source_table_name, src, f"value_map column '{col_decl.name}'"
+            )
+            if is_value_map
+            else "VARCHAR"
         )
 
-    # Static: read from the reader records relation.
-    return f'"{records_alias}"."{col_decl.from_}" AS "{col_decl.name}"'
+    if col_decl.derived is not None and col_decl.derived.timestamp is not None:
+        return build_timestamp_expr(col_decl, anchor, source_expr)
+
+    if col_decl.derived is not None and col_decl.derived.date_parse is not None:
+        return build_date_parse_expr(col_decl, source_expr, table_label)
+
+    if is_value_map:
+        return build_value_map_expr(col_decl, source_expr, source_col_type)
+
+    if col_decl.derived is not None and col_decl.derived.decimal is not None:
+        return build_decimal_expr(col_decl, source_expr, table_label)
+
+    if col_decl.derived is not None and col_decl.derived.json_precision is not None:
+        return build_json_precision_expr(col_decl, source_expr, table_label)
+
+    # `from`: the tracked cast or the records-relation column.
+    return f'{source_expr} AS "{col_decl.name}"'
 
 
 def _collect_tracked_props(
@@ -121,8 +235,12 @@ def build_scd2_sql(
     (build_records_relation_sql) for static columns. The format authors no
     base-table SQL.
 
-    Tracked columns project from the derivation's pre-computed prop__<p> columns;
-    static columns LEFT JOIN the reader records relation on record_id.
+    Tracked columns read per version from the derivation's pre-computed
+    prop__<p> columns; static columns LEFT JOIN the reader records relation
+    on record_id. Column expressions — including the pure per-row value
+    renderings, evaluated per version over tracked sources and per record
+    otherwise — compile through build_scd2_column_expr_flag, which resolves
+    each column's source class from the sidecar tracked set.
 
     Honors table_decl.source.filter: a discriminator-split source restricts both
     the derivation's version rows and the records relation to the filtered
@@ -139,6 +257,10 @@ def build_scd2_sql(
     Returns:
         A complete, deterministic SELECT statement composing the derivation and
         the reader records relation.
+
+    Raises:
+        ExportError: A column's declared-type read finds source_table_name
+            missing from the sidecar (build_scd2_column_expr_flag).
     """
     source = table_decl.source
     kind = source.kind
@@ -168,26 +290,17 @@ def build_scd2_sql(
         discriminator_filter=discriminator_filter,
     )
 
-    # Build a lookup of column name -> DuckDB type for the source table.
-    source_col_types: dict[str, str] = {
-        col_spec.name: col_spec.type for col_spec in sidecar.columns(source_table_name)
-    }
-
     col_exprs: list[str] = []
     for col_decl in table_decl.columns:
-        if col_decl.from_ is not None and col_decl.from_.startswith("prop__"):
-            prop = col_decl.from_[len("prop__") :]
-            is_tracked = prop in tracked_props
-        else:
-            is_tracked = False
-        col_type = source_col_types.get(col_decl.from_ or "", "VARCHAR")
         expr = build_scd2_column_expr_flag(
             col_decl,
             _VERSIONS_ALIAS,
             _RECORDS_ALIAS,
-            is_tracked,
+            tracked_props,
             anchor,
-            col_type,
+            sidecar,
+            source_table_name,
+            table_decl.name,
         )
         col_exprs.append(expr)
 
@@ -222,8 +335,14 @@ def build_scd2_rows_sql(
     sim-time change point). Applies a half-open window predicate on the raw
     change point.
 
-    Composes the versioned-intervals derivation for version bounds and tracked
-    prop__<p> values, and the reader records relation for static columns.
+    Composes the versioned-intervals derivation for version bounds and
+    tracked prop__<p> values, and the reader records relation for static
+    columns. Column expressions — including the pure per-row value
+    renderings, evaluated per version over tracked sources and per record
+    otherwise — compile through build_scd2_column_expr_flag, which resolves
+    each column's source class from the sidecar tracked set. The window
+    predicate and __valid_from_ns read raw version bounds, untouched by any
+    value election (version structure is election-invariant).
 
     Honors table_decl.source.filter: a discriminator-split source restricts both
     the derivation's version rows and the records relation to the filtered
@@ -241,6 +360,10 @@ def build_scd2_rows_sql(
 
     Returns:
         A complete SELECT statement for the physical __rows table.
+
+    Raises:
+        ExportError: A column's declared-type read finds source_table_name
+            missing from the sidecar (build_scd2_column_expr_flag).
     """
     source = table_decl.source
     kind = source.kind
@@ -270,29 +393,24 @@ def build_scd2_rows_sql(
         discriminator_filter=discriminator_filter,
     )
 
-    source_col_types: dict[str, str] = {
-        col_spec.name: col_spec.type for col_spec in sidecar.columns(source_table_name)
-    }
-
     col_exprs: list[str] = []
     for col_decl in table_decl.columns:
         # Skip valid_to slots — not materialized in the rows table.
-        if col_decl.derived is not None and col_decl.derived.scd_window == "valid_to":
+        if (
+            col_decl.derived is not None
+            and scd_window_bound(col_decl.derived.scd_window) == "valid_to"
+        ):
             continue
 
-        if col_decl.from_ is not None and col_decl.from_.startswith("prop__"):
-            prop = col_decl.from_[len("prop__") :]
-            is_tracked = prop in tracked_props
-        else:
-            is_tracked = False
-        col_type = source_col_types.get(col_decl.from_ or "", "VARCHAR")
         expr = build_scd2_column_expr_flag(
             col_decl,
             _VERSIONS_ALIAS,
             _RECORDS_ALIAS,
-            is_tracked,
+            tracked_props,
             anchor,
-            col_type,
+            sidecar,
+            source_table_name,
+            table_decl.name,
         )
         col_exprs.append(expr)
 
@@ -348,7 +466,7 @@ def build_scd2_view_sql(
     for col_decl in table_decl.columns:
         if col_decl.derived is not None and col_decl.derived.scd_window is not None:
             scd_window_col_names.add(col_decl.name)
-            if col_decl.derived.scd_window == "valid_from":
+            if scd_window_bound(col_decl.derived.scd_window) == "valid_from":
                 valid_from_col = col_decl.name
 
     # Identity = key minus scd_window columns
@@ -359,7 +477,10 @@ def build_scd2_view_sql(
 
     view_exprs: list[str] = []
     for col_decl in table_decl.columns:
-        if col_decl.derived is not None and col_decl.derived.scd_window == "valid_to":
+        if (
+            col_decl.derived is not None
+            and scd_window_bound(col_decl.derived.scd_window) == "valid_to"
+        ):
             # Compute valid_to as LEAD(valid_from) over identity ordered by raw ns
             assert valid_from_col is not None
             expr = (

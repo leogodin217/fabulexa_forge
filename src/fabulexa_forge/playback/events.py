@@ -106,21 +106,24 @@ def _build_record_after_image(
     row: "tuple[object, ...]",
     col_names: list[str],
     op: str,
+    identity: tuple[str, ...],
     selected_properties: tuple[str, ...],
 ) -> dict[str, str | None] | None:
-    """Build one record event's after-image, projected to selected properties.
+    """Build one record event's after-image, projected to identity + properties.
 
-    None on a 'd' event. Otherwise record_id, then presentation_id when the
-    kind carries one (identity — unaffected by the properties projection),
-    then one prop__<p> per selected property, in col_names order (the
-    kind's sidecar declaration order, since selected_properties is always a
-    subset of the full set the fold row was built from).
+    None on a 'd' event. Otherwise record_id, then presentation_id when it is
+    a published identity surface (resolve_selection guarantees it is minted
+    whenever published), then one prop__<p> per selected property, in
+    col_names order (the kind's sidecar declaration order, since
+    selected_properties is always a subset of the full set the fold row was
+    built from).
 
     Args:
         row: The fold output row.
         col_names: Column names parallel to the row tuple
             (record_fold_row_column_names' order, over the full property set).
         op: The event op ('c', 'u', or 'd').
+        identity: The resolved selection's published identity surfaces.
         selected_properties: The resolved selection's effective property set.
 
     Returns:
@@ -129,11 +132,14 @@ def _build_record_after_image(
     if op == "d":
         return None
 
+    publish_presentation_id = "presentation_id" in identity
     selected = frozenset(selected_properties)
     after: dict[str, str | None] = {"record_id": str(row[_IDX_RECORD_ID])}
     for idx in range(4, len(col_names)):
         name = col_names[idx]
         if name == "presentation_id":
+            if not publish_presentation_id:
+                continue
             value = row[idx]
             after[name] = None if value is None else str(value)
             continue
@@ -208,7 +214,7 @@ def _build_record_event_rows(
             presentation_id = None if raw_pid is None else str(raw_pid)
 
         after = _build_record_after_image(
-            row, col_names, op, resolved_record.properties
+            row, col_names, op, resolved_record.identity, resolved_record.properties
         )
         merge_key: _EventKey = (
             event_sim_time,

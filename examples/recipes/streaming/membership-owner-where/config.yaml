@@ -1,0 +1,48 @@
+# Recipe: streaming / membership-owner-where
+# ============================================================
+# Narrow a membership-events stream by a predicate on the OWNER record.
+#
+# `where` on a MembershipStream reads the OWNER kind's row, resolved per
+# interval through the parent lookup (`membership.kind`) — it does NOT read the
+# interval's own element fields. So the keys name owner properties, never the
+# names in `fields`: `where: {role: lead}` is not a filter on the element's
+# role, it is a lookup of a `role` property on kind `team` that does not exist.
+# This is the distinguishing surface from `where` on a KindStream, which gates
+# the streamed kind's own rows.
+#
+# The gate is per-interval and whole: an interval whose owner fails the
+# predicate is dropped entirely, so its join AND its leave vanish together and
+# the global `seq` renumbers densely over the survivors.
+#
+# Same constant-class rule as any `where`: a key must name a CONSTANT-class
+# property of the owner kind — one fixed for the record's whole life, so "does
+# this owner satisfy the predicate?" has a single answer. A history-tracked
+# owner property holds different values at different instants and is refused at
+# load time (Principle #7 — no silently-picked as-of instant):
+#
+#   where: {status: active}
+#     -> ERROR: stream 'team__members': where key 'status' is not a
+#        constant-class property of kind 'team'
+#
+# Entries are AND-joined: every key must match for the owner to survive.
+#
+# Fixture world (recipe emit):
+#   records__team — t001 name Alpha (surgical), t002 name Bravo (nursing)
+#     `name` is constant-class (predicate-eligible); `status` and `shift` are
+#     history-tracked (refused as `where` keys).
+#   membership__team__members — one interval per owner:
+#     owner t001: staff s002, role lead,  joined@1d, left NULL (open   -> join only)
+#     owner t002: staff s001, role float, joined@2d, left@3d   (closed -> join + leave)
+#
+# Output (one team__members.jsonl stream):
+#   seq 1  join  t001  after {role: lead}   @2024-01-02
+#   t002 (name Bravo) fails the predicate and is excluded whole — both its
+#   join@2d and its leave@3d are gone, leaving that one event.
+
+content: membership-events
+
+streams:
+  - name: team__members
+    membership: {kind: team, property: members}
+    fields: [role]          # element-schema fields — payload only, NOT predicate keys
+    where: {name: Alpha}    # OWNER (kind: team) properties; constant-class only

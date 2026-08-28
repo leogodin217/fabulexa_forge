@@ -6,23 +6,23 @@ streams:
       - seq: 1
         op: c
         record_id: p001
-        after.prop__status: pending
-        after.prop__name: Alice
+        after.status: pending
+        after.name: Alice
       - seq: 2
         op: c
         record_id: p002
-        after.prop__status: pending
-        after.prop__name: Bob
+        after.status: pending
+        after.name: Bob
       # updates — one per distinct history timestamp after creation (p001 only)
       - seq: 3
         op: u
         record_id: p001
-        after.prop__status: active
+        after.status: active
       - seq: 4
         op: u
         record_id: p001
-        after.prop__status: discharged
+        after.status: discharged
       # type-1 `name` rides every event at the current value — never spawns a `u`
       - op: u
         record_id: p001
-        after.prop__name: Alice
+        after.name: Alice

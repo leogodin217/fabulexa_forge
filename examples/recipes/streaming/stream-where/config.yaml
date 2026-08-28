@@ -1,0 +1,43 @@
+# Recipe: streaming / stream-where
+# ============================================================
+# Narrow a state-changes stream to the records that satisfy a constant-gated
+# predicate via `where:`.
+#
+# `where` is a map of bare property name -> value, AND-joined across entries.
+# A record either satisfies it or it does not, so a non-satisfying record is
+# excluded WHOLE — its `c`, every `u`, and its `d` all vanish together. That
+# makes the selection faithful rather than a fabrication: the surviving events
+# are unchanged, and the global `seq` renumbers densely over the survivors
+# only. `where` reads the record's own row, not the projection, so a
+# predicated property need not appear in `properties` and never joins the
+# after-image.
+#
+# The constant-class gate (the teaching point): a `where` key must name a
+# CONSTANT-class property — one whose value is fixed for the record's whole
+# life, so "does this record satisfy the predicate?" has a single answer. A
+# history-tracked property has a different value at different instants, so it
+# cannot gate the record; naming one is a load-time error (Principle #7 — no
+# invented values, no silently-picked as-of instant):
+#
+#   where: {status: pending}
+#     -> ERROR: stream 'patient': where key 'status' is not a constant-class
+#        property of kind 'patient'
+#
+# Fixture world (recipe emit):
+#   records__patient — p001 Alice, status pending@1d -> active@2d -> discharged@3d
+#                      p002 Bob,   status pending@2d
+#   `name` is constant-class (predicate-eligible); `status` is history-tracked
+#   (refused as a `where` key). Neither patient is deactivated, so no `d` events.
+#
+# Output (one patient.jsonl stream — p002 is excluded whole, seq stays dense):
+#   seq 1  c p001  after {status: pending,    name: Alice}
+#   seq 2  u p001  after {status: active,     name: Alice}
+#   seq 3  u p001  after {status: discharged, name: Alice}
+
+content: state-changes
+
+streams:
+  - name: patient
+    kind: patient
+    properties: [status, name]
+    where: {name: Alice}    # constant-class key only; `status` would be refused

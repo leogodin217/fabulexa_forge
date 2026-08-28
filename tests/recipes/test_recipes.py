@@ -67,7 +67,13 @@ def test_recipe_run_and_assert(
             None,
         )
         export_dimensional(
-            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
     assert_recipe_output(expectation, out_path)

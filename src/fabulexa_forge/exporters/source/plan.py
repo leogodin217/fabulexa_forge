@@ -27,25 +27,34 @@ Layer-direction invariant: imports the reader, the derivations layer only
 via the mode-neutral `election` module, `fabulexa_forge.errors`,
 `fabulexa_forge._sql` (`cast_predicate_element`, the `where` constant-cast
 seam), the mode-neutral `reserved_names` / `slice_only` / `query_spec`
-(`TableKeys`) / `populations` modules, the sibling `source.columns`
-(`_PROP_PREFIX`) and `source.events` (`SourceEventSourcePlan`,
-`SourceEventLogPlan`) modules, `notices`, `derivations.guard`
-(`require_single_branch`), config.models (TYPE_CHECKING only except
-`KeySurface`), and stdlib. Never imports exporters.dimensional.* or
+(`TableKeys`) / `populations` / `selection_spine` (`WhereEntry`,
+`check_where_values_observed`, `where_predicate_elements` — the promoted
+`where`-resolution primitives streaming now shares) modules, the sibling
+`source.columns` (`_PROP_PREFIX`) and `source.events`
+(`SourceEventSourcePlan`, `SourceEventLogPlan`) modules, `notices`,
+`derivations.guard` (`require_single_branch`), config.models (the
+`RenderElection` typed-election classes — `DateParseElection` /
+`InstantElection` / `DecimalElection` / `JsonPrecisionElection` — imported at
+runtime for the render-map form dispatch; TYPE_CHECKING only otherwise,
+except `KeySurface`), and stdlib. Never imports exporters.dimensional.* or
 exporters.streaming.*.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
+from dataclasses import dataclass, replace
+from functools import partial
+from typing import TYPE_CHECKING, Literal, TypeVar
 
 if TYPE_CHECKING:
-    from fabulexa_forge.anchor import EffectiveAnchor
+    from collections.abc import Callable
+
+    from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
     from fabulexa_forge.config.models import (
         ExportConfig,
         KeySurface,
         PredicateValue,
+        RenderElection,
         SourceEventsDecl,
         SourceEventSourceDecl,
         SourceTableDecl,
@@ -55,9 +64,21 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import PresentationKeys, Sidecar
 
 from fabulexa_forge._sql import cast_predicate_element
+from fabulexa_forge.config.models import (
+    DateParseElection,
+    DecimalElection,
+    InstantElection,
+    JsonPrecisionElection,
+)
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.errors import (
+    DateParseSourceColumn,
+    DecimalSourceIsDouble,
+    ElectionKindConflict,
     ExportError,
+    InstantSourceIsBigint,
+    JsonPrecisionSourceIsVarchar,
+    RenderKeyResolves,
     SourceColumnNotAddressable,
     SourceColumnUnresolved,
     SourceEventSourceOverlap,
@@ -91,6 +112,11 @@ from fabulexa_forge.exporters.reserved_names import (
     is_reserved_column_name,
     is_reserved_table_name,
 )
+from fabulexa_forge.exporters.selection_spine import (
+    WhereEntry,
+    check_where_values_observed,
+    where_predicate_elements,
+)
 from fabulexa_forge.exporters.slice_only import (
     is_non_exempt_slice_only,
     slice_only_refusal_message,
@@ -101,8 +127,14 @@ from fabulexa_forge.exporters.source.events import (
     SourceEventSourcePlan,
 )
 from fabulexa_forge.reader.errors import TableNotFoundError
-from fabulexa_forge.reader.records_columns import REF_INDEX_PREFIX, records_column_role
+from fabulexa_forge.reader.records_columns import (
+    REF_INDEX_PREFIX,
+    records_column_role,
+    structural_instant_columns,
+)
 from fabulexa_forge.reader.sidecar import combined_claim
+
+_TemporalMapValue = TypeVar("_TemporalMapValue")
 
 #: The `records__<kind>` name prefix.
 _RECORDS_TABLE_PREFIX = "records__"
@@ -171,24 +203,6 @@ class SourceEdgeSurface:
 
 
 @dataclass(frozen=True)
-class SourceWhereEntry:
-    """One resolved `where` entry: gate-passed and plan-time-typed."""
-
-    key: str
-    """The key as written (source-column or bare form)."""
-    source_column: str
-    """The base-table column identity (`prop__<p>`) on the subject kind's
-    records table."""
-    sql_type: str
-    """The column's sidecar-declared DuckDB type."""
-    value: "str | list[str]"
-    """The config value, verbatim — what the rendering authority compiles."""
-    typed_values: tuple[object, ...]
-    """Per-element `cast_predicate_element` results, config element order —
-    the disjointness gate's comparison set (doc § Event-source disjointness)."""
-
-
-@dataclass(frozen=True)
 class SourceStateTablePlan:
     """One resolved `state` table: a declared thing-table over the
     populations of exactly one kind.
@@ -226,12 +240,25 @@ class SourceStateTablePlan:
     keys: TableKeys | None
     """The table's declared keys (§ 4), resolved at plan time; None when
     `declare_keys` is off."""
-    where: tuple[SourceWhereEntry, ...] = ()
+    where: "tuple[WhereEntry, ...]" = ()
     """The table's resolved row predicate, `where` declaration order; empty
     when `where` is absent — config absence is already detected at the
     decl. Defaults to empty so existing construction call sites (a table
     with no `where`) need no change; `_build_state_table_plan` always
     passes it explicitly."""
+    render: "tuple[tuple[str, RenderElection], ...]" = ()
+    """Resolved rendering elections, (source identity, elected form) pairs,
+    `decl.render` iteration order; keys gated at plan time
+    (`RenderKeyResolves`) against the value form's key domain — the bare
+    shorthand against the records category's instant-carrying structural
+    columns, a typed election against `prop__<p>` payload columns — plus the
+    election's own source-type gate (`DecimalSourceIsDouble` /
+    `InstantSourceIsBigint` / `JsonPrecisionSourceIsVarchar` /
+    `DateParseSourceColumn`), and against the table's final projected column
+    sources (the windowed-omission / `columns`-selection posture `rename`
+    already carries). Empty when `decl.render` is absent — every structural
+    instant renders the mode-definitional default `timestamp`, every payload
+    column renders verbatim."""
 
 
 @dataclass(frozen=True)
@@ -275,10 +302,17 @@ class SourceJunctionTablePlan:
     semi-join. Defaults to empty so a unit built for pure type
     discrimination (never compiled) needs no change; `_build_junction_table_plan`
     always passes it explicitly."""
-    where: "tuple[SourceWhereEntry, ...]" = ()
+    where: "tuple[WhereEntry, ...]" = ()
     """The unit's resolved owner row predicate (doc § The parent lookup),
     `where` declaration order; empty when `where` is absent. Defaults to
     empty for the same reason as `owner_populations`."""
+    render: "tuple[tuple[str, RenderElection], ...]" = ()
+    """Resolved rendering elections over the membership category's interval
+    columns (`joined_sim_time` / `left_sim_time`, bare shorthand only) and
+    `elem__<f>` scalar payload columns (typed elections only), (source
+    identity, elected form) pairs, `decl.render` iteration order — gated the
+    same way as `SourceStateTablePlan.render`. Empty when `decl.render` is
+    absent."""
 
 
 @dataclass(frozen=True)
@@ -307,35 +341,6 @@ class SourcePlan:
     """One unit per `tables` declaration, declaration order."""
     events: "SourceEventLogPlan | None"
     """The event-log unit, or None when no `events` block is declared."""
-
-
-# ---------------------------------------------------------------------------
-# Sidecar-known kinds (the edge-resolution admitted universe)
-# ---------------------------------------------------------------------------
-
-
-def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
-    """Every kind with a declared `records__<kind>` table, sidecar table order.
-
-    The closed, data-free universe of kinds a junction member field's
-    per-row `member__<f>__kind` value could legally name. Independent of
-    which kinds the author *declares* a `tables` entry for — a reference to
-    an undeclared kind still renders in its elected surface (design doc §
-    Populations, "an undeclared kind may still carry an election").
-
-    Args:
-        sidecar: The open emit's sidecar.
-
-    Returns:
-        Record kinds, in sidecar table-declaration order.
-    """
-    kinds: list[str] = []
-    for table in sidecar.tables():
-        if table.category == "records":
-            kind = table.record_kind
-            assert kind is not None, "records table must declare record_kind"
-            kinds.append(kind)
-    return tuple(kinds)
 
 
 def _resolve_kind_labels(
@@ -988,6 +993,292 @@ def _apply_state_table_rename(
 
 
 # ---------------------------------------------------------------------------
+# `render`: the unified rendering-election map (shared, state + junction)
+# ---------------------------------------------------------------------------
+
+
+def _verify_render_key_is_instant(key: str, category: str, table_name: str) -> None:
+    """Enforce RenderKeyResolves' shorthand-form domain: a bare-literal
+    `render` key names an instant-carrying structural column of the table's
+    category.
+
+    Args:
+        key: The `render` key, already confirmed a projected column source.
+        category: The sidecar table category ('records' or 'membership'),
+            resolved through the reader's `structural_instant_columns` —
+            never a hardcoded list.
+        table_name: The table's output name, for the error.
+
+    Raises:
+        RenderKeyResolves: `key` is not among the category's instant-carrying
+            structural columns.
+    """
+    if key not in structural_instant_columns(category):
+        raise RenderKeyResolves(
+            f"table '{table_name}': render key '{key}' is not an"
+            f" instant-carrying structural column of category '{category}'"
+        )
+
+
+def _verify_render_key_is_payload(key: str, category: str, table_name: str) -> None:
+    """Enforce RenderKeyResolves' typed-form domain: a typed election's
+    `render` key names a payload column of the table's category —
+    `prop__<p>` on records, `elem__<f>` on membership. Never a structural
+    column (so no rendering ever has two spellings) and never a junction
+    member-pair column (`member__<f>__kind` / `__id`, outside the
+    typed-election key domain — reference identity is key election's
+    surface).
+
+    Args:
+        key: The `render` key, already confirmed a projected column source.
+        category: The sidecar table category ('records' or 'membership').
+        table_name: The table's output name, for the error.
+
+    Raises:
+        RenderKeyResolves: `key` is not a payload column of `category`.
+    """
+    prefix = _PROP_PREFIX if category == "records" else _ELEM_PREFIX
+    if not key.startswith(prefix):
+        raise RenderKeyResolves(
+            f"table '{table_name}': render key '{key}' names a typed"
+            f" election but is not a payload column of category '{category}'"
+            f" (typed elections require a '{prefix}' key)"
+        )
+
+
+def _verify_date_parse_source_varchar(
+    key: str, col_types: dict[str, str], table_name: str
+) -> None:
+    """Enforce DateParseSourceColumn: a `date_parse` election's key resolves
+    to a declared VARCHAR column.
+
+    Args:
+        key: The `render` key, already confirmed a projected column source.
+        col_types: Every real column of the table's source, name -> declared
+            DuckDB type (`_column_types`).
+        table_name: The table's output name, for the error.
+
+    Raises:
+        DateParseSourceColumn: `key`'s declared type is not VARCHAR.
+    """
+    sql_type = col_types.get(key)
+    if sql_type is None or sql_type.upper() != "VARCHAR":
+        got = sql_type if sql_type is not None else "no declared type"
+        raise DateParseSourceColumn(
+            f"date_parse column '{key}' on table '{table_name}': source must"
+            f" be an existing VARCHAR column (got {got})"
+        )
+
+
+#: Per typed-election kind (excluding `date_parse`, whose message shape
+#: predates this map and stays its own function): the required declared
+#: source type, the error class its gate raises, and the full reason clause
+#: spliced into that error's message ahead of "(got <type>)".
+_TYPED_ELECTION_SOURCE_GATES: dict[str, tuple[str, type[ExportError], str]] = {
+    "decimal": (
+        "DOUBLE",
+        DecimalSourceIsDouble,
+        "decimal rendering requires a DOUBLE source",
+    ),
+    "instant": (
+        "BIGINT",
+        InstantSourceIsBigint,
+        "instant rendering requires a BIGINT sim-time source",
+    ),
+    "json_precision": (
+        "VARCHAR",
+        JsonPrecisionSourceIsVarchar,
+        "json_precision requires a VARCHAR JSON payload source",
+    ),
+}
+
+
+def _verify_typed_election_source_type(
+    key: str, form: str, col_types: dict[str, str], table_name: str
+) -> None:
+    """Enforce one typed election's source-type gate (`DecimalSourceIsDouble`
+    / `InstantSourceIsBigint` / `JsonPrecisionSourceIsVarchar`) — the one
+    shape every non-`date_parse` typed election's gate shares, per
+    `_TYPED_ELECTION_SOURCE_GATES`.
+
+    Args:
+        key: The `render` key, already confirmed a projected column source.
+        form: The election's form name (`decimal` / `instant` /
+            `json_precision`), keying `_TYPED_ELECTION_SOURCE_GATES`.
+        col_types: Every real column of the table's source, name -> declared
+            DuckDB type.
+        table_name: The table's output name, for the error.
+
+    Raises:
+        DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar: `key`'s declared type does not
+            match `form`'s required source type.
+    """
+    expected_type, error_cls, reason = _TYPED_ELECTION_SOURCE_GATES[form]
+    sql_type = col_types.get(key)
+    if sql_type is None or sql_type.upper() != expected_type:
+        got = sql_type if sql_type is not None else "no declared type"
+        raise error_cls(f"render key '{key}' on '{table_name}': {reason} (got {got})")
+
+
+def _verify_render_election(
+    key: str,
+    value: "RenderElection",
+    category: str,
+    col_types: dict[str, str],
+    table_name: str,
+) -> None:
+    """Enforce RenderKeyResolves' form-domain check plus the election's own
+    source-type gate, for one resolved `render` entry.
+
+    Args:
+        key: The `render` key, already confirmed a projected column source.
+        value: The parsed election value.
+        category: The sidecar table category ('records' or 'membership').
+        col_types: Every real column of the table's source, name -> declared
+            DuckDB type.
+        table_name: The table's output name, for errors.
+
+    Raises:
+        RenderKeyResolves: `key` is outside `value`'s form domain.
+        DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: `key`'s
+            declared type fails the election's source-type gate.
+    """
+    if isinstance(value, str):
+        _verify_render_key_is_instant(key, category, table_name)
+        return
+    _verify_render_key_is_payload(key, category, table_name)
+    if isinstance(value, DecimalElection):
+        _verify_typed_election_source_type(key, "decimal", col_types, table_name)
+    elif isinstance(value, InstantElection):
+        _verify_typed_election_source_type(key, "instant", col_types, table_name)
+    elif isinstance(value, JsonPrecisionElection):
+        _verify_typed_election_source_type(key, "json_precision", col_types, table_name)
+    else:
+        assert isinstance(value, DateParseElection), (
+            f"unrecognized RenderElection form for key {key!r}: {value!r}"
+        )
+        _verify_date_parse_source_varchar(key, col_types, table_name)
+
+
+def _resolve_temporal_key_map(
+    entries: "dict[str, _TemporalMapValue] | None",
+    sources: "frozenset[str]",
+    table_name: str,
+    check_name: "Callable[[str], None]",
+    verify: "Callable[[str, _TemporalMapValue], None]",
+) -> tuple[tuple[str, "_TemporalMapValue"], ...]:
+    """Resolve one declared `render` map to (key, value) pairs, gating each
+    key through the shared two-stage check every such map shares: first,
+    that it names one of the table's final projected column sources —
+    `render` keys are source identities, composing with `rename` exactly as
+    a `rename` key does (`check_name` diagnoses the specific reason when it
+    does not: a real-but-excluded column under `columns` selection or a
+    windowed omission, a mechanism column, or a non-exempt slice_only
+    column; else a generic "not among this table's projected columns",
+    `SourceColumnUnresolved` — the windowed omitted-column posture composes
+    here for free, since a key naming a column the windowed render omits is
+    never in `sources`; an elected source joins this same slice_only
+    refusal). Second, the map's own business rule (`verify` —
+    `RenderKeyResolves` plus the entry's own source-type gate).
+
+    Args:
+        entries: The declared map, or None (no entries).
+        sources: The table's final (post-`columns`-selection) column sources.
+        table_name: The table's output name, for the generic error.
+        check_name: Raises the specific column-resolution error for a key
+            not in `sources`; returns silently otherwise (unreachable in
+            practice — a resolving key is always excluded only by `columns`
+            selection, per this function's own gate).
+        verify: Raises the map-specific business-rule error for a
+            (key, value) pair already confirmed a projected column source.
+
+    Returns:
+        (key, value) pairs, `entries` iteration order; empty when `entries`
+        is None.
+
+    Raises:
+        SourceColumnUnresolved, SourceColumnNotAddressable, SourceSliceOnlyRead:
+            Propagated from `check_name`.
+        RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: Propagated
+            from `verify`.
+    """
+    if entries is None:
+        return ()
+    resolved: list[tuple[str, _TemporalMapValue]] = []
+    for key, value in entries.items():
+        if key not in sources:
+            check_name(key)
+            raise SourceColumnUnresolved(
+                f"table '{table_name}': '{key}' is not among this table's"
+                " projected columns"
+            )
+        verify(key, value)
+        resolved.append((key, value))
+    return tuple(resolved)
+
+
+def _resolve_state_table_render(
+    columns: tuple[tuple[str, str], ...],
+    render: "dict[str, RenderElection] | None",
+    identity_surface: "KeySurface",
+    windowed: bool,
+    sidecar: "Sidecar",
+    kind: str,
+    table_name: str,
+    all_source_columns: frozenset[str],
+    col_types: dict[str, str],
+) -> "tuple[tuple[str, RenderElection], ...]":
+    """Resolve a `state` table's declared unified `render` map
+    (§ `SourceStateTablePlan.render`).
+
+    Args:
+        columns: The table's final (source, output) pairs, post `columns` /
+            `rename`.
+        render: The `tables[].render` entry, or None.
+        identity_surface: The table's gated elected identity surface.
+        windowed: Whether the invocation is windowed.
+        sidecar: The open emit's sidecar.
+        kind: The table's record kind.
+        table_name: The table's output name, for errors.
+        all_source_columns: Every real column name of the kind's records
+            table.
+        col_types: Every real column of the kind's records table, name ->
+            declared DuckDB type.
+
+    Returns:
+        The resolved (source identity, elected form) pairs.
+
+    Raises:
+        SourceColumnUnresolved, SourceColumnNotAddressable, SourceSliceOnlyRead,
+            RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: Propagated
+            from `_resolve_temporal_key_map`.
+    """
+    sources = frozenset(src for src, _ in columns)
+    return _resolve_temporal_key_map(
+        render,
+        sources,
+        table_name,
+        lambda key: _check_state_column_name(
+            key,
+            identity_surface,
+            windowed,
+            all_source_columns,
+            sidecar,
+            kind,
+            table_name,
+            allow_identity=False,
+        ),
+        lambda key, value: _verify_render_election(
+            key, value, "records", col_types, table_name
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # junction table: column resolution (candidate set, `columns`, `rename`)
 # ---------------------------------------------------------------------------
 
@@ -1148,6 +1439,50 @@ def _apply_junction_rename(
     return tuple((src, rename.get(src, out)) for src, out in columns)
 
 
+def _resolve_junction_table_render(
+    columns: tuple[tuple[str, str], ...],
+    render: "dict[str, RenderElection] | None",
+    table_name: str,
+    all_source_columns: frozenset[str],
+    col_types: dict[str, str],
+) -> "tuple[tuple[str, RenderElection], ...]":
+    """Resolve a `junction` table's declared unified `render` map (§
+    `SourceJunctionTablePlan.render`) — the membership category's interval
+    columns (`joined_sim_time` / `left_sim_time`, bare shorthand only) and
+    the table's `elem__<f>` scalar payload columns (typed elections only).
+
+    Args:
+        columns: The table's final (source, output) pairs, post `columns` /
+            `rename`.
+        render: The `tables[].render` entry, or None.
+        table_name: The table's output name, for errors.
+        all_source_columns: Every real column name of the membership table.
+        col_types: Every real column of the membership table, name ->
+            declared DuckDB type.
+
+    Returns:
+        The resolved (source identity, elected form) pairs.
+
+    Raises:
+        SourceColumnUnresolved, SourceColumnNotAddressable,
+            RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: Propagated
+            from `_resolve_temporal_key_map`.
+    """
+    sources = frozenset(src for src, _ in columns)
+    return _resolve_temporal_key_map(
+        render,
+        sources,
+        table_name,
+        lambda key: _check_junction_column_name(
+            key, all_source_columns, table_name, allow_owner=False
+        ),
+        lambda key, value: _verify_render_election(
+            key, value, "membership", col_types, table_name
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # `where` predicate resolution (the constant-column gate, doc § The
 # constant-column gate)
@@ -1167,25 +1502,13 @@ def _column_types(sidecar: "Sidecar", table_name: str) -> dict[str, str]:
     return {col.name: col.type for col in sidecar.columns(table_name)}
 
 
-def _where_predicate_elements(value: "str | list[str]") -> list[str]:
-    """Normalize a `where` value to its element list, in config order.
-
-    Args:
-        value: A scalar (treated as a one-element list) or a list.
-
-    Returns:
-        The value's elements, in order.
-    """
-    return [value] if isinstance(value, str) else list(value)
-
-
 def _resolve_where_selection(
     sidecar: "Sidecar",
     where: "dict[str, PredicateValue]",
     subject_kind: str,
     key_form: Literal["source_column", "bare"],
     label: str,
-) -> tuple[SourceWhereEntry, ...]:
+) -> tuple[WhereEntry, ...]:
     """The constant-column gate (doc § The constant-column gate): resolve
     every `where` key against the subject kind's payload-property set in the
     unit's key form, gate class and discriminator, and constant-evaluate
@@ -1223,7 +1546,7 @@ def _resolve_where_selection(
     )
     col_types = _column_types(sidecar, source_table)
 
-    entries: list[SourceWhereEntry] = []
+    entries: list[WhereEntry] = []
     for key, value in where.items():
         if key_form == "source_column":
             if not key.startswith(_PROP_PREFIX):
@@ -1263,7 +1586,7 @@ def _resolve_where_selection(
             )
 
         sql_type = col_types[source_column]
-        elements = _where_predicate_elements(value)
+        elements = where_predicate_elements(value)
         typed_values: list[object] = []
         for element in elements:
             try:
@@ -1275,7 +1598,7 @@ def _resolve_where_selection(
                 ) from exc
 
         entries.append(
-            SourceWhereEntry(
+            WhereEntry(
                 key=key,
                 source_column=source_column,
                 sql_type=sql_type,
@@ -1315,50 +1638,6 @@ def _where_value_unobserved_message(
         f"{label}: where value '{element}' for '{key}' not observed;"
         " it contributes no rows"
     )
-
-
-def _check_where_values_observed(
-    sidecar: "Sidecar",
-    entries: "tuple[SourceWhereEntry, ...]",
-    subject_kind: str,
-    label: str,
-    notice_sink: "NoticeSink",
-) -> None:
-    """Emit dimensional's `discriminator-value-unobserved` notice per
-    out-of-domain `where` element — shipped code, message granularity, and
-    element order reused (doc § The constant-column gate; dimensional's
-    `check_discriminator_value_observed`). A column with no `enum_domains`
-    entry is unchecked. Never an error.
-
-    Args:
-        sidecar: The open emit's sidecar.
-        entries: The unit's resolved `where` entries.
-        subject_kind: The `enum_domains` key.
-        label: The declaring unit's message label.
-        notice_sink: Receiver for the notices.
-    """
-    kind_domains = sidecar.enum_domains().get(subject_kind, {})
-    for entry in entries:
-        bare_prop = entry.source_column[len(_PROP_PREFIX) :]
-        observed_values = kind_domains.get(bare_prop, ())
-        if not observed_values:
-            continue
-
-        elements = _where_predicate_elements(entry.value)
-        unobserved = [e for e in elements if e not in observed_values]
-        if not unobserved:
-            continue
-
-        wholly_unobserved = len(unobserved) == len(elements)
-        for element in unobserved:
-            notice_sink(
-                Notice(
-                    code="discriminator-value-unobserved",
-                    message=_where_value_unobserved_message(
-                        label, entry.key, element, wholly_unobserved
-                    ),
-                )
-            )
 
 
 # ---------------------------------------------------------------------------
@@ -1402,6 +1681,9 @@ def _build_state_table_plan(
         SourceWhereColumnUnresolved, SourceWhereNotConstant,
             SourceWhereOnDiscriminator, SourceWhereValueUncastable: `where`
             resolution fails (the constant-column gate).
+        RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: `render`
+            resolution fails.
     """
     assert decl.kind is not None, "a records tables[] declaration carries kind"
     kind = decl.kind
@@ -1445,6 +1727,18 @@ def _build_state_table_plan(
         all_source_columns,
     )
 
+    render = _resolve_state_table_render(
+        columns,
+        decl.render,
+        identity_surface,
+        windowed,
+        sidecar,
+        kind,
+        decl.name,
+        all_source_columns,
+        _column_types(sidecar, source_table),
+    )
+
     known_kinds_set = frozenset(known_kinds)
     edge_surfaces = _resolve_reference_prop_edges(
         sidecar, election, source_table, columns, known_kinds_set, decl.name
@@ -1467,8 +1761,12 @@ def _build_state_table_plan(
         if decl.where is not None
         else ()
     )
-    _check_where_values_observed(
-        sidecar, where, kind, f"table '{decl.name}'", notice_sink
+    check_where_values_observed(
+        sidecar,
+        where,
+        kind,
+        notice_sink,
+        partial(_where_value_unobserved_message, f"table '{decl.name}'"),
     )
 
     return SourceStateTablePlan(
@@ -1480,6 +1778,7 @@ def _build_state_table_plan(
         edge_surfaces=edge_surfaces,
         keys=keys,
         where=where,
+        render=render,
     )
 
 
@@ -1525,6 +1824,9 @@ def _build_junction_table_plan(
             resolution fails (the constant-column gate, applied to the owner
             kind).
         ElectionUnionUnsafe: An edge gate fails.
+        RenderKeyResolves, DecimalSourceIsDouble, InstantSourceIsBigint,
+            JsonPrecisionSourceIsVarchar, DateParseSourceColumn: `render`
+            resolution fails.
     """
     assert decl.membership is not None, "a membership tables[] declaration carries it"
     owner_kind = decl.membership.kind
@@ -1561,6 +1863,14 @@ def _build_junction_table_plan(
         columns,
     )
 
+    render = _resolve_junction_table_render(
+        columns,
+        decl.render,
+        decl.name,
+        all_source_columns,
+        _column_types(sidecar, source_table),
+    )
+
     where = (
         _resolve_where_selection(
             sidecar, decl.where, owner_kind, key_form="bare", label=label
@@ -1568,7 +1878,13 @@ def _build_junction_table_plan(
         if decl.where is not None
         else ()
     )
-    _check_where_values_observed(sidecar, where, owner_kind, label, notice_sink)
+    check_where_values_observed(
+        sidecar,
+        where,
+        owner_kind,
+        notice_sink,
+        partial(_where_value_unobserved_message, label),
+    )
 
     return SourceJunctionTablePlan(
         name=decl.name,
@@ -1580,6 +1896,7 @@ def _build_junction_table_plan(
         kind_labels=kind_labels,
         owner_populations=owner_populations,
         where=where,
+        render=render,
     )
 
 
@@ -2117,7 +2434,13 @@ def _build_event_source_plan(
             if decl.where is not None
             else ()
         )
-        _check_where_values_observed(sidecar, where, kind, owner, notice_sink)
+        check_where_values_observed(
+            sidecar,
+            where,
+            kind,
+            notice_sink,
+            partial(_where_value_unobserved_message, owner),
+        )
         return SourceEventSourcePlan(
             item_type=item_type,
             kind=kind,
@@ -2163,7 +2486,13 @@ def _build_event_source_plan(
         if decl.where is not None
         else ()
     )
-    _check_where_values_observed(sidecar, where, owner_kind, owner, notice_sink)
+    check_where_values_observed(
+        sidecar,
+        where,
+        owner_kind,
+        notice_sink,
+        partial(_where_value_unobserved_message, owner),
+    )
     return SourceEventSourcePlan(
         item_type=_resolve_event_source_item_type(
             decl, kind_labels_map, owner_kind, property_name
@@ -2411,6 +2740,264 @@ def _check_item_type_union_safety(
         )
 
 
+# ---------------------------------------------------------------------------
+# ElectionKindConflict: the per-membership render-election agreement gate
+# (doc § Event-log and after-image reach)
+# ---------------------------------------------------------------------------
+
+_DeclaredTable = SourceStateTablePlan | SourceJunctionTablePlan
+"""One resolved declared table, either shape — the `ElectionKindConflict`
+gate's declaring-side type, spelled once to keep its several signatures
+under the line-length limit."""
+
+
+def _table_emitted_properties(
+    table: "_DeclaredTable",
+) -> "tuple[tuple[str, RenderElection | None], ...]":
+    """One declared table's emitted payload properties: bare name -> its
+    table-level elected form, or None when the table is silent on it (the
+    default raw rendering). State table: `prop__<p>` columns of
+    `table.columns`; junction table: `elem__<f>` columns (the junction
+    render's own name strip — an `elem__<f>` election reaches the log's
+    bare field `<f>`).
+
+    Args:
+        table: One resolved declared table.
+
+    Returns:
+        (bare name, elected form or None) pairs, `table.columns` order.
+    """
+    prefix = _PROP_PREFIX if isinstance(table, SourceStateTablePlan) else _ELEM_PREFIX
+    render_map = dict(table.render)
+    return tuple(
+        (src[len(prefix) :], render_map.get(src))
+        for src, _out in table.columns
+        if src.startswith(prefix)
+    )
+
+
+def _table_membership_key(
+    table: "_DeclaredTable",
+) -> "tuple[str, str | None]":
+    """One declared table's `(kind, property)` membership — the same grain
+    an events source audits (`SourceEventSourcePlan.kind` / `.property`):
+    `(kind, None)` for a state table, `(owner_kind, property)` for a
+    junction table.
+
+    Args:
+        table: One resolved declared table.
+
+    Returns:
+        The membership key.
+    """
+    if isinstance(table, SourceStateTablePlan):
+        return (table.kind, None)
+    return (table.owner_kind, table.property)
+
+
+def _membership_label(kind: str, property_name: "str | None") -> str:
+    """A `(kind, property)` membership's message label: `kind` for a records
+    membership, `kind.property` for a membership-table membership — the
+    same `.` composition the item-type default and population labels use.
+
+    Args:
+        kind: The membership's kind.
+        property_name: The membership's property, or None for a records
+            membership.
+
+    Returns:
+        The message label.
+    """
+    if property_name is None:
+        return kind
+    return f"{kind}.{property_name}"
+
+
+def _log_rendered_properties(
+    sources: "tuple[SourceEventSourcePlan, ...]",
+) -> "dict[tuple[str, str | None], frozenset[str]]":
+    """Every `(kind, property)` membership the log renders, to its audited
+    bare property/field names — the union across every source sharing that
+    membership (disjoint-population sources of one kind may audit differing
+    property sets via `where`).
+
+    Args:
+        sources: The event log's resolved sources.
+
+    Returns:
+        Membership key -> audited bare names.
+    """
+    result: dict[tuple[str, str | None], set[str]] = {}
+    for source in sources:
+        key = (source.kind, source.property)
+        bucket = result.setdefault(key, set())
+        bucket.update(bare for bare, _output in source.audited_properties)
+    return {key: frozenset(names) for key, names in result.items()}
+
+
+def _group_tables_by_membership(
+    tables: "tuple[_DeclaredTable, ...]",
+) -> "dict[tuple[str, str | None], list[_DeclaredTable]]":
+    """Group the plan's declared tables by `(kind, property)` membership,
+    declaration order within each group.
+
+    Args:
+        tables: The plan's resolved declared tables, declaration order.
+
+    Returns:
+        Membership key -> its declared tables.
+    """
+    grouped: "dict[tuple[str, str | None], list[_DeclaredTable]]" = {}
+    for table in tables:
+        grouped.setdefault(_table_membership_key(table), []).append(table)
+    return grouped
+
+
+def _raise_election_kind_conflict(
+    bare: str,
+    kind_label: str,
+    first: "tuple[str, RenderElection | None]",
+    second: "tuple[str, RenderElection | None]",
+) -> None:
+    """Raise ElectionKindConflict for one property's disagreeing pair —
+    either the silent-table message shape (one side elects, one is silent)
+    or the differing-elections shape (both elect, differently).
+
+    Args:
+        bare: The bare property/field name (the message's '{column}').
+        kind_label: The membership's message label (`_membership_label`).
+        first: (table name, election or None) — the first declared table
+            emitting the property, table declaration order.
+        second: (table name, election or None) — a later table disagreeing
+            with `first`.
+
+    Raises:
+        ElectionKindConflict: Always.
+    """
+    first_name, first_election = first
+    second_name, second_election = second
+    if first_election is None or second_election is None:
+        electing, silent = (
+            (first, second) if first_election is not None else (second, first)
+        )
+        raise ElectionKindConflict(
+            f"property '{bare}' of kind '{kind_label}': '{electing[0]}'"
+            f" declares a render election and '{silent[0]}' declares none"
+        )
+    raise ElectionKindConflict(
+        f"property '{bare}' of kind '{kind_label}': '{first_name}' and"
+        f" '{second_name}' declare conflicting render elections"
+    )
+
+
+def _resolve_membership_property_election(
+    entries: "list[tuple[str, RenderElection | None]]",
+    bare: str,
+    kind_label: str,
+) -> "RenderElection | None":
+    """Agreement-gate one `(kind, property)` membership's one audited
+    property across every declared table that emits it: unanimous election
+    wins; uniform silence is legal (raw codec text); any disagreement —
+    differing elections, or an electing table beside a silent one — raises
+    `ElectionKindConflict`.
+
+    Args:
+        entries: (table name, election or None) pairs, declaration order —
+            every declared table that projects this bare property.
+        bare: The bare property/field name.
+        kind_label: The membership's message label.
+
+    Returns:
+        The unanimous election, or None under uniform silence.
+
+    Raises:
+        ElectionKindConflict: The declared tables disagree.
+    """
+    first = entries[0]
+    for candidate in entries[1:]:
+        if candidate[1] != first[1]:
+            _raise_election_kind_conflict(bare, kind_label, first, candidate)
+    return first[1]
+
+
+def _resolve_election_kind_conflicts(
+    tables: "tuple[_DeclaredTable, ...]",
+    sources: "tuple[SourceEventSourcePlan, ...]",
+) -> "dict[tuple[str, str | None], dict[str, RenderElection]]":
+    """Enforce `ElectionKindConflict` and resolve the agreed per-property
+    election every log-rendered property carries (doc § Event-log and
+    after-image reach). Scoped to properties inside some events source's
+    audited set — a property no source audits, or a `(kind, property)`
+    membership with no declared table, never reaches the gate.
+
+    Args:
+        tables: The plan's resolved declared tables, declaration order.
+        sources: The event log's resolved sources.
+
+    Returns:
+        Per `(kind, property)` membership, the agreed bare-property ->
+        election map (a uniformly-silent property carries no entry — raw
+        codec text needs none).
+
+    Raises:
+        ElectionKindConflict: Two declared tables of one membership
+            disagree on a property the log renders.
+    """
+    log_rendered = _log_rendered_properties(sources)
+    by_membership = _group_tables_by_membership(tables)
+    resolved: dict[tuple[str, str | None], dict[str, RenderElection]] = {}
+    for membership, rendered_names in log_rendered.items():
+        if not rendered_names:
+            continue
+        per_property: dict[str, list[tuple[str, RenderElection | None]]] = {}
+        for table in by_membership.get(membership, []):
+            for bare, election in _table_emitted_properties(table):
+                if bare in rendered_names:
+                    per_property.setdefault(bare, []).append((table.name, election))
+        kind_label = _membership_label(*membership)
+        agreed: dict[str, RenderElection] = {}
+        for bare, entries in per_property.items():
+            election = _resolve_membership_property_election(entries, bare, kind_label)
+            if election is not None:
+                agreed[bare] = election
+        if agreed:
+            resolved[membership] = agreed
+    return resolved
+
+
+def _source_render_entries(
+    source: SourceEventSourcePlan,
+    election_map: "dict[tuple[str, str | None], dict[str, RenderElection]]",
+) -> "tuple[tuple[str, RenderElection], ...]":
+    """One source's resolved log-site render entries (§
+    `SourceEventSourcePlan.render`): its membership's agreed election per
+    audited bare name, excluding any bare name carrying a change_edge — a
+    reference-valued property's `changes` entry always renders through
+    identity translation (`_edge_translation_join`), never a value election.
+
+    Args:
+        source: The resolved events source (change_edges already resolved).
+        election_map: `_resolve_election_kind_conflicts`'s per-membership
+            agreed elections.
+
+    Returns:
+        (bare name, elected form) pairs, `audited_properties` order.
+    """
+    agreed = election_map.get((source.kind, source.property))
+    if not agreed:
+        return ()
+    edged_bare = {
+        edge.source_column[len(_PROP_PREFIX) :]
+        for edge in source.change_edges
+        if edge.source_column.startswith(_PROP_PREFIX)
+    }
+    return tuple(
+        (bare, agreed[bare])
+        for bare, _output in source.audited_properties
+        if bare in agreed and bare not in edged_bare
+    )
+
+
 def _resolve_log_item_id_type(
     sidecar: "Sidecar", sources: tuple[SourceEventSourcePlan, ...]
 ) -> str:
@@ -2443,6 +3030,39 @@ def _resolve_log_item_id_type(
     return "VARCHAR"
 
 
+_EVENT_LOG_INSTANT_KEY = "event_sim_time"
+"""The event log's one legal `render` key — mode-definitional (design doc §
+The event log): the fold's own instant column, before its `occurred_at`
+output rename."""
+
+
+def _resolve_event_log_render(
+    render: "dict[str, TemporalRender] | None",
+) -> "TemporalRender":
+    """Resolve the `events.render` declaration (§ `SourceEventLogPlan.render`).
+
+    Args:
+        render: The `SourceEventsDecl.render` map, or None.
+
+    Returns:
+        The elected rendering for `event_sim_time`; the mode-definitional
+        default `'timestamp'` when `render` is None.
+
+    Raises:
+        RenderKeyResolves: `render` names any key other than
+            `event_sim_time` (the log's one legal key, mode-definitional).
+    """
+    if render is None:
+        return "timestamp"
+    invalid = sorted(set(render) - {_EVENT_LOG_INSTANT_KEY})
+    if invalid:
+        raise RenderKeyResolves(
+            f"events: render key(s) {invalid} not legal; the log's one"
+            f" legal key is '{_EVENT_LOG_INSTANT_KEY}'"
+        )
+    return render[_EVENT_LOG_INSTANT_KEY]
+
+
 def _build_event_log_plan(
     sidecar: "Sidecar",
     election: Election,
@@ -2451,6 +3071,7 @@ def _build_event_log_plan(
     declare_keys: bool,
     notice_sink: "NoticeSink",
     kind_labels: "tuple[tuple[str, str], ...]",
+    tables: "tuple[_DeclaredTable, ...]",
 ) -> SourceEventLogPlan:
     """Resolve the `events` declaration to a `SourceEventLogPlan`.
 
@@ -2465,6 +3086,8 @@ def _build_event_log_plan(
         notice_sink: Receiver for slice-only-column-omitted notices.
         kind_labels: The resolved `source.kind_labels` map (§
             `_resolve_kind_labels`), threaded onto every source.
+        tables: The plan's resolved declared tables (`tables[]`) — the
+            `ElectionKindConflict` agreement gate's declaring side.
 
     Returns:
         The resolved event-log plan.
@@ -2486,6 +3109,11 @@ def _build_event_log_plan(
             item-type, or a resolved item-type collides with a kind's
             rendered name.
         ElectionUnionUnsafe: An item-type or change-edge gate fails.
+        RenderKeyResolves: `decl.render` names a key other than
+            `event_sim_time`.
+        ElectionKindConflict: Two declared tables of one `(kind, property)`
+            membership disagree on a render election for a property this
+            log renders (doc § Event-log and after-image reach).
     """
     known_kinds_set = frozenset(known_kinds)
     sources = tuple(
@@ -2504,12 +3132,18 @@ def _build_event_log_plan(
     _check_events_source_overlap(sources)
     _check_item_type_distinctness(sources, known_kinds, kind_labels)
     _check_item_type_union_safety(election, sources)
+    election_map = _resolve_election_kind_conflicts(tables, sources)
+    sources = tuple(
+        replace(source, render=_source_render_entries(source, election_map))
+        for source in sources
+    )
     item_id_type = _resolve_log_item_id_type(sidecar, sources)
     return SourceEventLogPlan(
         name=decl.name,
         sources=sources,
         item_id_type=item_id_type,
         keys=TableKeys(primary_key=("id",), unique=()) if declare_keys else None,
+        render=_resolve_event_log_render(decl.render),
     )
 
 
@@ -2988,6 +3622,9 @@ def build_source_plan(
         ElectionMixedIdentity, ElectionUnionUnsafe: the identity gates
             per declared table; the edge gates per referencing column and
             per event-log item-type.
+        ElectionKindConflict: two declared tables of one `(kind, property)`
+            membership disagree on a render election for a property the
+            event log renders.
         SourceHistoryTrackedRequired: the sidecar predates per-column
             history_tracked flags.
         TemporalClassUnavailableError: a consulted flagged column declares
@@ -3011,7 +3648,7 @@ def build_source_plan(
     source_config = config.source
     assert source_config is not None, "mode='source' guarantees a source section"
 
-    known_kinds = _known_records_kinds(sidecar)
+    known_kinds = sidecar.record_kinds()
     declare_keys = source_config.declare_keys
     kind_labels = _resolve_kind_labels(known_kinds, source_config.kind_labels)
 
@@ -3047,6 +3684,7 @@ def build_source_plan(
             declare_keys,
             notices,
             kind_labels,
+            tables_t,
         )
 
     _check_output_collisions(tables_t, events_plan)

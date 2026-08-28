@@ -1,0 +1,12 @@
+tables:
+  fact_length_of_stay:
+    columns: [patient_id, discharged_at, stay_hours, stay_interval]
+    row_count: 1
+    contains_rows:
+      # Same 2-day delta (admission@1*DAY -> discharge@3*DAY), rendered
+      # twice: stay_hours (the default numeric DOUBLE) and stay_interval
+      # (the elected INTERVAL) agree.
+      - patient_id: p001
+        discharged_at: 259200000000000    # 3*DAY
+        stay_hours: 48.0
+        stay_interval: "48:00:00"

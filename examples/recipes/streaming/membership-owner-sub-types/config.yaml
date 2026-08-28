@@ -1,0 +1,45 @@
+# Recipe: membership-owner-sub-types
+# ============================================================
+# Scope a membership stream to a subset of the OWNER's sub-types.
+#
+# On a KindStream, `sub_types` scopes the streamed kind itself. On a
+# MembershipStream there is no streamed kind — there is an owner and a member —
+# and `sub_types` scopes the OWNER of the membership relation, never the member.
+# Each interval row is resolved through the parent lookup to its owner record,
+# and the interval streams only when that owner's <owner_kind>_type
+# discriminator is in the declared set. Intervals owned by any other sub-type
+# are dropped whole: both their join and their leave disappear, so the global
+# `seq` numbers only the events that survive.
+#
+# The owner kind must itself be sub-typed for the field to be legal
+# (Principle #7 — no invented values): `sub_types` on a membership whose owner
+# kind carries no discriminator, or naming a value outside that kind's declared
+# sub-types, is a load-time error. The member kind's sub-types are irrelevant
+# here — they are neither consulted nor selectable.
+#
+# Fixture world (recipe emit):
+#   records__team is sub-typed by team_type (nursing, surgical) and owns the
+#   `members` collection:
+#     t001 "Alpha", team_type surgical
+#     t002 "Bravo", team_type nursing
+#   membership__team__members — one interval per owner, members are staff:
+#     owner t001: member s002, role "lead",  joined@1d, left NULL  (open)
+#     owner t002: member s001, role "float", joined@2d, left@3d    (closed)
+#   Selecting [nursing] keeps owner t002 alone. t001 is surgical, so its open
+#   interval — and the lone join it would have emitted — is dropped entirely.
+#
+# `fields: [role]` carries the scalar element field alone; the element's `staff`
+# reference field is simply not requested, so no member__staff__kind / __id pair
+# appears in the payload.
+#
+# Output (one team__members.jsonl stream, global seq order):
+#   seq 1  join  t002  after {role: float}  @2024-01-03
+#   seq 2  leave t002  after {role: float}  @2024-01-04
+
+content: membership-events
+
+streams:
+  - name: team__members
+    membership: {kind: team, property: members}
+    sub_types: [nursing]   # the OWNER team's team_type — not the member staff's
+    fields: [role]

@@ -13,6 +13,9 @@ from pydantic import ValidationError
 
 from fabulexa_forge.config.models import (
     ColumnDecl,
+    DateParseElection,
+    DateParseSpec,
+    DecimalSpec,
     DerivedSpec,
     DimensionalConfig,
     ElapsedSpec,
@@ -20,10 +23,14 @@ from fabulexa_forge.config.models import (
     ExportConfig,
     FkClause,
     IncrementalConfig,
+    JsonPrecisionSpec,
     RebaseConfig,
+    ScdWindowSpec,
     SourceDecl,
+    SourceTableDecl,
     StrictBaseModel,
     TableDecl,
+    TimestampSpec,
     ValueMapSpec,
 )
 
@@ -357,13 +364,13 @@ def test_derived_scd_window_and_timestamp_raises() -> None:
         )
 
 
-_ELAPSED_PAYLOAD = {
+_ELAPSED_BASE_PAYLOAD = {
     "correlate_on": "attendance_id",
     "other_where": {"state": "ed_arrival"},
     "start_source": "last_mutation_sim_time",
     "end_source": "last_mutation_sim_time",
-    "unit": "minutes",
 }
+_ELAPSED_PAYLOAD = {**_ELAPSED_BASE_PAYLOAD, "unit": "minutes"}
 
 
 def test_derived_elapsed_alone_parses() -> None:
@@ -398,6 +405,108 @@ def test_derived_elapsed_and_scd_window_raises() -> None:
         )
 
 
+def test_derived_date_parse_alone_parses() -> None:
+    """A DerivedSpec with only `date_parse` set parses into a typed DateParseSpec."""
+    spec = DerivedSpec.model_validate(
+        {"date_parse": {"from": "prop__dob", "format": "%Y-%m-%d"}}
+    )
+    assert spec.date_parse is not None
+    assert spec.date_parse.from_ == "prop__dob"
+    assert spec.date_parse.format == "%Y-%m-%d"
+    assert spec.elapsed is None
+    assert spec.timestamp is None
+
+
+def test_derived_date_parse_and_timestamp_raises() -> None:
+    """date_parse + timestamp combination raises."""
+    with pytest.raises(ValidationError, match="exactly one"):
+        DerivedSpec.model_validate(
+            {
+                "date_parse": {"from": "prop__dob", "format": "%Y-%m-%d"},
+                "timestamp": {"source": "sim_time"},
+            }
+        )
+
+
+# ---------------------------------------------------------------------------
+# derived: decimal / derived: json_precision (value-rendering-elections
+# Phase 5 — the dimensional derived spellings)
+# ---------------------------------------------------------------------------
+
+
+def test_derived_decimal_alone_parses() -> None:
+    """A DerivedSpec with only `decimal` set parses into a typed DecimalSpec."""
+    spec = DerivedSpec.model_validate(
+        {"decimal": {"from": "prop__amount", "as": [4, 3]}}
+    )
+    assert spec.decimal is not None
+    assert spec.decimal.from_ == "prop__amount"
+    assert spec.decimal.as_ == (4, 3)
+    assert spec.date_parse is None
+    assert spec.json_precision is None
+
+
+def test_derived_decimal_and_timestamp_raises() -> None:
+    """decimal + timestamp combination raises."""
+    with pytest.raises(ValidationError, match="exactly one"):
+        DerivedSpec.model_validate(
+            {
+                "decimal": {"from": "prop__amount", "as": [4, 3]},
+                "timestamp": {"source": "sim_time"},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    "precision,scale",
+    [(0, 0), (39, 0), (4, 5), (4, -1)],
+)
+def test_decimal_spec_bounds_rejects(precision: int, scale: int) -> None:
+    """DecimalSpec rejects precision outside 1..38 or scale outside 0..precision —
+    the same bounds `DecimalElection.decimal_bounds` enforces (shared validator)."""
+    with pytest.raises(ValidationError):
+        DecimalSpec.model_validate({"from": "prop__amount", "as": [precision, scale]})
+
+
+def test_derived_json_precision_alone_parses() -> None:
+    """A DerivedSpec with only `json_precision` set parses into a typed
+    JsonPrecisionSpec."""
+    spec = DerivedSpec.model_validate(
+        {"json_precision": {"from": "prop__payload", "leaves": {"discount": 2}}}
+    )
+    assert spec.json_precision is not None
+    assert spec.json_precision.from_ == "prop__payload"
+    assert spec.json_precision.leaves == {"discount": 2}
+    assert spec.decimal is None
+    assert spec.date_parse is None
+
+
+def test_derived_json_precision_and_decimal_raises() -> None:
+    """json_precision + decimal combination raises."""
+    with pytest.raises(ValidationError, match="exactly one"):
+        DerivedSpec.model_validate(
+            {
+                "json_precision": {"from": "prop__payload", "leaves": {"x": 2}},
+                "decimal": {"from": "prop__amount", "as": [4, 3]},
+            }
+        )
+
+
+def test_json_precision_spec_empty_leaves_rejects() -> None:
+    """JsonPrecisionSpec rejects an empty leaf map — the same shape
+    `JsonPrecisionElection.json_precision_shape` enforces (shared validator)."""
+    with pytest.raises(ValidationError, match="must not be empty"):
+        JsonPrecisionSpec.model_validate({"from": "prop__payload", "leaves": {}})
+
+
+def test_json_precision_spec_digits_out_of_range_rejects() -> None:
+    """JsonPrecisionSpec rejects a digits value outside 0..12."""
+    with pytest.raises(ValidationError, match="0..12"):
+        JsonPrecisionSpec.model_validate(
+            {"from": "prop__payload", "leaves": {"discount": 13}}
+        )
+
+
 # ---------------------------------------------------------------------------
 # ElapsedSpec required fields
 # ---------------------------------------------------------------------------
@@ -405,13 +514,50 @@ def test_derived_elapsed_and_scd_window_raises() -> None:
 
 @pytest.mark.parametrize(
     "missing_field",
-    ["correlate_on", "other_where", "start_source", "end_source", "unit"],
+    ["correlate_on", "other_where", "start_source", "end_source"],
 )
 def test_elapsed_spec_missing_required_field_raises(missing_field: str) -> None:
-    """Each ElapsedSpec field is required — omitting any one raises."""
+    """Each unconditionally-required ElapsedSpec field raises when omitted.
+
+    `unit` is not in this list — it is conditionally required by
+    `exactly_one_rendering`, covered separately below."""
     payload = {k: v for k, v in _ELAPSED_PAYLOAD.items() if k != missing_field}
     with pytest.raises(ValidationError, match=missing_field):
         ElapsedSpec.model_validate(payload)
+
+
+# ---------------------------------------------------------------------------
+# exactly_one_rendering (ElapsedSpec)
+# ---------------------------------------------------------------------------
+
+
+def test_elapsed_spec_unit_alone_parses() -> None:
+    """`unit` alone (no `as`) parses — the numeric rendering election."""
+    spec = ElapsedSpec.model_validate({**_ELAPSED_BASE_PAYLOAD, "unit": "minutes"})
+    assert spec.unit == "minutes"
+    assert spec.as_ is None
+
+
+def test_elapsed_spec_as_interval_alone_parses() -> None:
+    """`as: interval` alone (no `unit`) parses — the typed rendering election."""
+    spec = ElapsedSpec.model_validate({**_ELAPSED_BASE_PAYLOAD, "as": "interval"})
+    assert spec.as_ == "interval"
+    assert spec.unit is None
+
+
+def test_elapsed_spec_both_unit_and_as_raises() -> None:
+    """Setting both `unit` and `as` contradicts (exactly_one_rendering)."""
+    with pytest.raises(ValidationError, match="exactly one"):
+        ElapsedSpec.model_validate(
+            {**_ELAPSED_BASE_PAYLOAD, "unit": "minutes", "as": "interval"}
+        )
+
+
+def test_elapsed_spec_neither_unit_nor_as_raises() -> None:
+    """Omitting both `unit` and `as` is an error — no default rendering is
+    invented."""
+    with pytest.raises(ValidationError, match="exactly one"):
+        ElapsedSpec.model_validate(_ELAPSED_BASE_PAYLOAD)
 
 
 def test_elapsed_spec_unknown_unit_raises() -> None:
@@ -443,6 +589,248 @@ def test_elapsed_other_where_one_entry_accepted() -> None:
         {**_ELAPSED_PAYLOAD, "other_where": {"state": "ed_arrival"}}
     )
     assert spec.other_where == {"state": "ed_arrival"}
+
+
+# ---------------------------------------------------------------------------
+# TimestampSpec — `as` absence detection
+# ---------------------------------------------------------------------------
+
+
+def test_timestamp_spec_as_absent_is_none() -> None:
+    """`as` absent parses as_ = None (mode-definitional default rendering)."""
+    spec = TimestampSpec.model_validate({"source": "sim_time"})
+    assert spec.as_ is None
+
+
+@pytest.mark.parametrize("render", ["timestamp", "date", "time", "timestamptz"])
+def test_timestamp_spec_as_value_parses(render: str) -> None:
+    """Each of the four TemporalRender values parses as an explicit election."""
+    spec = TimestampSpec.model_validate({"source": "sim_time", "as": render})
+    assert spec.as_ == render
+
+
+def test_timestamp_spec_unknown_as_value_raises() -> None:
+    """An `as` value outside the TemporalRender literal is refused."""
+    with pytest.raises(ValidationError):
+        TimestampSpec.model_validate({"source": "sim_time", "as": "epoch"})
+
+
+# ---------------------------------------------------------------------------
+# ScdWindowSpec — object form requires both bound and as
+# ---------------------------------------------------------------------------
+
+
+def test_scd_window_spec_object_form_requires_bound_and_as() -> None:
+    """The object form with both `bound` and `as` set parses."""
+    spec = ScdWindowSpec.model_validate({"bound": "valid_from", "as": "date"})
+    assert spec.bound == "valid_from"
+    assert spec.as_ == "date"
+
+
+def test_scd_window_spec_missing_as_raises() -> None:
+    """A bound-only object (missing `as`) is refused."""
+    with pytest.raises(ValidationError, match="as"):
+        ScdWindowSpec.model_validate({"bound": "valid_from"})
+
+
+def test_scd_window_spec_missing_bound_raises() -> None:
+    """An `as`-only object (missing `bound`) is refused."""
+    with pytest.raises(ValidationError, match="bound"):
+        ScdWindowSpec.model_validate({"as": "date"})
+
+
+def test_derived_scd_window_bare_literal_parses() -> None:
+    """The bare-literal shorthand `scd_window: valid_from` still parses,
+    with no election (the no-election form)."""
+    spec = DerivedSpec.model_validate({"scd_window": "valid_from"})
+    assert spec.scd_window == "valid_from"
+
+
+def test_derived_scd_window_object_form_parses() -> None:
+    """The object form carries a typed ScdWindowSpec with its election."""
+    spec = DerivedSpec.model_validate(
+        {"scd_window": {"bound": "valid_to", "as": "timestamptz"}}
+    )
+    assert isinstance(spec.scd_window, ScdWindowSpec)
+    assert spec.scd_window.bound == "valid_to"
+    assert spec.scd_window.as_ == "timestamptz"
+
+
+# ---------------------------------------------------------------------------
+# DateParseSpec — format_denotes_a_temporal
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("fmt", ["%Y-%m-%d", "%d %B %Y", "%Y%%-%m-%d"])
+def test_date_parse_spec_valid_formats_parse(fmt: str) -> None:
+    """A format carrying year, month, and day directives parses.
+
+    Includes a `%%` literal directive, which the closed directive set
+    (spec Contracts) explicitly allows."""
+    spec = DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
+    assert spec.format == fmt
+
+
+@pytest.mark.parametrize(
+    "fmt",
+    [
+        "%Y-%m-%d %H:%M:%S",
+        "%H:%M",
+        "%I:%M %p",
+        "%H:%M:%S.%f",
+        "%H:%M:%S.%g",
+    ],
+)
+def test_date_parse_spec_family_formats_parse(fmt: str) -> None:
+    """The instant-string family widening: a date+time format, a 24-hour
+    time-only format, a 12-hour time-only format with its AM/PM marker, and
+    sub-second fraction formats (`%f` microseconds, `%g` milliseconds) all
+    parse."""
+    spec = DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
+    assert spec.format == fmt
+
+
+def test_date_parse_spec_missing_year_directive_raises() -> None:
+    """A format with no year directive is refused."""
+    with pytest.raises(ValidationError, match="year"):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": "%m-%d"})
+
+
+def test_date_parse_spec_missing_month_directive_raises() -> None:
+    """A format with no month directive is refused."""
+    with pytest.raises(ValidationError, match="month"):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": "%Y-%d"})
+
+
+def test_date_parse_spec_missing_day_directive_raises() -> None:
+    """A format with no day directive is refused."""
+    with pytest.raises(ValidationError, match="day"):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": "%Y-%m"})
+
+
+def test_date_parse_spec_malformed_percent_directive_raises() -> None:
+    """A trailing `%` with no following character is refused as malformed."""
+    with pytest.raises(ValidationError, match="malformed"):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": "%Y-%m-%d %"})
+
+
+@pytest.mark.parametrize("directive", ["%x", "%A", "%z", "%Z"])
+def test_date_parse_spec_locale_zone_directive_still_refused(directive: str) -> None:
+    """A locale (`%x`, `%A`) or zone (`%z`, `%Z`) directive stays outside the
+    closed set and is refused — the family widening adds time-of-day
+    directives only (zone directives and non-VARCHAR sources are doc-pinned
+    non-goals)."""
+    with pytest.raises(ValidationError, match="unsupported"):
+        DateParseSpec.model_validate(
+            {"from": "prop__dob", "format": f"%Y-%m-%d {directive}"}
+        )
+
+
+@pytest.mark.parametrize(
+    "fmt,match",
+    [
+        ("%I:%M", "%I and %p"),
+        ("%Y-%m-%d %p", "%I and %p"),
+        ("%Y-%m-%d %M", "hour"),
+        ("%H:%S", r"%S requires %M"),
+        ("%H:%M.%f", r"require %S"),
+    ],
+)
+def test_date_parse_spec_pairing_refusals(fmt: str, match: str) -> None:
+    """Each pairing rule is refused, naming the rule: an orphaned `%I` or
+    `%p`, `%M` with no hour directive, `%S` with no `%M`, `%f`/`%g` with no
+    `%S`. `%H`/`%M`/`%S` are now in the closed directive set — these
+    formerly "unsupported directive" cases are refused by pairing instead."""
+    with pytest.raises(ValidationError, match=match):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
+
+
+@pytest.mark.parametrize(
+    "fmt,match",
+    [
+        ("%Y-%m-%d %Y", "year"),
+        ("%Y %y %m %d", "year"),
+        ("%H %I %p", "hour"),
+        ("%H:%M:%S.%f%g", "sub-second fraction"),
+    ],
+)
+def test_date_parse_spec_uniqueness_refusals(fmt: str, match: str) -> None:
+    """Each uniqueness rule is refused: a repeated directive, or two
+    alternative forms of one temporal field (year, hour, or sub-second
+    fraction)."""
+    with pytest.raises(ValidationError, match=match):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
+
+
+@pytest.mark.parametrize(
+    "fmt,match",
+    [
+        ("%m-%d %H:%M", "year"),
+        ("%M:%S", "hour"),
+    ],
+)
+def test_date_parse_spec_completeness_refusals(fmt: str, match: str) -> None:
+    """A partial calendar date combined with a complete time is still
+    refused (`%Y-%m` alone stays covered by the missing-directive tests
+    above); a minute/second pair with no hour directive is caught by the
+    `%M` pairing rule."""
+    with pytest.raises(ValidationError, match=match):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": fmt})
+
+
+def test_date_parse_spec_no_temporal_directive_raises() -> None:
+    """A format carrying directives but no date or time field (a bare `%%`
+    literal) is refused — neither date-complete nor time-complete."""
+    with pytest.raises(ValidationError, match="must denote a complete date"):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": "%%"})
+
+
+def test_date_parse_spec_empty_from_raises() -> None:
+    """An empty `from` is refused."""
+    with pytest.raises(ValidationError, match="from"):
+        DateParseSpec.model_validate({"from": "", "format": "%Y-%m-%d"})
+
+
+def test_date_parse_spec_empty_format_raises() -> None:
+    """An empty `format` is refused."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        DateParseSpec.model_validate({"from": "prop__dob", "format": ""})
+
+
+# ---------------------------------------------------------------------------
+# date_parse — property-first render-map attach point (SourceTableDecl)
+# ---------------------------------------------------------------------------
+
+
+def test_source_table_decl_date_parse_map_timestamp_format_accepted() -> None:
+    """A `render` map entry electing `date_parse` with a TIMESTAMP-denoting
+    format is accepted."""
+    decl = SourceTableDecl.model_validate(
+        {
+            "name": "visits",
+            "kind": "actor",
+            "render": {"prop__dob": {"date_parse": "%Y-%m-%d %H:%M:%S"}},
+        }
+    )
+    assert decl.render == {
+        "prop__dob": DateParseElection(date_parse="%Y-%m-%d %H:%M:%S")
+    }
+
+
+def test_source_table_decl_date_parse_map_family_violation_refused() -> None:
+    """A `render` map entry electing `date_parse` that violates a family rule
+    is refused, naming the entry-keyed field name and the violated rule."""
+    with pytest.raises(ValidationError) as excinfo:
+        SourceTableDecl.model_validate(
+            {
+                "name": "visits",
+                "kind": "actor",
+                "render": {"prop__dob": {"date_parse": "%H:%S"}},
+            }
+        )
+    message = str(excinfo.value)
+    assert "render.prop__dob" in message
+    assert "%S requires %M" in message
 
 
 # ---------------------------------------------------------------------------

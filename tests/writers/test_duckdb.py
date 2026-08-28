@@ -2,8 +2,8 @@
 
 Verifies: Arrow-path materialization, input emit read-only untouched, zero-row
 yields empty typed table (not dropped), NULL-pad column typed correctly, return
-value is {table: row_count}, ExportRuntimeError on failure, keyed tables get
-explicit-DDL PRIMARY KEY / UNIQUE constraints.
+value is {table: WrittenRelation}, ExportRuntimeError on failure, keyed tables
+get explicit-DDL PRIMARY KEY / UNIQUE constraints.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ def test_write_duckdb_materializes_rows(tmp_path: Path) -> None:
         sql = 'SELECT fork_path, record_id FROM "records__entity" ORDER BY record_id'
         result = write_duckdb(emit, {"dim_entity": sql}, out_path, {})
 
-    assert result == {"dim_entity": 2}
+    assert result["dim_entity"].row_count == 2
     out_conn = duckdb.connect(str(out_path), read_only=True)
     rows = out_conn.execute(
         "SELECT record_id FROM dim_entity ORDER BY record_id"
@@ -49,8 +49,8 @@ def test_write_duckdb_returns_row_counts(tmp_path: Path) -> None:
         sql_history = 'SELECT record_id FROM "history" ORDER BY record_id'
         result = write_duckdb(emit, {"t1": sql_entity, "t2": sql_history}, out_path, {})
 
-    assert result["t1"] == 2
-    assert result["t2"] == 3
+    assert result["t1"].row_count == 2
+    assert result["t2"].row_count == 3
 
 
 def test_write_duckdb_empty_grain_yields_empty_typed_table(tmp_path: Path) -> None:
@@ -62,7 +62,7 @@ def test_write_duckdb_empty_grain_yields_empty_typed_table(tmp_path: Path) -> No
         sql = 'SELECT record_id FROM "records__entity" WHERE 1=0'
         result = write_duckdb(emit, {"empty_table": sql}, out_path, {})
 
-    assert result == {"empty_table": 0}
+    assert result["empty_table"].row_count == 0
     out_conn = duckdb.connect(str(out_path), read_only=True)
     tables = out_conn.execute("SHOW TABLES").fetchall()
     schema = out_conn.execute("DESCRIBE empty_table").fetchall()
@@ -81,7 +81,7 @@ def test_write_duckdb_null_pad_column_typed(tmp_path: Path) -> None:
         sql = 'SELECT record_id, CAST(NULL AS VARCHAR) AS null_col FROM "records__entity" ORDER BY record_id'
         result = write_duckdb(emit, {"null_test": sql}, out_path, {})
 
-    assert result == {"null_test": 2}
+    assert result["null_test"].row_count == 2
     out_conn = duckdb.connect(str(out_path), read_only=True)
     schema = out_conn.execute("DESCRIBE null_test").fetchall()
     out_conn.close()
@@ -144,7 +144,7 @@ def test_write_duckdb_quotes_embedded_quote_in_table_name(tmp_path: Path) -> Non
         sql = 'SELECT record_id FROM "records__entity" ORDER BY record_id'
         result = write_duckdb(emit, {evil_name: sql}, out_path, {})
 
-    assert result == {evil_name: 2}
+    assert result[evil_name].row_count == 2
     out_conn = duckdb.connect(str(out_path), read_only=True)
     try:
         names = {
@@ -173,7 +173,7 @@ def test_write_duckdb_keyed_table_declares_constraints(tmp_path: Path) -> None:
         }
         result = write_duckdb(emit, {"dim_entity": sql}, out_path, keys)
 
-    assert result == {"dim_entity": 2}
+    assert result["dim_entity"].row_count == 2
     types = constraint_types(out_path, "dim_entity")
     assert "PRIMARY KEY" in types
     assert "UNIQUE" in types
@@ -193,7 +193,7 @@ def test_write_duckdb_empty_keyed_table(tmp_path: Path) -> None:
         }
         result = write_duckdb(emit, {"dim_entity": sql}, out_path, keys)
 
-    assert result == {"dim_entity": 0}
+    assert result["dim_entity"].row_count == 0
     types = constraint_types(out_path, "dim_entity")
     assert "PRIMARY KEY" in types
     assert "UNIQUE" in types
@@ -213,7 +213,7 @@ def test_write_duckdb_multi_column_unique_constraint(tmp_path: Path) -> None:
         }
         result = write_duckdb(emit, {"dim_entity": sql}, out_path, keys)
 
-    assert result == {"dim_entity": 2}
+    assert result["dim_entity"].row_count == 2
     out_conn = duckdb.connect(str(out_path), read_only=True)
     try:
         composite = out_conn.execute(
@@ -243,7 +243,7 @@ def test_write_duckdb_unique_allows_nulls(tmp_path: Path) -> None:
         }
         result = write_duckdb(emit, {"dim_entity": sql}, out_path, keys)
 
-    assert result == {"dim_entity": 2}
+    assert result["dim_entity"].row_count == 2
 
 
 def test_write_duckdb_duplicate_unique_value_raises(tmp_path: Path) -> None:

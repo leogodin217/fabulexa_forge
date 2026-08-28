@@ -7,11 +7,14 @@ joins, and record-index key joins.
 `build_state_at_sql` at an exclusive horizon otherwise — then wraps the raw
 state-at relation with base's own presentation: `created_sim_time` /
 `deactivated_at` render wallclock through the shared anchor renderer (raw
-sim-time ns when `anchor` is None, since `render_anchor_timestamp_expr`
+sim-time ns when `anchor` is None, since `render_anchor_temporal_expr`
 already handles that case); `presentation_id` and `prop__<p>` columns CAST
-back from the state-at codec VARCHAR to their sidecar-declared type;
-`record_id` / `active` pass through verbatim (the state-at derivation's own
-native columns). It also composes the record-index resident at the same
+back from the state-at codec VARCHAR to their sidecar-declared type, except a
+`prop__<p>` column named in `spec.render`, which reads its elected typed
+rendering (§ `_render_elected_column` — `date_parse` / `instant` / `decimal`
+/ `json_precision`) instead; `record_id` / `active` pass through verbatim
+(the state-at derivation's own native columns). It also composes the
+record-index resident at the same
 horizon selection — once for the kind's own self key, once per
 `spec.reference_keys` entry for the target kind's edge key — and LEFT JOINs
 each onto the state-at spine: the self key ahead of `id`, an edge key
@@ -30,10 +33,18 @@ surface at runtime; `Sidecar` TYPE_CHECKING only), the derivations layer (the
 state-at derivation), the mode-neutral election module (the record-index /
 presentation-key horizon-dispatch helpers `_record_index_sql` /
 `_presentation_key_sql`, shared with source's renders — doc § module
-placement), fabulexa_forge.anchor, fabulexa_forge._sql, the sibling base.plan
-module (`_self_identity` at runtime; `BaseTableSpec` / `ReferenceKey`
-TYPE_CHECKING only), and stdlib. Never imports exporters.dimensional.*,
-exporters.source.*, or exporters.streaming.*.
+placement), fabulexa_forge.anchor (`render_anchor_temporal_expr` — every
+lifecycle instant renders through it, in the spec's resolved `render`
+election), fabulexa_forge._sql (`render_date_parse_expr` /
+`render_decimal_expr` / `render_json_precision_expr` — the three typed-
+election authorities `_render_elected_column` dispatches to, the one
+dispatch every render composes), config.models (the `RenderElection` typed-
+election classes — `DateParseElection` / `InstantElection` /
+`DecimalElection` / `JsonPrecisionElection` — imported at runtime for the
+render-map form dispatch; `RenderElection` TYPE_CHECKING only), the sibling
+base.plan module (`_self_identity` at runtime; `BaseTableSpec` /
+`ReferenceKey` TYPE_CHECKING only), and stdlib. Never imports
+exporters.dimensional.*, exporters.source.*, or exporters.streaming.*.
 """
 
 from __future__ import annotations
@@ -42,12 +53,23 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import KeySurface
+    from fabulexa_forge.config.models import KeySurface, RenderElection
     from fabulexa_forge.exporters.base.plan import BaseTableSpec, ReferenceKey
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge._sql import _sql_literal
-from fabulexa_forge.anchor import render_anchor_timestamp_expr
+from fabulexa_forge._sql import (
+    _sql_literal,
+    render_date_parse_expr,
+    render_decimal_expr,
+    render_json_precision_expr,
+)
+from fabulexa_forge.anchor import render_anchor_temporal_expr
+from fabulexa_forge.config.models import (
+    DateParseElection,
+    DecimalElection,
+    InstantElection,
+    JsonPrecisionElection,
+)
 from fabulexa_forge.derivations.state_at import (
     STATE_AT_COLUMNS,
     build_state_at_end_sql,
@@ -365,6 +387,52 @@ def _render_reference_value(
     return f'"{alias}"."rendered_value" AS "{out}"'
 
 
+def _render_elected_column(
+    qualified_source: str,
+    out: str,
+    src: str,
+    value: "RenderElection",
+    anchor: "EffectiveAnchor | None",
+    table_name: str,
+) -> str:
+    """Render one typed-election column's SQL fragment — the one dispatch
+    every render composes for a `render`-map entry outside the bare
+    shorthand form (a `prop__<p>` payload column).
+
+    Args:
+        qualified_source: The fully table-qualified source column SQL (the
+            state-at codec-VARCHAR after-image).
+        out: The resolved output column name.
+        src: The source identity, for guard attribution (`column_label`).
+        value: The elected typed election (never the bare shorthand form).
+        anchor: The resolved wallclock anchor, or None — `instant` is the
+            only form reaching this branch that reads it; a None anchor here
+            is a caller bug, already refused at plan time by
+            `TemporalRenderRequiresAnchor`.
+        table_name: The output table name, for guard attribution.
+
+    Returns:
+        A SQL SELECT-list expression fragment ending in `AS "<out>"`.
+    """
+    if isinstance(value, DateParseElection):
+        return render_date_parse_expr(
+            qualified_source, value.date_parse, out, table_name
+        )
+    if isinstance(value, InstantElection):
+        return render_anchor_temporal_expr(anchor, qualified_source, out, value.instant)
+    if isinstance(value, DecimalElection):
+        precision, scale = value.decimal
+        expr = render_decimal_expr(qualified_source, precision, scale, src, table_name)
+        return f'{expr} AS "{out}"'
+    assert isinstance(value, JsonPrecisionElection), (
+        f"unrecognized RenderElection form for {src!r}: {value!r}"
+    )
+    expr = render_json_precision_expr(
+        qualified_source, value.json_precision, src, table_name
+    )
+    return f'{expr} AS "{out}"'
+
+
 def build_base_render_sql(
     sidecar: "Sidecar",
     fork_path: str,
@@ -381,13 +449,21 @@ def build_base_render_sql(
     fork_path, spec.kind, spec.properties, horizon_ns)` otherwise — then wraps
     the raw relation with base's own presentation: the lifecycle timestamps
     `created_sim_time` and `deactivated_at` render through
-    `render_anchor_timestamp_expr`, which already yields the raw sim-time
-    column aliased when `anchor` is None (so base needs no conditional of its
-    own); `prop__<p>` and `presentation_id` cast back from the state-at codec
-    VARCHAR to their sidecar types (as source's snapshot render does), except
-    a `prop__<p>` reference column whose admitted target populations elect a
-    non-uniform-record_id surface, which reads its elected-surface join
-    instead (§ `_render_reference_value`). Composes the record-index resident
+    `render_anchor_temporal_expr`, in `spec.render`'s elected rendering for
+    that column (the mode-definitional default `timestamp` absent an entry),
+    which already yields the raw sim-time column aliased when `anchor` is
+    None (so base needs no conditional of its own — a None anchor with an
+    explicit election is a caller bug, already refused at plan time by
+    `TemporalRenderRequiresAnchor`); `prop__<p>` and `presentation_id` cast
+    back from the state-at codec VARCHAR to their sidecar types (as source's
+    snapshot render does), except a `prop__<p>` column named in
+    `spec.render`, which reads its elected typed rendering
+    (§ `_render_elected_column` — `date_parse` / `instant` / `decimal` /
+    `json_precision`) instead, and a `prop__<p>` reference column whose
+    admitted target populations elect a non-uniform-record_id surface, which
+    reads its elected-surface join instead (§ `_render_reference_value` —
+    takes priority over a `render` entry, mirroring source's precedent).
+    Composes the record-index resident
     at the same horizon selection (invariant 3) and `LEFT JOIN`s it in: once
     for the kind's own self key (always), once per `spec.reference_keys`
     entry for its always-on `<p>_key`; under a non-`record_id` election it
@@ -427,6 +503,7 @@ def build_base_render_sql(
     col_types = _column_types(sidecar, f"{_RECORDS_PREFIX}{spec.kind}")
     identities = _state_at_column_order(sidecar, spec)
     reference_keys_by_property = _reference_keys_by_property(spec)
+    render_map: dict[str, "RenderElection"] = dict(spec.render)
 
     self_key_out = spec.column_renames.get("record_index", "record_index")
     select_parts: list[str] = [
@@ -447,7 +524,13 @@ def build_base_render_sql(
         elif identity in _VERBATIM_COLUMNS:
             select_parts.append(f'{qualified} AS "{out}"')
         elif identity in _WALLCLOCK_COLUMNS:
-            select_parts.append(render_anchor_timestamp_expr(anchor, qualified, out))
+            render = render_map.get(identity, "timestamp")
+            assert isinstance(render, str), (
+                f"structural render key {identity!r} must be shorthand"
+            )
+            select_parts.append(
+                render_anchor_temporal_expr(anchor, qualified, out, render)
+            )
         elif rk is not None:
             # A dropped value column (uniform record_index target election)
             # emits no SELECT part at all — the always-on `<p>_key` below is
@@ -456,10 +539,22 @@ def build_base_render_sql(
                 select_parts.append(
                     _render_reference_value(rk, out, col_types, identity)
                 )
+        elif identity in render_map:
+            select_parts.append(
+                _render_elected_column(
+                    qualified,
+                    out,
+                    identity,
+                    render_map[identity],
+                    anchor,
+                    spec.table_name,
+                )
+            )
         else:
             # presentation_id (standalone, non-elected) or a non-reference
-            # prop__<p> payload column: the state-at derivation's value is
-            # codec VARCHAR; CAST back to the sidecar type.
+            # prop__<p> payload column with no declared render entry: the
+            # state-at derivation's value is codec VARCHAR; CAST back to the
+            # sidecar type.
             select_parts.append(
                 f'CAST({qualified} AS {col_types[identity]}) AS "{out}"'
             )
