@@ -58,7 +58,7 @@ def _sidecar_sha256(emit: "Emit") -> str:
 
 
 def _check_source_conformant(emit: "Emit") -> None:
-    """Refuse a source emit that fails any C1-C14 check.
+    """Refuse a source emit that fails any C1-C15 check.
 
     Args:
         emit: The open source emit.
@@ -70,7 +70,7 @@ def _check_source_conformant(emit: "Emit") -> None:
     failing = [result.check for result in report.results if not result.passed]
     if failing:
         raise CorruptValidationError(
-            f"source emit is not C1-C14 conformant; failing checks: {failing}"
+            f"source emit is not C1-C15 conformant; failing checks: {failing}"
         )
 
 
@@ -174,7 +174,7 @@ def corrupt_emit(
     """Apply a corrupter config to an open emit and write the broken emit + defect
     manifest.
 
-    Guards single-branch, verifies the source emit is C1-C14 conformant
+    Guards single-branch, verifies the source emit is C1-C15 conformant
     (conformance.validate; a corrupter refuses to interpret a non-conformant input --
     the agreement invariant's precondition), runs the emit-dependent business rules,
     materializes every source table into a CorruptState, threads the operations in
@@ -205,7 +205,7 @@ def corrupt_emit(
     Raises:
         ExportError: The emit is not single-branch (trunk-only stage; from
             require_single_branch).
-        CorruptValidationError: The source emit fails a C1-C14 check, a business
+        CorruptValidationError: The source emit fails a C1-C15 check, a business
             rule fails (checked against the per-operation evolved schema), a
             retype cast is impossible, out_dir already holds an emit, or the
             working set is left with zero rows across every table after the

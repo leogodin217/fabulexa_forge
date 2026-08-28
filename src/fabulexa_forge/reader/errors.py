@@ -1,7 +1,7 @@
 """Reader error hierarchy for fabulexa_forge.reader.
 
 All errors are operational/structural problems that prevent opening or querying.
-Conformance failures (C1-C11) are reported as failing CheckResults, never raised.
+Conformance failures (C1-C15) are reported as failing CheckResults, never raised.
 """
 
 from __future__ import annotations

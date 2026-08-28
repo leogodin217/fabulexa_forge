@@ -248,7 +248,7 @@ def open_emit(emit_dir: Path) -> Emit:
     either file.
 
     Opening performs the version gate and a structural parse only — it does NOT
-    run conformance (C1–C11). A sidecar may open successfully and still be
+    run conformance (C1–C15). A sidecar may open successfully and still be
     non-conformant; call `validate` to assess conformance.
 
     Args:
