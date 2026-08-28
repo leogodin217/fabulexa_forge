@@ -113,7 +113,9 @@ def _compile_table_spec(
         per window) or `'append'` for a `junction` unit (extract-on-change).
         `keys` is the unit's declared keys for a `state` table (`None` when
         `declare_keys` is off); always `None` for a `junction` table (it
-        declares no keys).
+        declares no keys). `provenance` is copied verbatim from the plan
+        unit (stamped at plan build); `kind_values` stays empty — neither
+        table shape carries a kind-name-as-value column.
     """
     if isinstance(unit, SourceStateTablePlan):
         sql = build_state_render_sql(sidecar, fork_path, unit, anchor, window)
@@ -132,6 +134,7 @@ def _compile_table_spec(
         view_name=None,
         view_sql=None,
         keys=keys,
+        provenance=unit.provenance,
     )
 
 
@@ -158,7 +161,8 @@ def build_source_query_specs(
     Returns:
         One spec per output table, declared order; the event log last. The
         log's `keys` is its plan unit's — `PRIMARY KEY (id)` under
-        `declare_keys`, else None.
+        `declare_keys`, else None. Every spec's `provenance` and
+        `kind_values` are copied verbatim from their plan unit.
 
     Raises:
         ValueError: `window` presence disagrees with the plan's
@@ -189,6 +193,8 @@ def build_source_query_specs(
                 view_name=None,
                 view_sql=None,
                 keys=plan.events.keys,
+                provenance=plan.events.provenance,
+                kind_values=plan.events.kind_values,
             )
         )
     return tuple(specs)

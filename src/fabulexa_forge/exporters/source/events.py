@@ -24,9 +24,10 @@ codec-seam dispatch, § doc Event-log and after-image reach), the sibling
 `source.plan` module (`SourceEdgeSurface`, TYPE_CHECKING only), the sibling
 `source.columns` module (`build_kind_label_expr` — the one labeling
 authority, also the junction render's call site), `exporters.populations`
-(`Population`, TYPE_CHECKING only), config.models (`KeySurface`,
-`TemporalRender`, `RenderElection`, TYPE_CHECKING only, except the four
-typed-election classes — `DateParseElection` / `InstantElection` /
+(`Population`, TYPE_CHECKING only), `exporters.query_spec` (`ColumnProvenance`,
+`KindValueEntry`, `TableKeys`, TYPE_CHECKING only), config.models
+(`KeySurface`, `TemporalRender`, `RenderElection`, TYPE_CHECKING only, except
+the four typed-election classes — `DateParseElection` / `InstantElection` /
 `DecimalElection` / `JsonPrecisionElection` — imported at runtime for the
 election-form dispatch), and stdlib. Never imports `exporters.dimensional.*`
 or `exporters.streaming.*`.
@@ -36,13 +37,20 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from dataclasses import field as _field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
     from fabulexa_forge.config.models import KeySurface, RenderElection
     from fabulexa_forge.exporters.populations import Population
-    from fabulexa_forge.exporters.query_spec import TableKeys
+    from fabulexa_forge.exporters.query_spec import (
+        ColumnProvenance,
+        KindValueEntry,
+        TableKeys,
+    )
     from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -192,6 +200,18 @@ class SourceEventLogPlan:
     at plan time (`RenderKeyIsInstantColumn` — the log's one legal key is
     `event_sim_time`, mode-definitional). The mode-definitional default
     `'timestamp'` when `render` is absent."""
+    provenance: "Mapping[str, ColumnProvenance]" = _field(default_factory=dict)
+    """Always empty: every log column (`id`, `item_type`, `item_id`, `event`,
+    `occurred_at`, `changes`) is computed, not a single-source carry. Present
+    for shape uniformity with the other plan units' `QuerySpec.provenance`
+    copy."""
+    kind_values: "Mapping[str, tuple[KindValueEntry, ...]]" = _field(
+        default_factory=dict
+    )
+    """`item_type` -> one `KindValueEntry` per source, `sources` order — the
+    resolved (post-`kind_labels`) item-type label and the source's raw
+    `kind`. Defaults to empty so a direct test construction bypassing the
+    builder needs no change; `_build_event_log_plan` always stamps it."""
 
 
 # ---------------------------------------------------------------------------

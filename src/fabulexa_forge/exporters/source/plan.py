@@ -27,7 +27,8 @@ Layer-direction invariant: imports the reader, the derivations layer only
 via the mode-neutral `election` module, `fabulexa_forge.errors`,
 `fabulexa_forge._sql` (`cast_predicate_element`, the `where` constant-cast
 seam), the mode-neutral `reserved_names` / `slice_only` / `query_spec`
-(`TableKeys`) / `populations` / `selection_spine` (`WhereEntry`,
+(`TableKeys`, `KindValueEntry`, `build_carried_provenance`; `ColumnProvenance`
+TYPE_CHECKING only) / `populations` / `selection_spine` (`WhereEntry`,
 `check_where_values_observed`, `where_predicate_elements` — the promoted
 `where`-resolution primitives streaming now shares) modules, the sibling
 `source.columns` (`_PROP_PREFIX`) and `source.events`
@@ -43,11 +44,12 @@ exporters.streaming.*.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from dataclasses import field as _field
 from functools import partial
 from typing import TYPE_CHECKING, Literal, TypeVar
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Mapping
 
     from fabulexa_forge.anchor import EffectiveAnchor, TemporalRender
     from fabulexa_forge.config.models import (
@@ -60,6 +62,7 @@ if TYPE_CHECKING:
         SourceTableDecl,
     )
     from fabulexa_forge.exporters.notices import NoticeSink
+    from fabulexa_forge.exporters.query_spec import ColumnProvenance
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import PresentationKeys, Sidecar
 
@@ -106,7 +109,11 @@ from fabulexa_forge.exporters.election import (
 )
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.populations import Population, resolve_populations
-from fabulexa_forge.exporters.query_spec import TableKeys
+from fabulexa_forge.exporters.query_spec import (
+    KindValueEntry,
+    TableKeys,
+    build_carried_provenance,
+)
 from fabulexa_forge.exporters.reserved_names import (
     RESERVED_PRESENTATION_COLUMN_NAME,
     is_reserved_column_name,
@@ -259,6 +266,13 @@ class SourceStateTablePlan:
     already carries). Empty when `decl.render` is absent — every structural
     instant renders the mode-definitional default `timestamp`, every payload
     column renders verbatim."""
+    provenance: "Mapping[str, ColumnProvenance]" = _field(default_factory=dict)
+    """Output column name -> its faithfully carried `(records__<kind>,
+    source column)` provenance, one entry per `columns` pair
+    (`build_carried_provenance`) — every state-table column is a straight
+    projection, rename, or cast-back carry, so every column gets an entry.
+    Defaults to empty so a direct test construction bypassing the builder
+    needs no change; `_build_state_table_plan` always stamps it."""
 
 
 @dataclass(frozen=True)
@@ -313,6 +327,13 @@ class SourceJunctionTablePlan:
     identity, elected form) pairs, `decl.render` iteration order — gated the
     same way as `SourceStateTablePlan.render`. Empty when `decl.render` is
     absent."""
+    provenance: "Mapping[str, ColumnProvenance]" = _field(default_factory=dict)
+    """Output column name -> its faithfully carried `(membership__<K>__<p>,
+    source column)` provenance, one entry per `columns` pair
+    (`build_carried_provenance`) — every junction column is a straight
+    projection, rename, or cast-back carry, so every column gets an entry.
+    Defaults to empty so a direct test construction bypassing the builder
+    needs no change; `_build_junction_table_plan` always stamps it."""
 
 
 @dataclass(frozen=True)
@@ -1779,6 +1800,7 @@ def _build_state_table_plan(
         keys=keys,
         where=where,
         render=render,
+        provenance=build_carried_provenance(source_table, columns),
     )
 
 
@@ -1897,6 +1919,7 @@ def _build_junction_table_plan(
         owner_populations=owner_populations,
         where=where,
         render=render,
+        provenance=build_carried_provenance(source_table, columns),
     )
 
 
@@ -3138,12 +3161,19 @@ def _build_event_log_plan(
         for source in sources
     )
     item_id_type = _resolve_log_item_id_type(sidecar, sources)
+    kind_values = {
+        "item_type": tuple(
+            KindValueEntry(label=source.item_type, source_kind=source.kind)
+            for source in sources
+        )
+    }
     return SourceEventLogPlan(
         name=decl.name,
         sources=sources,
         item_id_type=item_id_type,
         keys=TableKeys(primary_key=("id",), unique=()) if declare_keys else None,
         render=_resolve_event_log_render(decl.render),
+        kind_values=kind_values,
     )
 
 

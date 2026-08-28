@@ -29,7 +29,8 @@ structural-temporal surface `structural_instant_columns`), the derivations
 layer (the state-at derivation's column order / presentation-id helpers),
 fabulexa_forge.errors, the mode-neutral reserved_names, notices (for
 `Notice`, and `NoticeSink` TYPE_CHECKING-only), the mode-neutral query_spec
-and election modules (`TableKeys`; `Election`, `check_identity_election`,
+and election modules (`TableKeys`, `build_carried_provenance`;
+`ColumnProvenance` TYPE_CHECKING only; `Election`, `check_identity_election`,
 `check_edge_union_safety`, `resolve_election`), and slice_only modules,
 config.models (the `RenderElection` typed-election classes —
 `DateParseElection` / `InstantElection` / `DecimalElection` /
@@ -41,7 +42,7 @@ exporters.dimensional.*, exporters.source.*, or exporters.streaming.*.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -58,6 +59,7 @@ if TYPE_CHECKING:
     )
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
+    from fabulexa_forge.exporters.query_spec import ColumnProvenance
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge.config.models import (
@@ -87,7 +89,7 @@ from fabulexa_forge.exporters.election import (
     resolve_election,
 )
 from fabulexa_forge.exporters.notices import Notice
-from fabulexa_forge.exporters.query_spec import TableKeys
+from fabulexa_forge.exporters.query_spec import TableKeys, build_carried_provenance
 from fabulexa_forge.exporters.reserved_names import (
     RESERVED_PRESENTATION_COLUMN_NAME,
     is_reserved_column_name,
@@ -190,6 +192,16 @@ class BaseTableSpec:
     default `timestamp`, every payload column renders verbatim. Defaults to
     empty so existing construction call sites need no change; `_resolve_specs`
     always passes it explicitly."""
+    provenance: "Mapping[str, ColumnProvenance]" = field(default_factory=dict)
+    """Output column name -> its faithfully carried `(records__<kind>,
+    source column)` provenance, one entry per state-at identity
+    (`build_carried_provenance` over `_state_at_identities` +
+    `column_renames`) — projection, rename, and cast-back all carry. The
+    re-derived edge keys (`record_index` / `ref_index__<p>`, renamed
+    `<kind>_key` / `<p>_key`) get no entry: they are computed, not carried,
+    at any horizon. Defaults to empty so a direct test construction
+    bypassing the builder needs no change; `_resolve_specs` always stamps
+    it."""
 
 
 @dataclass(frozen=True)
@@ -1126,9 +1138,12 @@ def _resolve_specs(
         reference_keys = _resolve_reference_keys(
             sidecar, election, kind, properties, known_records_tables, notice_sink
         )
-        valid_identities = frozenset(
-            _state_at_identities(properties, has_pid, identity_surface, reference_keys)
-        ) | frozenset(_key_identities(reference_keys))
+        state_at_ids = _state_at_identities(
+            properties, has_pid, identity_surface, reference_keys
+        )
+        valid_identities = frozenset(state_at_ids) | frozenset(
+            _key_identities(reference_keys)
+        )
 
         matched_entry = rename_by_table.get(table)
         if matched_entry is not None:
@@ -1153,6 +1168,13 @@ def _resolve_specs(
             anchor,
             _column_types(sidecar, table),
         )
+        provenance = build_carried_provenance(
+            table,
+            (
+                (identity, column_renames.get(identity, identity))
+                for identity in state_at_ids
+            ),
+        )
 
         specs.append(
             BaseTableSpec(
@@ -1164,6 +1186,7 @@ def _resolve_specs(
                 reference_keys=reference_keys,
                 column_renames=column_renames,
                 render=render_pairs,
+                provenance=provenance,
             )
         )
 

@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Literal
 from fabulexa_forge.exporters.notices import Notice
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
     from pathlib import Path
 
     from fabulexa_forge.config.models import ExportConfig
@@ -67,6 +67,35 @@ class KindValueEntry:
 
     label: str
     source_kind: str
+
+
+def build_carried_provenance(
+    source_table: str,
+    columns: "Iterable[tuple[str, str]]",
+) -> "dict[str, ColumnProvenance]":
+    """Stamp provenance for a set of straight (source, output) column carries.
+
+    Shared by the source and base plan builders: every output column of a
+    `state` / `junction` table or a base flat table is a faithful, single-
+    source carry — projection, rename, or cast-back — of one source column
+    on one source table (no `lookup` / `derived` mode, unlike dimensional),
+    so one uniform map suffices for all three.
+
+    Args:
+        source_table: The one source table every entry is keyed against.
+        columns: (source column, output column) pairs — the caller's final,
+            post-selection/rename column set. A caller excludes any column
+            whose value is not a faithful single-source carry (e.g. a base
+            table's re-derived `<kind>_key` / `<p>_key` edge keys) before
+            calling this.
+
+    Returns:
+        Output column name -> ColumnProvenance, one entry per pair.
+    """
+    return {
+        out: ColumnProvenance(source_table=source_table, source_column=src)
+        for src, out in columns
+    }
 
 
 @dataclass(frozen=True)
