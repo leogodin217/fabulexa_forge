@@ -1221,3 +1221,119 @@ def test_row_census_drops_malformed_counts() -> None:
     assert census.table_rows == {"records__patient": 100}
     assert sorted(census.history_series["patient"]) == ["ward"]
     assert census.sub_type_rows == {}
+
+
+# ---------------------------------------------------------------------------
+# ColumnSpec / TableSpec documentation-attribute parse floor
+# ---------------------------------------------------------------------------
+
+
+def test_column_documentation_attributes_parse_verbatim_when_well_typed() -> None:
+    """Each of the seven optional column attributes parses verbatim when
+    correctly typed."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": [
+                {
+                    "name": "x",
+                    "type": "VARCHAR",
+                    "description": "A test column.",
+                    "unit": "ns",
+                    "min": 0,
+                    "max": 100,
+                    "immutable": True,
+                    "required": True,
+                    "extra_data": True,
+                }
+            ],
+            "rows": 0,
+        }
+    ]
+    col = Sidecar.from_raw(raw).column("history", "x")
+    assert col.description == "A test column."
+    assert col.unit == "ns"
+    assert col.min == 0
+    assert col.max == 100
+    assert col.immutable is True
+    assert col.required is True
+    assert col.extra_data is True
+
+
+def test_column_documentation_attributes_absent_are_none() -> None:
+    """Absent optional column attributes parse as None."""
+    col = Sidecar.from_raw(_full_raw()).columns("history")[0]
+    assert col.description is None
+    assert col.unit is None
+    assert col.min is None
+    assert col.max is None
+    assert col.immutable is None
+    assert col.required is None
+    assert col.extra_data is None
+
+
+def test_column_description_non_string_parses_as_none() -> None:
+    """A non-string description parses as absent (None), never raises."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": [{"name": "x", "type": "VARCHAR", "description": 42}],
+            "rows": 0,
+        }
+    ]
+    col = Sidecar.from_raw(raw).column("history", "x")
+    assert col.description is None
+
+
+def test_column_min_boolean_parses_as_none() -> None:
+    """A boolean min is excluded from the numeric parse and reads as absent."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": [{"name": "x", "type": "VARCHAR", "min": True}],
+            "rows": 0,
+        }
+    ]
+    col = Sidecar.from_raw(raw).column("history", "x")
+    assert col.min is None
+
+
+def test_column_immutable_non_bool_parses_as_none() -> None:
+    """A non-bool (int) immutable parses as absent (None)."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": [{"name": "x", "type": "VARCHAR", "immutable": 1}],
+            "rows": 0,
+        }
+    ]
+    col = Sidecar.from_raw(raw).column("history", "x")
+    assert col.immutable is None
+
+
+def test_table_description_parses_verbatim() -> None:
+    """tables[].description parses verbatim when present."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "description": "The change log.",
+            "columns": [{"name": "x", "type": "VARCHAR"}],
+            "rows": 0,
+        }
+    ]
+    assert Sidecar.from_raw(raw).table("history").description == "The change log."
+
+
+def test_table_description_absent_is_none() -> None:
+    """tables[].description parses as None when absent."""
+    assert Sidecar.from_raw(_minimal_raw()).table("history").description is None

@@ -8,6 +8,7 @@ from fabulexa_forge.reader.conformance import (
     run_check,
     validate,
 )
+from fabulexa_forge.reader.documentation import ColumnDoc, Documentation, EnumOption
 from fabulexa_forge.reader.emit import Emit, open_emit, pin_session_timezone
 from fabulexa_forge.reader.errors import (
     ColumnNotFoundError,
@@ -59,11 +60,14 @@ __all__ = [
     "BranchCensus",
     "BranchEntry",
     "CheckResult",
+    "ColumnDoc",
     "ColumnNotFoundError",
     "ColumnSpec",
     "ConformanceReport",
+    "Documentation",
     "Emit",
     "EmitNotFoundError",
+    "EnumOption",
     "KeySpace",
     "PartitionKey",
     "PresentationKeys",

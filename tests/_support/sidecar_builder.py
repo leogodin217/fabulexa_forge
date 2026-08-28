@@ -22,6 +22,7 @@ from fabulexa_forge.reader.sidecar import ColumnSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import Literal
 
     from fabulexa_forge.reader import TemporalClass
 
@@ -45,6 +46,13 @@ def prop_column(
     history_tracked: bool,
     temporal_class: "TemporalClass",
     references: str | None = None,
+    description: str | None = None,
+    unit: str | None = None,
+    min: float | int | None = None,
+    max: float | int | None = None,
+    immutable: "Literal[True] | None" = None,
+    required: "Literal[True] | None" = None,
+    extra_data: "Literal[True] | None" = None,
 ) -> dict[str, object]:
     """Build one value-carrying sidecar column.
 
@@ -59,7 +67,10 @@ def prop_column(
     requires history_tracked True, 'slice_only' requires history_tracked False.
     A negative variant that breaks the pairing, the enum, or an implication
     mutates the returned dict; a defect is never expressible through the
-    constructor.
+    constructor. The seven optional documentation attributes are emitted into
+    the column dict iff not None; the three flags are typed Literal[True] —
+    the schema never renders them false, and this constructor builds only
+    conformant columns (negative variants mutate the returned dict, as today).
 
     Args:
         name: Column name, including its prop__ prefix.
@@ -68,6 +79,16 @@ def prop_column(
         temporal_class: The column's point-in-time contract.
         references: The record kind this column's value equality-joins against,
             when the column is a foreign-key projection. Omitted when None.
+        description: The property's business meaning. Omitted when None.
+        unit: The property's unit of measure. Omitted when None.
+        min: The property's inclusive numeric floor. Omitted when None.
+        max: The property's inclusive numeric ceiling. Omitted when None.
+        immutable: True iff the schema declares the property immutable.
+            Omitted when None.
+        required: True iff the schema declares the property required.
+            Omitted when None.
+        extra_data: True iff the schema declares the property extra_data.
+            Omitted when None.
 
     Returns:
         A column dict suitable for a table's `columns` list.
@@ -92,6 +113,20 @@ def prop_column(
         column["references"] = references
     column["history_tracked"] = history_tracked
     column["temporal_class"] = temporal_class
+    if description is not None:
+        column["description"] = description
+    if unit is not None:
+        column["unit"] = unit
+    if min is not None:
+        column["min"] = min
+    if max is not None:
+        column["max"] = max
+    if immutable is not None:
+        column["immutable"] = immutable
+    if required is not None:
+        column["required"] = required
+    if extra_data is not None:
+        column["extra_data"] = extra_data
     return column
 
 

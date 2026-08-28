@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from typing import Literal, Mapping, Sequence, cast
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
+from fabulexa_forge.reader._enum_domains import parse_enum_domains_glossed
+from fabulexa_forge.reader.documentation import Documentation
 from fabulexa_forge.reader.errors import (
     ColumnNotFoundError,
     PresentationKeysInvalidError,
@@ -38,7 +40,13 @@ _TABLE_CATEGORIES: frozenset[str] = frozenset({"fixed", "records", "membership"}
 
 @dataclass(frozen=True)
 class ColumnSpec:
-    """One column of a base-layer table, as declared in base.json."""
+    """One column of a base-layer table, as declared in base.json.
+
+    The seven optional per-column attributes below are carried verbatim
+    (absent -> None), never validated or coerced at parse — C1 owns schema
+    conformance. The None defaults are absence detection on an internal
+    runtime type, not invented values.
+    """
 
     name: str
     type: str  # DuckDB type literal, e.g. "BIGINT", "VARCHAR"
@@ -50,6 +58,13 @@ class ColumnSpec:
     # see an out-of-enum value); absent -> None. Narrows to TemporalClass only through
     # Sidecar.temporal_class.
     temporal_class: str | None
+    description: str | None = None
+    unit: str | None = None
+    min: float | int | None = None
+    max: float | int | None = None
+    immutable: bool | None = None
+    required: bool | None = None
+    extra_data: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -64,6 +79,9 @@ class TableSpec:
     # Schema-required for membership — C1 enforces.
     columns: tuple[ColumnSpec, ...]
     rows: int
+    # tables[].description carried verbatim (absent -> None); always None for the
+    # fixed history table, per the contract.
+    description: str | None = None
 
 
 @dataclass(frozen=True)
@@ -121,12 +139,45 @@ def _parse_column(raw_col: object, table_name: str, col_idx: int) -> ColumnSpec:
     temporal_class: str | None = (
         temporal_class_raw if isinstance(temporal_class_raw, str) else None
     )
+    description_raw = raw_col.get("description")
+    description: str | None = (
+        description_raw if isinstance(description_raw, str) else None
+    )
+    unit_raw = raw_col.get("unit")
+    unit: str | None = unit_raw if isinstance(unit_raw, str) else None
+    min_raw = raw_col.get("min")
+    min_val: float | int | None = (
+        min_raw
+        if isinstance(min_raw, (int, float)) and not isinstance(min_raw, bool)
+        else None
+    )
+    max_raw = raw_col.get("max")
+    max_val: float | int | None = (
+        max_raw
+        if isinstance(max_raw, (int, float)) and not isinstance(max_raw, bool)
+        else None
+    )
+    immutable_raw = raw_col.get("immutable")
+    immutable: bool | None = immutable_raw if isinstance(immutable_raw, bool) else None
+    required_raw = raw_col.get("required")
+    required: bool | None = required_raw if isinstance(required_raw, bool) else None
+    extra_data_raw = raw_col.get("extra_data")
+    extra_data: bool | None = (
+        extra_data_raw if isinstance(extra_data_raw, bool) else None
+    )
     return ColumnSpec(
         name=col_name,
         type=col_type,
         references=references,
         history_tracked=history_tracked,
         temporal_class=temporal_class,
+        description=description,
+        unit=unit,
+        min=min_val,
+        max=max_val,
+        immutable=immutable,
+        required=required,
+        extra_data=extra_data,
     )
 
 
@@ -179,6 +230,11 @@ def _parse_table(raw_table: object, table_idx: int) -> TableSpec:
     property_raw = raw_table.get("property")
     property_val: str | None = property_raw if isinstance(property_raw, str) else None
 
+    description_raw = raw_table.get("description")
+    description: str | None = (
+        description_raw if isinstance(description_raw, str) else None
+    )
+
     return TableSpec(
         name=name,
         category=category_raw,
@@ -186,6 +242,7 @@ def _parse_table(raw_table: object, table_idx: int) -> TableSpec:
         property=property_val,
         columns=columns,
         rows=rows_raw,
+        description=description,
     )
 
 
@@ -286,8 +343,11 @@ def _parse_enum_domains(
 
     Each option is a value object (`{"value": ..., "description"?: ...}`,
     contract § Closed-domain registry); this view extracts the allowed value
-    strings in declaration order. The optional per-value gloss is not
-    surfaced here — a consumer that needs it reads `Sidecar.raw`.
+    strings in declaration order, sharing its parse floor with
+    `parse_enum_domains_glossed` (`Documentation.enum_options`'s source) so
+    the two views can never disagree on the declared value set. The optional
+    per-value gloss is not surfaced here — a consumer that needs it reads
+    `Sidecar.documentation().enum_options`.
 
     Args:
         raw: The raw enum_domains value from the sidecar.
@@ -295,22 +355,13 @@ def _parse_enum_domains(
     Returns:
         A nested {kind: {property: (option, ...)}} mapping, empty when absent.
     """
-    if not isinstance(raw, dict):
-        return {}
-    result: dict[str, dict[str, tuple[str, ...]]] = {}
-    for kind, props in raw.items():
-        if isinstance(props, dict):
-            inner: dict[str, tuple[str, ...]] = {}
-            for prop, options in props.items():
-                if isinstance(options, list):
-                    inner[prop] = tuple(
-                        entry["value"]
-                        for entry in options
-                        if isinstance(entry, dict)
-                        and isinstance(entry.get("value"), str)
-                    )
-            result[kind] = inner
-    return result
+    glossed = parse_enum_domains_glossed(raw)
+    return {
+        kind: {
+            prop: tuple(value for value, _ in pairs) for prop, pairs in props.items()
+        }
+        for kind, props in glossed.items()
+    }
 
 
 @dataclass(frozen=True)
@@ -1267,6 +1318,7 @@ class Sidecar:
         self._sub_type_columns = sub_type_columns
         self._presentation_keys_raw = presentation_keys_raw
         self._row_census = row_census
+        self._documentation: Documentation | None = None
 
     @classmethod
     def from_raw(cls, raw: Mapping[str, object]) -> "Sidecar":
@@ -1458,7 +1510,7 @@ class Sidecar:
         """
         return self.table(table_name).columns
 
-    def _column(self, table_name: str, column_name: str) -> ColumnSpec:
+    def column(self, table_name: str, column_name: str) -> ColumnSpec:
         """The ColumnSpec named `column_name` on `table_name`.
 
         Args:
@@ -1506,7 +1558,7 @@ class Sidecar:
                 value). The non-conformant messages direct the caller to
                 `fabulexa-forge validate`. No class is ever inferred.
         """
-        col = self._column(table_name, column_name)
+        col = self.column(table_name, column_name)
         qualified = f"{table_name}.{column_name}"
         if col.history_tracked is None and col.temporal_class is None:
             raise TemporalClassUnavailableError(
@@ -1641,3 +1693,17 @@ class Sidecar:
         return _build_presentation_keys(
             self._presentation_keys_raw, self._tables, self._enum_domains
         )
+
+    def documentation(self) -> Documentation:
+        """The emit's documentation view.
+
+        Lazy: constructed on first call and cached. Never raises on
+        construction — documentation has no consistency rules; identifier
+        errors surface per query.
+
+        Returns:
+            The Documentation view over this sidecar.
+        """
+        if self._documentation is None:
+            self._documentation = Documentation(self)
+        return self._documentation
