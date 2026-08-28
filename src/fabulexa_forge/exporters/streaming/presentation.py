@@ -30,7 +30,6 @@ from fabulexa_forge.errors import (
     StreamOutputNameCollision,
     StreamRenameUnresolvable,
 )
-from fabulexa_forge.exporters.streaming.routing import known_records_kinds
 
 if TYPE_CHECKING:
     from fabulexa_forge.config.models import KeySurface, MembershipRef, StreamConfig
@@ -358,7 +357,7 @@ def resolve_stream_kind_vocabulary(
         StreamKindLabelCollision: A label or a per-stream kind_label equals
             a different kind's rendered name.
     """
-    known_kinds = frozenset(known_records_kinds(sidecar))
+    known_kinds = frozenset(sidecar.record_kinds())
     kind_labels = config.kind_labels or {}
 
     for kind in kind_labels:

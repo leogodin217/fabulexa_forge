@@ -54,7 +54,6 @@ from fabulexa_forge.errors import StreamInitNothingToStream
 from fabulexa_forge.exporters.keys_init import propose_key_election, render_keys_block
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
-from fabulexa_forge.exporters.streaming.routing import known_records_kinds
 
 if TYPE_CHECKING:
     from fabulexa_forge.exporters.notices import NoticeSink
@@ -592,7 +591,7 @@ def generate_stream_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
             TemporalClassUnavailableError on an emit predating per-column
             temporal classes.
     """
-    if not known_records_kinds(emit.sidecar):
+    if not emit.sidecar.record_kinds():
         raise StreamInitNothingToStream(
             "this emit carries no records kind; a candidate streaming config"
             " that cannot stream is not proposed"

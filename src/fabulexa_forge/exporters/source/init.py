@@ -87,29 +87,6 @@ class _JunctionUnit:
     whole junction."""
 
 
-# ---------------------------------------------------------------------------
-# Sidecar-driven kind/unit enumeration
-# ---------------------------------------------------------------------------
-
-
-def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
-    """Every kind with a declared `records__<kind>` table, sidecar table order.
-
-    Args:
-        sidecar: The open emit's sidecar.
-
-    Returns:
-        Record kinds, in sidecar table-declaration order.
-    """
-    kinds: list[str] = []
-    for table in sidecar.tables():
-        if table.category == "records":
-            kind = table.record_kind
-            assert kind is not None, "records table must declare record_kind"
-            kinds.append(kind)
-    return tuple(kinds)
-
-
 def _proposed_units(sidecar: "Sidecar") -> "tuple[_StateUnit | _JunctionUnit, ...]":
     """One unit per population: one per sub-type of a sub-typed kind, one per
     flat kind, one per `membership__<K>__<p>` table.
@@ -458,7 +435,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
         A YAML string with candidate config and inline comments.
     """
     sidecar = emit.sidecar
-    known_kinds = _known_records_kinds(sidecar)
+    known_kinds = sidecar.record_kinds()
     proposal = propose_key_election(sidecar)
 
     buf = io.StringIO()

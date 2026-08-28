@@ -90,7 +90,6 @@ from fabulexa_forge.exporters.streaming.presentation import (
 )
 from fabulexa_forge.exporters.streaming.routing import (
     kind_reference_targets,
-    known_records_kinds,
     membership_reference_fields,
     membership_route_attributes,
     resolve_subtype_index,
@@ -566,7 +565,7 @@ def _gate_kind_stream_reference_edges(
         ElectionUnionUnsafe: An admitted target domain's resolved key spaces
             contain a pairwise-unsafe pair.
     """
-    known_kinds = frozenset(known_records_kinds(sidecar))
+    known_kinds = frozenset(sidecar.record_kinds())
     targets = kind_reference_targets(
         sidecar, stream.kind, stream.properties, known_kinds
     )
@@ -603,7 +602,7 @@ def _gate_membership_stream_edges(
     if not reference_fields:
         return
     for field in reference_fields:
-        for kind in known_records_kinds(sidecar):
+        for kind in sidecar.record_kinds():
             domain = sidecar.subtype_values(kind)
             check_edge_union_safety(
                 election,
@@ -1622,7 +1621,7 @@ def _iter_kind_streams_inner(
     key_output_key_by_stream: dict[str, str] = {}
     envelope_kind_by_stream: dict[str, str] = {}
     identity_index_cache: dict[tuple[str, str], dict[str, str]] = {}
-    known_kinds = frozenset(known_records_kinds(sidecar))
+    known_kinds = frozenset(sidecar.record_kinds())
 
     for stream in config.streams:
         assert isinstance(stream, KindStream)

@@ -168,6 +168,8 @@ def _make_event(
     record_id: str = "r1",
     topic: str = "topic_a",
     event_sim_time: int = 1_000_000,
+    key_column: str = "record_id",
+    key_value: str | None = None,
 ) -> StreamEvent:
     return StreamEvent(
         seq=seq,
@@ -179,8 +181,8 @@ def _make_event(
         after={"record_id": record_id},
         topic=topic,
         route_table="entity",
-        key_column="record_id",
-        key_value=record_id,
+        key_column=key_column,
+        key_value=key_value if key_value is not None else record_id,
     )
 
 
@@ -366,7 +368,8 @@ def test_open_raises_kafka_delivery_error_on_wrong_partition_count(
 
 
 def test_deliver_keys_by_record_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """deliver() keys the message as encode_pinned({"record_id": ...}) (UTF-8)."""
+    """deliver() keys the message as encode_pinned({event.key_column: event.key_value})
+    (UTF-8) — under the default election, key_column is 'record_id'."""
     from fabulexa_forge.exporters.streaming.encoding import encode_pinned
     from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
 
@@ -395,6 +398,44 @@ def test_deliver_keys_by_record_id(monkeypatch: pytest.MonkeyPatch) -> None:
     expected_key = encode_pinned({"record_id": "my-record"}).encode("utf-8")
     topic, key, value, _ts = producers[0].produced[0]
     assert key == expected_key
+    _run(sink.aclose())
+
+
+def test_deliver_keys_by_elected_key_column(monkeypatch: pytest.MonkeyPatch) -> None:
+    """deliver() keys on {event.key_column: event.key_value}, not a hardcoded
+    'record_id' — under a non-default election or a rename, the live key follows
+    the elected/renamed surface, matching the batch kafka_sink path."""
+    from fabulexa_forge.exporters.streaming.encoding import encode_pinned
+    from fabulexa_forge.exporters.streaming.mixer.sink import KafkaSink
+
+    producers: list[_FakeProducer] = []
+
+    class _SpyProducer(_FakeProducer):
+        def __init__(self, cfg: dict[str, Any]) -> None:
+            super().__init__(cfg)
+            producers.append(self)
+
+    fake_ck = _make_fake_ck(producer_cls=_SpyProducer)
+    _install_fake_ck(monkeypatch, fake_ck)
+
+    anchor = make_anchor()
+    sink = _run(
+        KafkaSink.open(
+            bootstrap_servers="localhost:9092",
+            topic_set=("topic_a",),
+            render_value=_render_value,
+            anchor=anchor,
+        )
+    )
+    event = _make_event(
+        record_id="my-record", key_column="customer_ref", key_value="CUST-42"
+    )
+    _run(sink.deliver(event))
+
+    expected_key = encode_pinned({"customer_ref": "CUST-42"}).encode("utf-8")
+    topic, key, value, _ts = producers[0].produced[0]
+    assert key == expected_key
+    assert b"my-record" not in key
     _run(sink.aclose())
 
 

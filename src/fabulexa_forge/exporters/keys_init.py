@@ -25,29 +25,6 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import PresentationKeys, Sidecar
 
 
-def _known_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
-    """Every kind with a declared `records__<kind>` table, sidecar table order.
-
-    Mirrors the established codebase convention (`exporters.source.plan`,
-    `exporters.source.init`, `exporters.streaming.routing`): reads the
-    sidecar's structured `TableSpec.category` / `record_kind` fields, never
-    the table name.
-
-    Args:
-        sidecar: The open emit's sidecar.
-
-    Returns:
-        Record kinds, in sidecar table-declaration order.
-    """
-    kinds: list[str] = []
-    for table in sidecar.tables():
-        if table.category == "records":
-            kind = table.record_kind
-            assert kind is not None, "records table must declare record_kind"
-            kinds.append(kind)
-    return tuple(kinds)
-
-
 def population_declared(
     presentation_keys: "PresentationKeys | None", kind: str, sub_type: str | None
 ) -> bool:
@@ -114,7 +91,7 @@ def propose_key_election(sidecar: "Sidecar") -> KeyElectionProposal:
     presentation_keys = sidecar.presentation_keys()
     active: "dict[str, KeySurface | dict[str, KeySurface]]" = {}
     alternatives: "dict[str, list[KeySurface]]" = {}
-    for kind in _known_kinds(sidecar):
+    for kind in sidecar.record_kinds():
         domain = sidecar.subtype_values(kind)
         sub_types: tuple[str | None, ...] = domain if domain else (None,)
         declared = [

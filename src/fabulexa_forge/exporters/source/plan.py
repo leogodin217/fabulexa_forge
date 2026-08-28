@@ -343,35 +343,6 @@ class SourcePlan:
     """The event-log unit, or None when no `events` block is declared."""
 
 
-# ---------------------------------------------------------------------------
-# Sidecar-known kinds (the edge-resolution admitted universe)
-# ---------------------------------------------------------------------------
-
-
-def _known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
-    """Every kind with a declared `records__<kind>` table, sidecar table order.
-
-    The closed, data-free universe of kinds a junction member field's
-    per-row `member__<f>__kind` value could legally name. Independent of
-    which kinds the author *declares* a `tables` entry for — a reference to
-    an undeclared kind still renders in its elected surface (design doc §
-    Populations, "an undeclared kind may still carry an election").
-
-    Args:
-        sidecar: The open emit's sidecar.
-
-    Returns:
-        Record kinds, in sidecar table-declaration order.
-    """
-    kinds: list[str] = []
-    for table in sidecar.tables():
-        if table.category == "records":
-            kind = table.record_kind
-            assert kind is not None, "records table must declare record_kind"
-            kinds.append(kind)
-    return tuple(kinds)
-
-
 def _resolve_kind_labels(
     known_kinds: "tuple[str, ...]",
     kind_labels: "dict[str, str] | None",
@@ -3677,7 +3648,7 @@ def build_source_plan(
     source_config = config.source
     assert source_config is not None, "mode='source' guarantees a source section"
 
-    known_kinds = _known_records_kinds(sidecar)
+    known_kinds = sidecar.record_kinds()
     declare_keys = source_config.declare_keys
     kind_labels = _resolve_kind_labels(known_kinds, source_config.kind_labels)
 
