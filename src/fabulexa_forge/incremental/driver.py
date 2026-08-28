@@ -227,6 +227,8 @@ def _build_windowed_report(
     real `WrittenRelation.row_count` for CLI presentation. `keys` follows
     the CSV/DuckDB constraint-surface split `write_query_specs` uses for
     full exports: DuckDB carries the spec's declared keys, CSV always None.
+    `provenance` and `kind_values` are forwarded from each spec verbatim —
+    windowed and full stamping are identical for the same table.
 
     Args:
         specs: The compiled windowed QuerySpecs, in plan iteration order.
@@ -245,6 +247,8 @@ def _build_windowed_report(
                     columns=written[spec.table_name].columns,
                     row_count=None,
                     keys=spec.keys if include_keys else None,
+                    provenance=spec.provenance,
+                    kind_values=spec.kind_values,
                 )
                 for spec in specs
             )

@@ -293,7 +293,10 @@ def build_query_specs(
             playback) resolve and pass it.
 
     Returns:
-        One QuerySpec per declared table, in declaration order.
+        One QuerySpec per declared table, in declaration order. Each spec's
+        `provenance` is `build_grain_sql`'s fifth element, stamped
+        verbatim; `kind_values` stays empty — dimensional has no
+        kind-name-as-value output column.
 
     Raises:
         ExportError: The existing rules; plus, when window is not None:
@@ -337,7 +340,7 @@ def build_query_specs(
             anchor=anchor,
             election=resolved_election,
         )
-        sql, write_mode, view_name, view_sql = build_grain_sql(
+        sql, write_mode, view_name, view_sql, provenance = build_grain_sql(
             table_decl,
             source_table_name,
             sidecar,
@@ -372,6 +375,7 @@ def build_query_specs(
                 write_mode=write_mode,
                 view_name=view_name,
                 view_sql=view_sql,
+                provenance=provenance,
             )
         )
 

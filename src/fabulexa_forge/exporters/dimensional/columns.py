@@ -12,6 +12,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ColumnDecl, DimensionalConfig, TableDecl
     from fabulexa_forge.exporters.election import Election
@@ -32,6 +34,7 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.election import resolve_election
+from fabulexa_forge.exporters.query_spec import ColumnProvenance
 from fabulexa_forge.reader.errors import TableNotFoundError
 
 __all__ = ["render_anchor_temporal_expr", "render_typed_literal"]
@@ -643,3 +646,106 @@ def build_column_expr(
             sidecar=sidecar,
         )
     raise AssertionError(f"no column mode set on '{col_decl.name}'")
+
+
+def resolve_carried_source_column(col_decl: "ColumnDecl") -> str | None:
+    """Resolve the single source column name a ColumnDecl's value faithfully carries.
+
+    Covers every source-bearing spelling: `from` -> from_; `correlation` ->
+    correlation; the pure per-row value renderings `derived: decimal` /
+    `json_precision` / `date_parse` / `value_map` -> the mode's own `from_`;
+    `derived: timestamp` -> timestamp.source. Every other mode (`null`, `fk`,
+    `lookup`, `derived: ordinal` / `elapsed` / `scd_window`) carries no single
+    faithfully-mapped source column and returns None — a computed value, not
+    a carry.
+
+    Args:
+        col_decl: The output column declaration.
+
+    Returns:
+        The source column name as declared, or None when the mode reads no
+        single source column.
+    """
+    if col_decl.from_ is not None:
+        return col_decl.from_
+    if col_decl.correlation is not None:
+        return col_decl.correlation
+    if col_decl.derived is not None:
+        derived = col_decl.derived
+        if derived.decimal is not None:
+            return derived.decimal.from_
+        if derived.json_precision is not None:
+            return derived.json_precision.from_
+        if derived.date_parse is not None:
+            return derived.date_parse.from_
+        if derived.value_map is not None:
+            return derived.value_map.from_
+        if derived.timestamp is not None:
+            return derived.timestamp.source
+    return None
+
+
+def build_column_provenance(
+    col_decl: "ColumnDecl",
+    source_table_name: str,
+    anchor_kind: str,
+) -> ColumnProvenance | None:
+    """Stamp one output column's provenance entry, or None for a computed column.
+
+    A `lookup` column's entry names the looked-up property's own source:
+    `records__<terminal kind>` / `prop__<property>` — the terminal kind is
+    `lookup.to` when given, else the grain's own anchor_kind (zero-hop self
+    lookup). Every other carried column (`resolve_carried_source_column`)
+    is keyed against source_table_name — the grain's resolved DuckDB source
+    table, the same identity already used for column-type resolution.
+
+    Args:
+        col_decl: The output column declaration.
+        source_table_name: The grain's resolved DuckDB source table name.
+        anchor_kind: The grain's record kind (table_decl.source.kind).
+
+    Returns:
+        The column's ColumnProvenance, or None for a computed column
+        (`null`, `fk`, `derived: ordinal` / `elapsed` / `scd_window`).
+    """
+    if col_decl.lookup is not None:
+        terminal_kind = (
+            col_decl.lookup.to if col_decl.lookup.to is not None else anchor_kind
+        )
+        return ColumnProvenance(
+            source_table=f"records__{terminal_kind}",
+            source_column=f"prop__{col_decl.lookup.property}",
+        )
+    src = resolve_carried_source_column(col_decl)
+    if src is None:
+        return None
+    return ColumnProvenance(source_table=source_table_name, source_column=src)
+
+
+def build_table_provenance(
+    table_decl: "TableDecl",
+    source_table_name: str,
+    anchor_kind: str,
+) -> "Mapping[str, ColumnProvenance]":
+    """Stamp every declared column's provenance entry for one output table.
+
+    Shared by every grain builder (records, history_point, history_interval,
+    membership, scd: type2) — all resolve the same source_table_name that
+    `validate_table` already returned, so one pass over table_decl.columns
+    covers every grain uniformly.
+
+    Args:
+        table_decl: The output table declaration.
+        source_table_name: The grain's resolved DuckDB source table name.
+        anchor_kind: The grain's record kind (table_decl.source.kind).
+
+    Returns:
+        Output column name -> ColumnProvenance, for every faithfully carried
+        column; computed columns get no entry.
+    """
+    provenance: dict[str, ColumnProvenance] = {}
+    for col_decl in table_decl.columns:
+        entry = build_column_provenance(col_decl, source_table_name, anchor_kind)
+        if entry is not None:
+            provenance[col_decl.name] = entry
+    return provenance

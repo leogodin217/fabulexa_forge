@@ -10,7 +10,13 @@ from pathlib import Path
 from _support.duckdb_introspect import constraint_types
 
 from exporters._emit_fixtures import build_test_emit
-from fabulexa_forge.exporters.query_spec import QuerySpec, TableKeys, write_query_specs
+from fabulexa_forge.exporters.query_spec import (
+    ColumnProvenance,
+    KindValueEntry,
+    QuerySpec,
+    TableKeys,
+    write_query_specs,
+)
 from fabulexa_forge.reader.emit import open_emit
 
 
@@ -71,3 +77,90 @@ def test_write_query_specs_csv_arm_ignores_keys(tmp_path: Path) -> None:
     row_counts = {table.name: table.row_count for table in report.tables}
     assert row_counts == {"dim_entity": 2}
     assert (out_dir / "dim_entity.csv").exists()
+
+
+def test_write_query_specs_duckdb_arm_forwards_provenance_verbatim(
+    tmp_path: Path,
+) -> None:
+    """`write_query_specs` forwards a spec's `provenance` and `kind_values`
+    onto the matching `TableReport` unchanged, under the DuckDB arm."""
+    emit_dir = build_test_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+
+    provenance = {
+        "id": ColumnProvenance(
+            source_table="records__entity", source_column="record_id"
+        )
+    }
+    kind_values = {"item_type": (KindValueEntry(label="Entity", source_kind="entity"),)}
+    spec = QuerySpec(
+        table_name="dim_entity",
+        sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
+        write_mode="create",
+        view_name=None,
+        view_sql=None,
+        provenance=provenance,
+        kind_values=kind_values,
+    )
+
+    with open_emit(emit_dir) as emit:
+        report = write_query_specs(emit, [spec], out_path, "duckdb")
+
+    table = report.tables[0]
+    assert table.provenance == provenance
+    assert table.kind_values == kind_values
+
+
+def test_write_query_specs_csv_arm_forwards_provenance_verbatim(
+    tmp_path: Path,
+) -> None:
+    """`write_query_specs` forwards a spec's `provenance` and `kind_values`
+    onto the matching `TableReport` unchanged, under the CSV arm."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "csv_out"
+    out_dir.mkdir()
+
+    provenance = {
+        "id": ColumnProvenance(
+            source_table="records__entity", source_column="record_id"
+        )
+    }
+    kind_values = {"item_type": (KindValueEntry(label="Entity", source_kind="entity"),)}
+    spec = QuerySpec(
+        table_name="dim_entity",
+        sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
+        write_mode="create",
+        view_name=None,
+        view_sql=None,
+        provenance=provenance,
+        kind_values=kind_values,
+    )
+
+    with open_emit(emit_dir) as emit:
+        report = write_query_specs(emit, [spec], out_dir, "csv")
+
+    table = report.tables[0]
+    assert table.provenance == provenance
+    assert table.kind_values == kind_values
+
+
+def test_write_query_specs_forwards_empty_maps_by_default(tmp_path: Path) -> None:
+    """A spec that stamps nothing forwards empty `provenance` / `kind_values`
+    onto its `TableReport` -- absence is not silently upgraded."""
+    emit_dir = build_test_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+
+    spec = QuerySpec(
+        table_name="dim_entity",
+        sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
+        write_mode="create",
+        view_name=None,
+        view_sql=None,
+    )
+
+    with open_emit(emit_dir) as emit:
+        report = write_query_specs(emit, [spec], out_path, "duckdb")
+
+    table = report.tables[0]
+    assert table.provenance == {}
+    assert table.kind_values == {}

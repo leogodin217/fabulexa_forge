@@ -12,12 +12,13 @@ when `declare_keys` meets a CSV target.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from fabulexa_forge.exporters.notices import Notice
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     from fabulexa_forge.config.models import ExportConfig
@@ -43,6 +44,32 @@ class TableKeys:
 
 
 @dataclass(frozen=True)
+class ColumnProvenance:
+    """The one source column that faithfully fed an output column.
+
+    Stamped at plan compile for columns whose value is the faithful carry
+    of exactly one source (table, column). Computed and multi-source
+    columns get no entry — absence is the "inherits nothing" answer.
+    """
+
+    source_table: str
+    source_column: str
+
+
+@dataclass(frozen=True)
+class KindValueEntry:
+    """One rendered label of a kind-name-as-value output column.
+
+    label is the post-`kind_labels` rendered value; source_kind names the
+    kind whose rows render under it. List order is the plan's event-source
+    compile order.
+    """
+
+    label: str
+    source_kind: str
+
+
+@dataclass(frozen=True)
 class TableReport:
     """One output table as written.
 
@@ -50,13 +77,17 @@ class TableReport:
     from the materialized relation via the writers' DESCRIBE authority.
     `row_count` is None on windowed invocations. `keys` is the table's
     declared `TableKeys`, or None when nothing was declared or the
-    declaration was CSV-dropped.
+    declaration was CSV-dropped. `provenance` and `kind_values` are forwarded
+    verbatim from the compiled `QuerySpec` that produced this table — no
+    default, so every report-assembly call site states them explicitly.
     """
 
     name: str
     columns: tuple[tuple[str, str], ...]
     row_count: int | None
     keys: TableKeys | None
+    provenance: "Mapping[str, ColumnProvenance]"
+    kind_values: "Mapping[str, tuple[KindValueEntry, ...]]"
 
 
 @dataclass(frozen=True)
@@ -78,6 +109,10 @@ class QuerySpec:
     the existing shape. A windowed compile tags facts and SCD-2 version
     tables 'append', type-1 dims 'replace', and carries the companion view
     (name + DDL SELECT body) for SCD-2 dims that declare a valid_to column.
+
+    `provenance` and `kind_values` are keyed by output column name
+    (post-rename). Empty means nothing stamped; every mode engine stamps at
+    plan compile (tests pin per-mode stamping).
     """
 
     table_name: str
@@ -86,6 +121,10 @@ class QuerySpec:
     view_name: str | None
     view_sql: str | None
     keys: TableKeys | None = None
+    provenance: "Mapping[str, ColumnProvenance]" = field(default_factory=dict)
+    kind_values: "Mapping[str, tuple[KindValueEntry, ...]]" = field(
+        default_factory=dict
+    )
 
 
 NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"
@@ -202,6 +241,8 @@ def write_query_specs(
                     columns=written[spec.table_name].columns,
                     row_count=written[spec.table_name].row_count,
                     keys=spec.keys,
+                    provenance=spec.provenance,
+                    kind_values=spec.kind_values,
                 )
                 for spec in specs
             )
@@ -218,6 +259,8 @@ def write_query_specs(
                 columns=relation.columns,
                 row_count=relation.row_count,
                 keys=None,
+                provenance=spec.provenance,
+                kind_values=spec.kind_values,
             )
         )
     return ExportReport(tables=tuple(tables))

@@ -66,12 +66,16 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 columns=(("id", "BIGINT"), ("mrn", "VARCHAR")),
                 row_count=row_count,
                 keys=TableKeys(primary_key=("id",), unique=(("mrn",),)),
+                provenance={},
+                kind_values={},
             ),
             TableReport(
                 name="visits",
                 columns=(("visit_id", "BIGINT"),),
                 row_count=row_count,
                 keys=None,
+                provenance={},
+                kind_values={},
             ),
         )
     )

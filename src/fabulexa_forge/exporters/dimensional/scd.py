@@ -26,6 +26,7 @@ from fabulexa_forge.exporters.dimensional.columns import (
     build_json_precision_expr,
     build_timestamp_expr,
     build_value_map_expr,
+    resolve_carried_source_column,
     resolve_source_column_type,
 )
 from fabulexa_forge.reader.relations import build_records_relation_sql
@@ -41,44 +42,6 @@ _VERSIONS_ALIAS = "_versions"
 _RECORDS_ALIAS = "_records"
 
 
-def _column_source_name(col_decl: "ColumnDecl") -> str | None:
-    """Resolve the single source column a ColumnDecl reads its value from.
-
-    The mapping across the source-bearing spellings the type2 build admits:
-    `from` -> col_decl.from_; `derived: decimal` -> decimal.from_;
-    `derived: json_precision` -> json_precision.from_;
-    `derived: date_parse` -> date_parse.from_;
-    `derived: value_map` -> value_map.from_;
-    `derived: timestamp` -> timestamp.source. Modes with no source column
-    (`null`, `derived: scd_window`) return None.
-
-    Callers pass only ColumnDecls the type2 mode gate
-    (Scd2ColumnModeSupported) admits; other modes are out of contract.
-
-    Args:
-        col_decl: The output column declaration.
-
-    Returns:
-        The source column name as declared (e.g. "prop__status",
-        "sim_time_created", "presentation_id"), or None when the mode reads
-        no source column.
-    """
-    if col_decl.derived is None:
-        return col_decl.from_
-    derived = col_decl.derived
-    if derived.decimal is not None:
-        return derived.decimal.from_
-    if derived.json_precision is not None:
-        return derived.json_precision.from_
-    if derived.date_parse is not None:
-        return derived.date_parse.from_
-    if derived.value_map is not None:
-        return derived.value_map.from_
-    if derived.timestamp is not None:
-        return derived.timestamp.source
-    return None
-
-
 def build_scd2_column_expr_flag(
     col_decl: "ColumnDecl",
     version_alias: str,
@@ -91,7 +54,8 @@ def build_scd2_column_expr_flag(
 ) -> str:
     """Build a SQL expression for one SCD-2 column.
 
-    Resolves the column's source column (_column_source_name) and its class:
+    Resolves the column's source column (resolve_carried_source_column) and
+    its class:
     a source named `prop__<p>` with `<p>` in tracked_props is tracked and
     reads per version from version_alias; every other source (constant
     prop__, structural, projection-introduced, exempt discriminator) reads
@@ -156,7 +120,7 @@ def build_scd2_column_expr_flag(
     if col_decl.null is not None:
         return f'CAST(NULL AS VARCHAR) AS "{col_decl.name}"'
 
-    src = _column_source_name(col_decl)
+    src = resolve_carried_source_column(col_decl)
     assert src is not None, f"column '{col_decl.name}': no source column resolved"
 
     is_value_map = (

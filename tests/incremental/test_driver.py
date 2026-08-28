@@ -29,7 +29,11 @@ from fabulexa_forge.errors import (
     IncrementalFingerprintMismatch,
     IncrementalRangeTargetExists,
 )
-from fabulexa_forge.exporters.query_spec import NOTICE_KEYS_NOT_DECLARABLE_CSV
+from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.query_spec import (
+    NOTICE_KEYS_NOT_DECLARABLE_CSV,
+    ColumnProvenance,
+)
 from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
     Cursor,
@@ -1957,6 +1961,87 @@ def test_declare_keys_fingerprint_mismatch_on_flip(tmp_path: Path) -> None:
             export_incremental_next(
                 emit, flipped, out, "duckdb", None, discard_notice_sink, overlay=None
             )
+
+
+# ---------------------------------------------------------------------------
+# Windowed report assembler: provenance / kind_values forwarding
+# (documentation-channel sprint, Phase 3)
+# ---------------------------------------------------------------------------
+
+_ENTITY_DIM_EXPECTED_PROVENANCE = {
+    "id": ColumnProvenance(source_table="records__entity", source_column="record_id"),
+    "name": ColumnProvenance(
+        source_table="records__entity", source_column="prop__name"
+    ),
+}
+
+
+def test_windowed_report_forwards_dimensional_provenance_verbatim(
+    tmp_path: Path,
+) -> None:
+    """A windowed drip's `TableReport` carries the compiled spec's
+    `provenance` map unchanged (`_build_windowed_report` forwards, never
+    re-derives)."""
+    emit_dir = _build_emit(tmp_path)
+    config = _simple_config()
+    out = tmp_path / "wh.duckdb"
+
+    with open_emit(emit_dir) as emit:
+        outcome = export_incremental_next(
+            emit,
+            config,
+            out,
+            "duckdb",
+            None,
+            notice_sink=discard_notice_sink,
+            overlay=None,
+        )
+
+    assert outcome.report is not None
+    tables_by_name = {t.name: t for t in outcome.report.tables}
+    assert tables_by_name["dim_entity"].provenance == _ENTITY_DIM_EXPECTED_PROVENANCE
+    assert tables_by_name["dim_entity"].kind_values == {}
+
+
+def test_windowed_and_full_dimensional_provenance_stamping_identical(
+    tmp_path: Path,
+) -> None:
+    """The same table's provenance map is identical whether compiled full
+    (window=None) or windowed -- stamping depends only on the table
+    declaration, never on the window."""
+    emit_dir = _build_emit(tmp_path)
+    config = _simple_config()
+    out = tmp_path / "wh.duckdb"
+    assert config.dimensional is not None
+
+    with open_emit(emit_dir) as emit:
+        outcome = export_incremental_next(
+            emit,
+            config,
+            out,
+            "duckdb",
+            None,
+            notice_sink=discard_notice_sink,
+            overlay=None,
+        )
+        assert outcome.report is not None
+        windowed_provenance = {t.name: t.provenance for t in outcome.report.tables}[
+            "dim_entity"
+        ]
+
+        full_specs = build_query_specs(
+            emit,
+            config.dimensional,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+
+    full_provenance = next(
+        spec.provenance for spec in full_specs if spec.table_name == "dim_entity"
+    )
+    assert windowed_provenance == full_provenance
 
 
 # ---------------------------------------------------------------------------

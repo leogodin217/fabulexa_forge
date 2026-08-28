@@ -28,6 +28,8 @@ def _report(table_name: str = "patients") -> ExportReport:
                 columns=(("id", "BIGINT"),),
                 row_count=1,
                 keys=None,
+                provenance={},
+                kind_values={},
             ),
         )
     )
