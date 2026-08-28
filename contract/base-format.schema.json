@@ -1,21 +1,32 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fabulexa.example/schemas/base-format-v8.schema.json",
+  "$id": "https://fabulexa.example/schemas/base-format-v9.schema.json",
   "title": "Base Format Sidecar (base.json)",
   "description": "Sidecar manifest enumerating the branches and tables present in a base-layer emit's run.duckdb. Defined by base-format.md, beside this schema.",
   "type": "object",
   "additionalProperties": true,
-  "required": ["base_format_version", "branches", "tables"],
+  "required": ["base_format_version", "surface", "branches", "tables"],
   "properties": {
     "base_format_version": {
       "type": "integer",
-      "description": "Format version. v8 = 8. Reader gates on this; unknown versions must be rejected.",
-      "const": 8
+      "description": "Format version. v9 = 9. Reader gates on this; unknown versions must be rejected.",
+      "const": 9
+    },
+    "surface": {
+      "type": "string",
+      "const": "published",
+      "description": "Positive discriminator naming what this emit is. An emit conformant with this schema always carries 'published' -- the output of the Fabulexa publishing step. Required. See C15 (surface consistency)."
+    },
+    "scenario_description": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The scenario's declared narrative, forwarded verbatim from the source emit. Present only when the scenario declared one; omitted entirely otherwise."
     },
     "branches": {
       "type": "array",
       "description": "Branches present in the emit. A published emit covers exactly one branch.",
       "minItems": 1,
+      "maxItems": 1,
       "items": {
         "$ref": "#/$defs/branch"
       }
@@ -112,7 +123,7 @@
     },
     "enum_domains": {
       "type": "object",
-      "description": "Nested {<kind>: {<property>: [<option>, ...]}}. Authoritative list of allowed string values for each closed-domain property. Keys at both levels are sorted lexicographically; option lists preserve declaration order.",
+      "description": "Nested {<kind>: {<property>: [{\"value\": <option>, \"description\"?: <text>}, ...]}}. Authoritative list of allowed values for each closed-domain property, as ordered value objects, re-filtered to the surviving kinds and forwarded entry-verbatim from the source emit. Keys at both levels are sorted lexicographically; value objects preserve declaration order.",
       "minProperties": 1,
       "additionalProperties": {
         "type": "object",
@@ -120,12 +131,29 @@
         "minProperties": 1,
         "additionalProperties": {
           "type": "array",
-          "description": "Allowed string values for this closed-domain property, in declaration order.",
+          "description": "Allowed values for this closed-domain property, as ordered value objects, in declaration order.",
           "minItems": 1,
           "items": {
-            "type": "string",
-            "minLength": 1
+            "$ref": "#/$defs/enum_domain_value"
           }
+        }
+      }
+    },
+    "enum_domain_value": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["value"],
+      "description": "One value object inside an enum_domains option array.",
+      "properties": {
+        "value": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The allowed option string."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "This value's gloss. Present only when a single non-empty meaning exists for it; omitted entirely otherwise."
         }
       }
     },
@@ -195,6 +223,11 @@
           "description": "Property name. Required iff category=='membership'. Equals the suffix of name after 'membership__<kind>__'.",
           "minLength": 1
         },
+        "description": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Engine-owned structural table prose, forwarded verbatim from the source emit's tables[].description on every surviving table. Omitted for an author-declared kind's records table and for the fixed history table."
+        },
         "columns": {
           "type": "array",
           "description": "Columns in DuckDB-catalog order.",
@@ -263,7 +296,7 @@
         },
         "history_tracked": {
           "type": "boolean",
-          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 8 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
+          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 9 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
         },
         "temporal_class": {
           "type": "string",
@@ -273,12 +306,12 @@
         "description": {
           "type": "string",
           "minLength": 1,
-          "description": "Author-declared business meaning of the property, from the manifest's property_docs block. Present on a records-category prop__<name> column iff its property is documented with a non-empty description. Omitted on every other column."
+          "description": "Business meaning of the property or element field this column renders (author- or engine-declared), forwarded verbatim from the source emit. Present on a documented records-category prop__<name> column or membership elem__<name> / member__<f>__kind / member__<f>__id column. Omitted on every other column."
         },
         "unit": {
           "type": "string",
           "minLength": 1,
-          "description": "Author-declared unit of measure of the property's value, from the manifest's property_docs block. Present on a records-category prop__<name> column iff its property is documented with a non-empty unit. Omitted on every other column."
+          "description": "Unit of measure of the property's or element field's value (author- or engine-declared), forwarded verbatim from the source emit. Present on a documented records-category prop__<name> column or membership elem__<name> column (never on a reference column). Omitted on every other column."
         },
         "min": {
           "type": "number",

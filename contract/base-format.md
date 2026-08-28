@@ -4,7 +4,7 @@ The on-disk shape of one **base-layer emit** — a standalone, self-describing d
 
 **Purpose.** Define the contract precisely enough that any producer or consumer — in any language, in any repo — can implement this format without depending on any package other than DuckDB itself.
 
-**Status.** Reference producer is the Fabulexa publishing step. The conformance procedure (C1–C14) is verified by the producer's own conformance suite and by a standalone reference checker, `check_published_conformance.py`, shipped in the producer's repository (not alongside this document).
+**Status.** Reference producer is the Fabulexa publishing step. The conformance procedure (C1–C15) is verified by the producer's own conformance suite and by a standalone reference checker, `check_published_conformance.py`, shipped in the producer's repository (not alongside this document).
 
 **Audience.** Producers (today: the Fabulexa base writer; tomorrow: any base-layer producer, in any repo or language), consumers (future exporters, corrupters, analyst tooling, third-party tools).
 
@@ -25,7 +25,7 @@ The contract is **two artifacts per emit**, not a Python package:
 | `run.duckdb` | DuckDB's own format | DuckDB (any version supporting the schema written) |
 | `base.json` | `base-format.schema.json` (sibling of this doc) | Any reader of any kind |
 
-**`BASE_FORMAT_VERSION = 8`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
+**`BASE_FORMAT_VERSION = 9`** — lives in the sidecar JSON, not in any Python package. No code imports needed to learn the version.
 
 ---
 
@@ -107,7 +107,7 @@ Where P is the count of *scalar* declared properties for kind *K* and R is the c
 
 **References-annotated properties.** When a property declares a record-to-record `references` annotation, the renderer emits `prop__<name>` as a single `VARCHAR` column carrying the id portion of the referenced record id (the id only, not the kind). The kind component is redundant with the schema annotation and is exposed via the sidecar's `references` field on the column entry. Producers MUST use this id-only form so downstream tools can equality-join against `records__<references>.record_id` without parsing tuple reprs. The property additionally carries a `ref_index__<name>` `BIGINT` column resolving the same target through `record_index` rather than `record_id` — see § Dense record index.
 
-**`active` is record existence, never domain in-effect state.** `active` is the lifecycle tombstone: FALSE iff the producer deactivated the record before the slice boundary, with `deactivated_at` carrying the instant. It says nothing about whether the thing the record models is currently "on". Kinds modeling episodic phenomena make the difference sharp — the `event` machinery kind's records live for the whole run and are never deactivated, so a scheduled event reads `active = TRUE` at every slice, including slices where no activation window is open. "Which events were in effect at T?" is a derivation over the event's window data, not a column read — see § Consumer derivations → *Events in effect at T*.
+**`active` is record existence, never domain in-effect state.** `active` is the lifecycle tombstone: FALSE iff the producer deactivated the record before the slice boundary, with `deactivated_at` carrying the instant. It says nothing about whether the thing the record models is currently "on". Supply kinds make the difference sharp — a `resource` closed by a windowed capacity cut still reads `active = TRUE` at every slice: the closure is a capacity → 0 span in its `history`, not a deactivation. "Was this record's thing on at T?" is a derivation over the record's own data, not a column read — see § Consumer derivations → *Supply drain and utilisation*.
 
 **On drained supply, `deactivated_at` is the drain end, not the configured retirement instant.** A supply record (a `resource` server, a booking `diary`) retired while holders were in service drains passively: the retirement cuts capacity to zero, in-service holders keep their slots, and the tombstone lands when the last holder releases. `deactivated_at` therefore reads the drain *completion* — the configured decommission instant may precede it by the whole notice period. The configured instant is still in the emit: it is the `sim_time` of the retirement's capacity → 0 `history` row. Entity kinds deactivate at their configured instant exactly; only drained supply carries this offset. See § Consumer derivations → *Supply drain and utilisation*.
 
@@ -123,7 +123,7 @@ Where P is the count of *scalar* declared properties for kind *K* and R is the c
 
 **`created_sim_time` is the record's immutable creation time.** Position 3 carries the `sim_time` at which the record was created and is set exactly once. It is unaffected by every later content event — a property write and a deactivation both leave it unchanged — and is non-NULL on every row, including write-once fact records (`history_tracked: false`). Consumers MAY use it to bound a record's lifetime from below.
 
-**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 8`.
+**`last_mutation_sim_time` bounds every content change to its record.** Position 6 advances on *every* content event for the record — creation, each property write, and deactivation. A deactivation flip is a content change, **not** exempt: a record whose only post-creation event is deactivation carries `last_mutation_sim_time == deactivated_at`. Producers MUST uphold this so consumers MAY treat the column as a high-water mark over the record's whole lifecycle, deactivation included. This is binding at `base_format_version: 9`.
 
 **Row order.** Creation order within kind, lexicographic on kind across kinds — the order in which the producer created each record, preserved by insertion-order iteration. A kind whose records are created through more than one id-minting path (e.g. sequential integer-string ids and hex-digest ids on the same kind) yields rows interleaved by creation time, **not** sorted by `record_id` value. Consumers MUST NOT rely on any sort derived from `record_id` — ids minted by different paths are structurally disjoint, and lexicographic order over the mixed set carries no semantic meaning.
 
@@ -155,6 +155,46 @@ The owning kind and property are not columns: `<K>` and `<p>` are the table-name
 **NULL semantics.** `left_sim_time` is NULL exactly when the element is still present at the slice boundary. An `elem__<f>` column is NULL exactly when that struct slot's value was `None`. A reference field's `(member__<f>__kind, member__<f>__id)` pair is all-NULL-together or all-non-NULL-together — a reference is never half-present (C7).
 
 **Member kind is per-row, not fixed.** Because `member__<f>__kind` is a column, one membership table may reference records of more than one kind; the format neither assumes nor requires a single member kind per collection. `<K>` in the table name is the kind that *owns* the property, not the member kind.
+
+---
+
+## Structural column descriptions
+
+The structural columns of the fixed and category tables mean the same thing in every emit, so their documentation lives here — in the contract, once — never in the sidecar. A sidecar's `columns[].description` / `unit` attributes carry only per-run documentation (author-declared and producer-supplied property docs, element-field docs); the sidecar entries for the columns below deliberately carry neither attribute. A consumer generating a data dictionary or any other documentation artifact MAY embed the strings below verbatim.
+
+The block is keyed by table family (`history`; `records` = every `records__<kind>` table; `membership` = every `membership__<K>__<p>` table), then by column. `<name>` and `<kind>` stand for the sibling property and kind the column instance is minted for. Every simulation-time value is in nanoseconds (`unit: "ns"`).
+
+```json
+{
+  "history": {
+    "fork_path": {"description": "Branch this row is attributed to (canonical @-joined branch path)."},
+    "kind": {"description": "Kind of the record whose property changed."},
+    "record_id": {"description": "Id of the record whose property changed. Opaque; equality-join against records__<kind>.record_id."},
+    "property": {"description": "Name of the property that changed."},
+    "sim_time": {"description": "Simulation time the change took effect; the value holds until the series' next row.", "unit": "ns"},
+    "value": {"description": "Value in effect from sim_time onward, text-encoded. NULL only in a creation-seed row for a property with no creation value."}
+  },
+  "records": {
+    "fork_path": {"description": "Branch this row is attributed to (canonical @-joined branch path)."},
+    "record_id": {"description": "Opaque identifier of the record within its branch and kind. Not ordered by creation; use record_index for creation order."},
+    "presentation_id": {"description": "Presentation surrogate identity minted for this kind; present only when the sidecar declares it."},
+    "created_sim_time": {"description": "Simulation time the record was created. Set once; never changed by later writes or deactivation.", "unit": "ns"},
+    "active": {"description": "Record-existence flag: FALSE iff the record was deactivated before the slice boundary. Lifecycle only — not the domain's on/off state."},
+    "deactivated_at": {"description": "Simulation time the record was deactivated; NULL while active.", "unit": "ns"},
+    "last_mutation_sim_time": {"description": "Simulation time of the record's most recent content change: creation, any property write, or deactivation.", "unit": "ns"},
+    "record_index": {"description": "Dense 0-based creation-order ordinal of the record within its (fork_path, kind). Stable across emits of the same branch; direct positional key for creation order."},
+    "ref_index__<name>": {"description": "Creation-order index of the record referenced by the sibling prop__<name> column, resolved at the emitted slice; NULL together with it."}
+  },
+  "membership": {
+    "fork_path": {"description": "Branch this row is attributed to (canonical @-joined branch path)."},
+    "record_id": {"description": "Id of the record that owns the collection; its kind is the table name's <K> segment."},
+    "joined_sim_time": {"description": "Simulation time the element entered the collection.", "unit": "ns"},
+    "left_sim_time": {"description": "Simulation time the element left the collection; NULL while still present at the slice boundary.", "unit": "ns"}
+  }
+}
+```
+
+`prop__<name>`, `elem__<f>`, and `member__<f>__kind` / `member__<f>__id` columns are not in this block: their meaning is per-scenario and travels in the sidecar (`columns[].description` / `unit`).
 
 ---
 
@@ -290,15 +330,6 @@ SELECT EXISTS (
 - **The drain interval is derivable.** Drain start = the `sim_time` of the retirement's capacity → 0 `history` row; drain end = the record's `deactivated_at` (§ Records-category tables — on drained supply it is the drain end, not the configured instant). A capacity → 0 row *without* a later deactivation is a temporary closure (a windowed capacity cut), not a retirement.
 - **The `retiring` flag is slice-only.** It answers "was this record draining at this emit's `slice_at`", never "was it draining at T" — per the temporal-class dispatch above, refuse the as-of read and use the drain interval instead.
 
-### Events in effect at T
-
-`active` cannot answer this (§ Records-category tables): `event` records are never deactivated. An event's activation windows are carried on the record itself — `prop__pair_list` decodes (tuple codec, § Recommended type mapping) to a sequence of `(activation_sim_time, deactivation_sim_time)` pairs, and the event is in effect at T iff some pair satisfies `activation <= T < deactivation`.
-
-Two caveats:
-
-- `pair_list` is NULL on events not driven by a schedule envelope (feedback-spawned and fork-overlay events). For those, derive in-effect intervals as the union of their `event_modifier` records' `[prop__start_time, prop__end_time)` spans (`end_time` NULL = open at the slice); modifiers for curve-shaped effects are per-intensity-step, so union before reading them as windows.
-- Absence of a `records__event_modifier` table does not mean no event was in effect: edge-triggered effects mint no modifiers. `pair_list` is the general route; modifiers exist only for continuous, modifier-based effects.
-
 ---
 
 ## The sidecar: `base.json`
@@ -313,7 +344,9 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 ```json
 {
-  "base_format_version": 8,
+  "base_format_version": 9,
+  "surface": "published",
+  "scenario_description": "A regional hospital network's inpatient/outpatient flow.",
   "branches": [
     {"fork_path": "trunk", "parent": null, "slice_at": 1728000000000000}
   ],
@@ -350,7 +383,9 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `base_format_version` | integer | yes | Format version. Current value: `8`. |
+| `base_format_version` | integer | yes | Format version. Current value: `9`. |
+| `surface` | string | yes | Positive discriminator naming what this emit is. Always `"published"` in an emit conformant with this document. See § The `surface` field. |
+| `scenario_description` | string | optional | The scenario's declared narrative, forwarded verbatim from the source emit. Present only when the source scenario declared one; omitted entirely otherwise. See § Scenario narrative. |
 | `branches` | array | yes | Exactly one entry — an emit covers a single branch. See § Branch enumeration and runtime anchor. |
 | `branches[].fork_path` | string | yes | Canonical `@`-joined fork path of the single branch. |
 | `branches[].parent` | string \| null | yes | Parent fork path (the `@`-joined prefix), or `null` for a root branch; the named parent need not be present in the emit. |
@@ -359,7 +394,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `runtime.timezone` | string | yes (within `runtime`) | IANA timezone string. |
 | `runtime.start_datetime` | string | yes (within `runtime`) | Tz-aware ISO-8601 datetime for `sim_time = 0`. |
 | `pinned_ids` | object | optional | Pin identity surface, nested `{<kind>: {<label>: <id-string>}}`. Present only when the run had pinned actors; omitted entirely otherwise. Each `<id-string>` is the id portion of the minted record id, equality-joinable against `records__<kind>.record_id`. See § Pin identity surface. |
-| `enum_domains` | object | optional | Closed-domain registry, nested `{<kind>: {<property>: [<option>, ...]}}`. Present only when the scenario declared at least one closed-domain string property (`status` / `category` typed property or a synthesized sub-type discriminator); omitted entirely otherwise. Keys at both nesting levels are sorted lexicographically; option lists preserve declaration order. The authoritative list of allowed values for each closed-domain string property. See § Closed-domain registry. |
+| `enum_domains` | object | optional | Closed-domain registry, nested `{<kind>: {<property>: [{"value": <option>, "description"?: <text>}, ...]}}`. Present only when the scenario declared at least one closed-domain string property (`status` / `category` typed property or a synthesized sub-type discriminator); omitted entirely otherwise. Keys at both nesting levels are sorted lexicographically; value objects preserve declaration order. The authoritative list of allowed values for each closed-domain string property. See § Closed-domain registry. |
 | `record_roles` | object | optional | Warehouse-role registry, nested by kind. The `actor` entry is an object `{<sub_type>: role}`; every other records-category kind maps to a single role string (`"dimension"` or `"fact"`). Present when the emit carries ≥ 1 records kind; keys sorted lexicographically at every level. See § Record roles. |
 | `sub_type_columns` | object | optional | Sub-type column partition, nested `{<kind>: {<sub_type>: [<column-name>, ...]}}` — per sub-typed kind, the value columns attributed to each declared sub-type: the columns of the properties it declares plus the kind's structural columns. Present when the producing run carries the partition and ≥ 1 sub-typed kind has a records table in the emit; omitted entirely otherwise. Keys sorted lexicographically at both levels. The NULL-disambiguation surface for sub-typed records tables. See § Sub-type column partition. |
 | `presentation_keys` | object | optional | Per-kind `presentation_id` key declarations, nested `{<kind>: <flat or partitioned entry>}` — one entry per kind whose `records__<kind>` table carries a `presentation_id` column, carrying per-minting-declaration key claims, key-space identities, and (partitioned kinds) a kind-level rollup. Present only when ≥ 1 `presentation_id` column is minted; omitted entirely otherwise. Keys sorted lexicographically at both levels. See § The `presentation_keys` block. |
@@ -368,6 +403,7 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `tables[].category` | enum | yes | `"fixed"`, `"records"`, or `"membership"`. |
 | `tables[].record_kind` | string | only when `category` in `{"records", "membership"}` | Kind name. For a `records` table, the suffix of `name` after `records__`. For a `membership` table, the `<kind>` segment of the table name — the kind that *owns* the collection-struct property, not the member kind (the member kind is the per-row `member__<f>__kind` column). |
 | `tables[].property` | string | only when `category=="membership"` | The collection-struct property name; equals the table-name segment after the final `__`. |
+| `tables[].description` | string | optional | Engine-owned structural table prose, forwarded verbatim from the source emit on every surviving table. Omitted for an author-declared kind's records table and for the fixed `history` table. See § Table descriptions. |
 | `tables[].columns` | array | yes | Columns in DuckDB-catalog order. |
 | `tables[].columns[].name` | string | yes | Column name. |
 | `tables[].columns[].type` | string | yes | DuckDB type literal (e.g. `"BIGINT"`, `"VARCHAR"`). |
@@ -379,12 +415,31 @@ The sidecar's JSON Schema is `base-format.schema.json`, beside this doc. Conform
 | `tables[].columns[].max` | number | optional | Upper bound of the declared value domain, enforced on every write by the producer. Present only when the property declares that bound. See § Column value declarations. |
 | `tables[].columns[].immutable` | boolean | optional | `true` when nothing may write the property after record creation. Absent on a value column means the property is mutable. See § Column value declarations. |
 | `tables[].columns[].required` | boolean | optional | `true` when every record of the kind carries a value at creation. Absent means that kind-wide guarantee does not hold. See § Column value declarations. |
-| `tables[].columns[].description` | string | optional | Author-declared business meaning of the property the column renders. Present only when the producing scenario declared one; omitted entirely otherwise. See § Author-declared column documentation. |
-| `tables[].columns[].unit` | string | optional | Author-declared unit of measure of the value (`"rides"`, `"GBP"`, `"minutes"`). Present only when the producing scenario declared one; omitted entirely otherwise. See § Author-declared column documentation. |
+| `tables[].columns[].description` | string | optional | Business meaning of the property or element field this column renders (author- or engine-declared), forwarded verbatim from the source emit. Present only when the property/field is documented with a non-empty description; omitted entirely otherwise. See § Author-declared column documentation. |
+| `tables[].columns[].unit` | string | optional | Unit of measure of the value (`"rides"`, `"GBP"`, `"minutes"`), author- or engine-declared, forwarded verbatim from the source emit. Present only when documented with a non-empty unit; omitted entirely otherwise. See § Author-declared column documentation. |
 | `row_census` | object | optional | Row counts describing the rows of the file this sidecar sits in, keyed by `fork_path` — one key, matching the single `branches[]` entry. Keys sorted lexicographically at every nesting level. Advisory: no conformance check ranges over its contents. See § The `row_census` block. |
 | `tables[].rows` | integer | yes | Row count of the table. |
 
-The fields above are the *required* shape at `base_format_version: 8`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 8` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
+The fields above are the *required* shape at `base_format_version: 9`. Producers MAY add other top-level fields (cross-emit linkage, pin-identity surfaces, producer hints) as optional extensions; a reader encountering unknown fields under a `base_format_version: 9` sidecar MAY warn but MUST NOT fail. See § Format versioning for which additions are version-compatible vs. require a bumped version.
+
+### The `surface` field
+
+`surface` is the required positive discriminator naming what step produced
+this emit. An emit conformant with this document always carries `surface:
+"published"` — the output of the Fabulexa publishing step, the sole
+producer this document describes. It is the only top-level field publish
+rewrites; every other documentation field forwards verbatim from the emit
+it was produced from.
+
+A `"published"` emit requires no `projection` block, no `firings` table, no
+`machinery_kinds` block, and no provenance column group — see § C15.
+Surface consistency.
+
+### Scenario narrative
+
+Optional top-level `scenario_description`: the scenario's declared
+`description`, forwarded verbatim from the source emit. Omitted entirely
+when the source scenario declared none. There is no name-derived fallback.
 
 ### Branch enumeration and runtime anchor
 
@@ -439,21 +494,31 @@ depends on the enumerated value set rather than the values actually observed
 in `records__<kind>` tables. A declared option absent from the live row set is
 *still* in `enum_domains`; the registry is intent, not observation.
 
-The block is a nested object `{<kind>: {<property>: [<option>, ...]}}`:
+The block is a nested object `{<kind>: {<property>: [{"value": <option>,
+"description"?: <text>}, ...]}}` — an ordered array of **value objects**, one
+per allowed option:
 
 | Condition | Result |
 |-----------|--------|
 | Scenario declared no closed-domain string properties | `enum_domains` is omitted entirely; an empty `enum_domains: {}` is equivalent but producers omit the key |
-| Scenario declared closed-domain string properties | One entry per kind that has ≥ 1 closed-domain property; each per-kind object maps `<property>` to the ordered list of allowed string options |
-| Sub-typed kind | Carries an `enum_domains[<kind>][<kind>_type]` entry listing the declared sub-type names; the corresponding `records__<kind>` table carries a populated, never-NULL `prop__<kind>_type` `VARCHAR` column whose values are drawn from this list |
+| Scenario declared closed-domain string properties | One entry per kind that has ≥ 1 closed-domain property; each per-kind object maps `<property>` to the ordered list of allowed-value objects |
+| Sub-typed kind | Carries an `enum_domains[<kind>][<kind>_type]` entry listing the declared sub-type names; the corresponding `records__<kind>` table carries a populated, never-NULL `prop__<kind>_type` `VARCHAR` column whose values are drawn from this list's `value`s |
+| A value carries a gloss | Its object's `description` is present, forwarded verbatim from the source emit; absence is silence, never a default |
+
+`enum_domains` re-filters to the kinds surviving publish's strip — an entry
+keyed on a stripped kind is dropped whole; every surviving entry's value
+objects (descriptions included) forward entry-verbatim, unmodified from the
+source emit.
 
 Closed domains are fixed at run initialization and persisted with the run, so
 every emit derived from the same persisted run carries the
-same registry across `slice_at` choices. Adding
-`enum_domains` is a version-compatible extension at `base_format_version: 8`:
-a reader that does not recognize the key ignores it (unknown top-level fields
-MAY warn but MUST NOT fail). Downstream tools that route per-sub-type read
-`enum_domains[<kind>][<kind>_type]` as the authoritative declared key set.
+same registry across `slice_at` choices. `enum_domains` is a required-shape
+field once present (unlike a bare optional extension) because the v8 → v9
+reshape changed an existing field's element shape from bare strings to value
+objects — a v8 reader parsing a v9 array as strings misreads every entry; see
+§ Format versioning. Downstream tools that route per-sub-type read
+`enum_domains[<kind>][<kind>_type]` as the authoritative declared key set, one
+`entry["value"]` per declared sub-type.
 
 ### Record roles
 
@@ -472,8 +537,8 @@ kind appears exactly once:
 | Kind | Surface | Role |
 |---|---|---|
 | `actor` | object `{<sub_type>: role}`, one entry per declared actor sub-type | per sub-type, `"dimension"` or `"fact"` (author-declared) |
-| `entity`, `resource`, `queue`, `journey_instance` | string | `"dimension"` |
-| `tick_decision`, `relationship` | string | `"fact"` |
+| `diary`, `entity`, `journey_instance`, `queue`, `resource` | string | `"dimension"` |
+| `booking`, `pairing`, `relationship`, `tick_decision`, `waiter` | string | `"fact"` |
 
 `actor` is the only kind surfaced as an object because it is the only kind whose
 role varies by sub-type — a single `records__actor` table may hold both a
@@ -505,9 +570,26 @@ actor sub-types, never narrowed to those surviving a slice — this is what keep
 the block slice-stable.
 
 Adding `record_roles` is a version-compatible extension at
-`base_format_version: 8`: it is an optional top-level field a reader that does
+`base_format_version: 9`: it is an optional top-level field a reader that does
 not recognize it ignores (unknown top-level fields MAY warn but MUST NOT fail).
 A generic exporter branches on `record_roles` with no hard-coded kind→role map.
+
+### Table descriptions
+
+`tables[].description` is engine-owned structural prose only — what the kind
+*is mechanically*, forwarded verbatim from the source emit on every table
+that survives publish's strip:
+
+| Table | Source |
+|---|---|
+| `records__<kind>`, kind with an engine structural core (`journey_instance`, `tick_decision`, `queue`, `booking`, `resource`, `diary`, …) | forwarded from the source emit's engine-owned kind-docs prose |
+| `records__<kind>`, author-declared kind (`actor`, `entity`) | absent — business meaning rides the `<kind>_type` value objects |
+| `membership__<kind>__<prop>` | forwarded from the source emit's collection-struct property documentation |
+| the fixed `history` table | absent — its meaning is contract prose, identical in every emit |
+
+A stripped machinery kind's table vanishes with its description; nothing in
+this document names any machinery kind, since a published emit carries
+none.
 
 ### Sub-type column partition
 
@@ -600,7 +682,7 @@ exactly this one column. C14 references this carve-out.
 The declared partition and the kind's structural properties are both fixed at
 run initialization and persisted with the run, so every emit derived from the
 same persisted run carries the same per-kind entry across `slice_at` choices. Adding `sub_type_columns` is a version-compatible
-extension at `base_format_version: 8`: an optional top-level field a reader
+extension at `base_format_version: 9`: an optional top-level field a reader
 that does not recognize it ignores (unknown top-level fields MAY warn but MUST
 NOT fail). Consumers gate on presence and fall back to union-schema behavior
 when absent.
@@ -662,7 +744,7 @@ semantics) — its identity-column analogue is the key declaration
 `tracked` — it is re-minted at each change instant of its source, and those mints
 are appended to the `history` table.
 
-**Coverage.** A `base_format_version: 8` emit carries both attributes on every
+**Coverage.** A `base_format_version: 9` emit carries both attributes on every
 records-category `prop__<name>` column, and on every presentation-property column.
 
 **All-or-none across an emit's `prop__` columns.** A producer that emits column
@@ -676,7 +758,7 @@ emit derived from the same persisted run carries the same pair for a given colum
 across `slice_at` choices — matching how `enum_domains` and `pinned_ids` are
 run-level.
 
-**Reader contract.** A reader gating on `base_format_version: 8` reads
+**Reader contract.** A reader gating on `base_format_version: 9` reads
 `temporal_class` directly. On a v4 emit the attribute is **absent and the class is
 unknown**; the reader falls back to `history_tracked` inference and inherits its
 false-negative tail — and cannot distinguish `constant` from `slice_only` at all,
@@ -751,9 +833,10 @@ mutually exclusive with `references` on the same column.
 
 ### Author-declared column documentation (`description`, `unit`)
 
-Two optional per-column strings carrying what the producing scenario's author said
-a property means. Neither is derivable: business meaning and unit of measure are
-the author's knowledge, and neither is recoverable from the schema or the rows.
+Two optional per-column strings carrying what a property means: business
+meaning (author- or engine-declared) and unit of measure. Neither is
+derivable from the schema or the rows; both forward verbatim from the
+source emit's columns onto the corresponding surviving column.
 
 | Attribute | Meaning | Declarable on |
 |---|---|---|
@@ -767,19 +850,24 @@ the unit says they are rides rather than pounds. Neither substitutes for the oth
 sub-types' columns, and the same property name may be declared by more than one
 sub-type — one column, potentially several declarations. Divergent documentation
 for one name is rejected upstream, so the producer holds exactly one `description`
-and one `unit` per `(kind, property)` and the rendered column carries the author's
-single intended meaning. Silence is compatible with any declaration; only two
+and one `unit` per `(kind, property)` and the rendered column carries the single
+intended meaning. Silence is compatible with any declaration; only two
 differing non-empty values conflict.
 
-**Absence is silence, never a default.** A column whose property carries no
-declaration omits the field entirely; a column belonging to a producer-injected
-kind carries neither, because only author declarations travel this path.
+**Element-field columns.** A collection-struct property's element fields carry
+the same two attributes on the corresponding membership table columns
+(`elem__<name>`, or a reference field's `member__<f>__kind` / `member__<f>__id`
+pair), forwarded verbatim.
 
-**Meaning is run-level.** Documentation and the value declarations above are fixed
-at run initialization, so every emit derived from the same run carries the same
-values for a given column — the same run-level posture as `enum_domains` and
-`pinned_ids`. That is why both sit on the `columns[]` axis while the row census
-describes one emit's rows.
+**Absence is silence, never a default.** A column whose property carries no
+declaration in either channel omits the field entirely.
+
+**Meaning does not fork; it does not change on publish either.** Documentation
+and the value declarations above are run-level and fixed at run initialization,
+so every emit derived from the same run carries the same values for a given
+column — the same run-level posture as `enum_domains` and `pinned_ids`. That
+is why both sit on the `columns[]` axis while the row census describes one
+emit's rows.
 
 ### The `presentation_keys` block
 
@@ -999,7 +1087,7 @@ load base.json
 validate against base-format.schema.json (the schema matching base_format_version)
 ```
 
-The schema validates *required shape*, not closed shape: its top level and the column object permit unknown members (`additionalProperties: true`), so a sidecar carrying a newer same-version optional field or column attribute still validates against an older revision of the v8 schema. Unknown members fall under the § Field semantics rule — a reader MAY warn but MUST NOT fail.
+The schema validates *required shape*, not closed shape: its top level and the column object permit unknown members (`additionalProperties: true`), so a sidecar carrying a newer same-version optional field or column attribute still validates against an older revision of the v9 schema. Unknown members fall under the § Field semantics rule — a reader MAY warn but MUST NOT fail.
 
 ### C2. DuckDB catalog matches the sidecar
 
@@ -1188,7 +1276,8 @@ let partitioned_kinds = { t.record_kind for t in tables
                           and "<t.record_kind>_type" in enum_domains[t.record_kind] }
 require: keys(sub_type_columns) == partitioned_kinds
 for each kind K in sub_type_columns:
-    require: keys(sub_type_columns[K]) == set(enum_domains[K]["<K>_type"])
+    require: keys(sub_type_columns[K]) ==
+             { entry.value for entry in enum_domains[K]["<K>_type"] }
     let V = columns of records__K carrying the temporal pair, minus prop__<K>_type,
             plus presentation_id when records__K carries that column
     let X = { ref_index__<n> : prop__<n> in V carries a sidecar references field }
@@ -1216,7 +1305,20 @@ intent the checker does not second-guess from row data. Non-reference
 `ref_index__` companion and are outside the pair-integrity rule. C14 is
 classed with the semantic checks (C6, C7, C9–C13).
 
-A reference Python conformance check, `check_published_conformance.py`, ships in the producer's repository and implements C1–C14 against any `(emit_dir,)` argument. It checks exactly the format described by this document. Implementations in other languages that pass C1–C14 are equally conformant.
+### C15. Surface consistency
+
+```
+require: base.json[surface] == "published"
+require: base.json[projection] is absent
+```
+
+A published emit's `surface` MUST be `"published"`, and it MUST carry no
+`projection` block. The other invariants of a published emit — no `firings`
+table, no `machinery_kinds`, no provenance column group — are C3, C12, and
+C5 respectively; C15 checks only what those do not: the `surface`
+discriminator itself.
+
+A reference Python conformance check, `check_published_conformance.py`, ships in the producer's repository and implements C1–C15 against any `(emit_dir,)` argument. It checks exactly the format described by this document. Implementations in other languages that pass C1–C15 are equally conformant.
 
 ---
 
@@ -1226,7 +1328,7 @@ A reference Python conformance check, `check_published_conformance.py`, ships in
 |---|---|---|
 | `base_format_version` | `base.json` | Required tables change, fixed-table column lists change, sidecar schema changes |
 
-**Current version = 8.** This document defines v8. A version bump implies one of:
+**Current version = 9.** This document defines v9. A version bump implies one of:
 - The required-tables set changed (added/removed/renamed tables)
 - A fixed-table required-column list changed
 - The sidecar schema gained a new *required* top-level field
@@ -1261,6 +1363,15 @@ The `5 → 6` bump is forced by two new required columns on every `records__<kin
 The `6 → 7` bump is forced by moving the `presentation_id` key claims from the column descriptor to the top-level `presentation_keys` block: v6's optional column attributes `unique_within` / `branch_stable` / `slice_stable` do not exist at v7 — an existing field's semantics changed. The block alone would have been a version-compatible optional extension, but a same-version reader looking for key claims on the column descriptor would silently conclude "no claim" for a kind whose claims moved to the block.
 
 The `7 → 8` bump is likewise **not** forced by the `extra_data` column attribute — under the optional-attribute rule that alone would have been version-compatible. It is forced by the **cell-encoding change** that ships with it: a column whose property declares `extra_data` now stores JSON object text where a v7 producer stored the plain-`tuple` `repr()` encoding. A v7 reader applying `ast.literal_eval` to a v8 cell fails to parse; a v8 reader applying JSON to a v7 cell fails the same way. The two readings are incompatible, which is what a bump is for.
+
+The `8 → 9` bump is forced by two changes together: `surface` becomes a new
+*required* top-level field (a required-field addition always bumps), and
+`enum_domains`' option arrays reshape from bare strings to value objects
+(`{"value": ..., "description"?: ...}`) — an existing field's element shape
+changing incompatibly, since a v8 reader iterating the array expecting
+strings misreads every entry. `scenario_description` and `tables[].description`
+ride the same bump as optional additions; alone, each would have been
+version-compatible.
 
 A reader MUST gate on `base_format_version` and refuse to interpret an unknown version. No auto-upgrade.
 
