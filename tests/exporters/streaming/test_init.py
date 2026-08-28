@@ -16,15 +16,18 @@ streaming-declared-streams.md § `init --mode streaming` inference contract):
 - Name collision -- a kind name vs. a sub-type value, and the membership
   `<K>_<p>` underscore ambiguity -- later entry commented, config parses.
 - Topic-illegal sub-type value -> commented, naming the rule and the value.
-- `keys:` proposal: presentation_id for registry-declared, record_index
-  otherwise; a gate failure degrades the implicated kind with a comment.
+- `keys:` proposal: uniform `record_index` active for every population,
+  `presentation_id` offered as a commented alternative only where
+  registry-declared; the retired degradation mechanism never emits
+  `NOTE: ElectionUnionUnsafe`.
 - Each membership table -> one commented stream in the membership-events
   alternative, `fields` bare.
 - No records kind, and all-names-illegal -> `StreamInitNothingToStream`.
 - An emit predating per-column temporal classes -> `TemporalClassUnavailableError`.
 - Non-exempt `slice_only` columns are never proposed; one notice each.
-- The `rebase`/`debezium`/`clock`/`kafka` blocks are never proposed, named in
-  a trailing comment.
+- The `rebase`/`debezium`/`clock`/`kafka` blocks and the authoring fields
+  (`rename`/`kind_label`/`kind_labels`/`where`/`only`/`ignore`/`identity`/
+  membership `sub_types`) are never proposed, named in a trailing comment.
 - Round-trip: the emitted text parses into a `StreamConfig` and
   `iter_stream_events` runs clean, including the membership alternative
   uncommented wholesale.
@@ -555,41 +558,55 @@ def test_topic_illegal_subtype_value_commented_never_sanitized(tmp_path: Path) -
 
 
 # ---------------------------------------------------------------------------
-# `keys:` proposal, self-gated
+# `keys:` proposal — uniform record_index active, resolvability alternatives
 # ---------------------------------------------------------------------------
 
 
-def test_keys_registry_declared_proposes_presentation_id(tmp_path: Path) -> None:
-    """A registry-declared, gate-safe population proposes `presentation_id`;
-    an undeclared population proposes `record_index`."""
+def test_keys_registry_declared_proposes_presentation_id_alternative(
+    tmp_path: Path,
+) -> None:
+    """Every population proposes the uniform `record_index` active election;
+    a registry-declared population additionally offers `presentation_id` as
+    a commented alternative, an undeclared one offers only `record_id`."""
     build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
     content = _generate(tmp_path)
-    assert "  widget: presentation_id\n" in content
+    assert "  # widget: presentation_id\n  widget: record_index\n" in content
+    assert "# gadget: presentation_id" not in content
     assert "  gadget: record_index\n" in content
-    assert "  person: presentation_id\n" in content
-    assert "  pet: presentation_id\n" in content
+    assert "  # person: presentation_id\n  person: record_index\n" in content
+    assert "  # pet: presentation_id\n  pet: record_index\n" in content
 
 
-def test_keys_gate_failure_degrades_to_record_index_with_comment(
+def test_keys_pairwise_unsafe_declaration_proposes_clean_no_degradation(
     tmp_path: Path,
 ) -> None:
     """`creature`'s declared-but-pairwise-unsafe election, gated against
-    `trainer.prop__pet_id`'s reference edge, degrades to uniform
-    `record_index` with a comment naming the forcing gate."""
+    `trainer.prop__pet_id`'s reference edge, proposes the uniform
+    `record_index` per-sub-type map cleanly -- the degradation mechanism is
+    retired, so no `NOTE: ElectionUnionUnsafe` comment appears anywhere."""
     build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
     content = _generate(tmp_path)
-    assert "  creature: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "ElectionUnionUnsafe" not in content
+    assert (
+        "  creature:\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # cat: record_id\n"
+        "    # cat: presentation_id\n"
+        "    cat: record_index\n" in content
+    )
 
 
 def test_keys_undeclared_registry_proposes_record_index(tmp_path: Path) -> None:
     """No `presentation_keys` block at all -> every population proposes the
-    `record_index` scalar."""
+    `record_index` scalar, with only the record_id alternative commented."""
     build_election_emit(tmp_path, presentation_keys=None)
     content = _generate(tmp_path)
-    assert "  widget: record_index\n" in content
-    assert "  person: record_index\n" in content
-    assert "  pet: record_index\n" in content
-    assert "  creature: record_index\n" in content
+    assert "  # widget: record_id\n  widget: record_index\n" in content
+    assert "  # person: record_id\n  person: record_index\n" in content
+    assert "  # pet: record_id\n  pet: record_index\n" in content
+    assert "  # creature: record_id\n  creature: record_index\n" in content
+    assert "presentation_id" not in content
 
 
 _MIN_PERSON_COLS: list[dict[str, object]] = [
@@ -680,16 +697,25 @@ def _build_membership_member_field_degrade_emit(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_keys_membership_member_field_reference_degrades_admitted_kind(
+def test_keys_membership_member_field_kind_proposes_clean_no_degradation(
     tmp_path: Path,
 ) -> None:
-    """A membership stream's reference-valued member field alone admits
-    `creature` to the edge gate -- its pairwise-unsafe presentation_id claims
-    degrade it to `record_index`, with no kind-shaped stream reference
-    involved at all."""
+    """`propose_key_election` reads the sidecar's known kinds directly, not
+    edge admission: `creature`'s pairwise-unsafe presentation_id claims still
+    propose cleanly as the uniform `record_index` per-sub-type map, with no
+    `NOTE: ElectionUnionUnsafe` comment, even though no kind-shaped stream
+    references it -- only a membership member field does."""
     _build_membership_member_field_degrade_emit(tmp_path)
     content = _generate(tmp_path)
-    assert "  creature: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "ElectionUnionUnsafe" not in content
+    assert (
+        "  creature:\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # cat: record_id\n"
+        "    # cat: presentation_id\n"
+        "    cat: record_index\n" in content
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -880,10 +906,11 @@ def test_delivery_blocks_never_proposed_trailing_comment(tmp_path: Path) -> None
 
 
 def test_authoring_fields_never_proposed_trailing_comment(tmp_path: Path) -> None:
-    """`rename`/`kind_label`/`kind_labels`/`where`/`only`/`ignore`/membership
-    `sub_types` are never proposed; the trailing comment names them alongside
-    the delivery blocks, and the proposal is otherwise unchanged and
-    parse-clean."""
+    """`rename`/`kind_label`/`kind_labels`/`where`/`only`/`ignore`/`identity`/
+    membership `sub_types` are never proposed -- `init` proposes no
+    `identity` block, joining streaming's never-proposed list; the trailing
+    comment names them alongside the delivery blocks, and the proposal is
+    otherwise unchanged and parse-clean."""
     build_source_test_emit(tmp_path)
     content = _generate(tmp_path)
     live_lines = [
@@ -896,13 +923,14 @@ def test_authoring_fields_never_proposed_trailing_comment(tmp_path: Path) -> Non
         "where:",
         "only:",
         "ignore:",
+        "identity:",
     ):
         assert not any(line.strip().startswith(field) for line in live_lines)
     membership_block = content.split("# Alternative")[1]
     assert "sub_types:" not in membership_block
     assert (
         "# rename: / kind_label: / kind_labels: / where: / only: / ignore: /"
-        " sub_types: (membership) --\n"
+        " identity: / sub_types: (membership) --\n"
         "# never proposed either; each is author intent with no sidecar-derived"
         " value (proposing one would be invention). Add them yourself.\n" in content
     )

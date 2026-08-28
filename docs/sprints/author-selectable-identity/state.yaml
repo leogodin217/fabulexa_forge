@@ -65,7 +65,7 @@ phases:
     name: "Playback tier-1 identity projection"
     demo: "docs/sprints/author-selectable-identity/demos/phase_4_playback_identity.py"
   5:
-    status: pending
+    status: complete
     name: "The init election menu"
     demo: "docs/sprints/author-selectable-identity/demos/phase_5_init_menu.py"
     steps:

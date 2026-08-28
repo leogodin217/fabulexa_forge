@@ -20,11 +20,11 @@ Covers:
 - A name collision (underscore-bearing identifiers) comments out the later
   proposal with a collision note; the emitted config still parses and plans
   clean.
-- A registry-declared population -> the `keys:` proposal, self-gated through
-  `check_edge_union_safety` (every proposed table is single-population, so
-  the identity-mixing gate never applies; a partial declaration proposes
-  each population's own election independently, no degradation; full
-  agreement collapses to the scalar).
+- The `keys:` proposal: uniform `record_index` active for every population,
+  with `record_id` always and `presentation_id` (only where registry-declared)
+  offered as commented alternatives -- shape (scalar vs. per-sub-type map)
+  follows whether >= 1 sub-type is declared, never the active values, and
+  the retired degradation mechanism never emits `NOTE: ElectionUnionUnsafe`.
 - Non-exempt `slice_only` columns are never proposed; one notice each.
 - An emit predating `history_tracked` -> `SourceHistoryTrackedRequired`; an
   incoherent `presentation_keys` block -> `PresentationKeysInvalidError`.
@@ -529,7 +529,7 @@ def test_subtyped_junction_name_collision_comments_out_proposal(
 
 
 # ---------------------------------------------------------------------------
-# `keys:` proposal — registry-declared population, self-gated
+# `keys:` proposal — uniform record_index active, resolvability alternatives
 # ---------------------------------------------------------------------------
 
 
@@ -602,10 +602,10 @@ _ACTOR_PARTIAL_KEYS: dict[str, object] = {
 
 
 def test_registry_partial_declaration_proposes_per_subtype_dict(tmp_path: Path) -> None:
-    """`driver`/`bus` declared and `ride` undeclared: since each sub-type gets
-    its own single-population table, there is no mixed-identity table to
-    protect against -- the proposal elects each population independently
-    (no degradation) as a per-sub-type dict."""
+    """`driver`/`bus` declared and `ride` undeclared: the uniform
+    `record_index` active election still proposes a per-sub-type dict (shape
+    follows the alternatives, not the active values); only driver/bus offer
+    the `presentation_id` alternative."""
     emit_dir = _build_subtyped_actor_emit(
         tmp_path, ["driver", "bus", "ride"], _ACTOR_PARTIAL_KEYS
     )
@@ -613,11 +613,22 @@ def test_registry_partial_declaration_proposes_per_subtype_dict(tmp_path: Path) 
     assert (
         "keys:\n"
         "  actor:\n"
-        "    driver: presentation_id\n"
-        "    bus: presentation_id\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # driver: record_id\n"
+        "    # driver: presentation_id\n"
+        "    driver: record_index\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # bus: record_id\n"
+        "    # bus: presentation_id\n"
+        "    bus: record_index\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # ride: record_id\n"
         "    ride: record_index\n" in content
     )
-    assert "NOTE" not in content
+    assert "# ride: presentation_id" not in content
     _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
 
 
@@ -709,15 +720,23 @@ def _build_subtyped_actor_with_referencing_order_emit(tmp_path: Path) -> Path:
     return emit_dir
 
 
-def test_referencing_column_degrades_union_unsafe_subtype(tmp_path: Path) -> None:
+def test_referencing_column_proposes_clean_no_degradation(tmp_path: Path) -> None:
     """`order.prop__actor_id` references the sub-typed `actor` kind: driver
-    and bus both electing pairwise-unsafe bare counters degrades the kind to
-    uniform `record_index` via the edge gate -- `check_edge_union_safety`,
-    not `check_identity_election` (no table combines driver and bus; each
-    gets its own single-population stub)."""
+    and bus both declaring pairwise-unsafe bare counters proposes the uniform
+    `record_index` map cleanly -- the degradation mechanism is retired, so no
+    `NOTE: ElectionUnionUnsafe` comment appears anywhere in the proposal."""
     emit_dir = _build_subtyped_actor_with_referencing_order_emit(tmp_path)
     content = _generate(emit_dir)
-    assert "keys:\n  actor: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "ElectionUnionUnsafe" not in content
+    assert (
+        "keys:\n"
+        "  actor:\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # driver: record_id\n"
+        "    # driver: presentation_id\n"
+        "    driver: record_index\n" in content
+    )
     _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
 
 
@@ -744,15 +763,20 @@ _ACTOR_FULL_KEYS: dict[str, object] = {
 }
 
 
-def test_registry_full_declaration_collapses_to_presentation_id_scalar(
+def test_registry_full_declaration_still_proposes_per_subtype_map(
     tmp_path: Path,
 ) -> None:
-    """Every declared sub-type electing `presentation_id`, pairwise
-    union-safe, collapses the `keys:` proposal to the scalar -- independent
-    of the `tables:` layout, which still splits one stub per sub-type."""
+    """Every declared sub-type still proposes the per-sub-type map -- shape
+    never collapses to scalar once >= 1 sub-type is declared, independent of
+    the `tables:` layout, which still splits one stub per sub-type."""
     emit_dir = _build_subtyped_actor_emit(tmp_path, ["driver", "bus"], _ACTOR_FULL_KEYS)
     content = _generate(emit_dir)
-    assert "keys:\n  actor: presentation_id\n" in content
+    assert "keys:\n  actor:\n" in content
+    assert "keys:\n  actor: record_index\n" not in content
+    for sub_type in ("driver", "bus"):
+        assert f"    # {sub_type}: presentation_id\n    {sub_type}: record_index\n" in (
+            content
+        )
     assert (
         "    - name: actor_driver\n      kind: actor\n      sub_types: [driver]\n"
         in content
@@ -765,12 +789,13 @@ def test_registry_full_declaration_collapses_to_presentation_id_scalar(
 
 def test_undeclared_registry_proposes_record_index(tmp_path: Path) -> None:
     """No `presentation_keys` block at all -> every kind proposes the
-    `record_index` scalar."""
+    `record_index` scalar, with only the record_id alternative commented."""
     emit_dir = _flat_records_emit(
         tmp_path, "widget", _UNTRACKED_FLAT_COLUMNS, _UNTRACKED_FLAT_ROW
     )
     content = _generate(emit_dir)
-    assert "keys:\n  widget: record_index\n" in content
+    assert "  # widget: record_id\n  widget: record_index\n" in content
+    assert "# widget: presentation_id" not in content
 
 
 # ---------------------------------------------------------------------------

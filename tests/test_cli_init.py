@@ -1434,19 +1434,20 @@ def build_object_valued_actor_emit_with_presentation_id(
     return tmp_path
 
 
-def test_claimed_flat_kind_dim_key_subsumes_advisory_comment(tmp_path: Path) -> None:
-    """A flat kind's whole-column claim elects `presentation_id` (key election),
-    aligning the dim's id column and subsuming the advisory comment on that
-    stub — declared-key election supersedes the older advisory-only note."""
+def test_claimed_flat_kind_dim_key_sources_record_index(tmp_path: Path) -> None:
+    """A flat kind's whole-column claim still proposes the uniform
+    `record_index` active election; the dim's id column sources from it, and
+    the advisory comment names `presentation_id` as an available alternative
+    rather than being subsumed."""
     emit_dir = build_flat_dim_emit_with_presentation_id(
         tmp_path / "emit", _LOCATION_PRESENTATION_KEYS
     )
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
-    assert "{name: id, from: presentation_id}" in content
-    assert "keys:\n  location: presentation_id" in content
-    assert "presentation_id` a natural key for 'location'" not in content
+    assert "{name: id, from: record_index}" in content
+    assert "  # location: presentation_id\n  location: record_index\n" in content
+    assert "presentation_id` a natural key for 'location'" in content
 
 
 def test_partitioned_kind_with_rollup_claim_carries_advisory_comment(
@@ -1628,20 +1629,28 @@ def _assert_proposal_passes_its_own_gates(out_path: Path, emit_dir: Path) -> Non
 
 def test_undeclared_kind_proposes_record_index_scalar(tmp_path: Path) -> None:
     """A flat kind with no presentation_keys entry proposes the record_index
-    scalar."""
+    scalar, with only the always-available record_id alternative commented."""
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
-    assert "keys:\n  location: record_index\n" in content
+    assert (
+        "keys:\n"
+        "  # NOTE: an uncommented alternative below SWAPS the active line for"
+        " this population -- delete the active line, don't just uncomment\n"
+        "  # location: record_id\n"
+        "  location: record_index\n" in content
+    )
+    assert "# location: presentation_id" not in content
     assert "{name: id, from: record_index}" in content
     _assert_proposal_passes_its_own_gates(out_path, emit_dir)
 
 
 def test_partial_declaration_proposes_per_sub_type_map(tmp_path: Path) -> None:
-    """Driver/bus declared with distinct, union-safe prefixes and ride
-    undeclared proposes the per-sub-type map with the record_index
-    fallback."""
+    """Driver/bus declared and ride undeclared still proposes the uniform
+    record_index active for every sub-type, as a per-sub-type map (shape
+    follows the alternatives, not the active values); only driver/bus offer
+    the presentation_id alternative."""
     emit_dir = build_object_valued_actor_emit_with_presentation_id(
         tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_CLAIMED
     )
@@ -1649,36 +1658,62 @@ def test_partial_declaration_proposes_per_sub_type_map(tmp_path: Path) -> None:
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert (
-        "keys:\n  actor:\n    driver: presentation_id\n    ride: record_index\n"
-        "    bus: presentation_id\n" in content
+        "    # driver: record_id\n"
+        "    # driver: presentation_id\n"
+        "    driver: record_index\n" in content
+    )
+    assert "    # ride: record_id\n    ride: record_index\n" in content
+    assert "# ride: presentation_id" not in content
+    assert (
+        "    # bus: record_id\n"
+        "    # bus: presentation_id\n"
+        "    bus: record_index\n" in content
     )
     _assert_proposal_passes_its_own_gates(out_path, emit_dir)
 
 
-def test_all_agreeing_map_collapses_to_scalar(tmp_path: Path) -> None:
-    """Every declared sub-type electing presentation_id collapses the
-    per-sub-type map to the scalar."""
+def test_all_declared_still_produces_per_sub_type_map(tmp_path: Path) -> None:
+    """Every declared sub-type still proposes the per-sub-type map — shape
+    never collapses to scalar once >= 1 sub-type is declared, even when every
+    sub-type agrees on its alternatives."""
     emit_dir = build_object_valued_actor_emit_with_presentation_id(
         tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_ALL_DECLARED
     )
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
-    assert "keys:\n  actor: presentation_id\n" in content
+    assert "keys:\n  actor:\n" in content
+    assert "keys:\n  actor: record_index\n" not in content
+    for sub_type in ("driver", "ride", "bus"):
+        assert f"    # {sub_type}: presentation_id\n    {sub_type}: record_index\n" in (
+            content
+        )
     _assert_proposal_passes_its_own_gates(out_path, emit_dir)
 
 
-def test_self_gate_degrades_bare_counter_siblings_with_comment(tmp_path: Path) -> None:
+def test_union_unsafe_siblings_propose_clean_no_degradation(tmp_path: Path) -> None:
     """A referencing edge into actor's full domain, with driver/bus declared
-    on bare (comparable) counter prefixes, degrades actor to the uniform
-    record_index scalar — the keys: line names the forcing gate."""
+    on bare (comparable) counter prefixes that a rollup claim would find
+    union-unsafe, still proposes the uniform record_index map cleanly — the
+    degradation mechanism is retired, so no `NOTE: ElectionUnionUnsafe`
+    comment appears anywhere in the proposal."""
     emit_dir = build_actor_with_referencing_booking_emit(
         tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_UNCLAIMED
     )
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
-    assert "keys:\n  actor: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "ElectionUnionUnsafe" not in content
+    assert (
+        "    # driver: record_id\n"
+        "    # driver: presentation_id\n"
+        "    driver: record_index\n" in content
+    )
+    assert (
+        "    # bus: record_id\n"
+        "    # bus: presentation_id\n"
+        "    bus: record_index\n" in content
+    )
     assert "{name: id, from: record_index}" in content
     _assert_proposal_passes_its_own_gates(out_path, emit_dir)
 
