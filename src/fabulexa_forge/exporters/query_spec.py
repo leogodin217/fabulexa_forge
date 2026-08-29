@@ -50,10 +50,18 @@ class ColumnProvenance:
     Stamped at plan compile for columns whose value is the faithful carry
     of exactly one source (table, column). Computed and multi-source
     columns get no entry — absence is the "inherits nothing" answer.
+
+    `value_map` is set only for a `derived: value_map` column: the applied
+    substitution as (source value, rendered output text) pairs in the map's
+    declaration order. The dictionary resolvers translate the source
+    property's declared enum values through it so the documented domain is
+    the values the column actually renders; None means the carry is
+    value-identical.
     """
 
     source_table: str
     source_column: str
+    value_map: tuple[tuple[str, str], ...] | None = None
 
 
 @dataclass(frozen=True)

@@ -141,13 +141,29 @@ _DOCUMENTED_ENUM_DOMAINS: dict[str, object] = {
 }
 
 
+def _history_columns() -> list[dict[str, object]]:
+    """The fixed `history` table's contract-minimum columns -- present so the
+    dictionary's `history`-sourced resolutions (`sim_time`, the virtual
+    `lead_sim_time`) have a declared table to answer from; documentation is
+    contract-pinned either way."""
+    return [
+        {"name": "fork_path", "type": "VARCHAR"},
+        {"name": "kind", "type": "VARCHAR"},
+        {"name": "record_id", "type": "VARCHAR"},
+        {"name": "property", "type": "VARCHAR"},
+        {"name": "sim_time", "type": "BIGINT"},
+        {"name": "value", "type": "VARCHAR"},
+    ]
+
+
 def write_documented_emit(dest: "Path", *, documented: bool = True) -> None:
     """Write a records-category emit exercising every dictionary resolution
     rule: a forwarded table description (`records__actor`), an undocumented
     kind (`records__team`, no `description`), a description-only property
     (`prop__full_name`), a description+unit property (`prop__shift_minutes`),
-    a closed-domain property (`prop__status`), and an undocumented property
-    (`prop__team_id`).
+    a closed-domain property (`prop__status`), an undocumented property
+    (`prop__team_id`), and the fixed `history` table for the
+    `sim_time`/`lead_sim_time` structural resolutions.
 
     Args:
         dest: The emit directory; base.json and run.duckdb are written inside it.
@@ -172,6 +188,12 @@ def write_documented_emit(dest: "Path", *, documented: bool = True) -> None:
                 "rows": 1,
                 **({"description": ACTOR_TABLE_DESCRIPTION} if documented else {}),
                 "columns": _actor_records_columns(documented=documented),
+            },
+            {
+                "name": "history",
+                "category": "fixed",
+                "rows": 0,
+                "columns": _history_columns(),
             },
         ],
         extra=(
@@ -240,4 +262,64 @@ def documented_actor_table_report(
                 KindValueEntry(label="Team", source_kind="team"),
             )
         },
+    )
+
+
+def history_interval_table_report(
+    *, table_name: str = "actor_status_interval", row_count: int | None = 1
+) -> TableReport:
+    """One history_interval-shaped output table's report: the [start, end)
+    pair carried from `history`'s `sim_time` / virtual `lead_sim_time` --
+    the interval-end description resolution's fixture. Kept separate from
+    `documented_actor_table_report` so that report's provenance stays
+    single-source (its table-description forwarding depends on it).
+
+    Args:
+        table_name: The output table's name.
+        row_count: The report's row count (None for a windowed invocation).
+
+    Returns:
+        The `TableReport`.
+    """
+    return TableReport(
+        name=table_name,
+        columns=(
+            ("entered_at", "TIMESTAMP"),
+            ("exited_at", "TIMESTAMP"),
+        ),
+        row_count=row_count,
+        keys=None,
+        provenance={
+            "entered_at": ColumnProvenance("history", "sim_time"),
+            "exited_at": ColumnProvenance("history", "lead_sim_time"),
+        },
+        kind_values={},
+    )
+
+
+def value_mapped_table_report(
+    *, table_name: str = "actor_events", row_count: int | None = 1
+) -> TableReport:
+    """One output table whose `status` column is a `derived: value_map`
+    carry of `prop__status`: the map renders `A` as `active` and omits `I`
+    -- the post-map declared-values resolution's fixture.
+
+    Args:
+        table_name: The output table's name.
+        row_count: The report's row count (None for a windowed invocation).
+
+    Returns:
+        The `TableReport`.
+    """
+    return TableReport(
+        name=table_name,
+        columns=(("status", "VARCHAR"),),
+        row_count=row_count,
+        keys=None,
+        provenance={
+            "status": ColumnProvenance(
+                "records__actor", "prop__status", value_map=(("A", "active"),)
+            ),
+        },
+        kind_values={},
     )

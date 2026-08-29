@@ -23,7 +23,11 @@ union) forwards nothing; there is no single subject to attribute it to.
 **Closed-domain columns.** A carried column whose source is a
 `records__<kind>` table's `prop__<name>` (or bare-named) property renders
 its declared value list when the sidecar carries an `enum_domains` entry
-for `(kind, property)`; every other carried column has none.
+for `(kind, property)`; every other carried column has none. A
+value-mapped carry declares the *post-map* domain — the source options
+translated through the stamped `ColumnProvenance.value_map`, glosses kept,
+unmapped options dropped (they render NULL) — never the source property's
+raw values, which the column does not contain.
 
 **Kind-name-as-value columns.** Resolved straight from `TableReport.kind_values`
 -- each rendered label glossed by its source kind's table description.
@@ -34,6 +38,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from fabulexa_forge.reader.documentation import EnumOption
 from fabulexa_forge.reader.records_columns import (
     RECORDS_TABLE_PREFIX,
     records_kind_from_table,
@@ -41,17 +46,28 @@ from fabulexa_forge.reader.records_columns import (
 
 if TYPE_CHECKING:
     from fabulexa_forge.exporters.query_spec import TableReport
-    from fabulexa_forge.reader.documentation import ColumnDoc, Documentation, EnumOption
+    from fabulexa_forge.reader.documentation import ColumnDoc, Documentation
 
 _PROP_COLUMN_PREFIX = "prop__"
 
 #: history_interval's virtual next-sim_time column (dimensional/validation.py's
 #: `_LEAD_SIM_TIME`) -- not a declared sidecar column, so it carries no sidecar
 #: entry of its own. It is `LEAD(sim_time)` (grains.py's history-interval
-#: builder): the value it holds literally *is* the next row's `sim_time`, so
-#: its documentation is `sim_time`'s.
+#: builder): the *value* is the next row's `sim_time`, but its *meaning* on
+#: the interval row is the end of the value's validity — so it resolves
+#: through `sim_time`'s entry for unit/origin and carries the forge-authored
+#: end-of-interval description below, never `sim_time`'s took-effect prose.
 _LEAD_SIM_TIME_COLUMN = "lead_sim_time"
 _HISTORY_TABLE = "history"
+
+#: The interval-end description authored here: the contract documents only
+#: the one `sim_time` axis; the [start, end) reading is a consumer
+#: derivation, so its end column's prose is forge's to own.
+_LEAD_SIM_TIME_DESCRIPTION = (
+    "Simulation time the value stopped holding — the instant the series'"
+    " next change took effect; NULL while the value is still current at the"
+    " slice boundary."
+)
 
 #: DuckDB's integer type literals -- the forms a raw-nanosecond ("ns") value
 #: still counts as itself under. Any other rendered type is a
@@ -104,22 +120,31 @@ def resolve_column_doc(
 
     Returns:
         The source column's resolved `ColumnDoc` (history_interval's virtual
-        `lead_sim_time` resolves through `sim_time`'s, since it *is* the next
-        row's `sim_time`), unit dropped where `output_type` shows the
-        rendering left the source's raw-nanosecond form behind; None for a
-        column with no carried provenance, or whose source carries neither
-        description nor unit.
+        `lead_sim_time` resolves through `sim_time`'s entry for unit/origin
+        but carries the forge-authored end-of-interval description — the
+        start column's took-effect prose would be wrong on the end bound),
+        unit dropped where `output_type` shows the rendering left the
+        source's raw-nanosecond form behind; None for a column with no
+        carried provenance, or whose source carries neither description nor
+        unit.
     """
     provenance = table.provenance.get(column_name)
     if provenance is None:
         return None
     source_column = provenance.source_column
+    column_doc: "ColumnDoc | None"
     if (
         provenance.source_table == _HISTORY_TABLE
         and source_column == _LEAD_SIM_TIME_COLUMN
     ):
-        source_column = "sim_time"
-    column_doc = doc.column_doc(provenance.source_table, source_column)
+        sim_time_doc = doc.column_doc(_HISTORY_TABLE, "sim_time")
+        column_doc = (
+            None
+            if sim_time_doc is None
+            else replace(sim_time_doc, description=_LEAD_SIM_TIME_DESCRIPTION)
+        )
+    else:
+        column_doc = doc.column_doc(provenance.source_table, source_column)
     if column_doc is None:
         return None
     if column_doc.unit == "ns" and output_type.upper() not in _INTEGER_DUCKDB_TYPES:
@@ -141,7 +166,11 @@ def resolve_column_enum_options(
         The source property's declared options, in sidecar order; empty
         when the column carries no provenance, its source table is not a
         `records__<kind>` table, or the source `(kind, property)` declares
-        no closed domain.
+        no closed domain. A value-mapped carry (`provenance.value_map` set)
+        declares the values the column actually renders: each source option
+        is translated through the map, keeping its gloss; a source option
+        the map omits is dropped — it renders NULL, outside the declared
+        domain.
     """
     provenance = table.provenance.get(column_name)
     if provenance is None:
@@ -151,9 +180,17 @@ def resolve_column_enum_options(
         return ()
     prop = provenance.source_column.removeprefix(_PROP_COLUMN_PREFIX)
     try:
-        return doc.enum_options(kind, prop)
+        options = doc.enum_options(kind, prop)
     except KeyError:
         return ()
+    if provenance.value_map is None:
+        return options
+    mapped = dict(provenance.value_map)
+    return tuple(
+        EnumOption(value=mapped[option.value], description=option.description)
+        for option in options
+        if option.value in mapped
+    )
 
 
 def resolve_kind_value_glosses(

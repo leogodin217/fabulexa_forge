@@ -31,6 +31,7 @@ from fabulexa_forge.config.models import (
     SourceDecl,
     TableDecl,
     TimestampSpec,
+    ValueMapSpec,
 )
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.query_spec import ColumnProvenance
@@ -391,6 +392,39 @@ def test_fact_grain_columns_carried_computed_columns_absent(tmp_path: Path) -> N
     )
     assert "seq" not in provenance
     assert "wait_minutes" not in provenance
+
+
+def test_value_map_column_stamps_source_and_applied_map(tmp_path: Path) -> None:
+    """A `derived: value_map` column stamps its source column plus the
+    applied map as (source value, rendered text) pairs in declaration
+    order -- the documentation channel's handle on the post-map domain."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    table_decl = TableDecl(
+        name="fact_event",
+        role="fact",
+        source=SourceDecl(grain="records", kind="tick_decision"),
+        key=["event_id"],
+        columns=[
+            ColumnDecl(name="event_id", **{"from": "record_id"}),
+            ColumnDecl(
+                name="event_type",
+                derived=DerivedSpec(
+                    value_map=ValueMapSpec(
+                        **{"from": "prop__decision_type"},
+                        map={"arrival": "patient_arrived", "triage": "triaged"},
+                    )
+                ),
+            ),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(table_decl))
+
+    assert specs["fact_event"].provenance["event_type"] == ColumnProvenance(
+        source_table="records__tick_decision",
+        source_column="prop__decision_type",
+        value_map=(("arrival", "patient_arrived"), ("triage", "triaged")),
+    )
 
 
 # ---------------------------------------------------------------------------

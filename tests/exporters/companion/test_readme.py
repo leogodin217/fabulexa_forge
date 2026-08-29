@@ -11,6 +11,8 @@ import pytest
 
 from exporters.companion._fixtures import (
     documented_actor_table_report,
+    history_interval_table_report,
+    value_mapped_table_report,
     write_documented_emit,
     write_minimal_emit,
 )
@@ -343,6 +345,55 @@ def test_kind_name_as_value_column_glosses_present_and_absent(
     assert "- `Actor`: Hospital staff members." in kind_block
     assert "- `Team`\n" in kind_block or kind_block.rstrip().endswith("- `Team`")
     assert "- `Team`:" not in kind_block
+
+
+def _render_report(tmp_path: Path, report: TableReport) -> str:
+    """Render one arbitrary table report against the documented fixture emit."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+    with open_emit(emit_dir) as emit:
+        return render_readme(
+            mode="source",
+            emit=emit,
+            report=ExportReport(tables=(report,)),
+            overlay=None,
+            anchor=None,
+            manifest_filename="source-manifest.json",
+        )
+
+
+def test_history_interval_end_column_gets_end_of_validity_description(
+    tmp_path: Path,
+) -> None:
+    """The [start, end) pair carried from history's sim_time /
+    lead_sim_time documents each bound in its own words: the start keeps
+    the contract's took-effect string, the end gets the forge-authored
+    stopped-holding description -- never the start's prose duplicated."""
+    text = _render_report(tmp_path, history_interval_table_report())
+
+    assert _column_line(text, "entered_at") == (
+        "- `entered_at` (TIMESTAMP): Simulation time the change took effect; "
+        "the value holds until the series' next row."
+    )
+    assert _column_line(text, "exited_at") == (
+        "- `exited_at` (TIMESTAMP): Simulation time the value stopped holding "
+        "— the instant the series' next change took effect; NULL while the "
+        "value is still current at the slice boundary."
+    )
+
+
+def test_value_mapped_column_declares_post_map_values(tmp_path: Path) -> None:
+    """A derived: value_map column's declared values are the post-map
+    rendered values (glosses kept); a source option the map omits renders
+    NULL and is dropped from the declared domain."""
+    text = _render_report(tmp_path, value_mapped_table_report())
+    glosses = text[text.index("Declared values:") :]
+    status_block = glosses[glosses.index("- `status`:") :]
+
+    assert "- `active`: Active and on duty." in status_block
+    assert "`A`" not in status_block
+    assert "Inactive" not in status_block
 
 
 def test_two_renders_are_byte_identical(tmp_path: Path) -> None:

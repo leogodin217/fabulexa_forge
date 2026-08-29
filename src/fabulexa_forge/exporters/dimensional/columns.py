@@ -685,6 +685,25 @@ def resolve_carried_source_column(col_decl: "ColumnDecl") -> str | None:
     return None
 
 
+def _value_map_display(out_val: "int | float | str") -> str:
+    """The declared-values display text of one value_map output value.
+
+    Mirrors `build_value_map_expr`'s literal forms as DuckDB renders them:
+    strings verbatim, booleans lowercase, numbers via str().
+
+    Args:
+        out_val: One `value_map.map` output value.
+
+    Returns:
+        The value as it appears in the materialized column's text form.
+    """
+    if isinstance(out_val, bool):
+        return "true" if out_val else "false"
+    if isinstance(out_val, str):
+        return out_val
+    return str(out_val)
+
+
 def build_column_provenance(
     col_decl: "ColumnDecl",
     source_table_name: str,
@@ -697,7 +716,11 @@ def build_column_provenance(
     `lookup.to` when given, else the grain's own anchor_kind (zero-hop self
     lookup). Every other carried column (`resolve_carried_source_column`)
     is keyed against source_table_name — the grain's resolved DuckDB source
-    table, the same identity already used for column-type resolution.
+    table, the same identity already used for column-type resolution. A
+    `derived: value_map` column additionally stamps its applied map as
+    (source value, rendered text) pairs in declaration order, so the
+    documentation channel declares the post-map domain rather than the
+    source property's.
 
     Args:
         col_decl: The output column declaration.
@@ -719,7 +742,15 @@ def build_column_provenance(
     src = resolve_carried_source_column(col_decl)
     if src is None:
         return None
-    return ColumnProvenance(source_table=source_table_name, source_column=src)
+    value_map = None
+    if col_decl.derived is not None and col_decl.derived.value_map is not None:
+        value_map = tuple(
+            (src_val, _value_map_display(out_val))
+            for src_val, out_val in col_decl.derived.value_map.map.items()
+        )
+    return ColumnProvenance(
+        source_table=source_table_name, source_column=src, value_map=value_map
+    )
 
 
 def build_table_provenance(

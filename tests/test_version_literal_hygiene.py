@@ -61,6 +61,12 @@ _EXCLUDED_DIRS: tuple[Path, ...] = (
     _REPO_ROOT / "contract",
     _REPO_ROOT / "docs" / "sprints",
     _REPO_ROOT / "docs" / "architecture" / "pending",
+    # Generated export companions (README/manifest) transcribe the emit's
+    # identity block — base_format_version included — from the bundle they
+    # were built against: machine-written data like the published base.json
+    # beside them, not authored prose. The hand-written prose in
+    # docs/examples/ (a showcase's top-level README.md) stays scanned.
+    *sorted((_REPO_ROOT / "docs" / "examples").glob("*/exports")),
 )
 
 # ---------------------------------------------------------------------------
