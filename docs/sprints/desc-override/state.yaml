@@ -1,6 +1,6 @@
 sprint: desc-override
 parent_branch: base-format-v9
-baseline_sha: 897848cb137e4d4a9cbac3d8e389b6a087696699
+baseline_sha: 1787c48b9b191b7c5b38dbf53cd605bfdd8309fe  # parent code baseline incl. the trailing-newline fixture fix
 started: 2026-08-29
 current_phase: 1
 capabilities:
