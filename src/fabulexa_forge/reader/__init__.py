@@ -23,10 +23,12 @@ from fabulexa_forge.reader.errors import (
     UnsupportedBaseFormatVersionError,
 )
 from fabulexa_forge.reader.records_columns import (
+    RECORDS_TABLE_PREFIX,
     REF_INDEX_PREFIX,
     RecordsColumnRole,
     StructuralInstant,
     records_column_role,
+    records_kind_from_table,
     records_structural_column_is_mutable,
     ref_index_sibling,
     structural_instant_columns,
@@ -72,6 +74,7 @@ __all__ = [
     "PartitionKey",
     "PresentationKeys",
     "PresentationKeysInvalidError",
+    "RECORDS_TABLE_PREFIX",
     "ReaderError",
     "REF_INDEX_PREFIX",
     "RecordRoles",
@@ -98,6 +101,7 @@ __all__ = [
     "open_emit",
     "pin_session_timezone",
     "records_column_role",
+    "records_kind_from_table",
     "records_structural_column_is_mutable",
     "ref_index_sibling",
     "run_check",

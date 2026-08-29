@@ -135,6 +135,7 @@ from fabulexa_forge.exporters.source.events import (
 )
 from fabulexa_forge.reader.errors import TableNotFoundError
 from fabulexa_forge.reader.records_columns import (
+    RECORDS_TABLE_PREFIX,
     REF_INDEX_PREFIX,
     records_column_role,
     structural_instant_columns,
@@ -142,9 +143,6 @@ from fabulexa_forge.reader.records_columns import (
 from fabulexa_forge.reader.sidecar import combined_claim
 
 _TemporalMapValue = TypeVar("_TemporalMapValue")
-
-#: The `records__<kind>` name prefix.
-_RECORDS_TABLE_PREFIX = "records__"
 
 #: Prefixes/suffixes the presentation-default renamer strips or recognizes.
 _ELEM_PREFIX = "elem__"
@@ -462,7 +460,7 @@ def _presentation_id_type(sidecar: "Sidecar", kind: str) -> str:
         ExportError: The kind's table declares no presentation_id column — a
             caller gating error.
     """
-    table = f"{_RECORDS_TABLE_PREFIX}{kind}"
+    table = f"{RECORDS_TABLE_PREFIX}{kind}"
     for col in sidecar.columns(table):
         if col.name == "presentation_id":
             return col.type
@@ -779,7 +777,7 @@ def _state_table_candidate_columns(
         SourceUnclassifiedColumn: A column matches no records-column
             taxonomy role.
     """
-    source_table = f"{_RECORDS_TABLE_PREFIX}{kind}"
+    source_table = f"{RECORDS_TABLE_PREFIX}{kind}"
     pairs: list[tuple[str, str]] = []
     for col in sidecar.columns(source_table):
         name = col.name
@@ -1558,7 +1556,7 @@ def _resolve_where_selection(
             unavailable (C13, reader-owned).
         ExportError: A consulted column's declared type is unrecognized.
     """
-    source_table = f"{_RECORDS_TABLE_PREFIX}{subject_kind}"
+    source_table = f"{RECORDS_TABLE_PREFIX}{subject_kind}"
     bare_names = _scalar_properties(sidecar, source_table)
     discriminator_col = (
         f"{_PROP_PREFIX}{subject_kind}_type"
@@ -1719,7 +1717,7 @@ def _build_state_table_plan(
     candidate = _state_table_candidate_columns(
         sidecar, kind, identity_surface, windowed, decl.name, notice_sink
     )
-    source_table = f"{_RECORDS_TABLE_PREFIX}{kind}"
+    source_table = f"{RECORDS_TABLE_PREFIX}{kind}"
     all_source_columns = frozenset(col.name for col in sidecar.columns(source_table))
     discriminator_col = (
         f"{_PROP_PREFIX}{kind}_type" if sidecar.subtype_values(kind) else None
@@ -2008,7 +2006,7 @@ def _resolve_records_audited_properties(
             entry is unresolved.
         TemporalClassUnavailableError: Propagated.
     """
-    source_table = f"{_RECORDS_TABLE_PREFIX}{kind}"
+    source_table = f"{RECORDS_TABLE_PREFIX}{kind}"
     all_bare_set = _scalar_properties(sidecar, source_table)
     candidates: list[str] = []
     for col in sidecar.columns(source_table):
@@ -2432,7 +2430,7 @@ def _build_event_source_plan(
     if decl.kind is not None:
         kind = decl.kind
         populations = resolve_populations(sidecar, owner, kind, decl.sub_types)
-        source_table = f"{_RECORDS_TABLE_PREFIX}{kind}"
+        source_table = f"{RECORDS_TABLE_PREFIX}{kind}"
         audited = _resolve_records_audited_properties(
             sidecar, kind, decl.only, decl.ignore, owner, notice_sink
         )

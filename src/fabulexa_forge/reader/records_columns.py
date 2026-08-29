@@ -14,6 +14,10 @@ category carry a sim-time instant, and which records structural columns may
 change after creation. Both are pure and emit-independent — contract facts,
 not presentation — and loud on anything outside their closed domains (design
 doc § The structural-temporal surface).
+
+Also owns the `records__<kind>` table-name convention (`RECORDS_TABLE_PREFIX`,
+`records_kind_from_table`): the prefix a records-category table name carries,
+and recovering the kind name from it.
 """
 
 from __future__ import annotations
@@ -21,6 +25,9 @@ from __future__ import annotations
 from typing import Final, Literal, Mapping
 
 RecordsColumnRole = Literal["identity", "presentation", "lifecycle", "payload"]
+
+#: The `records__<kind>` table-name prefix.
+RECORDS_TABLE_PREFIX: Final[str] = "records__"
 
 #: Prefix marking a records-table reference-identity sibling column.
 REF_INDEX_PREFIX: Final[str] = "ref_index__"
@@ -41,6 +48,23 @@ _PRESENTATION_NAMES: Final[frozenset[str]] = frozenset({"presentation_id"})
 _LIFECYCLE_NAMES: Final[frozenset[str]] = frozenset(
     {"created_sim_time", "active", "deactivated_at", "last_mutation_sim_time"}
 )
+
+
+def records_kind_from_table(table_name: str) -> str | None:
+    """
+    The kind name for a `records__<kind>` sidecar table, else None.
+
+    Args:
+        table_name: A sidecar table name, as carried on a `ColumnProvenance`
+            or returned by `Sidecar.tables()`.
+
+    Returns:
+        The kind name, or None for a table outside the `records__` family
+        (membership, fixed).
+    """
+    if not table_name.startswith(RECORDS_TABLE_PREFIX):
+        return None
+    return table_name[len(RECORDS_TABLE_PREFIX) :]
 
 
 def records_column_role(name: str) -> RecordsColumnRole | None:

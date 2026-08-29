@@ -54,8 +54,8 @@ source.columns (`_PROP_PREFIX`, and the
 one labeling authority `build_kind_label_expr` the junction render's
 `member__<f>__kind` column renders through) and source.plan modules
 (`_column_types` and the latter's `_MEMBER_PREFIX` / `_MEMBER_ID_SUFFIX` /
-`_MEMBER_KIND_SUFFIX` / `_RECORDS_TABLE_PREFIX` name constants at runtime,
-mirroring base's runtime import of `_self_identity`; `SourceEdgeSurface` /
+`_MEMBER_KIND_SUFFIX` name constants at runtime, mirroring base's runtime
+import of `_self_identity`; `SourceEdgeSurface` /
 `SourceStateTablePlan` / `SourceJunctionTablePlan` TYPE_CHECKING only),
 `exporters.populations` (`Population`, TYPE_CHECKING only), config.models
 (the `RenderElection` typed-election classes — `DateParseElection` /
@@ -110,10 +110,12 @@ from fabulexa_forge.exporters.source.plan import (
     _MEMBER_ID_SUFFIX,
     _MEMBER_KIND_SUFFIX,
     _MEMBER_PREFIX,
-    _RECORDS_TABLE_PREFIX,
     _column_types,
 )
-from fabulexa_forge.reader.records_columns import structural_instant_columns
+from fabulexa_forge.reader.records_columns import (
+    RECORDS_TABLE_PREFIX,
+    structural_instant_columns,
+)
 from fabulexa_forge.reader.relations import (
     build_membership_relation_sql,
     build_records_relation_sql,
@@ -533,7 +535,7 @@ def build_state_render_sql(
         relation_sql = build_state_at_sql(
             sidecar, fork_path, kind, bare_props, horizon_ns
         )
-        col_types = _column_types(sidecar, f"{_RECORDS_TABLE_PREFIX}{kind}")
+        col_types = _column_types(sidecar, f"{RECORDS_TABLE_PREFIX}{kind}")
 
     joins = [
         _self_identity_join_clause(

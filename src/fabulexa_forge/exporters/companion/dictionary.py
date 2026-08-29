@@ -34,11 +34,15 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from fabulexa_forge.reader.records_columns import (
+    RECORDS_TABLE_PREFIX,
+    records_kind_from_table,
+)
+
 if TYPE_CHECKING:
     from fabulexa_forge.exporters.query_spec import TableReport
     from fabulexa_forge.reader.documentation import ColumnDoc, Documentation, EnumOption
 
-_RECORDS_TABLE_PREFIX = "records__"
 _PROP_COLUMN_PREFIX = "prop__"
 
 #: history_interval's virtual next-sim_time column (dimensional/validation.py's
@@ -66,21 +70,6 @@ _INTEGER_DUCKDB_TYPES = frozenset(
         "UHUGEINT",
     }
 )
-
-
-def records_kind_from_table(table_name: str) -> str | None:
-    """The kind name for a `records__<kind>` sidecar table, else None.
-
-    Args:
-        table_name: A sidecar table name, as carried on a `ColumnProvenance`.
-
-    Returns:
-        The kind name, or None for a table outside the `records__` family
-        (membership, fixed).
-    """
-    if not table_name.startswith(_RECORDS_TABLE_PREFIX):
-        return None
-    return table_name[len(_RECORDS_TABLE_PREFIX) :]
 
 
 def resolve_table_description(doc: "Documentation", table: "TableReport") -> str | None:
@@ -187,7 +176,7 @@ def resolve_kind_value_glosses(
     return tuple(
         (
             entry.label,
-            doc.table_description(f"{_RECORDS_TABLE_PREFIX}{entry.source_kind}"),
+            doc.table_description(f"{RECORDS_TABLE_PREFIX}{entry.source_kind}"),
         )
         for entry in entries
     )
