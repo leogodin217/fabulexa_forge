@@ -18,9 +18,9 @@
 #
 # The dose (rates sized against this emit's populations):
 #   - missing contact data, MNAR: budget-segment shoppers are 4x likelier to
-#     have no phone on file (~4% of the 11,468 customers), and ~2% of street
+#     have no phone on file (~4% of customers), and ~2% of street
 #     addresses are blank uniformly.
-#   - double-fired clickstream events: ~0.2% of the 122,125 funnel decisions
+#   - double-fired clickstream events: ~0.2% of funnel decisions
 #     duplicated verbatim — the classic double-submit.
 #   - a tracking outage: ~300 session state-change events dropped inside two
 #     one-day windows, so sessionization sees gaps there.

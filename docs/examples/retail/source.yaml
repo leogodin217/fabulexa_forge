@@ -36,8 +36,8 @@
 #     customer_action_id, member id -> product_id) and de-simulates vocabulary
 #     names (journey_type -> session_type, decision_type -> action_type,
 #     pick_index -> position, joined/left -> bound_at/released_at).
-#   - The junction drops its constant kind column (entity_kind='entity' on all
-#     92,358 rows — one simulator word, zero information) via `columns:`.
+#   - The junction drops its constant kind column (entity_kind='entity' on
+#     every row — one simulator word, zero information) via `columns:`.
 #   - Per-source `rename:` keeps the `changes` payload keys in step with the
 #     renamed state-table columns.
 #   Renaming shopping_session.actor to customer_id accepts one known anomaly:
@@ -46,13 +46,14 @@
 #
 #   SPLIT  actor -> customer + ops_agent, two `state` tables over the same
 #          `kind: actor`, each narrowed by its own `sub_types:`. They are
-#          genuinely separate operational tables, not two views of one — measured
-#          11,468 shoppers against a single ops agent, and `sub_type_columns`
+#          genuinely separate operational tables, not two views of one — the
+#          whole shopper population against a single ops agent, and `sub_type_columns`
 #          gives them disjoint columns (the shopper's commercial and demographic
 #          attributes; the agent's monitored component).
 #   SPLIT  entity -> product + storefront, for the same reason: the partition
 #          gives product 11 columns and infrastructure 5, overlapping only on
-#          presentation_id. Measured 193 products against 1 storefront host. One
+#          presentation_id. Measured: a full product catalogue against a single
+#          storefront host. One
 #          combined catalogue table would be NULL for the other's columns on every
 #          row — a shape no app database would ship.
 #   PLAIN  journey_instance -> shopping_session, tick_decision -> customer_action.
@@ -96,8 +97,8 @@
 # business identifiers, not the engine's internal record ids. The registry
 # declares all four populations (CUST_/OPS_/SKU_/INFRA_ counter key spaces,
 # unique within the emit, pairwise union-safe), which matters here because the
-# bundle's record_id for products mixes two upstream id-assignment schemes (44
-# short integers, 149 64-char hashes). Under the election each state table's
+# bundle's record_id for products mixes two upstream id-assignment schemes (a
+# minority of short integers amid 64-char hashes). Under the election each state table's
 # `id` IS the presentation key (the standalone presentation_id column is
 # absorbed — emitting both would duplicate it), and every referencing column
 # renders its target's surface: shopping_session.actor -> CUST_/OPS_,
@@ -120,10 +121,10 @@
 #
 # Two columns are largely empty, and both are faithful rather than defects. The
 # soft-delete `deactivated_at` is set only where something actually retires:
-# measured, 13 of 193 products are withdrawn from the catalogue and 31,174 of
-# 31,175 shopping sessions have ended, while no customer, storefront, ops agent or
-# customer action is ever deactivated. And `action_product.left_at` is empty for
-# all 92,358 rows because a product binding is never released once made.
+# measured, a small minority of products are withdrawn from the catalogue and
+# essentially every shopping session has ended, while no customer, storefront,
+# ops agent or customer action is ever deactivated. And `action_product.left_at`
+# is empty on every row because a product binding is never released once made.
 
 mode: source
 
@@ -146,7 +147,7 @@ source:
       rename:
         prop__store: storefront_id
       # prop__birth_date is a plain upstream-minted date string (verified
-      # %Y-%m-%d, 11,468/11,468, no NULLs) — declared, not sniffed.
+      # %Y-%m-%d on every row, no NULLs) — declared, not sniffed.
       render:
         prop__birth_date: {date_parse: "%Y-%m-%d"}
     - name: ops_agent

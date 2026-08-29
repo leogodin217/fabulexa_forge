@@ -8,8 +8,9 @@
 # The bundle speaks the simulator's ontology, not TechMart's: `actor`, `entity`,
 # `journey_instance`, `tick_decision`. The atlas names what each one is, and the
 # sidecar's `sub_type_columns` names which columns are real for which sub-type.
-# Every output name below is the domain's; every claim in this log was re-derived
-# against THIS emit (counts as measured, not inherited from a sibling config).
+# Every output name below is the domain's. Exact row counts live in the
+# generated companion README/manifest; this log keeps its measured claims
+# qualitative so a regenerated emit cannot strand them.
 #
 # The governing curation rule: the star models what a real retail site's
 # instrumentation could observe. The simulator's internal machinery — state-machine
@@ -22,21 +23,23 @@
 #   SPLIT    actor -> dim_customer / dim_ops_agent, by prop__actor_type.
 #            `sub_type_columns.actor` partitions into customer (22 columns) and
 #            ops (2: presentation_id, prop__component) with no overlap beyond
-#            presentation_id. Measured: 11,468 customers, 1 ops agent. Each dim
+#            presentation_id. Measured: the whole shopper population against a
+#            single ops agent. Each dim
 #            projects exactly its own sub-type's columns; NO output table mixes
 #            the two concepts (see SEPARATE below). NOTE `prop__store` is a
 #            CUSTOMER column — projecting it on the ops dim would export all-NULL.
 #            It is not projected on dim_customer either: this run has ONE
 #            storefront host, so the column is one constant reference value on
-#            all 11,468 rows, carrying no information.
+#            every customer row, carrying no information.
 #   SPLIT    entity -> dim_product / dim_storefront. `sub_type_columns.entity`
 #            partitions into product (11 columns) and infrastructure (5), with NO
-#            overlap beyond presentation_id. Measured: 193 products, 1 storefront
+#            overlap beyond presentation_id. Measured: a full product catalogue
+#            against a single storefront
 #            host. Conforming them into one dim exports a table where the product
 #            columns are NULL for every infrastructure row and vice versa — and
 #            because only the infrastructure columns (status, error_rate) are
-#            history-tracked, SCD-2 over the conformed table turns a 194-entity
-#            catalogue into 318 rows, 125 of them versions of the single server.
+#            history-tracked, SCD-2 over the conformed table buries the
+#            catalogue under the lone server's version rows.
 #            Split, each dim projects exactly its own sub-type's columns.
 #   SEPARATE customer tables carry only customer activity. The single
 #            storefront_ops journey is the monitoring loop, and its rows
@@ -44,15 +47,14 @@
 #            agent is not in dim_customer; the storefront host is not in
 #            dim_product). Each customer-side table now filters to its concept:
 #              - dim_session: filter prop__journey_type = shopping_session
-#                (measured: 31,174 of 31,175 journey_instance rows)
+#                (every journey_instance row but the single ops journey)
 #              - fact_customer_action: filter prop__decision_type IN the six
-#                shopping actions (measured: 122,124 of 122,125 tick_decisions;
-#                the excluded row is the ops journey's single `store_bound`
-#                decision — tick_decision carries no journey column, and
-#                decision_type partitions the two journeys exactly)
+#                shopping actions (every tick_decision but the ops journey's
+#                single `store_bound` row — tick_decision carries no journey
+#                column, and decision_type partitions the two journeys exactly)
 #              - fact_action_product: where elem__role_name IN the three product
-#                roles (measured: 92,357 of 92,358 bindings; the excluded row is
-#                the ops journey's single `store`-role binding to the host)
+#                roles (every binding but the ops journey's single
+#                `store`-role binding to the host)
 #            Every FK now resolves completely — no dangling references remain.
 #   DROPPED  the ops journey's mechanism rows (1 session, 1 store_bound decision,
 #            1 store binding). The monitoring loop is engine mechanism; its
@@ -60,13 +62,14 @@
 #            exported — dim_storefront's SCD-2 versions. The ops AGENT itself
 #            stays exported (dim_ops_agent), so the actor kind is fully covered.
 #   DROPPED  journey_instance's current_state history (previously exported as a
-#            fact_session_state occupancy fact, 397,672 rows). The state machine
+#            fact_session_state occupancy fact several times the clickstream's
+#            size). The state machine
 #            is how the simulator generates shopper behaviour, not something a
 #            retail site's instrumentation records: measured, its milestone
-#            entries duplicate the clickstream exactly (browsing = visit,
-#            31,174 = 31,174; checkout = begin_checkout, 2,453 = 2,453; the
-#            1,897 purchased sessions = the 1,897 sessions with a purchase
-#            action), ~60% of its rows are gate/loop decision states
+#            entries duplicate the clickstream exactly (browsing entries =
+#            visit actions, checkout entries = begin_checkout actions, and
+#            purchased sessions = the sessions with a purchase action), the
+#            bulk of its rows are gate/loop decision states
 #            (browse_view_gate, browse_cart_gate, browse_loop, browse_advance),
 #            and the remainder (considering entries, the *_stop abandonment
 #            terminals) is engine-internal knowledge — a real site never observes
@@ -82,7 +85,8 @@
 #   SCD-2    dim_storefront: `status` and `error_rate` are the only `tracked`
 #            columns in the entity kind, and they are the incident timeline the
 #            atlas is built around (five storefront degradations across the run,
-#            during which checkout completion collapses). 125 versions of one host.
+#            during which checkout completion collapses). One host, versioned
+#            through every incident.
 #   SCD-2    dim_customer: `total_purchases` is `tracked` — the lifetime order
 #            count genuinely versions per completed order.
 #   DIM      dim_session keeps what genuinely does NOT version about a session
@@ -98,19 +102,20 @@
 #            clickstream.
 #   BRIDGE   the product binding is NOT an FK on fact_customer_action. The
 #            `bindings` membership carries a MULTI-PICK role — `compared_products`
-#            binds TWO products to one comparison decision (measured 7,846 binding
-#            rows), ordered by elem__pick_index — and dimensional.md § "Membership-
+#            binds TWO products to one comparison decision, ordered by
+#            elem__pick_index — and dimensional.md § "Membership-
 #            grain facts (multi-pick)" is explicit that a multi-pick role's fact
 #            grain must be the BINDING, not the owner. So the bindings become their
-#            own binding-grain fact, fact_action_product, carrying all 92,357
-#            product-role bindings; dropping a compared product to force 1:1
+#            own binding-grain fact, fact_action_product, carrying every
+#            product-role binding; dropping a compared product to force 1:1
 #            would be a fidelity violation.
 #   KEYS     actor and entity elect presentation_id, whole-kind. Every sub-type
 #            is registry-declared with its own prefixed counter space (CUST_ /
 #            OPS_ / SKU_ / INFRA_ — pairwise union-safe), and the engine
 #            record_ids are the mess the election exists to hide: products mix
-#            two upstream id-assignment schemes (measured: 44 short integer ids,
-#            149 64-char hashes — seeded vs runtime-spawned creation paths), and
+#            two upstream id-assignment schemes (measured: a minority of short
+#            integer ids amid 64-char hashes — seeded vs runtime-spawned
+#            creation paths), and
 #            customers are 64-char hashes. Each dim keys on its registry code
 #            and every FK renders the same surface; the fact's customer_id is a
 #            two-hop `fk:` (decision -> session -> actor), which the election
@@ -141,7 +146,7 @@
 #                      AND (f.occurred_at < d.valid_to OR d.valid_to IS NULL)
 #
 # ELECTED: dim_customer.birth_date is a clean upstream-minted date string
-# (verified all 11,468 values match `%Y-%m-%d`, no NULLs), so it is declared
+# (verified every value matches `%Y-%m-%d`, no NULLs), so it is declared
 # via `date_parse` and reinterpreted as a real DATE — the same election
 # source.yaml / base.yaml apply to the same column. dim_customer is
 # `scd: type2`, which admits the per-record derived modes on a
@@ -308,8 +313,11 @@ dimensional:
     # --- fact: action_product (the binding bridge) — grain: one binding,
     #     product roles only (see SEPARATE). Single-pick roles contribute one
     #     row; the multi-pick compared_products role contributes one row per
-    #     compared product, keyed by pick_index, so BOTH compared products
-    #     survive. ---
+    #     compared product, keyed by comparison_position (from
+    #     elem__pick_index), so BOTH compared products survive. Output names
+    #     are the domain's, not the engine's: the binding-role / pick-index /
+    #     joined-time membership vocabulary renders as interaction_type /
+    #     comparison_position / occurred_at. ---
     - name: fact_action_product
       role: fact
       source:
@@ -318,7 +326,7 @@ dimensional:
         property: bindings           # membership__tick_decision__bindings
         where:
           elem__role_name: [viewed_product, carted_product, compared_products]
-      key: [action_id, product_id, pick_index]
+      key: [action_id, product_id, comparison_position]
       columns:
         - {name: action_id, from: record_id}
         # Inherits entity/product's presentation_id election: SKU_xxxxx values.
@@ -327,8 +335,10 @@ dimensional:
             to: dim_product
             via: membership
             member_field: entity
-        - {name: binding_role, from: elem__role_name}
-        - {name: pick_index, from: elem__pick_index}
-        - {name: bound_at, derived: {timestamp: {source: joined_sim_time}}}
+        - {name: interaction_type, from: elem__role_name}
+        # zero-based slot within one product_comparison's compared pair;
+        # 0 for the single-pick view/cart bindings
+        - {name: comparison_position, from: elem__pick_index}
+        - {name: occurred_at, derived: {timestamp: {source: joined_sim_time}}}
         # left_sim_time is not projected: no product binding is ever released
-        # within the run, so the column is empty for all 92,357 rows.
+        # within the run, so the column is empty on every row.

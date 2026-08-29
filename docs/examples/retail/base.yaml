@@ -37,7 +37,7 @@
 # table spans all its sub-types, so the election must be uniform and the
 # spanned key spaces pairwise union-safe (they are: distinct non-empty
 # prefixes). Motivation: the bundle's record_id for products mixes two
-# upstream id-assignment schemes (44 short integers, 149 64-char hashes);
+# upstream id-assignment schemes (a minority of short integers amid 64-char hashes);
 # under the election the id-space value column carries the uniform business
 # key instead, and reference columns into these kinds (journey_instance's
 # prop__actor) render the same surface. The `<kind>_key` index keys ship
@@ -55,7 +55,7 @@
 # and no `rebase:` is the case where lifecycle columns stay raw BIGINT ns.
 #
 # ELECTED: actor.prop__birth_date is a plain upstream-minted date string
-# (verified all 11,468 values match `%Y-%m-%d`, no NULLs) — declared via
+# (verified every value matches `%Y-%m-%d`, no NULLs) — declared via
 # `date_parse` and reinterpreted as a real DATE.
 
 mode: base
