@@ -1,0 +1,51 @@
+sprint: desc-override
+parent_branch: base-format-v9
+baseline_sha: 897848cb137e4d4a9cbac3d8e389b6a087696699
+started: 2026-08-29
+current_phase: 1
+capabilities:
+  - companion-documentation: [per-column description override]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "Config surfaces + compiled-plan carriage"
+    demo: "docs/sprints/desc-override/demos/phase_1_config_carriage.py"
+    steps:
+      - kind: source
+        summary: "Add the three config override fields + validators; add author_descriptions to QuerySpec (defaulted) and TableReport (required); forward at both report-assembly sites; create the demo"
+      - kind: migrate
+        tactic: fan-out
+        change: "TableReport gained a required author_descriptions: Mapping[str, str] field (no default); add author_descriptions={} to every TableReport(...) construction"
+        files:
+          - "tests/exporters/companion/_fixtures.py"
+          - "tests/exporters/companion/test_manifest.py"
+          - "tests/exporters/companion/test_readme.py"
+          - "tests/exporters/companion/test_artifacts.py"
+      - kind: author
+        summary: "New load-time validator tests for the three config surfaces; widen the write_query_specs forwarding tests to author_descriptions"
+        files:
+          - "tests/config/test_models.py"
+          - "tests/exporters/test_query_spec.py"
+  2:
+    status: pending
+    name: "Plan-compile stamping + descriptions key gates"
+    demo: "docs/sprints/desc-override/demos/phase_2_plan_stamping.py"
+    steps:
+      - kind: source
+        summary: "Three plan compilers translate their config surface to output-name-keyed author_descriptions; source/base rename-key gates widen to descriptions keys; event log stamps empty; create the demo"
+      - kind: author
+        summary: "Per-mode stamping tests, descriptions key-gate tests, and the windowed-vs-full driver forwarding test"
+        files:
+          - "tests/exporters/dimensional/test_provenance.py"
+          - "tests/exporters/source/test_provenance.py"
+          - "tests/exporters/source/test_plan.py"
+          - "tests/exporters/base/test_provenance.py"
+          - "tests/exporters/base/test_plan.py"
+          - "tests/incremental/test_driver.py"
+  3:
+    status: pending
+    name: "Author-first dictionary resolution + fingerprint exclusion"
+    demo: "docs/sprints/desc-override/demos/phase_3_authored_dictionary.py"
