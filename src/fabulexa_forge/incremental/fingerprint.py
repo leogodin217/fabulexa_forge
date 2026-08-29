@@ -17,6 +17,17 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
 
+#: Config surfaces excluded from the canonical dump — presentation-only or
+#: (the three description overrides) authored prose that re-voices but never
+#: reshapes an export. Changing any of these mid-drip must not raise a
+#: fingerprint mismatch. Nested dict form per Pydantic's `model_dump(exclude=)`.
+_FINGERPRINT_EXCLUDE: "dict[str, Any]" = {
+    "readme_overlay": True,
+    "dimensional": {"tables": {"__all__": {"columns": {"__all__": {"description"}}}}},
+    "source": {"tables": {"__all__": {"descriptions"}}},
+    "base": {"rename": {"__all__": {"descriptions"}}},
+}
+
 
 def compute_fingerprint(
     config: "ExportConfig",
@@ -30,12 +41,12 @@ def compute_fingerprint(
 
     Canonical JSON: UTF-8 bytes, keys sorted, compact (',', ':') separators,
     no NaN/Infinity — over the parsed config (model dump, `readme_overlay`
-    excluded — a presentation-only field an author may add, change, or
-    remove mid-drip without it counting as a drip-identity change), the
-    resolved anchor (start_instant ISO + IANA key, or null), the base.json
-    digest, the sole branch's fork_path, the fmt, and the package version.
-    Any change to any other input yields a new fingerprint, halting --next
-    rather than splicing inconsistent windows.
+    and the three description-override surfaces excluded — presentation-only
+    fields an author may add, change, or remove mid-drip without it counting
+    as a drip-identity change), the resolved anchor (start_instant ISO + IANA
+    key, or null), the base.json digest, the sole branch's fork_path, the
+    fmt, and the package version. Any change to any other input yields a new
+    fingerprint, halting --next rather than splicing inconsistent windows.
 
     Args:
         config: The parsed export config.
@@ -50,7 +61,7 @@ def compute_fingerprint(
     """
     document: dict[str, Any] = {
         "anchor": anchor_to_json(anchor),
-        "config": config.model_dump(mode="json", exclude={"readme_overlay"}),
+        "config": config.model_dump(mode="json", exclude=_FINGERPRINT_EXCLUDE),
         "fmt": fmt,
         "fork_path": fork_path,
         "package_version": package_version,

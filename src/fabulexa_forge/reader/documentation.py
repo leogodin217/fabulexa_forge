@@ -31,12 +31,16 @@ class ColumnDoc:
 
     origin names the single authority that answered: "contract" for a
     structural column (pinned strings, instance placeholders bound),
-    "sidecar" for a per-run column (verbatim carry).
+    "sidecar" for a per-run column (verbatim carry), "author" for a
+    companion-dictionary resolution answered by the export config's
+    per-column description override. This reader's documentation view never
+    produces "author" — it is stamped only downstream, by the companion
+    dictionary.
     """
 
     description: str | None
     unit: str | None
-    origin: Literal["contract", "sidecar"]
+    origin: Literal["contract", "sidecar", "author"]
 
 
 @dataclass(frozen=True)

@@ -451,6 +451,125 @@ def test_two_renders_are_byte_identical(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Data dictionary -- author_descriptions override resolution
+# ---------------------------------------------------------------------------
+
+
+def test_override_on_carried_column_renders_author_prose_unit_still_inherited(
+    tmp_path: Path,
+) -> None:
+    """An override on a carried column renders the author's prose while the
+    source unit still inherits under today's unit rules."""
+    report = documented_actor_table_report(
+        author_descriptions={"shift_minutes": "Custom shift length."}
+    )
+    text = _render_report(tmp_path, report)
+    assert (
+        _column_line(text, "shift_minutes")
+        == "- `shift_minutes` (DECIMAL(10,2)): Custom shift length. [minutes]"
+    )
+
+
+def test_override_plus_temporal_rendering_still_drops_ns_unit(
+    tmp_path: Path,
+) -> None:
+    """An override on a column whose rendering left the raw-ns form behind
+    still drops the unit -- the ns-unit stop is unaffected by the override."""
+    report = documented_actor_table_report(
+        author_descriptions={"created_at": "Custom creation label."}
+    )
+    text = _render_report(tmp_path, report)
+    assert (
+        _column_line(text, "created_at")
+        == "- `created_at` (TIMESTAMPTZ): Custom creation label."
+    )
+
+
+def test_override_on_structural_column_wins_over_contract_rewrite(
+    tmp_path: Path,
+) -> None:
+    """An override on a projected structural column wins outright -- the
+    contract string and its export rewrite are never consulted."""
+    report = structural_identity_table_report(
+        author_descriptions={"event_id": "Custom identity note."}
+    )
+    text = _render_report(tmp_path, report)
+    section = text[text.index("### actor_identity") :]
+    assert (
+        _column_line(section, "event_id")
+        == "- `event_id` (VARCHAR): Custom identity note."
+    )
+
+
+def test_override_on_computed_column_with_no_provenance_renders_description_only(
+    tmp_path: Path,
+) -> None:
+    """An override on a column with no carried provenance gives a
+    description-only doc where today's resolution returns none."""
+    report = TableReport(
+        name="computed_facts",
+        columns=(("computed_flag", "BOOLEAN"),),
+        row_count=1,
+        keys=None,
+        provenance={},
+        kind_values={},
+        author_descriptions={"computed_flag": "A derived flag."},
+    )
+    text = _render_report(tmp_path, report)
+    assert (
+        _column_line(text, "computed_flag")
+        == "- `computed_flag` (BOOLEAN): A derived flag."
+    )
+
+
+def test_override_on_history_interval_end_column_replaces_forge_authored_constant(
+    tmp_path: Path,
+) -> None:
+    """An override on the history-interval end column replaces the
+    forge-authored end-of-validity constant; the start column is unaffected."""
+    report = history_interval_table_report(
+        author_descriptions={"exited_at": "Custom exit description."}
+    )
+    text = _render_report(tmp_path, report)
+    assert (
+        _column_line(text, "exited_at")
+        == "- `exited_at` (TIMESTAMP): Custom exit description."
+    )
+    assert _column_line(text, "entered_at") == (
+        "- `entered_at` (TIMESTAMP): Simulation time the change took effect; "
+        "the value holds until the series' next row."
+    )
+
+
+def test_override_on_value_mapped_column_renders_author_prose_enum_untouched(
+    tmp_path: Path,
+) -> None:
+    """An override on a derived: value_map column renders the author's prose;
+    the declared enum options stay the post-map list."""
+    report = value_mapped_table_report(
+        author_descriptions={"status": "Custom status label."}
+    )
+    text = _render_report(tmp_path, report)
+    assert _column_line(text, "status") == "- `status` (VARCHAR): Custom status label."
+    glosses = text[text.index("Declared values:") :]
+    assert "- `active`: Active and on duty." in glosses
+
+
+def test_override_present_while_source_carries_no_sidecar_documentation(
+    tmp_path: Path,
+) -> None:
+    """An override still renders even when its carried column's source
+    carries no sidecar documentation of its own."""
+    report = documented_actor_table_report(
+        author_descriptions={"team_id": "Foreign key to team."}
+    )
+    text = _render_report(tmp_path, report)
+    assert (
+        _column_line(text, "team_id") == "- `team_id` (VARCHAR): Foreign key to team."
+    )
+
+
+# ---------------------------------------------------------------------------
 # _load_mode_template resolution paths
 # ---------------------------------------------------------------------------
 

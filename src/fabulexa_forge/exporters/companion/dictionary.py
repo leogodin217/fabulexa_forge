@@ -5,7 +5,16 @@ manifest's machine-readable mirror must never disagree -- so the resolution
 lives here once and each companion builder renders it its own way (design
 doc § The data dictionary in companion artifacts).
 
-**Column resolution.** A column with no carried provenance entry (computed,
+**Column resolution.** The export config's `author_descriptions` (dimensional
+`columns[].description`, source `descriptions`, base `rename[].descriptions`
+— stamped onto `TableReport.author_descriptions` at plan compile, keyed by
+output column name) is consulted first: an entry re-voices a carried
+column's description while its unit still inherits under the rules below, or
+gives a column with no carried provenance a description-only doc where one
+otherwise wouldn't exist. Without an entry, resolution is exactly the
+carried-column rule that follows.
+
+A column with no carried provenance entry (computed,
 or fed by more than one source) inherits nothing. A carried column's
 documentation is its source column's resolved `ColumnDoc` — except the
 pinned structural strings whose prose points at base-layer structure a
@@ -43,15 +52,15 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from fabulexa_forge.reader.documentation import EnumOption
+from fabulexa_forge.reader.documentation import ColumnDoc, EnumOption
 from fabulexa_forge.reader.records_columns import (
     RECORDS_TABLE_PREFIX,
     records_kind_from_table,
 )
 
 if TYPE_CHECKING:
-    from fabulexa_forge.exporters.query_spec import TableReport
-    from fabulexa_forge.reader.documentation import ColumnDoc, Documentation
+    from fabulexa_forge.exporters.query_spec import ColumnProvenance, TableReport
+    from fabulexa_forge.reader.documentation import Documentation
 
 _PROP_COLUMN_PREFIX = "prop__"
 
@@ -161,6 +170,54 @@ def resolve_table_description(doc: "Documentation", table: "TableReport") -> str
     return doc.table_description(next(iter(sources)))
 
 
+def _resolve_source_doc(
+    doc: "Documentation", provenance: "ColumnProvenance"
+) -> "ColumnDoc | None":
+    """A carried column's source-resolved doc, pre-rewrite, pre-unit-stop.
+
+    Args:
+        doc: The emit's documentation view.
+        provenance: The carried column's provenance entry.
+
+    Returns:
+        history_interval's virtual `lead_sim_time` resolves through
+        `sim_time`'s entry for unit/origin but carries the forge-authored
+        end-of-interval description — the start column's took-effect prose
+        would be wrong on the end bound; every other carried column resolves
+        straight through `Documentation.column_doc`. None when the source
+        carries neither description nor unit.
+    """
+    if (
+        provenance.source_table == _HISTORY_TABLE
+        and provenance.source_column == _LEAD_SIM_TIME_COLUMN
+    ):
+        sim_time_doc = doc.column_doc(_HISTORY_TABLE, "sim_time")
+        return (
+            None
+            if sim_time_doc is None
+            else replace(sim_time_doc, description=_LEAD_SIM_TIME_DESCRIPTION)
+        )
+    return doc.column_doc(provenance.source_table, provenance.source_column)
+
+
+def _ns_unit_survives(unit: str | None, output_type: str) -> bool:
+    """Whether a carried "ns" unit still describes `output_type`'s rendering.
+
+    A rendering election that turned a raw-nanosecond integer into a
+    DATE/TIMESTAMPTZ value has left the "ns" claim behind; every other
+    declared unit rides its rendering unchanged.
+
+    Args:
+        unit: The source doc's resolved unit, or None.
+        output_type: The column's materialized DuckDB type text.
+
+    Returns:
+        False only when `unit == "ns"` and `output_type` is not one of
+        DuckDB's integer type literals; True otherwise (including unit=None).
+    """
+    return not (unit == "ns" and output_type.upper() not in _INTEGER_DUCKDB_TYPES)
+
+
 def resolve_column_doc(
     doc: "Documentation", table: "TableReport", column_name: str, output_type: str
 ) -> "ColumnDoc | None":
@@ -173,34 +230,35 @@ def resolve_column_doc(
         output_type: The column's materialized DuckDB type text.
 
     Returns:
-        The source column's resolved `ColumnDoc` (history_interval's virtual
-        `lead_sim_time` resolves through `sim_time`'s entry for unit/origin
-        but carries the forge-authored end-of-interval description — the
-        start column's took-effect prose would be wrong on the end bound),
-        a contract-answered description rewritten per
-        `_EXPORT_STRUCTURAL_REWRITES` where the pinned string points at
-        base-layer structure the export does not contain, unit dropped where
-        `output_type` shows the rendering left the source's raw-nanosecond
-        form behind; None for a column with no carried provenance, or whose
-        source carries neither description nor unit.
+        With an `author_descriptions` entry for the column: the resolved doc
+        with the author's description and origin "author" — on a carried
+        column the inherited unit rides along under today's unit rules; on a
+        column with no carried provenance the doc is description-only (unit
+        None). Without an entry: exactly today's resolution — the source
+        column's resolved `ColumnDoc` (history_interval's virtual
+        `lead_sim_time` case above), a contract-answered description
+        rewritten per `_EXPORT_STRUCTURAL_REWRITES` where the pinned string
+        points at base-layer structure the export does not contain, unit
+        dropped where `output_type` shows the rendering left the source's
+        raw-nanosecond form behind; None for a column with no carried
+        provenance, or whose source carries neither description nor unit.
     """
     provenance = table.provenance.get(column_name)
+    override = table.author_descriptions.get(column_name)
+    if override is not None:
+        source_doc = (
+            None if provenance is None else _resolve_source_doc(doc, provenance)
+        )
+        unit = (
+            source_doc.unit
+            if source_doc is not None
+            and _ns_unit_survives(source_doc.unit, output_type)
+            else None
+        )
+        return ColumnDoc(description=override, unit=unit, origin="author")
     if provenance is None:
         return None
-    source_column = provenance.source_column
-    column_doc: "ColumnDoc | None"
-    if (
-        provenance.source_table == _HISTORY_TABLE
-        and source_column == _LEAD_SIM_TIME_COLUMN
-    ):
-        sim_time_doc = doc.column_doc(_HISTORY_TABLE, "sim_time")
-        column_doc = (
-            None
-            if sim_time_doc is None
-            else replace(sim_time_doc, description=_LEAD_SIM_TIME_DESCRIPTION)
-        )
-    else:
-        column_doc = doc.column_doc(provenance.source_table, source_column)
+    column_doc = _resolve_source_doc(doc, provenance)
     if column_doc is None:
         return None
     if column_doc.origin == "contract":
@@ -208,11 +266,11 @@ def resolve_column_doc(
         rewrite = (
             None
             if family is None
-            else _EXPORT_STRUCTURAL_REWRITES.get((family, source_column))
+            else _EXPORT_STRUCTURAL_REWRITES.get((family, provenance.source_column))
         )
         if rewrite is not None:
             column_doc = replace(column_doc, description=rewrite)
-    if column_doc.unit == "ns" and output_type.upper() not in _INTEGER_DUCKDB_TYPES:
+    if not _ns_unit_survives(column_doc.unit, output_type):
         return replace(column_doc, unit=None)
     return column_doc
 

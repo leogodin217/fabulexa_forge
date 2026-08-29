@@ -24,6 +24,7 @@ from fabulexa_forge.exporters.companion.manifest import (
     build_manifest_document,
     render_manifest_bytes,
 )
+from fabulexa_forge.exporters.companion.readme import render_readme
 from fabulexa_forge.exporters.query_spec import (
     ColumnProvenance,
     ExportReport,
@@ -351,6 +352,73 @@ def test_closed_domain_column_enum_options(tmp_path: Path) -> None:
     assert columns["full_name"]["enum_options"] is None
 
 
+def test_override_on_carried_column_renders_author_prose(tmp_path: Path) -> None:
+    """An override on a carried column renders the author's prose while the
+    source unit still inherits under today's unit rules."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+
+    with open_emit(emit_dir) as emit:
+        document = build_manifest_document(
+            emit=emit,
+            config=ExportConfig(mode="base"),
+            fmt="csv",
+            anchor=None,
+            report=ExportReport(
+                tables=(
+                    documented_actor_table_report(
+                        author_descriptions={"shift_minutes": "Custom shift length."}
+                    ),
+                )
+            ),
+            windowed=None,
+        )
+
+    columns = _documented_columns(document)
+    assert columns["shift_minutes"]["description"] == "Custom shift length."
+    assert columns["shift_minutes"]["unit"] == "minutes"
+
+
+def test_override_on_computed_column_with_no_provenance_renders_description_only(
+    tmp_path: Path,
+) -> None:
+    """An override on a column with no carried provenance gives a
+    description-only doc where today's resolution renders none."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+
+    with open_emit(emit_dir) as emit:
+        document = build_manifest_document(
+            emit=emit,
+            config=ExportConfig(mode="base"),
+            fmt="csv",
+            anchor=None,
+            report=ExportReport(
+                tables=(
+                    TableReport(
+                        name="computed_facts",
+                        columns=(("computed_flag", "BOOLEAN"),),
+                        row_count=1,
+                        keys=None,
+                        provenance={},
+                        kind_values={},
+                        author_descriptions={"computed_flag": "A derived flag."},
+                    ),
+                )
+            ),
+            windowed=None,
+        )
+
+    tables = document["tables"]
+    assert isinstance(tables, list)
+    columns = tables[0]["columns"]
+    assert isinstance(columns, list)
+    assert columns[0]["description"] == "A derived flag."
+    assert columns[0]["unit"] is None
+
+
 def test_table_spanning_multiple_source_tables_forwards_no_description(
     tmp_path: Path,
 ) -> None:
@@ -389,6 +457,43 @@ def test_table_spanning_multiple_source_tables_forwards_no_description(
     tables = document["tables"]
     assert isinstance(tables, list)
     assert tables[0]["description"] is None
+
+
+def test_readme_and_manifest_render_same_authored_prose(tmp_path: Path) -> None:
+    """The README's per-column line and the manifest's per-column
+    `description` render the same authored prose for the same report."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+    report = ExportReport(
+        tables=(
+            documented_actor_table_report(
+                author_descriptions={"shift_minutes": "Custom shift length."}
+            ),
+        )
+    )
+
+    with open_emit(emit_dir) as emit:
+        document = build_manifest_document(
+            emit=emit,
+            config=ExportConfig(mode="base"),
+            fmt="csv",
+            anchor=None,
+            report=report,
+            windowed=None,
+        )
+        readme_text = render_readme(
+            mode="source",
+            emit=emit,
+            report=report,
+            overlay=None,
+            anchor=None,
+            manifest_filename="source-manifest.json",
+        )
+
+    manifest_description = _documented_columns(document)["shift_minutes"]["description"]
+    assert manifest_description == "Custom shift length."
+    assert "Custom shift length." in readme_text
 
 
 def test_documentation_identical_across_windows(tmp_path: Path) -> None:

@@ -22,6 +22,7 @@ from fabulexa_forge.exporters.query_spec import (
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import Mapping
 
 _MINIMAL_TABLES: list[dict[str, object]] = [
     {
@@ -237,7 +238,10 @@ def write_documented_emit(dest: "Path", *, documented: bool = True) -> None:
 
 
 def documented_actor_table_report(
-    *, table_name: str = "actor_state", row_count: int | None = 1
+    *,
+    table_name: str = "actor_state",
+    row_count: int | None = 1,
+    author_descriptions: Mapping[str, str] | None = None,
 ) -> TableReport:
     """One `actor_state` output table's report, faithfully carried from
     `write_documented_emit`'s `records__actor` (+ one `records__team` gloss).
@@ -258,6 +262,8 @@ def documented_actor_table_report(
     Args:
         table_name: The output table's name.
         row_count: The report's row count (None for a windowed invocation).
+        author_descriptions: Per-column author overrides, keyed by output
+            column name; empty when omitted.
 
     Returns:
         The `TableReport`.
@@ -290,12 +296,15 @@ def documented_actor_table_report(
                 KindValueEntry(label="Team", source_kind="team"),
             )
         },
-        author_descriptions={},
+        author_descriptions=author_descriptions or {},
     )
 
 
 def history_interval_table_report(
-    *, table_name: str = "actor_status_interval", row_count: int | None = 1
+    *,
+    table_name: str = "actor_status_interval",
+    row_count: int | None = 1,
+    author_descriptions: Mapping[str, str] | None = None,
 ) -> TableReport:
     """One history_interval-shaped output table's report: the [start, end)
     pair carried from `history`'s `sim_time` / virtual `lead_sim_time` --
@@ -306,6 +315,8 @@ def history_interval_table_report(
     Args:
         table_name: The output table's name.
         row_count: The report's row count (None for a windowed invocation).
+        author_descriptions: Per-column author overrides, keyed by output
+            column name; empty when omitted.
 
     Returns:
         The `TableReport`.
@@ -323,12 +334,15 @@ def history_interval_table_report(
             "exited_at": ColumnProvenance("history", "lead_sim_time"),
         },
         kind_values={},
-        author_descriptions={},
+        author_descriptions=author_descriptions or {},
     )
 
 
 def value_mapped_table_report(
-    *, table_name: str = "actor_events", row_count: int | None = 1
+    *,
+    table_name: str = "actor_events",
+    row_count: int | None = 1,
+    author_descriptions: Mapping[str, str] | None = None,
 ) -> TableReport:
     """One output table whose `status` column is a `derived: value_map`
     carry of `prop__status`: the map renders `A` as `active` and omits `I`
@@ -337,6 +351,8 @@ def value_mapped_table_report(
     Args:
         table_name: The output table's name.
         row_count: The report's row count (None for a windowed invocation).
+        author_descriptions: Per-column author overrides, keyed by output
+            column name; empty when omitted.
 
     Returns:
         The `TableReport`.
@@ -352,12 +368,15 @@ def value_mapped_table_report(
             ),
         },
         kind_values={},
-        author_descriptions={},
+        author_descriptions=author_descriptions or {},
     )
 
 
 def structural_identity_table_report(
-    *, table_name: str = "actor_identity", row_count: int | None = 1
+    *,
+    table_name: str = "actor_identity",
+    row_count: int | None = 1,
+    author_descriptions: Mapping[str, str] | None = None,
 ) -> TableReport:
     """One output table carrying every pinned identity surface whose contract
     string points at base-layer structure -- the export-rewrite fixture:
@@ -371,6 +390,8 @@ def structural_identity_table_report(
     Args:
         table_name: The output table's name.
         row_count: The report's row count (None for a windowed invocation).
+        author_descriptions: Per-column author overrides, keyed by output
+            column name; empty when omitted.
 
     Returns:
         The `TableReport`.
@@ -392,5 +413,5 @@ def structural_identity_table_report(
             "changed_id": ColumnProvenance("history", "record_id"),
         },
         kind_values={},
-        author_descriptions={},
+        author_descriptions=author_descriptions or {},
     )

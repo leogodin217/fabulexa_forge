@@ -46,6 +46,6 @@ phases:
           - "tests/exporters/base/test_plan.py"
           - "tests/incremental/test_driver.py"
   3:
-    status: pending
+    status: complete
     name: "Author-first dictionary resolution + fingerprint exclusion"
     demo: "docs/sprints/desc-override/demos/phase_3_authored_dictionary.py"
