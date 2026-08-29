@@ -19,6 +19,11 @@ import io
 from typing import TYPE_CHECKING, Callable
 
 from fabulexa_forge.errors import InitRequiresRecordRoles
+from fabulexa_forge.exporters.init_annotations import (
+    column_doc_text,
+    scenario_comment_lines,
+    table_description,
+)
 from fabulexa_forge.exporters.keys_init import propose_key_election, render_keys_block
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
@@ -261,6 +266,37 @@ def _membership_kinds_and_props(
     return result
 
 
+def _write_table_description(
+    w: Callable[[str], None], sidecar: "Sidecar", records_table_name: str
+) -> None:
+    """Write a stub's source-table description comment, when declared.
+
+    Args:
+        w: Line-writing callable.
+        sidecar: The open emit's sidecar.
+        records_table_name: The stub's source records table.
+    """
+    description = table_description(sidecar, records_table_name)
+    if description is not None:
+        w(f"      # {description}")
+
+
+def _column_entry_suffix(fragments: list[str | None]) -> str:
+    """Join a column entry's trailing-comment fragments into one suffix.
+
+    Args:
+        fragments: Comment fragments in display order; None entries are
+            dropped (an absent fragment, e.g. no column documentation).
+
+    Returns:
+        `"  # frag1; frag2"`, or `""` when every fragment is None.
+    """
+    present = [f for f in fragments if f is not None]
+    if not present:
+        return ""
+    return "  # " + "; ".join(present)
+
+
 def _write_dim_scd2_stub(
     w: Callable[[str], None],
     kind: str,
@@ -303,6 +339,8 @@ def _write_dim_scd2_stub(
     tracked_cols = _get_tracked_columns(kind, all_tables)
     all_cols = _get_records_columns(kind, all_tables)
     discriminator = f"prop__{kind}_type"
+    records_table_name = f"records__{kind}"
+    _write_table_description(w, sidecar, records_table_name)
     w(f"    - name: {name}")
     w("      role: dim  # proposal: dimension kind")
     w("      scd: type2  # proposal: history_tracked columns present")
@@ -315,7 +353,10 @@ def _write_dim_scd2_stub(
     if advisory_comment is not None:
         w(advisory_comment)
     w("      columns:")
-    w(f"        - {{name: id, from: {_DIM_ID_SURFACE}}}")
+    id_suffix = _column_entry_suffix(
+        [column_doc_text(sidecar, records_table_name, _DIM_ID_SURFACE)]
+    )
+    w(f"        - {{name: id, from: {_DIM_ID_SURFACE}}}{id_suffix}")
     for col in all_cols:
         if records_column_role(col) not in ("payload", "presentation"):
             continue
@@ -333,14 +374,14 @@ def _write_dim_scd2_stub(
             )
             continue
         short = col.replace("prop__", "")
-        if col in tracked_cols:
-            evidence = _versions_per_record(sidecar, kind, short)
-            w(
-                f"        - {{name: {short}, from: {col}}}"
-                f"  # tracked -> per-version; {evidence}"
-            )
-        else:
-            w(f"        - {{name: {short}, from: {col}}}")
+        tracked_fragment = (
+            f"tracked -> per-version; {_versions_per_record(sidecar, kind, short)}"
+            if col in tracked_cols
+            else None
+        )
+        doc_fragment = column_doc_text(sidecar, records_table_name, col)
+        suffix = _column_entry_suffix([tracked_fragment, doc_fragment])
+        w(f"        - {{name: {short}, from: {col}}}{suffix}")
     w("        - {name: valid_from, derived: {scd_window: valid_from}}")
     w("        - {name: valid_to, derived: {scd_window: valid_to}}")
     w("")
@@ -350,6 +391,7 @@ def _write_dim_type1_stub(
     w: Callable[[str], None],
     kind: str,
     name: str,
+    sidecar: "Sidecar",
     filter_line: str | None = None,
     advisory_comment: str | None = None,
 ) -> None:
@@ -359,11 +401,14 @@ def _write_dim_type1_stub(
         w: Line-writing callable.
         kind: The record kind name.
         name: The proposed output table name.
+        sidecar: The open emit's sidecar.
         filter_line: Optional filter YAML line to include in source, or None.
         advisory_comment: The `presentation_id` natural-key advisory comment
             line for this kind, or None when the block carries no whole-table
             claim.
     """
+    records_table_name = f"records__{kind}"
+    _write_table_description(w, sidecar, records_table_name)
     w(f"    - name: {name}")
     w("      role: dim  # proposal: dimension kind")
     w("      scd: type1  # proposal: no tracked columns detected")
@@ -376,7 +421,10 @@ def _write_dim_type1_stub(
     if advisory_comment is not None:
         w(advisory_comment)
     w("      columns:")
-    w(f"        - {{name: id, from: {_DIM_ID_SURFACE}}}")
+    id_suffix = _column_entry_suffix(
+        [column_doc_text(sidecar, records_table_name, _DIM_ID_SURFACE)]
+    )
+    w(f"        - {{name: id, from: {_DIM_ID_SURFACE}}}{id_suffix}")
     w(
         "        # Add more columns from prop__* here;"
         " e.g. {name: name, from: prop__name}"
@@ -389,6 +437,7 @@ def _write_fact_stub(
     kind: str,
     name: str,
     all_tables: tuple[TableSpec, ...],
+    sidecar: "Sidecar",
     filter_line: str | None = None,
     owned_columns: frozenset[str] | None = None,
     advisory_comment: str | None = None,
@@ -405,6 +454,7 @@ def _write_fact_stub(
         kind: The record kind name.
         name: The proposed output table name.
         all_tables: All sidecar TableSpec objects.
+        sidecar: The open emit's sidecar.
         filter_line: Optional filter YAML line to include in source, or None.
         owned_columns: The sub-type's declared columns for pruning, or None to
             list the full union (bare-string kinds, or emits without the
@@ -414,6 +464,8 @@ def _write_fact_stub(
             claim.
     """
     discriminator = f"prop__{kind}_type"
+    records_table_name = f"records__{kind}"
+    _write_table_description(w, sidecar, records_table_name)
     w(f"    - name: {name}")
     w("      role: fact  # proposal: fact kind")
     w("      source:")
@@ -425,7 +477,10 @@ def _write_fact_stub(
     if advisory_comment is not None:
         w(advisory_comment)
     w("      columns:")
-    w("        - {name: id, from: record_id}")
+    id_suffix = _column_entry_suffix(
+        [column_doc_text(sidecar, records_table_name, "record_id")]
+    )
+    w(f"        - {{name: id, from: record_id}}{id_suffix}")
     for tbl in all_tables:
         if tbl.name == f"records__{kind}":
             for tbl_col in tbl.columns:
@@ -535,6 +590,7 @@ def _write_sub_type_stub(
                 w,
                 kind,
                 name,
+                sidecar,
                 filter_line,
                 advisory_comment=advisory_comment,
             )
@@ -544,6 +600,7 @@ def _write_sub_type_stub(
             kind,
             name,
             all_tables,
+            sidecar,
             filter_line,
             owned_columns=owned,
             advisory_comment=advisory_comment,
@@ -581,6 +638,11 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     def w(line: str = "") -> None:
         buf.write(line + "\n")
 
+    scenario_lines = scenario_comment_lines(sidecar)
+    if scenario_lines:
+        for line in scenario_lines:
+            w(line)
+        w("")
     w("# Candidate dimensional export config — generated by `fabulexa-forge init`")
     w("# This is a ~70-80% starting point. Review all role/scd proposals.")
     w("# Classification (role, scd) is AUTHOR-AUTHORITATIVE — confirm or flip each.")
@@ -665,6 +727,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                         w,
                         kind,
                         f"dim_{kind}",
+                        sidecar,
                         advisory_comment=advisory_comment,
                     )
             else:
@@ -685,6 +748,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                                 kind,
                                 f"fact_{kind}_{val}",
                                 all_tables,
+                                sidecar,
                                 filter_line,
                                 advisory_comment=advisory_comment,
                             )
@@ -698,6 +762,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                             kind,
                             f"fact_{kind}",
                             all_tables,
+                            sidecar,
                             advisory_comment=advisory_comment,
                         )
                 else:
@@ -707,6 +772,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
                         kind,
                         f"fact_{kind}",
                         all_tables,
+                        sidecar,
                         advisory_comment=advisory_comment,
                     )
 
@@ -778,6 +844,15 @@ def generate_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     shipped `id` name; the `presentation_id` natural-key advisory comment is
     retained on every stub whose kind carries a whole-table claim. FK
     candidates stay comments, `target_key`-free.
+
+    Also annotates the output through the emit's documentation view
+    (`Sidecar.documentation()`, shared with the other two `init` engines via
+    `exporters.init_annotations`): a scenario comment block at the top when
+    `scenario_description` is declared, each dim/fact stub's source records
+    table's `tables[].description`, and each proposed column entry's
+    `description` (unit appended) when the sidecar declares it. Comments
+    only — undocumented items get no comment, and no comment ever changes
+    the emitted grammar.
 
     Args:
         emit: The open emit. Its sidecar must carry `record_roles`.

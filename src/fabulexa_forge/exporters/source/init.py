@@ -40,6 +40,11 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 from fabulexa_forge.errors import SourceHistoryTrackedRequired
+from fabulexa_forge.exporters.init_annotations import (
+    scenario_comment_lines,
+    sub_type_line_suffix,
+    table_description,
+)
 from fabulexa_forge.exporters.keys_init import propose_key_election, render_keys_block
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
@@ -240,6 +245,7 @@ def _write_state_unit(
     unit: _StateUnit,
     domain: tuple[str, ...],
     commented: bool,
+    sidecar: "Sidecar",
 ) -> None:
     """Write one proposed `state` table entry.
 
@@ -261,29 +267,39 @@ def _write_state_unit(
         unit: The proposed unit.
         domain: The kind's declared sub-type domain, `()` for a flat kind.
         commented: True when a same-named proposal was already emitted.
+        sidecar: The open emit's sidecar.
     """
+    description = table_description(sidecar, f"records__{unit.kind}")
     if commented:
         _write_collision_note(w, unit.name)
+        if description is not None:
+            w(f"    # {description}")
         w(f"    # - name: {unit.name}")
         w(f"    #   kind: {unit.kind}")
         if unit.sub_type is not None:
-            w(f"    #   sub_types: [{unit.sub_type}]")
+            suffix = sub_type_line_suffix(sidecar, unit.kind, unit.sub_type)
+            w(f"    #   sub_types: [{unit.sub_type}]{suffix}")
         return
     if unit.sub_type is not None and unit.sub_type == domain[0]:
         w(
             f"    # kind '{unit.kind}' declares sub-types: {', '.join(domain)}"
             " (one table per sub-type below)"
         )
+    if description is not None:
+        w(f"    # {description}")
     w(f"    - name: {unit.name}")
     w(f"      kind: {unit.kind}")
     if unit.sub_type is not None:
-        w(f"      sub_types: [{unit.sub_type}]")
+        suffix = sub_type_line_suffix(sidecar, unit.kind, unit.sub_type)
+        w(f"      sub_types: [{unit.sub_type}]{suffix}")
     if unit.sub_type is not None and unit.sub_type == domain[-1]:
         w(
             "    # Combine alternative: one shared table across every"
             " declared sub-type instead of the per-sub-type split above"
             " (valid when the sub-types share an identical column set)"
         )
+        if description is not None:
+            w(f"    # {description}")
         w(f"    # - name: {unit.kind}")
         w(f"    #   kind: {unit.kind}")
 
@@ -293,6 +309,7 @@ def _write_junction_unit(
     unit: _JunctionUnit,
     domain: tuple[str, ...],
     commented: bool,
+    sidecar: "Sidecar",
 ) -> None:
     """Write one proposed `junction` table entry; a per-sub-type stub
     carries `sub_types: [<sub_type>]`, and the last stub of a sub-typed
@@ -306,24 +323,36 @@ def _write_junction_unit(
         domain: The owner kind's declared discriminator domain (empty for a
             flat owner) — last-stub detection, as `_write_state_unit`'s.
         commented: True when a same-named proposal was already emitted.
+        sidecar: The open emit's sidecar.
     """
+    description = table_description(
+        sidecar, f"membership__{unit.owner_kind}__{unit.property}"
+    )
     if commented:
         _write_collision_note(w, unit.name)
+        if description is not None:
+            w(f"    # {description}")
         w(f"    # - name: {unit.name}")
         w(f"    #   membership: {{kind: {unit.owner_kind}, property: {unit.property}}}")
         if unit.sub_type is not None:
-            w(f"    #   sub_types: [{unit.sub_type}]")
+            suffix = sub_type_line_suffix(sidecar, unit.owner_kind, unit.sub_type)
+            w(f"    #   sub_types: [{unit.sub_type}]{suffix}")
         return
+    if description is not None:
+        w(f"    # {description}")
     w(f"    - name: {unit.name}")
     w(f"      membership: {{kind: {unit.owner_kind}, property: {unit.property}}}")
     if unit.sub_type is not None:
-        w(f"      sub_types: [{unit.sub_type}]")
+        suffix = sub_type_line_suffix(sidecar, unit.owner_kind, unit.sub_type)
+        w(f"      sub_types: [{unit.sub_type}]{suffix}")
     if unit.sub_type is not None and unit.sub_type == domain[-1]:
         w(
             "    # Combine alternative: one shared junction across every"
             " declared sub-type instead of the per-sub-type split above"
             " (valid when the sub-types share an identical column set)"
         )
+        if description is not None:
+            w(f"    # {description}")
         w(f"    # - name: {unit.owner_kind}_{unit.property}")
         w(f"    #   membership: {{kind: {unit.owner_kind}, property: {unit.property}}}")
 
@@ -349,10 +378,10 @@ def _write_tables_block(
         if isinstance(unit, _StateUnit):
             _slice_only_notices_for_kind(sidecar, unit.kind, notice_sink)
             domain = sidecar.subtype_values(unit.kind)
-            _write_state_unit(w, unit, domain, commented)
+            _write_state_unit(w, unit, domain, commented, sidecar)
         else:
             domain = sidecar.subtype_values(unit.owner_kind)
-            _write_junction_unit(w, unit, domain, commented)
+            _write_junction_unit(w, unit, domain, commented, sidecar)
 
 
 # ---------------------------------------------------------------------------
@@ -401,7 +430,8 @@ def _write_events_block(
         for owner_kind, prop, sub_type in memberships:
             w(f"  #     - membership: {{kind: {owner_kind}, property: {prop}}}")
             if sub_type is not None:
-                w(f"  #       sub_types: [{sub_type}]")
+                suffix = sub_type_line_suffix(sidecar, owner_kind, sub_type)
+                w(f"  #       sub_types: [{sub_type}]{suffix}")
         return
 
     w("  events:")
@@ -414,7 +444,8 @@ def _write_events_block(
     for owner_kind, prop, sub_type in memberships:
         w(f"      # - membership: {{kind: {owner_kind}, property: {prop}}}")
         if sub_type is not None:
-            w(f"      #   sub_types: [{sub_type}]")
+            suffix = sub_type_line_suffix(sidecar, owner_kind, sub_type)
+            w(f"      #   sub_types: [{sub_type}]{suffix}")
 
 
 # ---------------------------------------------------------------------------
@@ -443,6 +474,11 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     def w(line: str = "") -> None:
         buf.write(line + "\n")
 
+    scenario_lines = scenario_comment_lines(sidecar)
+    if scenario_lines:
+        for line in scenario_lines:
+            w(line)
+        w("")
     w("# Candidate source export config — generated by `fabulexa-forge init`")
     w("# This is a starting point. Review every table / junction / events proposal.")
     w(
@@ -471,6 +507,14 @@ def generate_source_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     that collide emit the later proposal commented, with a collision note —
     the emitted config always parses and plans clean (design doc § `init
     --mode source` inference contract).
+
+    Also annotates the output through the emit's documentation view
+    (`Sidecar.documentation()`, shared with the other two `init` engines via
+    `exporters.init_annotations`): a scenario comment block at the top when
+    `scenario_description` is declared, each `state`/`junction` stub's source
+    table's `tables[].description`, and each `sub_types: [<v>]` line's
+    discriminator gloss — inside commented alternatives too. Comments only;
+    undocumented items get no comment.
 
     Args:
         emit: The open emit.

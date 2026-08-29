@@ -183,8 +183,9 @@ def test_flat_kind_properties_are_bare_prop_columns_only(tmp_path: Path) -> None
     build_source_test_emit(tmp_path)
     content = _generate(tmp_path)
     assert (
-        "    - name: order\n      kind: order\n      properties: [location_id, amount]\n"
-        in content
+        "    - name: order\n      kind: order\n      properties:\n"
+        "        - location_id\n"
+        "        - amount\n" in content
     )
     assert "ref_index" not in content
 
@@ -240,13 +241,15 @@ def test_subtyped_kind_partition_prunes_to_owned_columns(tmp_path: Path) -> None
         "    - name: alpha\n"
         "      kind: gizmo\n"
         "      sub_types: [alpha]\n"
-        "      properties: [weight]\n" in content
+        "      properties:\n"
+        "        - weight\n" in content
     )
     assert (
         "    - name: beta\n"
         "      kind: gizmo\n"
         "      sub_types: [beta]\n"
-        "      properties: [color]\n" in content
+        "      properties:\n"
+        "        - color\n" in content
     )
     assert "gizmo_type" not in content
     assert "sidecar carries no sub_type_columns partition" not in content
@@ -289,7 +292,8 @@ def test_subtyped_kind_missing_partition_falls_back_to_union_with_comment(
         "    - name: consultant\n"
         "      kind: actor\n"
         "      sub_types: [consultant]\n"
-        "      properties: [name]\n" in content
+        "      properties:\n"
+        "        - name\n" in content
     )
     assert (
         "    # NOTE: the sidecar carries no sub_type_columns partition for kind"
@@ -299,7 +303,8 @@ def test_subtyped_kind_missing_partition_falls_back_to_union_with_comment(
         "    - name: nurse\n"
         "      kind: actor\n"
         "      sub_types: [nurse]\n"
-        "      properties: [name]\n" in content
+        "      properties:\n"
+        "        - name\n" in content
     )
 
 
@@ -318,7 +323,9 @@ def test_lifecycle_only_flat_population_live_under_comment(tmp_path: Path) -> No
         " lifecycle-only (c/d events only) -- delete to opt out\n"
         "    - name: location\n"
         "      kind: location\n"
-        "      properties: [name, region]\n" in content
+        "      properties:\n"
+        "        - name\n"
+        "        - region\n" in content
     )
 
 
@@ -384,8 +391,10 @@ def test_kind_and_subtype_name_collision_comments_out_later_proposal(
     _build_kind_subtype_collision_emit(tmp_path)
     content = _generate(tmp_path)
     assert (
-        "    - name: product\n      kind: product\n      properties: [status]\n"
-        in content
+        "    - name: product\n"
+        "      kind: product\n"
+        "      properties:\n"
+        "        - status\n" in content
     )
     assert (
         "    # NOTE: name 'product' collides with an earlier proposal above;"
@@ -477,7 +486,8 @@ def test_membership_underscore_ambiguity_collision(tmp_path: Path) -> None:
     assert (
         "#   - name: a_b_c\n"
         "#     membership: {kind: a_b, property: c}\n"
-        "#     fields: [seat]\n" in content
+        "#     fields:\n"
+        "#       - seat\n" in content
     )
     assert (
         "#   # NOTE: name 'a_b_c' collides with an earlier proposal; excluded"
@@ -547,8 +557,10 @@ def test_topic_illegal_subtype_value_commented_never_sanitized(tmp_path: Path) -
     _build_topic_illegal_subtype_emit(tmp_path)
     content = _generate(tmp_path)
     assert (
-        "    - name: widget2\n      kind: widget2\n      properties: [status]\n"
-        in content
+        "    - name: widget2\n"
+        "      kind: widget2\n"
+        "      properties:\n"
+        "        - status\n" in content
     )
     assert (
         "    # NOTE: sub-type value 'bad type' of kind 'gadget2' is not a legal"
@@ -739,7 +751,9 @@ def test_membership_table_proposes_commented_stream_with_bare_fields(
     assert (
         "#   - name: visit_team\n"
         "#     membership: {kind: visit, property: team}\n"
-        "#     fields: [role_name, actor]\n" in content
+        "#     fields:\n"
+        "#       - role_name\n"
+        "#       - actor\n" in content
     )
 
 
@@ -883,7 +897,7 @@ def test_slice_only_column_never_proposed_one_notice(tmp_path: Path) -> None:
     _build_slice_only_notice_emit(tmp_path)
     content, sink = _generate_recording_notices(tmp_path)
     assert "zone_note" not in content
-    assert "properties: [status]" in content
+    assert "properties:\n        - status\n" in content
     slice_only_notices = [
         n for n in sink.notices if n.code == "slice-only-column-omitted"
     ]
@@ -943,6 +957,201 @@ def test_authoring_fields_never_proposed_trailing_comment(tmp_path: Path) -> Non
         "# never proposed either; each is author intent with no sidecar-derived"
         " value (proposing one would be invention). Add them yourself.\n" in content
     )
+    _assert_round_trip_streams_clean(tmp_path, content, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# `init` documentation annotations (documentation-channel Phase 6)
+# ---------------------------------------------------------------------------
+
+#: A documented flat `location` kind (a tracked, documented `name`; an
+#: untracked, documented-with-unit `capacity`; an undocumented `notes`) plus
+#: a documented, sub-typed `vehicle` kind (car/truck, a partially-glossed
+#: domain, an undocumented discriminator, a documented `label`) that owns a
+#: `passengers` membership table with a documented reference field
+#: (`rider`) and an undocumented plain field (`seat`).
+_DOC_LOCATION_COLUMNS: list[dict[str, object]] = [
+    *_IDENTITY_PREFIX,
+    prop_column(
+        "prop__name",
+        "VARCHAR",
+        history_tracked=True,
+        temporal_class="tracked",
+        description="Human-readable location name.",
+    ),
+    prop_column(
+        "prop__capacity",
+        "BIGINT",
+        history_tracked=False,
+        temporal_class="constant",
+        description="Maximum occupancy.",
+        unit="people",
+    ),
+    prop_column(
+        "prop__notes", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+_DOC_VEHICLE_COLUMNS: list[dict[str, object]] = [
+    *_IDENTITY_PREFIX,
+    prop_column(
+        "prop__vehicle_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+    prop_column(
+        "prop__label",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        description="Vehicle's fleet label.",
+    ),
+]
+
+_DOC_PASSENGERS_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__seat", "type": "VARCHAR"},
+    {
+        "name": "member__rider__kind",
+        "type": "VARCHAR",
+        "description": "Kind of the passenger riding this vehicle.",
+    },
+    {"name": "member__rider__id", "type": "VARCHAR"},
+]
+
+
+def _build_documented_streaming_emit(
+    tmp_path: Path, *, scenario_description: str | None
+) -> Path:
+    """A documented flat `location` kind plus a documented, sub-typed
+    `vehicle` kind owning a `passengers` membership table."""
+    conn = duckdb.connect(str(tmp_path / "run.duckdb"))
+    conn.execute(_ddl("records__location", _DOC_LOCATION_COLUMNS))
+    conn.execute(_ddl("records__vehicle", _DOC_VEHICLE_COLUMNS))
+    conn.execute(_ddl("membership__vehicle__passengers", _DOC_PASSENGERS_COLUMNS))
+    conn.execute(_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Central Depot", 40, None],
+    )
+    conn.execute(
+        'INSERT INTO "records__vehicle" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "veh1", 10, True, 10, 0, "car", "Shuttle-1"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__vehicle__passengers" VALUES (?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "veh1", 5, "1A", "location", "loc1"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "location", "loc1", "name", 10, "Central Depot"],
+    )
+    conn.close()
+    car_option, truck_option = enum_options("car", "truck")
+    car_option["description"] = "A passenger car."
+    location_table = _table_spec(
+        "records__location", "records", _DOC_LOCATION_COLUMNS, 1, "location"
+    )
+    location_table["description"] = "Physical locations recorded during the run."
+    vehicle_table = _table_spec(
+        "records__vehicle", "records", _DOC_VEHICLE_COLUMNS, 1, "vehicle"
+    )
+    vehicle_table["description"] = "Vehicles operating in the fleet."
+    passengers_table = _membership_table_spec(
+        "membership__vehicle__passengers",
+        _DOC_PASSENGERS_COLUMNS,
+        1,
+        "vehicle",
+        "passengers",
+    )
+    passengers_table["description"] = "Passengers riding each vehicle."
+    extra: dict[str, object] = {
+        "enum_domains": {"vehicle": {"vehicle_type": [car_option, truck_option]}}
+    }
+    if scenario_description is not None:
+        extra["scenario_description"] = scenario_description
+    write_emit(
+        tmp_path,
+        tables=[
+            location_table,
+            vehicle_table,
+            passengers_table,
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra=extra,
+    )
+    return tmp_path
+
+
+def test_scenario_comment_present_when_declared(tmp_path: Path) -> None:
+    """A declared `scenario_description` renders as a `# Scenario:` block."""
+    _build_documented_streaming_emit(
+        tmp_path, scenario_description="A city fleet simulation."
+    )
+    content = _generate(tmp_path)
+    assert "# Scenario:\n#   A city fleet simulation.\n" in content
+
+
+def test_scenario_comment_absent_when_not_declared(tmp_path: Path) -> None:
+    """No `scenario_description` -> no `# Scenario:` block anywhere."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert "# Scenario:" not in content
+
+
+def test_table_description_annotates_stream_stub(tmp_path: Path) -> None:
+    """Each stream's source table's description comments its stub."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert "    # Physical locations recorded during the run.\n" in content
+    assert "    # Vehicles operating in the fleet.\n" in content
+
+
+def test_sub_type_gloss_on_sub_types_line(tmp_path: Path) -> None:
+    """A glossed sub-type value's `sub_types:` line carries the gloss."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert "sub_types: [car]  # A passenger car.\n" in content
+
+
+def test_property_entries_carry_description_and_unit(tmp_path: Path) -> None:
+    """Block-style `properties:` entries carry description (+ unit);
+    undocumented properties carry no comment."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert (
+        "      properties:\n"
+        "        - name  # Human-readable location name.\n"
+        "        - capacity  # Maximum occupancy. (people)\n"
+        "        - notes\n" in content
+    )
+    assert "        - label  # Vehicle's fleet label.\n" in content
+
+
+def test_membership_alternative_annotates_reference_field(tmp_path: Path) -> None:
+    """The membership alternative's reference field reads its
+    `member__<f>__kind` documentation; the undocumented plain field
+    carries no comment."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert "#   # Passengers riding each vehicle.\n" in content
+    assert (
+        "#       - seat\n"
+        "#       - rider  # Kind of the passenger riding this vehicle.\n" in content
+    )
+
+
+def test_documented_proposal_streams_clean(tmp_path: Path) -> None:
+    """The annotated candidate config still parses and streams clean."""
+    _build_documented_streaming_emit(
+        tmp_path, scenario_description="A city fleet simulation."
+    )
+    content = _generate(tmp_path)
     _assert_round_trip_streams_clean(tmp_path, content, tmp_path)
 
 

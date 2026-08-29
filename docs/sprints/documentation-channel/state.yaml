@@ -75,7 +75,7 @@ phases:
           - "tests/exporters/companion/test_manifest.py"
           - "tests/exporters/companion/test_artifacts.py"
   6:
-    status: pending
+    status: complete
     name: "Init documentation annotations"
     demo: "docs/sprints/documentation-channel/demos/phase_6_init_annotations.py"
     steps:

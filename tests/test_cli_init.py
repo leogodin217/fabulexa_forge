@@ -183,6 +183,7 @@ def _base_sidecar(
     sub_type_columns: dict[str, dict[str, list[str]]] | None = None,
     presentation_keys: dict[str, object] | None = None,
     row_census: dict[str, object] | None = None,
+    scenario_description: str | None = None,
 ) -> dict[str, object]:
     """Build a minimal sidecar dict with optional record_roles/enum_domains/partition."""
     result: dict[str, object] = {
@@ -199,6 +200,8 @@ def _base_sidecar(
         result["presentation_keys"] = presentation_keys
     if row_census is not None:
         result["row_census"] = row_census
+    if scenario_description is not None:
+        result["scenario_description"] = scenario_description
     return result
 
 
@@ -1058,6 +1061,156 @@ def test_bare_subtyped_fact_splits_per_subtype(tmp_path: Path) -> None:
 def test_bare_subtyped_dim_proposal_passes_its_own_gates(tmp_path: Path) -> None:
     """The generated candidate for a bare-role subtyped kind loads and plans."""
     emit_dir = build_bare_subtyped_dim_emit(tmp_path / "emit")
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+# ---------------------------------------------------------------------------
+# `init` documentation annotations (documentation-channel Phase 6)
+# ---------------------------------------------------------------------------
+
+#: A bare-role, sub-typed dim kind ('equipment') carrying a documented table
+#: description, a partially-glossed sub-type domain (forklift glossed,
+#: scanner not), a documented tracked column (triggers the SCD-2 stub, so
+#: every payload column is proposed), a documented untracked column, and an
+#: undocumented discriminator.
+_DOCUMENTED_EQUIPMENT_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {"name": "prop__equipment_type", "type": "VARCHAR"},
+    prop_column(
+        "prop__label",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        description="Equipment's asset tag.",
+    ),
+    prop_column(
+        "prop__status",
+        "VARCHAR",
+        history_tracked=True,
+        temporal_class="tracked",
+        description="Current operating state.",
+    ),
+]
+
+
+def build_documented_subtyped_dim_emit(
+    tmp_path: Path, *, scenario_description: str | None
+) -> Path:
+    """A documented, bare-role, sub-typed dim kind ('equipment')."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__equipment", _DOCUMENTED_EQUIPMENT_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__equipment" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e1", 10, True, 10, 0, "forklift", "Forklift 1", "idle"],
+    )
+    conn.execute(
+        'INSERT INTO "records__equipment" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e2", 10, True, 10, 1, "scanner", "Scanner 1", "active"],
+    )
+    conn.close()
+    forklift_option, scanner_option = enum_options("forklift", "scanner")
+    forklift_option["description"] = "A powered lift truck."
+    equipment_table = _table_spec(
+        "records__equipment",
+        "records",
+        _DOCUMENTED_EQUIPMENT_COLUMNS,
+        2,
+        record_kind="equipment",
+    )
+    equipment_table["description"] = "Warehouse handling equipment."
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[equipment_table],
+            record_roles={"equipment": "dimension"},
+            enum_domains={
+                "equipment": {"equipment_type": [forklift_option, scanner_option]}
+            },
+            scenario_description=scenario_description,
+        ),
+    )
+    return tmp_path
+
+
+def test_scenario_comment_present_when_declared(tmp_path: Path) -> None:
+    """A declared `scenario_description` renders as a `# Scenario:` block."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description="A warehouse equipment scenario."
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "# Scenario:\n#   A warehouse equipment scenario.\n" in content
+
+
+def test_scenario_comment_absent_when_not_declared(tmp_path: Path) -> None:
+    """No `scenario_description` -> no `# Scenario:` block anywhere."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description=None
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "# Scenario:" not in content
+
+
+def test_table_description_annotates_every_sub_type_stub(tmp_path: Path) -> None:
+    """The source table's description comments each per-sub-type stub."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description=None
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert content.count("      # Warehouse handling equipment.") == 2
+
+
+def test_documented_columns_carry_description_comment(tmp_path: Path) -> None:
+    """A documented tracked/untracked column's proposal entry carries its
+    sidecar description as a trailing comment."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description=None
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "{name: label, from: prop__label}  # Equipment's asset tag." in content
+    assert (
+        "{name: status, from: prop__status}  # tracked -> per-version;"
+        " versions/record unknown (no row_census in this emit);"
+        " Current operating state." in content
+    )
+
+
+def test_undocumented_discriminator_carries_no_comment(tmp_path: Path) -> None:
+    """The undocumented discriminator column proposes with no trailing comment."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description=None
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "{name: equipment_type, from: prop__equipment_type}" in content, (
+        "the discriminator itself is proposed among the SCD-2 columns"
+    )
+    assert "{name: equipment_type, from: prop__equipment_type}  #" not in content
+
+
+def test_documented_proposal_passes_its_own_gates(tmp_path: Path) -> None:
+    """The annotated candidate config still loads and plans clean."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description="A warehouse equipment scenario."
+    )
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path, "dimensional")
     _assert_proposal_passes_its_own_gates(out_path, emit_dir)

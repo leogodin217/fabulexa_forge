@@ -51,6 +51,13 @@ from typing import TYPE_CHECKING, Callable, Literal, Sequence
 
 from fabulexa_forge.config.models import _validate_stream_name
 from fabulexa_forge.errors import StreamInitNothingToStream
+from fabulexa_forge.exporters.init_annotations import (
+    column_doc_text,
+    membership_field_doc_text,
+    scenario_comment_lines,
+    sub_type_line_suffix,
+    table_description,
+)
 from fabulexa_forge.exporters.keys_init import propose_key_election, render_keys_block
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.slice_only import is_non_exempt_slice_only
@@ -366,8 +373,33 @@ def _classify_units(
 # ---------------------------------------------------------------------------
 
 
+def _write_properties_block(
+    w: Callable[[str], None], sidecar: "Sidecar", kind: str, properties: Sequence[str]
+) -> None:
+    """Write a `properties:` list, block-style, one per-property doc comment.
+
+    Block-style (one entry per line) instead of the flow-style `[a, b]`
+    carries a trailing documentation comment per property; parses to the
+    identical list value.
+
+    Args:
+        w: Line-writing callable.
+        sidecar: The open emit's sidecar.
+        kind: The population's records kind.
+        properties: The bare property names to list.
+    """
+    w("      properties:")
+    for prop in properties:
+        doc = column_doc_text(sidecar, f"records__{kind}", f"{_PROP_PREFIX}{prop}")
+        suffix = f"  # {doc}" if doc else ""
+        w(f"        - {prop}{suffix}")
+
+
 def _write_kind_unit(
-    w: Callable[[str], None], unit: _KindStreamUnit, status: _UnitStatus
+    w: Callable[[str], None],
+    unit: _KindStreamUnit,
+    status: _UnitStatus,
+    sidecar: "Sidecar",
 ) -> None:
     """Write one kind-shaped stream entry to the live `streams:` list.
 
@@ -375,7 +407,9 @@ def _write_kind_unit(
         w: Line-writing callable.
         unit: The proposed unit.
         status: The unit's classification.
+        sidecar: The open emit's sidecar.
     """
+    description = table_description(sidecar, f"records__{unit.kind}")
     if status != "live":
         note = (
             f"sub-type value {unit.sub_type!r} of kind '{unit.kind}' is not a legal"
@@ -385,13 +419,18 @@ def _write_kind_unit(
             else f"name '{unit.name}' collides with an earlier proposal above;"
             " rename one before uncommenting"
         )
+        if description is not None:
+            w(f"    # {description}")
         w(f"    # NOTE: {note}")
         w(f"    # - name: {unit.name}")
         w(f"    #   kind: {unit.kind}")
         if unit.sub_type is not None:
-            w(f"    #   sub_types: [{unit.sub_type}]")
+            suffix = sub_type_line_suffix(sidecar, unit.kind, unit.sub_type)
+            w(f"    #   sub_types: [{unit.sub_type}]{suffix}")
         w(f"    #   properties: [{', '.join(unit.properties)}]")
         return
+    if description is not None:
+        w(f"    # {description}")
     if unit.sub_type is not None and unit.sub_type == unit.domain[0]:
         w(
             f"    # kind '{unit.kind}' declares sub-types: {', '.join(unit.domain)}"
@@ -410,28 +449,32 @@ def _write_kind_unit(
     w(f"    - name: {unit.name}")
     w(f"      kind: {unit.kind}")
     if unit.sub_type is not None:
-        w(f"      sub_types: [{unit.sub_type}]")
-    w(f"      properties: [{', '.join(unit.properties)}]")
+        suffix = sub_type_line_suffix(sidecar, unit.kind, unit.sub_type)
+        w(f"      sub_types: [{unit.sub_type}]{suffix}")
+    _write_properties_block(w, sidecar, unit.kind, unit.properties)
 
 
 def _write_streams_block(
     w: Callable[[str], None],
     kind_units: "Sequence[tuple[_KindStreamUnit, _UnitStatus]]",
+    sidecar: "Sidecar",
 ) -> None:
     """Write the live `streams:` list — one entry per kind-shaped unit.
 
     Args:
         w: Line-writing callable.
         kind_units: Every proposed kind-shaped unit with its classification.
+        sidecar: The open emit's sidecar.
     """
     w("streams:")
     for unit, status in kind_units:
-        _write_kind_unit(w, unit, status)
+        _write_kind_unit(w, unit, status, sidecar)
 
 
 def _write_membership_alternative(
     w: Callable[[str], None],
     membership_units: "Sequence[tuple[_MembershipStreamUnit, _UnitStatus]]",
+    sidecar: "Sidecar",
 ) -> None:
     """Write the fully-commented `content: membership-events` alternative block.
 
@@ -439,10 +482,18 @@ def _write_membership_alternative(
     body and carried as a collision comment instead, so uncommenting the
     block wholesale still yields a config that parses and streams clean.
 
+    Every line already carries the block's own leading `#`; a standalone
+    annotation line (the source-table description) needs a second, inner
+    `#` so it still reads as a comment once the block's outer `#` is
+    stripped by hand — the same convention the collision NOTE line already
+    uses. A trailing per-field doc comment needs only one `#`, since it
+    rides on what would already be a real content line once uncommented.
+
     Args:
         w: Line-writing callable.
         membership_units: Every proposed membership-shaped unit with its
             classification.
+        sidecar: The open emit's sidecar.
     """
     w("")
     w(
@@ -464,9 +515,17 @@ def _write_membership_alternative(
                 " excluded here -- rename before including it"
             )
             continue
+        table_name = f"membership__{unit.owner_kind}__{unit.property}"
+        description = table_description(sidecar, table_name)
+        if description is not None:
+            w(f"#   # {description}")
         w(f"#   - name: {unit.name}")
         w(f"#     membership: {{kind: {unit.owner_kind}, property: {unit.property}}}")
-        w(f"#     fields: [{', '.join(unit.fields)}]")
+        w("#     fields:")
+        for field in unit.fields:
+            doc = membership_field_doc_text(sidecar, table_name, field)
+            suffix = f"  # {doc}" if doc else ""
+            w(f"#       - {field}{suffix}")
 
 
 # ---------------------------------------------------------------------------
@@ -516,6 +575,11 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     def w(line: str = "") -> None:
         buf.write(line + "\n")
 
+    scenario_lines = scenario_comment_lines(sidecar)
+    if scenario_lines:
+        for line in scenario_lines:
+            w(line)
+        w("")
     w("# Candidate streaming config — generated by `fabulexa-forge init`")
     w("# This is a starting point. Review every stream declaration.")
     w(
@@ -525,7 +589,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
     w("")
     w("content: state-changes")
     w("")
-    _write_streams_block(w, kind_units)
+    _write_streams_block(w, kind_units, sidecar)
     w("")
     for line in render_keys_block(proposal):
         w(line)
@@ -545,7 +609,7 @@ def _build_candidate_yaml(emit: "Emit", notice_sink: "NoticeSink") -> str:
         "# never proposed either; each is author intent with no sidecar-derived"
         " value (proposing one would be invention). Add them yourself."
     )
-    _write_membership_alternative(w, membership_units)
+    _write_membership_alternative(w, membership_units, sidecar)
 
     return buf.getvalue()
 
@@ -568,6 +632,18 @@ def generate_stream_init_config(emit: "Emit", notice_sink: "NoticeSink") -> str:
     this emit (every proposal is live except collision losers and
     topic-illegal names, a collision pair's first entry stays live, and no
     live proposal at all is a refusal, not an emitted config).
+
+    Also annotates the output through the emit's documentation view
+    (`Sidecar.documentation()`, shared with the other two `init` engines via
+    `exporters.init_annotations`): a scenario comment block at the top when
+    `scenario_description` is declared, each stream's source table's
+    `tables[].description`, each `sub_types: [<v>]` line's discriminator
+    gloss, each `properties:` entry's `description` (unit appended) —
+    rendered block-style instead of flow-style to carry the per-entry
+    comment, parsing to the identical list — and each membership-alternative
+    field's documentation (a reference field reads its `member__<f>__kind`
+    column). Annotations reach inside commented alternatives too. Comments
+    only; undocumented items get no comment.
 
     Args:
         emit: An open, version-gated emit (trusted as conformant; not

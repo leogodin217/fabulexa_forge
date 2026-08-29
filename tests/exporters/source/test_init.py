@@ -49,7 +49,7 @@ from _support.sidecar_builder import (
 )
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from exporters.source._source_fixtures import build_source_test_emit
+from exporters.source._source_fixtures import _HISTORY_COLUMNS, build_source_test_emit
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.loader import load_export_config
 from fabulexa_forge.errors import SourceHistoryTrackedRequired
@@ -809,6 +809,149 @@ def test_undeclared_registry_proposes_record_index(tmp_path: Path) -> None:
     content = _generate(emit_dir)
     assert "  # widget: record_id\n  widget: record_index\n" in content
     assert "# widget: presentation_id" not in content
+
+
+# ---------------------------------------------------------------------------
+# `init` documentation annotations (documentation-channel Phase 6)
+# ---------------------------------------------------------------------------
+
+#: A sub-typed, tracked `vehicle` kind (car/truck) that owns a
+#: `passengers` membership table -- documented table descriptions on both,
+#: a partially-glossed sub-type domain (car glossed, truck not).
+_DOCUMENTED_VEHICLE_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__vehicle_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+_DOCUMENTED_PASSENGERS_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__seat", "type": "VARCHAR"},
+]
+
+
+def _build_documented_source_emit(
+    tmp_path: Path, *, scenario_description: str | None
+) -> Path:
+    """A documented, sub-typed `vehicle` owner with a `passengers` junction."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    conn = duckdb.connect(str(emit_dir / "run.duckdb"))
+    conn.execute(_create_ddl("records__vehicle", _DOCUMENTED_VEHICLE_COLUMNS))
+    conn.execute(
+        _create_ddl("membership__vehicle__passengers", _DOCUMENTED_PASSENGERS_COLUMNS)
+    )
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__vehicle" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "veh1", 10, True, 10, 0, "car", "idle"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__vehicle__passengers" VALUES (?, ?, ?, NULL, ?)',
+        ["trunk", "veh1", 10, "1A"],
+    )
+    # Creation-seed history row (contract § history) for the tracked property.
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "vehicle", "veh1", "status", 10, "idle"],
+    )
+    conn.close()
+    car_option, truck_option = enum_options("car", "truck")
+    car_option["description"] = "A passenger car."
+    vehicle_table = _table_spec(
+        "records__vehicle",
+        "records",
+        _DOCUMENTED_VEHICLE_COLUMNS,
+        1,
+        record_kind="vehicle",
+    )
+    vehicle_table["description"] = "Vehicles operating in the fleet."
+    passengers_table = _table_spec(
+        "membership__vehicle__passengers",
+        "membership",
+        _DOCUMENTED_PASSENGERS_COLUMNS,
+        1,
+        record_kind="vehicle",
+        property_name="passengers",
+    )
+    passengers_table["description"] = "Passengers riding each vehicle."
+    extra: dict[str, object] = {
+        "enum_domains": {"vehicle": {"vehicle_type": [car_option, truck_option]}}
+    }
+    if scenario_description is not None:
+        extra["scenario_description"] = scenario_description
+    write_emit(
+        emit_dir,
+        tables=[
+            vehicle_table,
+            passengers_table,
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra=extra,
+    )
+    return emit_dir
+
+
+def test_scenario_comment_present_when_declared(tmp_path: Path) -> None:
+    """A declared `scenario_description` renders as a `# Scenario:` block."""
+    emit_dir = _build_documented_source_emit(
+        tmp_path, scenario_description="A city fleet simulation."
+    )
+    content = _generate(emit_dir)
+    assert "# Scenario:\n#   A city fleet simulation.\n" in content
+
+
+def test_scenario_comment_absent_when_not_declared(tmp_path: Path) -> None:
+    """No `scenario_description` -> no `# Scenario:` block anywhere."""
+    emit_dir = _build_documented_source_emit(tmp_path, scenario_description=None)
+    content = _generate(emit_dir)
+    assert "# Scenario:" not in content
+
+
+def test_table_description_annotates_state_and_junction_stubs(tmp_path: Path) -> None:
+    """Each state/junction stub carries its source table's description --
+    once per declared sub-type, plus once more on the trailing commented
+    combine-alternative."""
+    emit_dir = _build_documented_source_emit(tmp_path, scenario_description=None)
+    content = _generate(emit_dir)
+    assert content.count("    # Vehicles operating in the fleet.") == 3
+    assert content.count("    # Passengers riding each vehicle.") == 3
+
+
+def test_sub_type_gloss_on_state_and_junction_stubs(tmp_path: Path) -> None:
+    """A glossed sub-type value's `sub_types:` line carries the gloss; an
+    unglossed sub-type value's line carries none."""
+    emit_dir = _build_documented_source_emit(tmp_path, scenario_description=None)
+    content = _generate(emit_dir)
+    assert "sub_types: [car]  # A passenger car.\n" in content
+    assert "sub_types: [truck]\n" in content
+    assert "sub_types: [truck]  #" not in content
+
+
+def test_documented_proposal_plans_clean(tmp_path: Path) -> None:
+    """The annotated candidate config still loads and plans clean."""
+    emit_dir = _build_documented_source_emit(
+        tmp_path, scenario_description="A city fleet simulation."
+    )
+    content = _generate(emit_dir)
+    _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
 
 
 # ---------------------------------------------------------------------------
