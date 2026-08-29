@@ -1,0 +1,1825 @@
+{
+  "base_format_version": 9,
+  "branches": [
+    {
+      "fork_path": "trunk",
+      "parent": null,
+      "slice_at": 7862400000000000
+    }
+  ],
+  "enum_domains": {
+    "actor": {
+      "actor_type": [
+        {
+          "description": "One employee's career at the company, from requisition through exit; carries the skill/facility identity that routes their shifts and the burnout state that drives attrition.",
+          "value": "employment"
+        },
+        {
+          "description": "One customer's tenure: prospect -> active -> lapsing -> churned, with win-back; owns the customer entity's lifecycle.",
+          "value": "customer_lifecycle"
+        },
+        {
+          "description": "One customer order from placement to rest; after a failed delivery the same actor also walks the support_case journey.",
+          "value": "order"
+        },
+        {
+          "description": "One supplier order: raised -> in_transit -> received; receipt restocks the targeted stock line.",
+          "value": "purchase_order"
+        }
+      ],
+      "burnout": [
+        {
+          "value": "fresh"
+        },
+        {
+          "value": "burned"
+        }
+      ],
+      "facility": [
+        {
+          "value": "north"
+        },
+        {
+          "value": "south"
+        }
+      ],
+      "loyalty": [
+        {
+          "value": "loyal"
+        },
+        {
+          "value": "flighty"
+        }
+      ],
+      "skill": [
+        {
+          "value": "warehouse"
+        },
+        {
+          "value": "delivery"
+        },
+        {
+          "value": "support"
+        }
+      ]
+    },
+    "booking": {
+      "status": [
+        {
+          "description": "The booking holds a live reserved opening, pending attend.",
+          "value": "confirmed"
+        },
+        {
+          "description": "The subject attended the confirmed opening (terminal).",
+          "value": "attended"
+        },
+        {
+          "description": "The subject drew a no-show at the confirmed opening; the slot is wasted, not returned (terminal).",
+          "value": "no_show"
+        },
+        {
+          "description": "The booking was released before attend by an explicit cancel (terminal).",
+          "value": "cancelled"
+        },
+        {
+          "description": "The booking was released before attend because the subject's patience expired (terminal).",
+          "value": "reneged"
+        },
+        {
+          "description": "The booking's opening was cut by a diary cancel_rebook resolution and rebooked to a successor (terminal).",
+          "value": "supply_cancelled"
+        },
+        {
+          "description": "The booking's opening was cut by a diary forfeit resolution with no successor (terminal).",
+          "value": "supply_forfeited"
+        }
+      ]
+    },
+    "diary": {
+      "booking_discipline": [
+        {
+          "description": "Assigns the earliest eligible opening \u2014 an eligible free-list entry when one exists, else the diary's cursor.",
+          "value": "earliest_opening"
+        }
+      ],
+      "diary_type": [
+        {
+          "description": "A facility's roster calendar; booking a slot schedules a shift, and the no-show draw at the opening is the sick day.",
+          "value": "shift_diary"
+        },
+        {
+          "description": "A facility's delivery-window calendar; the no-show draw at the opening is customer-not-home, the delivery-failure mechanism.",
+          "value": "delivery_slot"
+        }
+      ]
+    },
+    "entity": {
+      "category": [
+        {
+          "value": "electronics"
+        },
+        {
+          "value": "home"
+        },
+        {
+          "value": "apparel"
+        },
+        {
+          "value": "grocery"
+        }
+      ],
+      "entity_type": [
+        {
+          "description": "A live customer account: order-placement candidate (weighted by propensity) and carrier of the support-written satisfaction signal.",
+          "value": "customer"
+        },
+        {
+          "description": "One catalog line: category, demand popularity, and the on-hand count that dispatch depletes and receipts replenish.",
+          "value": "stock"
+        }
+      ]
+    },
+    "journey_instance": {
+      "current_state": [
+        {
+          "description": "Routing point for the generated starting population, before each veteran joins its real journey.",
+          "value": "genesis_start"
+        },
+        {
+          "description": "Kickoff complete; the actor now lives in its routed journey.",
+          "value": "seeded"
+        },
+        {
+          "description": "Entry gate for a career: new requisitions head into the hiring pipeline, veterans step straight onto the floor.",
+          "value": "intake"
+        },
+        {
+          "description": "An approved opening awaiting a sourcing effort.",
+          "value": "requisition"
+        },
+        {
+          "description": "The role is being searched: postings, screens, interviews.",
+          "value": "sourcing"
+        },
+        {
+          "description": "An offer is out and awaiting acceptance.",
+          "value": "offer"
+        },
+        {
+          "description": "Hired but not yet useful: training, equipment, ramp-up.",
+          "value": "onboarding"
+        },
+        {
+          "description": "A working member of the crew, rostered onto shifts.",
+          "value": "productive"
+        },
+        {
+          "description": "Resignation handed in; still rostered through the notice period.",
+          "value": "notice"
+        },
+        {
+          "description": "The career at this company has ended.",
+          "value": "exited"
+        },
+        {
+          "description": "Between shifts: bind the crew pool and check whether this person is still on the roster.",
+          "value": "roster_check"
+        },
+        {
+          "description": "Holding a booked slot on the facility roster until the shift starts.",
+          "value": "book_shift"
+        },
+        {
+          "description": "Working a shift; the crew pool holds this person's capacity.",
+          "value": "on_shift"
+        },
+        {
+          "description": "Off sick after a no-show; recovering before rejoining the roster.",
+          "value": "recovering"
+        },
+        {
+          "description": "No bookable shift was available; waiting before trying again.",
+          "value": "idle"
+        },
+        {
+          "description": "The shift cycle has closed; re-entry books the next one while employment lasts.",
+          "value": "shift_done"
+        },
+        {
+          "description": "Entry gate for a tenure: new prospects enter the funnel, established customers go straight to activation.",
+          "value": "intake_c"
+        },
+        {
+          "description": "Evaluating the retailer before a first purchase.",
+          "value": "prospect"
+        },
+        {
+          "description": "The account opens: the customer record is minted here.",
+          "value": "activate_gate"
+        },
+        {
+          "description": "A live, buying customer.",
+          "value": "active"
+        },
+        {
+          "description": "Engagement has faded; the account is drifting toward churn.",
+          "value": "lapsing"
+        },
+        {
+          "description": "The tenure has ended and the account is closed.",
+          "value": "churned"
+        },
+        {
+          "description": "The order exists and its product line is chosen.",
+          "value": "placed"
+        },
+        {
+          "description": "Waiting for the chosen line to have units on hand.",
+          "value": "awaiting_stock"
+        },
+        {
+          "description": "Holding (or queuing for) a picker while the order is picked.",
+          "value": "picking"
+        },
+        {
+          "description": "Picking paused: the facility's picker pool is offline.",
+          "value": "pick_parked"
+        },
+        {
+          "description": "Picked goods being packed for dispatch.",
+          "value": "packing"
+        },
+        {
+          "description": "Packed and holding a booked delivery window.",
+          "value": "awaiting_dispatch"
+        },
+        {
+          "description": "On a van with a driver, en route to the customer.",
+          "value": "out_for_delivery"
+        },
+        {
+          "description": "Handed over to the customer.",
+          "value": "delivered"
+        },
+        {
+          "description": "Delivered and inside the return window.",
+          "value": "return_window"
+        },
+        {
+          "description": "A return is on its way back to the warehouse.",
+          "value": "returning"
+        },
+        {
+          "description": "The returned unit is back on the shelf; the order is closed.",
+          "value": "restocked"
+        },
+        {
+          "description": "The order completed without a return.",
+          "value": "closed"
+        },
+        {
+          "description": "The delivery failed; a support ticket is being opened.",
+          "value": "failed_delivery"
+        },
+        {
+          "description": "The order ended in a failed delivery; support owns the aftermath.",
+          "value": "failed"
+        },
+        {
+          "description": "A failed-delivery ticket exists and awaits triage.",
+          "value": "ticket_opened"
+        },
+        {
+          "description": "Queued for (or being assigned) a support agent; a case whose queue wait outlives its patience escalates instead.",
+          "value": "awaiting_agent"
+        },
+        {
+          "description": "An agent is working the case.",
+          "value": "resolving"
+        },
+        {
+          "description": "Escalated for senior handling, jumping the agent queue.",
+          "value": "escalated"
+        },
+        {
+          "description": "A senior agent is working the escalated case.",
+          "value": "esc_resolving"
+        },
+        {
+          "description": "The case is closed; the order actor retires.",
+          "value": "resolved"
+        },
+        {
+          "description": "The purchase order exists and its restock target is chosen.",
+          "value": "raised"
+        },
+        {
+          "description": "Goods are with the supplier or on the way in.",
+          "value": "in_transit"
+        },
+        {
+          "description": "Goods received and shelved; the purchase order closes.",
+          "value": "received"
+        }
+      ],
+      "journey_type": [
+        {
+          "description": "Kickoff router for the generated starting population: veterans go to the employment journey, established customers to the lifecycle journey.",
+          "value": "genesis"
+        },
+        {
+          "description": "One career: the hiring pipeline (whose onboarding delay is the workforce loop's inertia), the burnout-weighted attrition roll, and the notice period the hiring aggregate counts.",
+          "value": "employment"
+        },
+        {
+          "description": "The roster loop, one journey instance per shift: book a facility slot, roll the sick-day draw at the opening, and move the matching crew pool's capacity +1/-1 around each attended shift. Re-entry (gated on still being employed) books the next shift.",
+          "value": "shift_cycle"
+        },
+        {
+          "description": "One tenure: activation mints the customer entity; the active poll mixes natural (loyalty-weighted) lapse with the scarred-lapse gate on support-written satisfaction; churn tombstones the entity.",
+          "value": "customer_lifecycle"
+        },
+        {
+          "description": "One order's flow: stock gate and depletion, picker contention, the delivery-window booking whose no-show draw is customer-not-home, the return window, and the failure edge that opens a support case on this same actor.",
+          "value": "fulfillment"
+        },
+        {
+          "description": "The failed-delivery ticket on the same order actor: agent contention, queue-patience expiry escalating a case to senior handling that jumps the queue, and the distress-clearing resolution the satisfaction aggregate reads.",
+          "value": "support_case"
+        },
+        {
+          "description": "One supplier order: target a popular stock line, wait out the supplier lead time, and restock on receipt.",
+          "value": "replenishment"
+        }
+      ]
+    },
+    "queue": {
+      "discipline": [
+        {
+          "description": "Waiters promoted in arrival order.",
+          "value": "fifo"
+        },
+        {
+          "description": "Waiters promoted by highest declared priority, ties by earliest enqueue.",
+          "value": "priority"
+        },
+        {
+          "description": "A newly-arriving higher-priority actor displaces a lower-priority holder; 1-server queues only.",
+          "value": "preempt"
+        }
+      ],
+      "on_full": [
+        {
+          "description": "The seize waits in the queue for a slot to free.",
+          "value": "queue"
+        },
+        {
+          "description": "The seize is rejected immediately and routed to its on_rejected handler.",
+          "value": "reject"
+        },
+        {
+          "description": "The seize resamples a delay and is retried.",
+          "value": "retry"
+        },
+        {
+          "description": "The seize is routed to its on_reroute handler.",
+          "value": "reroute"
+        }
+      ]
+    },
+    "resource": {
+      "resource_type": [
+        {
+          "description": "A facility crew's working capacity (pickers north/south, drivers north/south); each attended shift raises it for the shift's duration.",
+          "value": "crew_pool"
+        },
+        {
+          "description": "The central support desk's working capacity; support-skill attendance raises it. Priority discipline lets escalated cases jump the queue.",
+          "value": "agent_pool"
+        }
+      ]
+    },
+    "tick_decision": {
+      "decision_type": [
+        {
+          "value": "product_selected"
+        },
+        {
+          "value": "po_target_selected"
+        }
+      ]
+    }
+  },
+  "pinned_ids": {
+    "diary": {
+      "north_delivery": "2",
+      "north_shifts": "0",
+      "south_delivery": "3",
+      "south_shifts": "1"
+    },
+    "resource": {
+      "agents": "4",
+      "driver_north": "2",
+      "driver_south": "3",
+      "picker_north": "0",
+      "picker_south": "1"
+    }
+  },
+  "presentation_keys": {
+    "actor": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "customer_lifecycle": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "CRM-",
+            "width": 5
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "employment": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "EMP-",
+            "width": 4
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "order": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "ORD-",
+            "width": 6
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "purchase_order": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "PO-",
+            "width": 5
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    },
+    "entity": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "customer": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "CUST-",
+            "width": 5
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "stock": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "SKU-",
+            "width": 4
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    }
+  },
+  "record_roles": {
+    "actor": {
+      "customer_lifecycle": "dimension",
+      "employment": "dimension",
+      "order": "fact",
+      "purchase_order": "fact"
+    },
+    "booking": "fact",
+    "diary": "dimension",
+    "entity": "dimension",
+    "journey_instance": "dimension",
+    "queue": "dimension",
+    "resource": "dimension",
+    "tick_decision": "fact"
+  },
+  "row_census": {
+    "trunk": {
+      "history_series": {
+        "actor": {
+          "burnout": {
+            "records": 2958,
+            "rows": 3008
+          },
+          "distress": {
+            "records": 2958,
+            "rows": 3271
+          },
+          "first_name": {
+            "records": 2958,
+            "rows": 2958
+          },
+          "last_name": {
+            "records": 2958,
+            "rows": 2958
+          },
+          "stage": {
+            "records": 2958,
+            "rows": 21325
+          },
+          "work_email": {
+            "records": 2958,
+            "rows": 2958
+          }
+        },
+        "booking": {
+          "status": {
+            "records": 3410,
+            "rows": 4948
+          }
+        },
+        "diary": {
+          "next_opening": {
+            "records": 4,
+            "rows": 3414
+          }
+        },
+        "entity": {
+          "birth_date": {
+            "records": 385,
+            "rows": 385
+          },
+          "email": {
+            "records": 385,
+            "rows": 385
+          },
+          "first_name": {
+            "records": 385,
+            "rows": 385
+          },
+          "home_area_code": {
+            "records": 385,
+            "rows": 385
+          },
+          "home_city": {
+            "records": 385,
+            "rows": 385
+          },
+          "home_postal_code": {
+            "records": 385,
+            "rows": 385
+          },
+          "home_subdivision": {
+            "records": 385,
+            "rows": 385
+          },
+          "last_name": {
+            "records": 385,
+            "rows": 385
+          },
+          "line_seq": {
+            "records": 385,
+            "rows": 385
+          },
+          "on_hand": {
+            "records": 385,
+            "rows": 2945
+          },
+          "product_name": {
+            "records": 385,
+            "rows": 385
+          },
+          "satisfaction": {
+            "records": 385,
+            "rows": 604
+          },
+          "sku_code": {
+            "records": 385,
+            "rows": 385
+          }
+        },
+        "journey_instance": {
+          "current_state": {
+            "records": 4297,
+            "rows": 26215
+          }
+        },
+        "resource": {
+          "allocated": {
+            "records": 5,
+            "rows": 7740
+          },
+          "capacity": {
+            "records": 5,
+            "rows": 2052
+          },
+          "queue": {
+            "records": 5,
+            "rows": 5
+          }
+        }
+      },
+      "sub_type_rows": {
+        "actor": {
+          "customer_lifecycle": 382,
+          "employment": 94,
+          "order": 2365,
+          "purchase_order": 117
+        },
+        "diary": {
+          "delivery_slot": 2,
+          "shift_diary": 2
+        },
+        "entity": {
+          "customer": 361,
+          "stock": 24
+        },
+        "resource": {
+          "agent_pool": 1,
+          "crew_pool": 4
+        }
+      },
+      "table_rows": {
+        "history": 88636,
+        "membership__journey_instance__bound_roles": 7488,
+        "membership__queue__waiters": 806,
+        "membership__resource__holders": 3888,
+        "membership__tick_decision__bindings": 2482,
+        "records__actor": 2958,
+        "records__booking": 3410,
+        "records__diary": 4,
+        "records__entity": 385,
+        "records__journey_instance": 4297,
+        "records__queue": 5,
+        "records__resource": 5,
+        "records__tick_decision": 2482
+      }
+    }
+  },
+  "runtime": {
+    "start_datetime": "2026-01-05T00:00:00+00:00",
+    "timezone": "UTC"
+  },
+  "scenario_description": "A regional retailer with its own warehouse and delivery fleet: employment, rostering, customer acquisition, orders, fulfillment, support, returns, and replenishment on one shared cast, with workforce, service, and reorder loops closed by mechanism.",
+  "sub_type_columns": {
+    "actor": {
+      "customer_lifecycle": [
+        "presentation_id",
+        "prop__stage",
+        "prop__distress",
+        "prop__loyalty"
+      ],
+      "employment": [
+        "presentation_id",
+        "prop__stage",
+        "prop__skill",
+        "prop__facility",
+        "prop__burnout",
+        "prop__distress",
+        "prop__first_name",
+        "prop__last_name",
+        "prop__work_email"
+      ],
+      "order": [
+        "presentation_id",
+        "prop__stage",
+        "prop__facility",
+        "prop__distress",
+        "prop__customer_ref",
+        "ref_index__customer_ref"
+      ],
+      "purchase_order": [
+        "presentation_id",
+        "prop__stage",
+        "prop__distress"
+      ]
+    },
+    "diary": {
+      "delivery_slot": [
+        "prop__slot_interval",
+        "prop__horizon",
+        "prop__min_lead",
+        "prop__booking_discipline",
+        "prop__window",
+        "prop__next_opening",
+        "prop__retiring",
+        "prop__facility"
+      ],
+      "shift_diary": [
+        "prop__slot_interval",
+        "prop__horizon",
+        "prop__min_lead",
+        "prop__booking_discipline",
+        "prop__window",
+        "prop__next_opening",
+        "prop__retiring",
+        "prop__facility"
+      ]
+    },
+    "entity": {
+      "customer": [
+        "presentation_id",
+        "prop__order_propensity",
+        "prop__satisfaction",
+        "prop__first_name",
+        "prop__last_name",
+        "prop__birth_date",
+        "prop__email",
+        "prop__home_city",
+        "prop__home_subdivision",
+        "prop__home_postal_code",
+        "prop__home_area_code"
+      ],
+      "stock": [
+        "presentation_id",
+        "prop__category",
+        "prop__popularity",
+        "prop__on_hand",
+        "prop__line_seq",
+        "prop__sku_code",
+        "prop__product_name"
+      ]
+    },
+    "resource": {
+      "agent_pool": [
+        "prop__capacity",
+        "prop__allocated",
+        "prop__retiring",
+        "prop__queue",
+        "ref_index__queue",
+        "prop__facility",
+        "prop__crew"
+      ],
+      "crew_pool": [
+        "prop__capacity",
+        "prop__allocated",
+        "prop__retiring",
+        "prop__queue",
+        "ref_index__queue",
+        "prop__facility",
+        "prop__crew"
+      ]
+    }
+  },
+  "surface": "published",
+  "tables": [
+    {
+      "category": "fixed",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "kind",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "property",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "value",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "history",
+      "rows": 88636
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Process phase mirror of the acting journey state; aggregates, gates, and roster checks read it.",
+          "history_tracked": true,
+          "name": "prop__stage",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Crew this person works: warehouse (pickers), delivery (drivers), or support (agents).",
+          "history_tracked": false,
+          "name": "prop__skill",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Facility axis (north/south, hq for the central desk): a worker's home site, an order's fulfilling site, or a pool/diary's served site.",
+          "history_tracked": false,
+          "name": "prop__facility",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "fresh or burned; spread peer-to-peer by the ABM rule, read by the attrition weight.",
+          "history_tracked": true,
+          "name": "prop__burnout",
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "1 while an order has an unresolved failed-delivery ticket, else 0 (structurally 0 on non-order sub-types); the satisfaction aggregate filters on it.",
+          "history_tracked": true,
+          "name": "prop__distress",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "loyal or flighty; weights the natural-lapse hazard.",
+          "history_tracked": false,
+          "name": "prop__loyalty",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The ordering customer, selected at placement weighted by order_propensity; partition key for the satisfaction record-write.",
+          "history_tracked": false,
+          "name": "prop__customer_ref",
+          "references": "entity",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__customer_ref",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__actor_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Employee's given name.",
+          "history_tracked": true,
+          "name": "prop__first_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Employee's family name.",
+          "history_tracked": true,
+          "name": "prop__last_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Employee's work email address on the company domain.",
+          "history_tracked": true,
+          "name": "prop__work_email",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__actor",
+      "record_kind": "actor",
+      "rows": 2958
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor this booking was made for.",
+          "history_tracked": false,
+          "name": "prop__subject",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__subject",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the diary this booking's opening was assigned from.",
+          "history_tracked": false,
+          "name": "prop__diary",
+          "references": "diary",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__diary",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Simulation time this booking was requested.",
+          "history_tracked": false,
+          "name": "prop__requested_at",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Simulation time of the assigned appointment opening.",
+          "history_tracked": false,
+          "name": "prop__opening_at",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Simulation time the subject attended the opening, when attendance was resolved.",
+          "history_tracked": false,
+          "name": "prop__attended_at",
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "This booking's resolution status.",
+          "history_tracked": true,
+          "name": "prop__status",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the cancelled booking this one supersedes, when this booking is a supply-cut rebook successor.",
+          "history_tracked": false,
+          "name": "prop__rebooked_from",
+          "references": "booking",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__rebooked_from",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to this booking's successor \u2014 a rebooked booking or, on exhaustion, a minted waiter \u2014 when this booking's opening was cut by a diary resolution.",
+          "history_tracked": false,
+          "name": "prop__rebooked_to",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One reservation trace against a diary opening: request and attend instants, and its resolution status.",
+      "name": "records__booking",
+      "record_kind": "booking",
+      "rows": 3410
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Working-time nanoseconds between consecutive appointment openings.",
+          "history_tracked": false,
+          "name": "prop__slot_interval",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT",
+          "unit": "nanoseconds"
+        },
+        {
+          "description": "Working-time nanoseconds ahead of now the booking cursor may advance.",
+          "history_tracked": false,
+          "name": "prop__horizon",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT",
+          "unit": "nanoseconds"
+        },
+        {
+          "description": "Minimum working-time nanoseconds required between booking and opening.",
+          "history_tracked": false,
+          "name": "prop__min_lead",
+          "temporal_class": "constant",
+          "type": "BIGINT",
+          "unit": "nanoseconds"
+        },
+        {
+          "description": "Allocation strategy governing which opening a request is assigned.",
+          "history_tracked": false,
+          "name": "prop__booking_discipline",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Named activity window governing this diary's working-time arithmetic; unset for a 24/7 diary.",
+          "history_tracked": false,
+          "name": "prop__window",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The booking-out cursor: the next opening this diary will assign absent a free-list reuse.",
+          "history_tracked": true,
+          "name": "prop__next_opening",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether this diary is in its retire wind-down: no longer accepting new bookings while existing confirmed bookings resolve.",
+          "history_tracked": false,
+          "name": "prop__retiring",
+          "temporal_class": "constant",
+          "type": "BOOLEAN"
+        },
+        {
+          "description": "Facility axis (north/south, hq for the central desk): a worker's home site, an order's fulfilling site, or a pool/diary's served site.",
+          "history_tracked": false,
+          "name": "prop__facility",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "name": "prop__diary_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One schedulable resource pool's future-opening state: the booking-out cursor, returned openings awaiting reuse, and supply modulation history.",
+      "name": "records__diary",
+      "record_kind": "diary",
+      "rows": 4
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Heavy-tailed ordering appetite fixed at activation; order placement selects customers weighted by it.",
+          "history_tracked": false,
+          "name": "prop__order_propensity",
+          "temporal_class": "constant",
+          "type": "BIGINT",
+          "unit": "relative weight"
+        },
+        {
+          "description": "1.0 baseline, pushed down by open failed-delivery tickets (record-write aggregate); the scarred-lapse gate reads it.",
+          "history_tracked": true,
+          "name": "prop__satisfaction",
+          "temporal_class": "tracked",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "Merchandising category.",
+          "history_tracked": false,
+          "name": "prop__category",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Demand skew: order placement picks stock lines weighted by it; replenishment targets popular lines.",
+          "history_tracked": false,
+          "name": "prop__popularity",
+          "temporal_class": "constant",
+          "type": "BIGINT",
+          "unit": "relative weight"
+        },
+        {
+          "description": "Units on hand. Decremented when a pick starts, incremented by restocks and returns; may go briefly negative (oversold backorder).",
+          "history_tracked": true,
+          "name": "prop__on_hand",
+          "temporal_class": "tracked",
+          "type": "BIGINT",
+          "unit": "units"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__entity_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's given name.",
+          "history_tracked": true,
+          "name": "prop__first_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's family name.",
+          "history_tracked": true,
+          "name": "prop__last_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's date of birth.",
+          "history_tracked": true,
+          "name": "prop__birth_date",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's personal email address on a consumer provider domain.",
+          "history_tracked": true,
+          "name": "prop__email",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's home place \u2014 a coherent city, state, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__home_city",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's home place \u2014 a coherent city, state, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__home_subdivision",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's home place \u2014 a coherent city, state, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__home_postal_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's home place \u2014 a coherent city, state, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__home_area_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Catalog line number; unique across the catalog.",
+          "history_tracked": true,
+          "name": "prop__line_seq",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Stock-keeping-unit code (category prefix plus catalog line number).",
+          "history_tracked": true,
+          "name": "prop__sku_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Product's display name, styled to match its category.",
+          "history_tracked": true,
+          "name": "prop__product_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__entity",
+      "record_kind": "entity",
+      "rows": 385
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor walking this journey.",
+          "history_tracked": false,
+          "name": "prop__actor",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__actor",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the journey type this instance is an execution of.",
+          "history_tracked": false,
+          "name": "prop__journey_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Name of the state the journey instance currently occupies.",
+          "history_tracked": true,
+          "name": "prop__current_state",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time the journey instance entered its current state.",
+          "history_tracked": false,
+          "name": "prop__state_entry_time",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether the journey instance has reached a terminal state.",
+          "history_tracked": false,
+          "name": "prop__complete",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BOOLEAN"
+        }
+      ],
+      "description": "One actor's traversal of one journey: current state, entry time, completion flag, and every role binding acquired along the way.",
+      "name": "records__journey_instance",
+      "record_kind": "journey_instance",
+      "rows": 4297
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding acquired by a select action during this journey instance's traversal.",
+      "name": "membership__journey_instance__bound_roles",
+      "property": "bound_roles",
+      "record_kind": "journey_instance",
+      "rows": 7488
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Waiter promotion order for this queue.",
+          "history_tracked": false,
+          "name": "prop__discipline",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Policy applied when every server this queue governs is full and no promotion is possible.",
+          "history_tracked": false,
+          "name": "prop__on_full",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "The wait-and-promotion record governing one server or a partitioned group of servers: promotion discipline, full-pool policy, and the current waiters.",
+      "name": "records__queue",
+      "record_kind": "queue",
+      "rows": 5
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the waiting actor.",
+          "name": "member__actor__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the waiting actor.",
+          "name": "member__actor__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rule id to schedule when this waiter is promoted to a slot.",
+          "name": "elem__on_acquired_rule",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time this waiter joined the queue.",
+          "name": "elem__enqueued_at",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Frozen-at-enqueue priority used by the priority discipline.",
+          "name": "elem__priority",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Rule id to schedule if this waiter's eventual holder is later preempted; None except on a 1-server preempt queue.",
+          "name": "elem__on_preempted_rule",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Number of slots this waiter's promotion needs to fit.",
+          "name": "elem__requested_count",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every actor currently waiting for a slot governed by this queue, in the queue's own storage order.",
+      "name": "membership__queue__waiters",
+      "property": "waiters",
+      "record_kind": "queue",
+      "rows": 806
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Total number of slots in this pool.",
+          "history_tracked": true,
+          "min": 0,
+          "name": "prop__capacity",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Number of slots currently held across every holder in this pool.",
+          "history_tracked": true,
+          "name": "prop__allocated",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether this pool is in its retire wind-down: no longer accepting new seizes while existing holders drain.",
+          "history_tracked": false,
+          "name": "prop__retiring",
+          "temporal_class": "constant",
+          "type": "BOOLEAN"
+        },
+        {
+          "description": "Reference to the queue record governing this pool's waiters, stamped once construction derives the run's queues.",
+          "history_tracked": true,
+          "name": "prop__queue",
+          "references": "queue",
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__queue",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Facility axis (north/south, hq for the central desk): a worker's home site, an order's fulfilling site, or a pool/diary's served site.",
+          "history_tracked": false,
+          "name": "prop__facility",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "warehouse, delivery, or support; matched against the worker's skill and each seize filter.",
+          "history_tracked": false,
+          "name": "prop__crew",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "name": "prop__resource_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "A resource pool actors seize slots from: capacity, current allocation, current holders, and the governing queue.",
+      "name": "records__resource",
+      "record_kind": "resource",
+      "rows": 5
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the holding actor.",
+          "name": "member__actor__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the holding actor.",
+          "name": "member__actor__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "This holder's priority, carried forward from promotion.",
+          "name": "elem__priority",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Rule id to schedule if this holder is displaced by a higher-priority preemption; None except on a 1-server preempt queue.",
+          "name": "elem__on_preempted_rule",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Number of slots this holder currently occupies.",
+          "name": "elem__slots_held",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every actor currently holding one or more slots in this pool.",
+      "name": "membership__resource__holders",
+      "property": "holders",
+      "record_kind": "resource",
+      "rows": 3888
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the journey instance this decision belongs to.",
+          "history_tracked": false,
+          "name": "prop__journey_instance",
+          "references": "journey_instance",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__journey_instance",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Author-declared discriminator identifying which decision this record represents.",
+          "history_tracked": false,
+          "name": "prop__decision_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Decision-specific key-value payload recorded at fire time, rendered as JSON object text.",
+          "extra_data": true,
+          "history_tracked": false,
+          "name": "prop__context",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One event-shaped record of a decision firing (select, recall, seize, book, match, create, or record) \u2014 archival, immortal, never rewritten.",
+      "name": "records__tick_decision",
+      "record_kind": "tick_decision",
+      "rows": 2482
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding this decision recorded, including any author-declared per-binding context fields.",
+      "name": "membership__tick_decision__bindings",
+      "property": "bindings",
+      "record_kind": "tick_decision",
+      "rows": 2482
+    }
+  ]
+}

@@ -1,0 +1,815 @@
+{
+  "base_format_version": 9,
+  "branches": [
+    {
+      "fork_path": "trunk",
+      "parent": null,
+      "slice_at": 157680000000000000
+    }
+  ],
+  "enum_domains": {
+    "actor": {
+      "actor_type": [
+        {
+          "description": "A subscribing organisation \u2014 the account holder whose lifecycle runs from onboarding through repeated renewal reviews to churn; its commercial terms live on the company_hub it provisions rather than on the actor itself.",
+          "value": "company"
+        },
+        {
+          "description": "A seat holder \u2014 an individual working inside a subscribing company, attached to that account's hub and cycling between product use and idle weeks until the account churns and the seat is released.",
+          "value": "user"
+        }
+      ]
+    },
+    "entity": {
+      "entity_type": [
+        {
+          "description": "The commercial record of an account \u2014 its plan tier and the pull it exerts on new seats, alongside the history-tracked pricing trail (seat price, and the negotiated percent of list rate paid for usage \u2014 100 until an enterprise review negotiates it down), the churn marker that cascades to its users, and the engagement score the daily roll-up writes.",
+          "value": "company_hub"
+        },
+        {
+          "description": "A product line in the catalogue \u2014 the feature a usage session is attributed to, carrying how often it is reached for and its list rate per unit of usage volume.",
+          "value": "sku"
+        }
+      ],
+      "plan": [
+        {
+          "value": "starter"
+        },
+        {
+          "value": "professional"
+        },
+        {
+          "value": "enterprise"
+        }
+      ]
+    },
+    "journey_instance": {
+      "current_state": [
+        {
+          "description": "The account is being set up; its hub is provisioned here with a plan tier and opening commercial terms, before the subscription goes live.",
+          "value": "onboarding"
+        },
+        {
+          "value": "active"
+        },
+        {
+          "description": "The subscription has ended; the hub is flagged churned so it stops drawing new seats and its existing users begin offboarding.",
+          "value": "churned"
+        },
+        {
+          "description": "The seat has been created but is not yet in service, waiting on the account to finish setting the user up.",
+          "value": "provisioned"
+        },
+        {
+          "description": "Inside a usage session \u2014 the product line being used is picked here and the session's volume recorded against it, before the user returns to its idle seat.",
+          "value": "using"
+        },
+        {
+          "description": "The seat has been given up after the account churned; the user has left the product.",
+          "value": "offboarded"
+        }
+      ],
+      "journey_type": [
+        {
+          "description": "The account lifecycle \u2014 a company onboards onto a freshly provisioned hub, then enters a repeating renewal review that each quarter either renegotiates its commercial terms or ends the subscription, marking the hub so its seats offboard in turn.",
+          "value": "company_lifecycle"
+        },
+        {
+          "description": "The seat lifecycle \u2014 a user is provisioned against its company's hub, then cycles week by week between using the product and letting the cycle pass, until the account churns and the seat is given up.",
+          "value": "user_lifecycle"
+        }
+      ]
+    },
+    "tick_decision": {
+      "decision_type": [
+        {
+          "value": "usage_event"
+        }
+      ]
+    }
+  },
+  "pinned_ids": {
+    "entity": {
+      "analytics": "1",
+      "api": "2",
+      "core": "0"
+    }
+  },
+  "presentation_keys": {
+    "actor": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "company": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "CMP-",
+            "width": 5
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "user": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "USR-",
+            "width": 6
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    },
+    "entity": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "company_hub": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "ACC-",
+            "width": 5
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "sku": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "SKU-",
+            "width": 3
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    }
+  },
+  "record_roles": {
+    "actor": {
+      "company": "dimension",
+      "user": "fact"
+    },
+    "entity": "dimension",
+    "journey_instance": "dimension",
+    "tick_decision": "fact"
+  },
+  "row_census": {
+    "trunk": {
+      "history_series": {
+        "actor": {
+          "company_domain": {
+            "records": 10399,
+            "rows": 10399
+          },
+          "company_name": {
+            "records": 10399,
+            "rows": 10399
+          },
+          "email": {
+            "records": 10399,
+            "rows": 10399
+          },
+          "email_convention": {
+            "records": 10399,
+            "rows": 10399
+          },
+          "first_name": {
+            "records": 10399,
+            "rows": 10399
+          },
+          "last_name": {
+            "records": 10399,
+            "rows": 10399
+          },
+          "status": {
+            "records": 10399,
+            "rows": 26829
+          }
+        },
+        "entity": {
+          "attach_weight": {
+            "records": 544,
+            "rows": 869
+          },
+          "churn_flag": {
+            "records": 544,
+            "rows": 869
+          },
+          "domain": {
+            "records": 544,
+            "rows": 544
+          },
+          "engagement_score": {
+            "records": 544,
+            "rows": 11104
+          },
+          "name": {
+            "records": 544,
+            "rows": 544
+          },
+          "pct_of_list_rate": {
+            "records": 544,
+            "rows": 875
+          },
+          "seat_price": {
+            "records": 544,
+            "rows": 3133
+          }
+        },
+        "journey_instance": {
+          "current_state": {
+            "records": 10399,
+            "rows": 940766
+          }
+        }
+      },
+      "sub_type_rows": {
+        "actor": {
+          "company": 541,
+          "user": 9858
+        },
+        "entity": {
+          "company_hub": 541,
+          "sku": 3
+        }
+      },
+      "table_rows": {
+        "history": 1047927,
+        "membership__journey_instance__bound_roles": 258740,
+        "membership__tick_decision__bindings": 456975,
+        "records__actor": 10399,
+        "records__entity": 544,
+        "records__journey_instance": 10399,
+        "records__tick_decision": 456975
+      }
+    }
+  },
+  "runtime": {
+    "start_datetime": "2026-01-01T00:00:00+00:00",
+    "timezone": "UTC"
+  },
+  "scenario_description": "A B2B SaaS vendor over five years: companies sign up on a plan tier and provision a hub of seats, their users cycle weekly between using the product and sitting idle, and a repeating renewal review either renegotiates the account's pricing or ends it \u2014 so the seat-price trail, the negotiated usage discounts, and the offboarding cascade onto users all emerge from each account's own review history rather than being written into the data.",
+  "sub_type_columns": {
+    "actor": {
+      "company": [
+        "presentation_id",
+        "prop__status"
+      ],
+      "user": [
+        "presentation_id",
+        "prop__status",
+        "prop__company",
+        "ref_index__company",
+        "prop__first_name",
+        "prop__last_name",
+        "prop__company_name",
+        "prop__company_domain",
+        "prop__email_convention",
+        "prop__email"
+      ]
+    },
+    "entity": {
+      "company_hub": [
+        "presentation_id",
+        "prop__company",
+        "ref_index__company",
+        "prop__plan",
+        "prop__seat_price",
+        "prop__attach_weight",
+        "prop__churn_flag",
+        "prop__pct_of_list_rate",
+        "prop__engagement_score",
+        "prop__name",
+        "prop__domain"
+      ],
+      "sku": [
+        "presentation_id",
+        "prop__popularity",
+        "prop__standard_rate",
+        "prop__name"
+      ]
+    }
+  },
+  "surface": "published",
+  "tables": [
+    {
+      "category": "fixed",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "kind",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "property",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "value",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "history",
+      "rows": 1047927
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Journey-stage mirror for this actor, history-tracked so consumers can read every stage transition it makes over time.",
+          "history_tracked": true,
+          "name": "prop__status",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "history_tracked": false,
+          "name": "prop__company",
+          "references": "entity",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__company",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__actor_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "User's given name.",
+          "history_tracked": true,
+          "name": "prop__first_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "User's family name.",
+          "history_tracked": true,
+          "name": "prop__last_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Display name of the company the user belongs to.",
+          "history_tracked": true,
+          "name": "prop__company_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Web domain of the company the user belongs to.",
+          "history_tracked": true,
+          "name": "prop__company_domain",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Email local-part convention the user's company uses (e.g. first.last, flast).",
+          "history_tracked": true,
+          "name": "prop__email_convention",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "User's work email address on their company's domain, following the company's email convention.",
+          "history_tracked": true,
+          "name": "prop__email",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__actor",
+      "record_kind": "actor",
+      "rows": 10399
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "history_tracked": false,
+          "name": "prop__company",
+          "references": "actor",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__company",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Starter, professional, or enterprise tier; picked at onboarding and gates which pricing and renegotiation edges the account's renewal reviews take.",
+          "history_tracked": false,
+          "name": "prop__plan",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Per-seat price at creation, with an SCD-2 trail of the ~10% uplift each renewal renegotiation redraws.",
+          "history_tracked": true,
+          "name": "prop__seat_price",
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Pull this account exerts on incoming user arrivals; zeroed on churn so a churned account stops drawing new seats.",
+          "history_tracked": true,
+          "name": "prop__attach_weight",
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "1 once the account's subscription has ended, else 0; the cascade signal that starts its users offboarding.",
+          "history_tracked": true,
+          "name": "prop__churn_flag",
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Percent of the SKU's standard rate this account is billed for usage; 100 until an enterprise renewal negotiates a discount.",
+          "history_tracked": true,
+          "name": "prop__pct_of_list_rate",
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Daily saturating 0-100 health score derived from the account's count of actively-seated users.",
+          "history_tracked": true,
+          "name": "prop__engagement_score",
+          "temporal_class": "tracked",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "Relative weight a usage session is attributed to this SKU over the others in the catalogue.",
+          "history_tracked": false,
+          "name": "prop__popularity",
+          "temporal_class": "constant",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "List price per unit of usage volume, discounted by an account's pct_of_list_rate when billed.",
+          "history_tracked": false,
+          "name": "prop__standard_rate",
+          "temporal_class": "constant",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__entity_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Company account's display name.",
+          "history_tracked": true,
+          "name": "prop__name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Company account's web domain.",
+          "history_tracked": true,
+          "name": "prop__domain",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__entity",
+      "record_kind": "entity",
+      "rows": 544
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor walking this journey.",
+          "history_tracked": false,
+          "name": "prop__actor",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__actor",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the journey type this instance is an execution of.",
+          "history_tracked": false,
+          "name": "prop__journey_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Name of the state the journey instance currently occupies.",
+          "history_tracked": true,
+          "name": "prop__current_state",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time the journey instance entered its current state.",
+          "history_tracked": false,
+          "name": "prop__state_entry_time",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether the journey instance has reached a terminal state.",
+          "history_tracked": false,
+          "name": "prop__complete",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BOOLEAN"
+        }
+      ],
+      "description": "One actor's traversal of one journey: current state, entry time, completion flag, and every role binding acquired along the way.",
+      "name": "records__journey_instance",
+      "record_kind": "journey_instance",
+      "rows": 10399
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding acquired by a select action during this journey instance's traversal.",
+      "name": "membership__journey_instance__bound_roles",
+      "property": "bound_roles",
+      "record_kind": "journey_instance",
+      "rows": 258740
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the journey instance this decision belongs to.",
+          "history_tracked": false,
+          "name": "prop__journey_instance",
+          "references": "journey_instance",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__journey_instance",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Author-declared discriminator identifying which decision this record represents.",
+          "history_tracked": false,
+          "name": "prop__decision_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Decision-specific key-value payload recorded at fire time, rendered as JSON object text.",
+          "extra_data": true,
+          "history_tracked": false,
+          "name": "prop__context",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One event-shaped record of a decision firing (select, recall, seize, book, match, create, or record) \u2014 archival, immortal, never rewritten.",
+      "name": "records__tick_decision",
+      "record_kind": "tick_decision",
+      "rows": 456975
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding this decision recorded, including any author-declared per-binding context fields.",
+      "name": "membership__tick_decision__bindings",
+      "property": "bindings",
+      "record_kind": "tick_decision",
+      "rows": 456975
+    }
+  ]
+}

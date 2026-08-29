@@ -1,0 +1,997 @@
+{
+  "base_format_version": 9,
+  "branches": [
+    {
+      "fork_path": "trunk",
+      "parent": null,
+      "slice_at": 604800000000000
+    }
+  ],
+  "enum_domains": {
+    "actor": {
+      "actor_type": [
+        {
+          "description": "A single ride request and its lifecycle \u2014 the transactional fact whose history-tracked status becomes the CDC changelog, carrying an assigned rider, pickup zone and, once matched, a held driver.",
+          "value": "trip"
+        }
+      ]
+    },
+    "entity": {
+      "entity_type": [
+        {
+          "description": "A rider dimension row \u2014 a lookup-join target carrying a name and loyalty tier, assigned to each trip at request time.",
+          "value": "rider"
+        },
+        {
+          "description": "A pickup-zone dimension row \u2014 a lookup-join target carrying a name and zone type (commercial, transit, residential, campus) for each trip's origin.",
+          "value": "zone"
+        }
+      ]
+    },
+    "journey_instance": {
+      "current_state": [
+        {
+          "description": "A newly arrived trip binding its rider and pickup zone, then searching for an available driver.",
+          "value": "requested"
+        },
+        {
+          "description": "The trip waiting to seize a driver from the shared fleet, holding in the queue when every driver is busy \u2014 this wait is the emergent match-time.",
+          "value": "matching"
+        },
+        {
+          "description": "A driver has been matched and is driving to the rider, who then either boards or turns out to be a no-show.",
+          "value": "en_route"
+        },
+        {
+          "description": "The rider has boarded and the ride is underway toward drop-off.",
+          "value": "on_trip"
+        },
+        {
+          "description": "The ride finished and the driver was released \u2014 the terminal success outcome.",
+          "value": "completed"
+        },
+        {
+          "description": "The rider was a no-show, releasing the driver without a ride \u2014 the terminal cancellation outcome.",
+          "value": "cancelled"
+        }
+      ],
+      "journey_type": [
+        {
+          "description": "The trip lifecycle from request through matching, pickup and the ride to a completed or cancelled outcome \u2014 the state machine whose status changes drive the SCD-2 / CDC changelog.",
+          "value": "trip"
+        }
+      ]
+    },
+    "queue": {
+      "discipline": [
+        {
+          "description": "Waiters promoted in arrival order.",
+          "value": "fifo"
+        },
+        {
+          "description": "Waiters promoted by highest declared priority, ties by earliest enqueue.",
+          "value": "priority"
+        },
+        {
+          "description": "A newly-arriving higher-priority actor displaces a lower-priority holder; 1-server queues only.",
+          "value": "preempt"
+        }
+      ],
+      "on_full": [
+        {
+          "description": "The seize waits in the queue for a slot to free.",
+          "value": "queue"
+        },
+        {
+          "description": "The seize is rejected immediately and routed to its on_rejected handler.",
+          "value": "reject"
+        },
+        {
+          "description": "The seize resamples a delay and is retried.",
+          "value": "retry"
+        },
+        {
+          "description": "The seize is routed to its on_reroute handler.",
+          "value": "reroute"
+        }
+      ]
+    },
+    "resource": {
+      "resource_type": [
+        {
+          "description": "A driver in the finite metro fleet \u2014 a seizable resource a trip holds from match through drop-off; all drivers share one queue, so riders wait when every driver is busy.",
+          "value": "driver"
+        }
+      ]
+    },
+    "tick_decision": {
+      "decision_type": [
+        {
+          "value": "rider_assigned"
+        },
+        {
+          "value": "pickup_assigned"
+        }
+      ]
+    }
+  },
+  "pinned_ids": {
+    "entity": {
+      "airport": "13",
+      "downtown": "12",
+      "r01": "0",
+      "r02": "1",
+      "r03": "2",
+      "r04": "3",
+      "r05": "4",
+      "r06": "5",
+      "r07": "6",
+      "r08": "7",
+      "r09": "8",
+      "r10": "9",
+      "r11": "10",
+      "r12": "11",
+      "riverside": "15",
+      "university": "16",
+      "uptown": "14"
+    },
+    "resource": {
+      "d1": "0",
+      "d2": "1",
+      "d3": "2",
+      "d4": "3",
+      "d5": "4",
+      "d6": "5"
+    }
+  },
+  "presentation_keys": {
+    "actor": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "trip": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "",
+            "width": 0
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    },
+    "entity": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "rider": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "",
+            "width": 0
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "zone": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "",
+            "width": 0
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      }
+    },
+    "resource": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "driver": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "",
+            "width": 0
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    }
+  },
+  "record_roles": {
+    "actor": {
+      "trip": "fact"
+    },
+    "entity": "dimension",
+    "journey_instance": "dimension",
+    "queue": "dimension",
+    "resource": "dimension",
+    "tick_decision": "fact"
+  },
+  "row_census": {
+    "trunk": {
+      "history_series": {
+        "actor": {
+          "status": {
+            "records": 1496,
+            "rows": 5740
+          }
+        },
+        "journey_instance": {
+          "current_state": {
+            "records": 1496,
+            "rows": 6695
+          }
+        },
+        "resource": {
+          "allocated": {
+            "records": 6,
+            "rows": 1086
+          },
+          "capacity": {
+            "records": 6,
+            "rows": 6
+          },
+          "queue": {
+            "records": 6,
+            "rows": 6
+          }
+        }
+      },
+      "sub_type_rows": {
+        "actor": {
+          "trip": 1496
+        },
+        "entity": {
+          "rider": 12,
+          "zone": 5
+        },
+        "resource": {
+          "driver": 6
+        }
+      },
+      "table_rows": {
+        "history": 13533,
+        "membership__journey_instance__bound_roles": 4488,
+        "membership__queue__waiters": 955,
+        "membership__resource__holders": 1496,
+        "membership__tick_decision__bindings": 2992,
+        "records__actor": 1496,
+        "records__entity": 17,
+        "records__journey_instance": 1496,
+        "records__queue": 1,
+        "records__resource": 6,
+        "records__tick_decision": 2992
+      }
+    }
+  },
+  "runtime": {
+    "start_datetime": "2026-01-05T00:00:00+00:00",
+    "timezone": "UTC"
+  },
+  "scenario_description": "A single-region ride-sharing marketplace over one week: riders request trips through the day, a small finite driver fleet picks them up and frees up for the next request, and each trip walks a lifecycle from request to a completed or cancelled outcome \u2014 rendered as a per-trip change-data-capture changelog in which rider match-wait emerges from a peaking demand stream contending for a fixed fleet.",
+  "sub_type_columns": {
+    "actor": {
+      "trip": [
+        "presentation_id",
+        "prop__status",
+        "prop__surge_tier"
+      ]
+    },
+    "entity": {
+      "rider": [
+        "presentation_id",
+        "prop__name",
+        "prop__loyalty"
+      ],
+      "zone": [
+        "presentation_id",
+        "prop__name",
+        "prop__zone_type"
+      ]
+    },
+    "resource": {
+      "driver": [
+        "presentation_id",
+        "prop__capacity",
+        "prop__allocated",
+        "prop__retiring",
+        "prop__queue",
+        "ref_index__queue",
+        "prop__name",
+        "prop__region"
+      ]
+    }
+  },
+  "surface": "published",
+  "tables": [
+    {
+      "category": "fixed",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "kind",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "property",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "value",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "history",
+      "rows": 13533
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Trip lifecycle stage \u2014 requested, matching, en_route, on_trip, completed, or cancelled \u2014 tracked as the SCD-2 changelog a CDC consumer replays.",
+          "history_tracked": true,
+          "name": "prop__status",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Pricing tier stamped on the trip \u2014 standard until a driver is matched, elevated for the remainder \u2014 overwritten in place rather than tracked, so only the final value reaches the emit.",
+          "history_tracked": false,
+          "name": "prop__surge_tier",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__actor_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__actor",
+      "record_kind": "actor",
+      "rows": 1496
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Display name of the entity row as it appears on the trip records that reference it.",
+          "history_tracked": false,
+          "name": "prop__name",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rider's loyalty program tier \u2014 gold, silver, or bronze \u2014 carried on the dimension row but not read by any rule in this scenario.",
+          "history_tracked": false,
+          "name": "prop__loyalty",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Land-use classification of the zone \u2014 commercial, transit, residential, or campus \u2014 describing the character of a trip's pickup location.",
+          "history_tracked": false,
+          "name": "prop__zone_type",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__entity_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__entity",
+      "record_kind": "entity",
+      "rows": 17
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor walking this journey.",
+          "history_tracked": false,
+          "name": "prop__actor",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__actor",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the journey type this instance is an execution of.",
+          "history_tracked": false,
+          "name": "prop__journey_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Name of the state the journey instance currently occupies.",
+          "history_tracked": true,
+          "name": "prop__current_state",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time the journey instance entered its current state.",
+          "history_tracked": false,
+          "name": "prop__state_entry_time",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether the journey instance has reached a terminal state.",
+          "history_tracked": false,
+          "name": "prop__complete",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BOOLEAN"
+        }
+      ],
+      "description": "One actor's traversal of one journey: current state, entry time, completion flag, and every role binding acquired along the way.",
+      "name": "records__journey_instance",
+      "record_kind": "journey_instance",
+      "rows": 1496
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding acquired by a select action during this journey instance's traversal.",
+      "name": "membership__journey_instance__bound_roles",
+      "property": "bound_roles",
+      "record_kind": "journey_instance",
+      "rows": 4488
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Waiter promotion order for this queue.",
+          "history_tracked": false,
+          "name": "prop__discipline",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Policy applied when every server this queue governs is full and no promotion is possible.",
+          "history_tracked": false,
+          "name": "prop__on_full",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "history_tracked": false,
+          "name": "prop__region",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "The wait-and-promotion record governing one server or a partitioned group of servers: promotion discipline, full-pool policy, and the current waiters.",
+      "name": "records__queue",
+      "record_kind": "queue",
+      "rows": 1
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the waiting actor.",
+          "name": "member__actor__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the waiting actor.",
+          "name": "member__actor__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rule id to schedule when this waiter is promoted to a slot.",
+          "name": "elem__on_acquired_rule",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time this waiter joined the queue.",
+          "name": "elem__enqueued_at",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Frozen-at-enqueue priority used by the priority discipline.",
+          "name": "elem__priority",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Rule id to schedule if this waiter's eventual holder is later preempted; None except on a 1-server preempt queue.",
+          "name": "elem__on_preempted_rule",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Number of slots this waiter's promotion needs to fit.",
+          "name": "elem__requested_count",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every actor currently waiting for a slot governed by this queue, in the queue's own storage order.",
+      "name": "membership__queue__waiters",
+      "property": "waiters",
+      "record_kind": "queue",
+      "rows": 955
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Total number of slots in this pool.",
+          "history_tracked": true,
+          "min": 0,
+          "name": "prop__capacity",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Number of slots currently held across every holder in this pool.",
+          "history_tracked": true,
+          "name": "prop__allocated",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether this pool is in its retire wind-down: no longer accepting new seizes while existing holders drain.",
+          "history_tracked": false,
+          "name": "prop__retiring",
+          "temporal_class": "constant",
+          "type": "BOOLEAN"
+        },
+        {
+          "description": "Reference to the queue record governing this pool's waiters, stamped once construction derives the run's queues.",
+          "history_tracked": true,
+          "name": "prop__queue",
+          "references": "queue",
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__queue",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Driver's display name as it appears on the trip record currently holding them.",
+          "history_tracked": false,
+          "name": "prop__name",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Driver's home region; partitions the shared fleet queue and is the filter every seize matches candidates against.",
+          "history_tracked": false,
+          "name": "prop__region",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "name": "prop__resource_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "A resource pool actors seize slots from: capacity, current allocation, current holders, and the governing queue.",
+      "name": "records__resource",
+      "record_kind": "resource",
+      "rows": 6
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the holding actor.",
+          "name": "member__actor__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the holding actor.",
+          "name": "member__actor__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "This holder's priority, carried forward from promotion.",
+          "name": "elem__priority",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Rule id to schedule if this holder is displaced by a higher-priority preemption; None except on a 1-server preempt queue.",
+          "name": "elem__on_preempted_rule",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Number of slots this holder currently occupies.",
+          "name": "elem__slots_held",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every actor currently holding one or more slots in this pool.",
+      "name": "membership__resource__holders",
+      "property": "holders",
+      "record_kind": "resource",
+      "rows": 1496
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the journey instance this decision belongs to.",
+          "history_tracked": false,
+          "name": "prop__journey_instance",
+          "references": "journey_instance",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__journey_instance",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Author-declared discriminator identifying which decision this record represents.",
+          "history_tracked": false,
+          "name": "prop__decision_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Decision-specific key-value payload recorded at fire time, rendered as JSON object text.",
+          "extra_data": true,
+          "history_tracked": false,
+          "name": "prop__context",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One event-shaped record of a decision firing (select, recall, seize, book, match, create, or record) \u2014 archival, immortal, never rewritten.",
+      "name": "records__tick_decision",
+      "record_kind": "tick_decision",
+      "rows": 2992
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding this decision recorded, including any author-declared per-binding context fields.",
+      "name": "membership__tick_decision__bindings",
+      "property": "bindings",
+      "record_kind": "tick_decision",
+      "rows": 2992
+    }
+  ]
+}

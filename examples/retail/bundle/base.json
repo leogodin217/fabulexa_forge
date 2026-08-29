@@ -1,0 +1,1139 @@
+{
+  "base_format_version": 9,
+  "branches": [
+    {
+      "fork_path": "trunk",
+      "parent": null,
+      "slice_at": 89596800000000000
+    }
+  ],
+  "enum_domains": {
+    "actor": {
+      "acquisition_source": [
+        {
+          "value": "organic"
+        },
+        {
+          "value": "paid_search"
+        },
+        {
+          "value": "social"
+        },
+        {
+          "value": "referral"
+        }
+      ],
+      "actor_type": [
+        {
+          "description": "A TechMart shopper \u2014 carries the commercial attributes that steer the funnel (loyalty tier, price segment, household income) alongside recorded-only demographics (acquisition source, age, country) and a lifetime purchase count that grows with each completed order.",
+          "value": "customer"
+        },
+        {
+          "description": "The storefront operations monitor \u2014 a single automated agent that polls the storefront host on a regular cadence and flips it into a degraded state during incidents, then restores it, writing the health status the customer funnel reacts to.",
+          "value": "ops"
+        }
+      ],
+      "country": [
+        {
+          "value": "US"
+        },
+        {
+          "value": "MX"
+        },
+        {
+          "value": "UK"
+        }
+      ],
+      "segment": [
+        {
+          "value": "budget"
+        },
+        {
+          "value": "mainstream"
+        },
+        {
+          "value": "premium"
+        }
+      ],
+      "tier": [
+        {
+          "value": "regular"
+        },
+        {
+          "value": "vip"
+        }
+      ]
+    },
+    "entity": {
+      "category": [
+        {
+          "value": "smartphones"
+        },
+        {
+          "value": "laptops"
+        },
+        {
+          "value": "tablets"
+        },
+        {
+          "value": "audio"
+        },
+        {
+          "value": "gaming"
+        },
+        {
+          "value": "accessories"
+        }
+      ],
+      "entity_type": [
+        {
+          "description": "A catalog item TechMart sells \u2014 carries its category, price (in cents), a popularity weight that governs how often shoppers view, compare, cart and buy it, and its gross margin in percentage points (recorded for downstream analysis; no mechanism reads it).",
+          "value": "product"
+        },
+        {
+          "description": "A storefront host serving the shop, carrying its health status and error rate; its reliability over time bears on how many sessions complete.",
+          "value": "infrastructure"
+        }
+      ],
+      "status": [
+        {
+          "value": "healthy"
+        },
+        {
+          "value": "degraded"
+        }
+      ]
+    },
+    "journey_instance": {
+      "current_state": [
+        {
+          "description": "The ops bot attaches to the storefront host it will watch.",
+          "value": "binding"
+        },
+        {
+          "description": "The storefront is serving normally; the bot re-checks its health each poll.",
+          "value": "healthy"
+        },
+        {
+          "description": "The storefront is degraded during an incident; the bot holds this state until the incident window ends, then restores health.",
+          "value": "degraded"
+        },
+        {
+          "description": "The storefront host has been retired and is no longer monitored.",
+          "value": "decommissioned"
+        },
+        {
+          "description": "The shopper has opened a session and landed on the store, beginning to look around.",
+          "value": "browsing"
+        },
+        {
+          "description": "Deciding whether this visit surfaces a product view \u2014 organic and referral shoppers browse product pages first, while social arrivals deep-link past them.",
+          "value": "browse_view_gate"
+        },
+        {
+          "description": "Looking at a specific product's page.",
+          "value": "browse_view"
+        },
+        {
+          "description": "Deciding whether the shopper adds an item to the cart on this pass \u2014 deep-linked social arrivals cart eagerly, view-first browsers are choosier.",
+          "value": "browse_cart_gate"
+        },
+        {
+          "description": "Adding a product to the cart, in some quantity.",
+          "value": "browse_cart"
+        },
+        {
+          "description": "The shopper chooses whether to keep browsing for more items or move on toward considering the cart.",
+          "value": "browse_loop"
+        },
+        {
+          "description": "The browsing shopper either engages further and moves on to consider, or leaves the store.",
+          "value": "browse_advance"
+        },
+        {
+          "description": "Weighing the products of interest, deciding whether to compare any of them.",
+          "value": "considering"
+        },
+        {
+          "description": "Comparing two products side by side.",
+          "value": "consider_compare"
+        },
+        {
+          "description": "The considering shopper either forms intent over the carted items and proceeds to checkout, or leaves without buying; a shopper who carted nothing has nothing to buy and always leaves.",
+          "value": "consider_advance"
+        },
+        {
+          "description": "The shopper has reached the checkout page and begins to check out.",
+          "value": "checkout"
+        },
+        {
+          "description": "The shopper completes the order, buying the items accumulated in the cart.",
+          "value": "purchased"
+        },
+        {
+          "description": "The shopper left during browsing without buying.",
+          "value": "browse_stop"
+        },
+        {
+          "description": "The shopper left while considering, without buying.",
+          "value": "consider_stop"
+        },
+        {
+          "description": "The shopper abandoned at checkout without buying.",
+          "value": "checkout_stop"
+        },
+        {
+          "description": "The session has ended after a completed order.",
+          "value": "session_complete"
+        }
+      ],
+      "journey_type": [
+        {
+          "description": "The storefront operations loop: bind the host, then poll its health on a regular cadence, dropping it into a degraded state for the duration of each incident window and restoring it to healthy afterwards.",
+          "value": "storefront_ops"
+        },
+        {
+          "description": "A single visit to the store: the shopper browses, may view and cart products, considers and compares them, and either reaches checkout and buys or leaves without purchasing; a completed session may return after a cooling-off period.",
+          "value": "shopping_session"
+        }
+      ]
+    },
+    "tick_decision": {
+      "decision_type": [
+        {
+          "value": "store_bound"
+        },
+        {
+          "value": "visit"
+        },
+        {
+          "value": "product_view"
+        },
+        {
+          "value": "add_to_cart"
+        },
+        {
+          "value": "product_comparison"
+        },
+        {
+          "value": "begin_checkout"
+        },
+        {
+          "value": "purchase"
+        }
+      ]
+    }
+  },
+  "pinned_ids": {
+    "actor": {
+      "ops_monitor": "0"
+    },
+    "entity": {
+      "flagship_earbuds": "1",
+      "flagship_laptop": "0",
+      "flagship_phone": "2",
+      "flagship_phone_v2": "44",
+      "storefront_primary": "43"
+    }
+  },
+  "presentation_keys": {
+    "actor": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "customer": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "CUST_",
+            "width": 6
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "ops": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "OPS_",
+            "width": 3
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    },
+    "entity": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "infrastructure": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "INFRA_",
+            "width": 4
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "product": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "SKU_",
+            "width": 5
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    },
+    "tick_decision": {
+      "key": {
+        "branch_stable": false,
+        "key_space": {
+          "class": "counter",
+          "prefix": "",
+          "width": 0
+        },
+        "slice_stable": false,
+        "unique_within": "emit"
+      }
+    }
+  },
+  "record_roles": {
+    "actor": {
+      "customer": "dimension",
+      "ops": "dimension"
+    },
+    "entity": "dimension",
+    "journey_instance": "dimension",
+    "tick_decision": "fact"
+  },
+  "row_census": {
+    "trunk": {
+      "history_series": {
+        "actor": {
+          "birth_date": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "email": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "first_name": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "last_name": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "name": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "phone": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "place_area_code": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "place_city": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "place_postal_code": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "place_subdivision": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "street_address": {
+            "records": 11469,
+            "rows": 11469
+          },
+          "total_purchases": {
+            "records": 11469,
+            "rows": 13372
+          },
+          "username": {
+            "records": 11469,
+            "rows": 11469
+          }
+        },
+        "entity": {
+          "designator": {
+            "records": 194,
+            "rows": 194
+          },
+          "domain": {
+            "records": 194,
+            "rows": 194
+          },
+          "error_rate": {
+            "records": 194,
+            "rows": 318
+          },
+          "identity_brand": {
+            "records": 194,
+            "rows": 194
+          },
+          "identity_line": {
+            "records": 194,
+            "rows": 194
+          },
+          "identity_naming_style": {
+            "records": 194,
+            "rows": 194
+          },
+          "identity_tier": {
+            "records": 194,
+            "rows": 194
+          },
+          "primary_ip": {
+            "records": 194,
+            "rows": 194
+          },
+          "product_name": {
+            "records": 194,
+            "rows": 194
+          },
+          "status": {
+            "records": 194,
+            "rows": 318
+          }
+        },
+        "journey_instance": {
+          "current_state": {
+            "records": 31306,
+            "rows": 399816
+          },
+          "customer_handle": {
+            "records": 31306,
+            "rows": 31306
+          }
+        }
+      },
+      "sub_type_rows": {
+        "actor": {
+          "customer": 11468,
+          "ops": 1
+        },
+        "entity": {
+          "infrastructure": 1,
+          "product": 193
+        }
+      },
+      "table_rows": {
+        "history": 584310,
+        "membership__journey_instance__bound_roles": 89451,
+        "membership__tick_decision__bindings": 92821,
+        "records__actor": 11469,
+        "records__entity": 194,
+        "records__journey_instance": 31306,
+        "records__tick_decision": 122728
+      }
+    }
+  },
+  "runtime": {
+    "start_datetime": "2022-03-01T00:00:00+00:00",
+    "timezone": "UTC"
+  },
+  "scenario_description": "TechMart Electronics, a three-year online consumer-electronics retailer: customers arrive organically at a secularly growing rate and each run a shopping session that funnels from visit through product views, cart adds and comparisons to checkout and purchase, buying popularity-weighted products from a fixed catalog and returning after a cooling-off period. Behaviour is stratified by acquisition channel (view-first organic browsing vs deep-linked social carting), loyalty tier, price segment and segment-correlated household income, and traffic is shaped by a seasonal calendar of weekend lifts, Black Friday and Cyber Monday spikes, a holiday bell and off-season slumps \u2014 with peak events lifting basket size and conversion, not just arrivals, outages suppressing repeat visits alongside new ones, deal days flattening the product mix while back-to-school concentrates it, and an October 2024 loyalty push raising repeat rates for VIP shoppers only \u2014 emitted as an event-grain base dataset of customers, products, storefront infrastructure and customer actions.",
+  "sub_type_columns": {
+    "actor": {
+      "customer": [
+        "presentation_id",
+        "prop__acquisition_source",
+        "prop__tier",
+        "prop__segment",
+        "prop__income",
+        "prop__age",
+        "prop__country",
+        "prop__store",
+        "ref_index__store",
+        "prop__total_purchases",
+        "prop__first_name",
+        "prop__last_name",
+        "prop__name",
+        "prop__place_city",
+        "prop__place_subdivision",
+        "prop__place_postal_code",
+        "prop__place_area_code",
+        "prop__birth_date",
+        "prop__email",
+        "prop__username",
+        "prop__phone",
+        "prop__street_address"
+      ],
+      "ops": [
+        "presentation_id",
+        "prop__component"
+      ]
+    },
+    "entity": {
+      "infrastructure": [
+        "presentation_id",
+        "prop__status",
+        "prop__error_rate",
+        "prop__primary_ip",
+        "prop__domain"
+      ],
+      "product": [
+        "presentation_id",
+        "prop__category",
+        "prop__price_cents",
+        "prop__popularity",
+        "prop__margin",
+        "prop__identity_brand",
+        "prop__identity_line",
+        "prop__identity_naming_style",
+        "prop__identity_tier",
+        "prop__designator",
+        "prop__product_name"
+      ]
+    }
+  },
+  "surface": "published",
+  "tables": [
+    {
+      "category": "fixed",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "kind",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "property",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "value",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "history",
+      "rows": 584310
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The channel this customer arrived through; gates which funnel entry style the browse gates apply and shapes conversion downstream.",
+          "history_tracked": false,
+          "name": "prop__acquisition_source",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Loyalty standing, a small VIP minority against the regular majority, that stratifies engagement, checkout completion, and retention throughout the funnel.",
+          "history_tracked": false,
+          "name": "prop__tier",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Willingness-to-buy band for regular customers, from budget to premium, that weights checkout completion and conditions income at arrival.",
+          "history_tracked": false,
+          "name": "prop__segment",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Household income in whole dollars, segment-conditioned at arrival, read continuously by the checkout transfer weight to bend regular-customer completion toward higher earners.",
+          "history_tracked": false,
+          "name": "prop__income",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Age in years at arrival, fixed for the customer's lifetime and read by no journey condition; the projection layer derives a birth date from it.",
+          "history_tracked": false,
+          "name": "prop__age",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The customer's country, a recorded locale mix with no bearing on any journey decision.",
+          "history_tracked": false,
+          "name": "prop__country",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "history_tracked": false,
+          "name": "prop__store",
+          "references": "entity",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__store",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Lifetime count of completed orders, incremented once per purchasing session; each increment opens a new SCD-2 version.",
+          "history_tracked": true,
+          "name": "prop__total_purchases",
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Which piece of storefront infrastructure this monitor polls and reports health for.",
+          "history_tracked": false,
+          "name": "prop__component",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__actor_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's given name.",
+          "history_tracked": true,
+          "name": "prop__first_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's family name.",
+          "history_tracked": true,
+          "name": "prop__last_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's full display name (first name followed by last name).",
+          "history_tracked": true,
+          "name": "prop__name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's home place \u2014 a coherent city, state/subdivision, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__place_city",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's home place \u2014 a coherent city, state/subdivision, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__place_subdivision",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's home place \u2014 a coherent city, state/subdivision, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__place_postal_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's home place \u2014 a coherent city, state/subdivision, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__place_area_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's date of birth, consistent with the recorded age.",
+          "history_tracked": true,
+          "name": "prop__birth_date",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's personal email address on a consumer provider domain.",
+          "history_tracked": true,
+          "name": "prop__email",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's unique account handle; sessions carry the same handle in customer_handle.",
+          "history_tracked": true,
+          "name": "prop__username",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's phone number; the area code matches the customer's home place.",
+          "history_tracked": true,
+          "name": "prop__phone",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Customer's street address (street line only; city and postal code live on the place columns).",
+          "history_tracked": true,
+          "name": "prop__street_address",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__actor",
+      "record_kind": "actor",
+      "rows": 11469
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The product's catalog category, drawn from a fixed domain that also governs the mid-run gaming line retirement and the minted-SKU mix drift.",
+          "history_tracked": false,
+          "name": "prop__category",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Retail price in cents, the substrate's minor-unit currency representation since it has no decimal storage.",
+          "history_tracked": false,
+          "name": "prop__price_cents",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Weight governing how often shoppers view, compare, cart, and buy this product under weighted selection.",
+          "history_tracked": false,
+          "name": "prop__popularity",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Gross margin in whole percentage points, recorded for downstream profitability analysis; no mechanism reads it.",
+          "history_tracked": false,
+          "name": "prop__margin",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The storefront host's health state, healthy or degraded, written by the ops monitor and read by regular-customer checkout completion.",
+          "history_tracked": true,
+          "name": "prop__status",
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The storefront host's current error rate, written alongside status by the ops monitor as a recorded companion metric.",
+          "history_tracked": true,
+          "name": "prop__error_rate",
+          "temporal_class": "tracked",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__entity_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Product's branding identity \u2014 a coherent brand, product line, naming style, and market tier drawn together per category.",
+          "history_tracked": true,
+          "name": "prop__identity_brand",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Product's branding identity \u2014 a coherent brand, product line, naming style, and market tier drawn together per category.",
+          "history_tracked": true,
+          "name": "prop__identity_line",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Product's branding identity \u2014 a coherent brand, product line, naming style, and market tier drawn together per category.",
+          "history_tracked": true,
+          "name": "prop__identity_naming_style",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Product's branding identity \u2014 a coherent brand, product line, naming style, and market tier drawn together per category.",
+          "history_tracked": true,
+          "name": "prop__identity_tier",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Product's model token (e.g. a numeric suffix, alphanumeric code, or generation marker); also rendered inside product_name.",
+          "history_tracked": true,
+          "name": "prop__designator",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Product's full display name, composed from its brand, line, and model designator.",
+          "history_tracked": true,
+          "name": "prop__product_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Host's primary IPv4 address.",
+          "history_tracked": true,
+          "name": "prop__primary_ip",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Host's DNS domain name.",
+          "history_tracked": true,
+          "name": "prop__domain",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__entity",
+      "record_kind": "entity",
+      "rows": 194
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor walking this journey.",
+          "history_tracked": false,
+          "name": "prop__actor",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__actor",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the journey type this instance is an execution of.",
+          "history_tracked": false,
+          "name": "prop__journey_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Name of the state the journey instance currently occupies.",
+          "history_tracked": true,
+          "name": "prop__current_state",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time the journey instance entered its current state.",
+          "history_tracked": false,
+          "name": "prop__state_entry_time",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether the journey instance has reached a terminal state.",
+          "history_tracked": false,
+          "name": "prop__complete",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BOOLEAN"
+        },
+        {
+          "description": "Account handle of the customer this session belongs to; matches that customer's username.",
+          "history_tracked": true,
+          "name": "prop__customer_handle",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One actor's traversal of one journey: current state, entry time, completion flag, and every role binding acquired along the way.",
+      "name": "records__journey_instance",
+      "record_kind": "journey_instance",
+      "rows": 31306
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding acquired by a select action during this journey instance's traversal.",
+      "name": "membership__journey_instance__bound_roles",
+      "property": "bound_roles",
+      "record_kind": "journey_instance",
+      "rows": 89451
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "BIGINT"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the journey instance this decision belongs to.",
+          "history_tracked": false,
+          "name": "prop__journey_instance",
+          "references": "journey_instance",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__journey_instance",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Author-declared discriminator identifying which decision this record represents.",
+          "history_tracked": false,
+          "name": "prop__decision_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Decision-specific key-value payload recorded at fire time, rendered as JSON object text.",
+          "extra_data": true,
+          "history_tracked": false,
+          "name": "prop__context",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One event-shaped record of a decision firing (select, recall, seize, book, match, create, or record) \u2014 archival, immortal, never rewritten.",
+      "name": "records__tick_decision",
+      "record_kind": "tick_decision",
+      "rows": 122728
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding this decision recorded, including any author-declared per-binding context fields.",
+      "name": "membership__tick_decision__bindings",
+      "property": "bindings",
+      "record_kind": "tick_decision",
+      "rows": 92821
+    }
+  ]
+}

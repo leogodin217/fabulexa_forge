@@ -1,0 +1,1173 @@
+{
+  "base_format_version": 9,
+  "branches": [
+    {
+      "fork_path": "trunk",
+      "parent": null,
+      "slice_at": 7776000000000000
+    }
+  ],
+  "enum_domains": {
+    "actor": {
+      "actor_type": [
+        {
+          "description": "A machine that originates connections \u2014 the 117 internal workstations, kiosks, and service boxes plus the four external approach hosts \u2014 carrying the zone, subnet, role, habitual service, breadth, and auth reliability that shape every firewall and authentication record it generates.",
+          "value": "host"
+        }
+      ],
+      "auth_reliability": [
+        {
+          "value": "steady"
+        },
+        {
+          "value": "clumsy"
+        }
+      ],
+      "breadth": [
+        {
+          "value": "focused"
+        },
+        {
+          "value": "broad"
+        }
+      ],
+      "role": [
+        {
+          "value": "developer"
+        },
+        {
+          "value": "finance"
+        },
+        {
+          "value": "kiosk"
+        },
+        {
+          "value": "service_account"
+        },
+        {
+          "value": "external"
+        }
+      ],
+      "stale_service": [
+        {
+          "value": "none"
+        },
+        {
+          "value": "db"
+        },
+        {
+          "value": "warehouse"
+        },
+        {
+          "value": "metrics"
+        },
+        {
+          "value": "legacy"
+        },
+        {
+          "value": "console"
+        },
+        {
+          "value": "app"
+        },
+        {
+          "value": "reports"
+        }
+      ],
+      "subnet": [
+        {
+          "value": "ws-eng"
+        },
+        {
+          "value": "ws-fin"
+        },
+        {
+          "value": "ws-ops"
+        },
+        {
+          "value": "dmz-svc"
+        },
+        {
+          "value": "external"
+        },
+        {
+          "value": "ws-eng02"
+        },
+        {
+          "value": "ws-eng03"
+        },
+        {
+          "value": "ws-eng04"
+        },
+        {
+          "value": "ws-eng05"
+        },
+        {
+          "value": "ws-eng06"
+        },
+        {
+          "value": "ws-eng07"
+        },
+        {
+          "value": "ws-eng08"
+        },
+        {
+          "value": "ws-eng09"
+        },
+        {
+          "value": "ws-eng10"
+        },
+        {
+          "value": "ws-eng11"
+        },
+        {
+          "value": "ws-fin02"
+        },
+        {
+          "value": "ws-fin03"
+        },
+        {
+          "value": "ws-fin04"
+        },
+        {
+          "value": "ws-fin05"
+        },
+        {
+          "value": "ws-fin06"
+        },
+        {
+          "value": "ws-fin07"
+        },
+        {
+          "value": "ws-fin08"
+        },
+        {
+          "value": "ws-fin09"
+        },
+        {
+          "value": "ws-ops02"
+        },
+        {
+          "value": "ws-ops03"
+        },
+        {
+          "value": "ws-ops04"
+        },
+        {
+          "value": "ws-ops05"
+        },
+        {
+          "value": "ws-ops06"
+        },
+        {
+          "value": "ws-ops07"
+        },
+        {
+          "value": "ws-ops08"
+        },
+        {
+          "value": "ws-ops09"
+        }
+      ]
+    },
+    "entity": {
+      "account_type": [
+        {
+          "value": "user"
+        },
+        {
+          "value": "service"
+        }
+      ],
+      "entity_type": [
+        {
+          "description": "A destination in the service estate \u2014 hostname, zone, listening port, and the service it backs; the fixed inventory whose width caps a host's distinct-destinations-per-day, the headline breadth signal.",
+          "value": "server"
+        },
+        {
+          "description": "A credential principal \u2014 user or service account \u2014 owned by one host; the identity that host's authentication records report on every accept or reject.",
+          "value": "account"
+        },
+        {
+          "description": "One entry in the authored firewall ruleset, matching a source-zone / destination-zone / port route to a disposition; routes no rule covers are the denies the intrusion narrative trips over.",
+          "value": "fw_rule"
+        }
+      ]
+    },
+    "journey_instance": {
+      "current_state": [
+        {
+          "description": "The host's role decides which session cadence it runs on.",
+          "value": "classifying"
+        },
+        {
+          "description": "The host has been handed to its role's session journey.",
+          "value": "routed"
+        },
+        {
+          "description": "The host decides whether this session is routine or off-pattern.",
+          "value": "picking_destination"
+        },
+        {
+          "description": "The host reaches its own service \u2014 the routine case.",
+          "value": "habitual_destination"
+        },
+        {
+          "description": "The host reaches something outside its habit \u2014 stale bookmark, wrong service, curiosity.",
+          "value": "exploratory_destination"
+        },
+        {
+          "description": "The host reaches the service it has always reached, on a route it no longer has.",
+          "value": "stale_destination"
+        },
+        {
+          "description": "The firewall matches the connection against its ruleset.",
+          "value": "resolve_rule"
+        },
+        {
+          "description": "The matched rule's disposition decides the connection.",
+          "value": "apply_rule"
+        },
+        {
+          "description": "The account behind the connection is presented to the service.",
+          "value": "auth_challenge"
+        },
+        {
+          "description": "The credentials were rejected on this attempt.",
+          "value": "auth_failed"
+        },
+        {
+          "description": "The connection is established and carrying traffic.",
+          "value": "session_active"
+        },
+        {
+          "description": "The session ran to completion and closed normally.",
+          "value": "session_closed"
+        },
+        {
+          "description": "Authentication failed and the host stopped retrying.",
+          "value": "abandoned"
+        },
+        {
+          "description": "A rule explicitly denied the connection.",
+          "value": "denied"
+        },
+        {
+          "description": "No rule matched; the default-deny posture applied.",
+          "value": "blocked"
+        },
+        {
+          "description": "The host picks a destination and tries it.",
+          "value": "probing"
+        },
+        {
+          "description": "The perimeter evaluates the connection, exactly as it does for anyone.",
+          "value": "resolve_probe"
+        },
+        {
+          "description": "That route was shut; the host decides whether to keep looking.",
+          "value": "probe_again"
+        },
+        {
+          "description": "The host offers credentials for an account it does not own.",
+          "value": "presenting_credentials"
+        },
+        {
+          "description": "The credentials were refused; the counter advances.",
+          "value": "attempt_rejected"
+        },
+        {
+          "description": "The host decides whether to try again or come back another time.",
+          "value": "persisting"
+        },
+        {
+          "description": "The account stopped accepting attempts.",
+          "value": "locked_out"
+        },
+        {
+          "description": "The credentials were accepted.",
+          "value": "inside"
+        },
+        {
+          "description": "An ordinary session, on an unusual destination for this host.",
+          "value": "staging"
+        },
+        {
+          "description": "A second session, larger, outbound.",
+          "value": "moving"
+        },
+        {
+          "description": "The host is not doing anything observable.",
+          "value": "away"
+        }
+      ],
+      "journey_type": [
+        {
+          "description": "Routes each host to the session journey for its role.",
+          "value": "dispatch"
+        },
+        {
+          "description": "Developer workstation session \u2014 the busiest human cohort.",
+          "value": "session_developer"
+        },
+        {
+          "description": "Finance workstation session \u2014 same body, slower cadence.",
+          "value": "session_finance"
+        },
+        {
+          "description": "Shared kiosk session \u2014 the quietest cohort, same working hours.",
+          "value": "session_kiosk"
+        },
+        {
+          "description": "Developer working at the weekend \u2014 same session, sparser regime.",
+          "value": "weekend_developer"
+        },
+        {
+          "description": "Finance working at the weekend \u2014 same session, sparser regime.",
+          "value": "weekend_finance"
+        },
+        {
+          "description": "Kiosk used at the weekend \u2014 same session, sparser regime.",
+          "value": "weekend_kiosk"
+        },
+        {
+          "description": "Batch service account \u2014 machine cadence, no working hours.",
+          "value": "session_service_account"
+        },
+        {
+          "description": "An external host working through the perimeter, on no calendar.",
+          "value": "approach_anytime"
+        },
+        {
+          "description": "The same approach, worked through in one sitting rather than over weeks.",
+          "value": "approach_burst"
+        },
+        {
+          "description": "The same approach, confined to working hours \u2014 it arrives inside the crowd.",
+          "value": "approach_business_hours"
+        }
+      ]
+    },
+    "tick_decision": {
+      "decision_type": [
+        {
+          "value": "account_presented"
+        },
+        {
+          "value": "destination_chosen"
+        },
+        {
+          "value": "firewall_evaluated"
+        },
+        {
+          "value": "auth_rejected"
+        },
+        {
+          "value": "session_opened"
+        }
+      ]
+    }
+  },
+  "pinned_ids": {
+    "actor": {
+      "dmz01": "10",
+      "dmz02": "11",
+      "dmz03": "12",
+      "ext01": "117",
+      "ext02": "118",
+      "ext03": "119",
+      "ext04": "120",
+      "ws01": "0",
+      "ws02": "1",
+      "ws03": "2",
+      "ws04": "3",
+      "ws05": "4",
+      "ws06": "5",
+      "ws07": "6",
+      "ws08": "7",
+      "ws09": "8",
+      "ws10": "9"
+    },
+    "entity": {
+      "acct_dmz01": "52",
+      "acct_dmz02": "53",
+      "acct_dmz03": "54",
+      "acct_ws01": "42",
+      "acct_ws02": "43",
+      "acct_ws03": "44",
+      "acct_ws04": "45",
+      "acct_ws05": "46",
+      "acct_ws06": "47",
+      "acct_ws07": "48",
+      "acct_ws08": "49",
+      "acct_ws09": "50",
+      "acct_ws10": "51",
+      "api01": "9",
+      "api02": "10",
+      "api03": "11",
+      "app01": "15",
+      "app02": "16",
+      "app03": "17",
+      "console01": "33",
+      "console02": "34",
+      "console03": "35",
+      "crm01": "12",
+      "crm02": "13",
+      "crm03": "14",
+      "db01": "21",
+      "db02": "22",
+      "db03": "23",
+      "legacy01": "30",
+      "legacy02": "31",
+      "legacy03": "32",
+      "mail01": "36",
+      "mail02": "37",
+      "mail03": "38",
+      "metrics01": "27",
+      "metrics02": "28",
+      "metrics03": "29",
+      "portal01": "6",
+      "portal02": "7",
+      "portal03": "8",
+      "r_dmz_app": "164",
+      "r_dmz_mail": "165",
+      "r_dmz_web": "163",
+      "r_ext_mail": "167",
+      "r_ext_web": "166",
+      "r_ws_app": "160",
+      "r_ws_db": "161",
+      "r_ws_mail": "162",
+      "r_ws_web": "159",
+      "relay01": "39",
+      "relay02": "40",
+      "relay03": "41",
+      "reports01": "18",
+      "reports02": "19",
+      "reports03": "20",
+      "warehouse01": "24",
+      "warehouse02": "25",
+      "warehouse03": "26",
+      "web01": "0",
+      "web02": "1",
+      "web03": "2",
+      "wiki01": "3",
+      "wiki02": "4",
+      "wiki03": "5"
+    }
+  },
+  "record_roles": {
+    "actor": {
+      "host": "dimension"
+    },
+    "entity": "dimension",
+    "journey_instance": "dimension",
+    "tick_decision": "fact"
+  },
+  "row_census": {
+    "trunk": {
+      "history_series": {
+        "actor": {
+          "breadth": {
+            "records": 121,
+            "rows": 435
+          },
+          "failed_attempts": {
+            "records": 121,
+            "rows": 10470
+          },
+          "ip_address": {
+            "records": 121,
+            "rows": 121
+          },
+          "last_octet": {
+            "records": 121,
+            "rows": 121
+          },
+          "pending_dst_port": {
+            "records": 121,
+            "rows": 18444
+          },
+          "pending_dst_zone": {
+            "records": 121,
+            "rows": 3203
+          }
+        },
+        "entity": {
+          "ip_address": {
+            "records": 168,
+            "rows": 168
+          },
+          "owner_first": {
+            "records": 168,
+            "rows": 168
+          },
+          "owner_last": {
+            "records": 168,
+            "rows": 168
+          },
+          "port": {
+            "records": 168,
+            "rows": 174
+          }
+        },
+        "journey_instance": {
+          "current_state": {
+            "records": 111412,
+            "rows": 758812
+          }
+        }
+      },
+      "sub_type_rows": {
+        "actor": {
+          "host": 121
+        },
+        "entity": {
+          "account": 117,
+          "fw_rule": 9,
+          "server": 42
+        }
+      },
+      "table_rows": {
+        "history": 792284,
+        "membership__journey_instance__bound_roles": 327428,
+        "membership__tick_decision__bindings": 327622,
+        "records__actor": 121,
+        "records__entity": 168,
+        "records__journey_instance": 111412,
+        "records__tick_decision": 440107
+      }
+    }
+  },
+  "runtime": {
+    "start_datetime": "2026-01-05T08:00:00+00:00",
+    "timezone": "UTC"
+  },
+  "scenario_description": "A 90-day SIEM log corpus of correlated firewall and authentication records over a segmented network: 117 internal hosts across thirty subnets run role-specific benign session journeys (each role with its own cadence, hours, and retry appetite) against a 42-server service estate behind an authored firewall ruleset, while \u2014 after a 30-day clean baseline \u2014 four external hosts walk an approach FSM toward intrusion and two ABM rules spread destination range through shared segments and subnets, so the attack signal is a shift in per-host reach and denies rather than any labeled event.",
+  "sub_type_columns": {
+    "actor": {
+      "host": [
+        "prop__name",
+        "prop__role",
+        "prop__home_service",
+        "prop__stale_service",
+        "prop__breadth",
+        "prop__auth_reliability",
+        "prop__zone",
+        "prop__subnet",
+        "prop__subnet_octet",
+        "prop__failed_attempts",
+        "prop__pending_dst_zone",
+        "prop__pending_dst_port",
+        "prop__last_octet",
+        "prop__ip_address"
+      ]
+    },
+    "entity": {
+      "account": [
+        "prop__account_name",
+        "prop__account_type",
+        "prop__owner_host",
+        "prop__owner_first",
+        "prop__owner_last"
+      ],
+      "fw_rule": [
+        "prop__rule_name",
+        "prop__src_zone",
+        "prop__dst_zone",
+        "prop__dst_port",
+        "prop__action"
+      ],
+      "server": [
+        "prop__hostname",
+        "prop__zone",
+        "prop__port",
+        "prop__service",
+        "prop__ip_address"
+      ]
+    }
+  },
+  "surface": "published",
+  "tables": [
+    {
+      "category": "fixed",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "kind",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "property",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "value",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "history",
+      "rows": 792284
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Hostname as it appears in log records.",
+          "history_tracked": false,
+          "name": "prop__name",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "What the host is for; decides its session cadence and working hours.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__role",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The service this host reaches by default; for an external host, what it went looking for.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__home_service",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "A service this host keeps reaching for that its zone has no route to; `none` for a host with no such habit.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__stale_service",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "How widely this host ranges beyond its habitual service.",
+          "history_tracked": true,
+          "name": "prop__breadth",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "How reliably this host's credentials are accepted.",
+          "history_tracked": false,
+          "name": "prop__auth_reliability",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Network segment the host sits in; the source side of every firewall match.",
+          "history_tracked": false,
+          "name": "prop__zone",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Addressable subnet within the host's zone; the hosts a given host sits alongside.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__subnet",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Third octet of the subnet's private /24 block; 0 for external hosts, which hold no internal block.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__subnet_octet",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Consecutive rejected credential attempts since this host last stopped trying.",
+          "history_tracked": true,
+          "name": "prop__failed_attempts",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Destination zone of the connection currently being resolved; the segment this host is working in.",
+          "history_tracked": true,
+          "name": "prop__pending_dst_zone",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Destination port of the connection currently being resolved.",
+          "history_tracked": true,
+          "name": "prop__pending_dst_port",
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__actor_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Final octet of the host's IP address; unique across all hosts.",
+          "history_tracked": true,
+          "name": "prop__last_octet",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Host's IPv4 address; the /24 identifies the host's subnet.",
+          "history_tracked": true,
+          "name": "prop__ip_address",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__actor",
+      "record_kind": "actor",
+      "rows": 121
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Server hostname.",
+          "history_tracked": false,
+          "name": "prop__hostname",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Network segment the server sits in.",
+          "history_tracked": false,
+          "name": "prop__zone",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Service port the server listens on.",
+          "history_tracked": true,
+          "name": "prop__port",
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "What the server serves; several hosts back one service, so a habitual host still spreads across a pool.",
+          "history_tracked": false,
+          "name": "prop__service",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Account identifier as it appears in authentication records.",
+          "history_tracked": false,
+          "name": "prop__account_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "What kind of principal this is.",
+          "history_tracked": false,
+          "name": "prop__account_type",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Hostname this account belongs to; the join the session's account select filters on.",
+          "history_tracked": false,
+          "name": "prop__owner_host",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rule identifier as it would appear in a firewall config.",
+          "history_tracked": false,
+          "name": "prop__rule_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Source zone this rule matches.",
+          "history_tracked": false,
+          "name": "prop__src_zone",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Destination zone this rule matches.",
+          "history_tracked": false,
+          "name": "prop__dst_zone",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Destination port this rule matches.",
+          "history_tracked": false,
+          "name": "prop__dst_port",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Disposition applied when this rule matches.",
+          "history_tracked": false,
+          "name": "prop__action",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__entity_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Server's IPv4 address; addressed in the server's own zone.",
+          "history_tracked": true,
+          "name": "prop__ip_address",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Given name of the account's responsible person (owner for a user account, custodian for a service account).",
+          "history_tracked": true,
+          "name": "prop__owner_first",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Family name of the account's responsible person.",
+          "history_tracked": true,
+          "name": "prop__owner_last",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__entity",
+      "record_kind": "entity",
+      "rows": 168
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor walking this journey.",
+          "history_tracked": false,
+          "name": "prop__actor",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__actor",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the journey type this instance is an execution of.",
+          "history_tracked": false,
+          "name": "prop__journey_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Name of the state the journey instance currently occupies.",
+          "history_tracked": true,
+          "name": "prop__current_state",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time the journey instance entered its current state.",
+          "history_tracked": false,
+          "name": "prop__state_entry_time",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether the journey instance has reached a terminal state.",
+          "history_tracked": false,
+          "name": "prop__complete",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BOOLEAN"
+        }
+      ],
+      "description": "One actor's traversal of one journey: current state, entry time, completion flag, and every role binding acquired along the way.",
+      "name": "records__journey_instance",
+      "record_kind": "journey_instance",
+      "rows": 111412
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding acquired by a select action during this journey instance's traversal.",
+      "name": "membership__journey_instance__bound_roles",
+      "property": "bound_roles",
+      "record_kind": "journey_instance",
+      "rows": 327428
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the journey instance this decision belongs to.",
+          "history_tracked": false,
+          "name": "prop__journey_instance",
+          "references": "journey_instance",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__journey_instance",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Author-declared discriminator identifying which decision this record represents.",
+          "history_tracked": false,
+          "name": "prop__decision_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Decision-specific key-value payload recorded at fire time, rendered as JSON object text.",
+          "extra_data": true,
+          "history_tracked": false,
+          "name": "prop__context",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One event-shaped record of a decision firing (select, recall, seize, book, match, create, or record) \u2014 archival, immortal, never rewritten.",
+      "name": "records__tick_decision",
+      "record_kind": "tick_decision",
+      "rows": 440107
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding this decision recorded, including any author-declared per-binding context fields.",
+      "name": "membership__tick_decision__bindings",
+      "property": "bindings",
+      "record_kind": "tick_decision",
+      "rows": 327622
+    }
+  ]
+}

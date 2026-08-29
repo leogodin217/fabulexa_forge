@@ -1,0 +1,1056 @@
+{
+  "base_format_version": 9,
+  "branches": [
+    {
+      "fork_path": "trunk",
+      "parent": null,
+      "slice_at": 2592000000000000
+    }
+  ],
+  "enum_domains": {
+    "actor": {
+      "actor_type": [
+        {
+          "description": "A demand-side agent hailing rides \u2014 carries an intrinsic propensity class and origin/destination zones (which steer how fast loyalty is earned and where trips drain supply), plus earned ride_count and loyalty_band that track its lifetime with the market.",
+          "value": "rider"
+        },
+        {
+          "description": "A supply-side agent serving trips \u2014 carries an intrinsic strategy class and home base zone, plus a mutable current zone that trips and deadheads relocate and a session_rides tally credited as it completes rides.",
+          "value": "driver"
+        }
+      ],
+      "loyalty_band": [
+        {
+          "value": "new"
+        },
+        {
+          "value": "silver"
+        },
+        {
+          "value": "gold"
+        }
+      ],
+      "propensity": [
+        {
+          "value": "heavy"
+        },
+        {
+          "value": "regular"
+        },
+        {
+          "value": "occasional"
+        }
+      ],
+      "status": [
+        {
+          "value": "requesting"
+        },
+        {
+          "value": "seeking"
+        },
+        {
+          "value": "enroute"
+        },
+        {
+          "value": "on_trip"
+        },
+        {
+          "value": "completed"
+        },
+        {
+          "value": "no_show"
+        },
+        {
+          "value": "abandoned"
+        },
+        {
+          "value": "declined"
+        },
+        {
+          "value": "available"
+        },
+        {
+          "value": "driving"
+        },
+        {
+          "value": "offline"
+        }
+      ],
+      "strategy": [
+        {
+          "value": "surge_chaser"
+        },
+        {
+          "value": "fixed_zone"
+        },
+        {
+          "value": "casual"
+        }
+      ]
+    },
+    "entity": {
+      "entity_type": [
+        {
+          "description": "A city zone as a first-class record \u2014 the spatial grain of the market. Its selection weights steer where riders originate, where trips end, and where drivers are based, and it carries the emitted per-zone demand and supply pressure streams a consumer joins into local surge.",
+          "value": "zone_market"
+        }
+      ]
+    },
+    "journey_instance": {
+      "current_state": [
+        {
+          "description": "Online and idle at the rank, counting as supply and waiting to be matched to a rider; may log off or reposition if no trip comes.",
+          "value": "available"
+        },
+        {
+          "description": "An idle driver drained away from home deadheading back empty toward its base zone to rejoin the available pool there, diffusing supply back.",
+          "value": "repositioning"
+        },
+        {
+          "description": "Provisionally holding a just-matched dispatch while the driver decides whether to accept the trip or decline and free the rider back to search.",
+          "value": "reviewing"
+        },
+        {
+          "description": "Committed to and carrying out the matched trip, off the supply count until the rider's trip-completion resumes it as available at the destination.",
+          "value": "driving"
+        },
+        {
+          "description": "Logged off and left the market; replacement supply arrives as fresh drivers via the log-on stream, so the fleet breathes rather than being a fixed roster.",
+          "value": "offline"
+        },
+        {
+          "description": "The trip has begun; the rider is opening its request in its origin zone before the market attempts a match.",
+          "value": "requesting"
+        },
+        {
+          "description": "Actively scanning for a free driver in its origin zone to claim; this is the pending-demand state the surge signal counts.",
+          "value": "seeking"
+        },
+        {
+          "description": "Found no free driver and holding on \u2014 re-polling in hope of a match while a give-up impulse builds toward abandoning the request.",
+          "value": "waiting"
+        },
+        {
+          "description": "Matched, with the accepted driver on its way to the pickup \u2014 unless the driver declines mid-review, in which case the rider resumes here as declined.",
+          "value": "enroute"
+        },
+        {
+          "description": "The driver has reached the pickup point; the rider either boards for the ride or fails to show.",
+          "value": "arrived"
+        },
+        {
+          "description": "Riding to the destination; on completion the ride is credited to both sides' tallies and the driver is relocated to the destination zone.",
+          "value": "on_trip"
+        },
+        {
+          "description": "The post-trip loyalty check where a rider's earned band may climb a tier once its completed-ride count crosses the propensity-gated threshold.",
+          "value": "tally"
+        },
+        {
+          "description": "Resting between trips after a good outcome; a satisfied rider that re-entry may recycle into a fresh trip.",
+          "value": "idle"
+        },
+        {
+          "description": "The post-bad-outcome loyalty check after a renege, no-show, or decline, dropping the rider's earned band one tier before it lapses.",
+          "value": "penalty"
+        },
+        {
+          "description": "Left the market after a bad experience; re-entry is still possible but the eroded band makes returning less likely, so bad service drives churn.",
+          "value": "lapsed"
+        }
+      ],
+      "journey_type": [
+        {
+          "description": "The supply-side lifecycle of a driver \u2014 logging on available, being matched and reviewing a dispatch, driving a trip, repositioning home when drained away, and logging off after a quiet stretch.",
+          "value": "driver_journey"
+        },
+        {
+          "description": "The demand-side lifecycle of a rider \u2014 requesting a trip, seeking and waiting for a match, riding to the destination, then earning or eroding loyalty and either re-riding or lapsing out of the market.",
+          "value": "rider_journey"
+        }
+      ]
+    },
+    "pairing": {
+      "match_type": [
+        {
+          "value": "ride_match"
+        }
+      ]
+    }
+  },
+  "pinned_ids": {
+    "entity": {
+      "downtown": "0",
+      "midtown": "1",
+      "riverside": "2"
+    }
+  },
+  "presentation_keys": {
+    "actor": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "driver": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "",
+            "width": 0
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "rider": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "",
+            "width": 0
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      }
+    },
+    "entity": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "zone_market": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "",
+            "width": 0
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    }
+  },
+  "record_roles": {
+    "actor": {
+      "driver": "fact",
+      "rider": "fact"
+    },
+    "entity": "dimension",
+    "journey_instance": "dimension",
+    "pairing": "fact"
+  },
+  "row_census": {
+    "trunk": {
+      "history_series": {
+        "actor": {
+          "account_id": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "app_user_agent": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "date_of_birth": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "driver_id": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "email": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "first_name": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "full_name": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "home_place_area_code": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "home_place_city": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "home_place_postal_code": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "home_place_subdivision": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "home_state": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "home_street": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "last_name": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "license_plate": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "loyalty_band": {
+            "records": 4862,
+            "rows": 7013
+          },
+          "payment_card": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "phone": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "ride_count": {
+            "records": 4862,
+            "rows": 8235
+          },
+          "session_rides": {
+            "records": 4862,
+            "rows": 8235
+          },
+          "status": {
+            "records": 4862,
+            "rows": 31225
+          },
+          "vehicle_color": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "vehicle_make": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "vehicle_model": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "vehicle_year": {
+            "records": 4862,
+            "rows": 4862
+          },
+          "zone": {
+            "records": 4862,
+            "rows": 7644
+          }
+        },
+        "entity": {
+          "demand_pressure": {
+            "records": 3,
+            "rows": 681
+          },
+          "place_area_code": {
+            "records": 3,
+            "rows": 3
+          },
+          "place_city": {
+            "records": 3,
+            "rows": 3
+          },
+          "place_postal_code": {
+            "records": 3,
+            "rows": 3
+          },
+          "place_subdivision": {
+            "records": 3,
+            "rows": 3
+          },
+          "supply_pressure": {
+            "records": 3,
+            "rows": 1619
+          }
+        },
+        "journey_instance": {
+          "current_state": {
+            "records": 8980,
+            "rows": 54906
+          }
+        }
+      },
+      "sub_type_rows": {
+        "actor": {
+          "driver": 2451,
+          "rider": 2411
+        },
+        "entity": {
+          "zone_market": 3
+        }
+      },
+      "table_rows": {
+        "history": 221672,
+        "records__actor": 4862,
+        "records__entity": 3,
+        "records__journey_instance": 8980,
+        "records__pairing": 5443
+      }
+    }
+  },
+  "runtime": {
+    "start_datetime": "2026-01-09T00:00:00+00:00",
+    "timezone": "UTC"
+  },
+  "scenario_description": "A two-sided ride-hailing marketplace across three city zones: riders (demand) and drivers (supply) are both agents on one clock, tied by an actor-to-actor match and coupled by a surge price signal \u2014 wait, match success, spatial supply deserts, surge episodes, and loyalty-driven churn all emerge from the moment-to-moment supply/demand balance rather than being written into the data.",
+  "sub_type_columns": {
+    "actor": {
+      "driver": [
+        "presentation_id",
+        "prop__status",
+        "prop__zone",
+        "ref_index__zone",
+        "prop__loyalty_band",
+        "prop__age",
+        "prop__strategy",
+        "prop__base_zone",
+        "ref_index__base_zone",
+        "prop__session_rides",
+        "prop__first_name",
+        "prop__last_name",
+        "prop__phone",
+        "prop__date_of_birth",
+        "prop__driver_id",
+        "prop__full_name",
+        "prop__vehicle_make",
+        "prop__vehicle_model",
+        "prop__vehicle_year",
+        "prop__vehicle_color",
+        "prop__license_plate"
+      ],
+      "rider": [
+        "presentation_id",
+        "prop__status",
+        "prop__propensity",
+        "prop__zone",
+        "ref_index__zone",
+        "prop__dest_zone",
+        "ref_index__dest_zone",
+        "prop__ride_count",
+        "prop__loyalty_band",
+        "prop__age",
+        "prop__account_id",
+        "prop__first_name",
+        "prop__last_name",
+        "prop__email",
+        "prop__home_place_city",
+        "prop__home_place_subdivision",
+        "prop__home_place_postal_code",
+        "prop__home_place_area_code",
+        "prop__phone",
+        "prop__date_of_birth",
+        "prop__home_street",
+        "prop__home_state",
+        "prop__payment_card",
+        "prop__app_user_agent"
+      ]
+    },
+    "entity": {
+      "zone_market": [
+        "presentation_id",
+        "prop__name",
+        "prop__dest_weight",
+        "prop__demand_pressure",
+        "prop__supply_pressure",
+        "prop__place_city",
+        "prop__place_subdivision",
+        "prop__place_postal_code",
+        "prop__place_area_code"
+      ]
+    }
+  },
+  "surface": "published",
+  "tables": [
+    {
+      "category": "fixed",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "kind",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "property",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "value",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "history",
+      "rows": 221672
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The actor's lifecycle stage \u2014 trip stages for a rider, online stages for a driver \u2014 which the surge signal counts as pending demand (seeking) or idle supply (available).",
+          "history_tracked": true,
+          "name": "prop__status",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The rider's intrinsic behavioral class, gating how many completed rides it takes to climb into the next loyalty tier.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__propensity",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The actor's zone as a zone_market reference \u2014 a rider's intrinsic pickup origin, a driver's current location that trips and deadheads relocate; matching pairs riders and drivers sharing this zone.",
+          "history_tracked": true,
+          "name": "prop__zone",
+          "references": "entity",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__zone",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The rider's intrinsic trip destination as a zone_market reference; a completed trip relocates the serving driver here, the drain that carves supply deserts.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__dest_zone",
+          "references": "entity",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__dest_zone",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Lifetime completed-ride tally, credited once per finished trip; crossing a propensity-gated threshold promotes the rider's loyalty band.",
+          "history_tracked": true,
+          "name": "prop__ride_count",
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The actor's earned tier, climbing on completed rides and eroding on a renege, no-show, or decline; keys the rider's return probability, and is carried but unread on the driver side for schema parity.",
+          "history_tracked": true,
+          "name": "prop__loyalty_band",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The actor's age at signup or logon, carried through for downstream identity enrichment such as date of birth; no simulation rule reads it.",
+          "history_tracked": false,
+          "name": "prop__age",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The driver's intrinsic behavioral class, a stratification label carried at logon; behavioral differentiation by strategy is a later enrichment.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__strategy",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The driver's home zone as a zone_market reference \u2014 where it logs on and where an idle deadhead returns it.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__base_zone",
+          "references": "entity",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__base_zone",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Completed-ride tally for the driver's current session, credited once per finished trip through the paired rider's completion mutation.",
+          "history_tracked": true,
+          "name": "prop__session_rides",
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__actor_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rider's account identifier (UUID).",
+          "history_tracked": true,
+          "name": "prop__account_id",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Given name.",
+          "history_tracked": true,
+          "name": "prop__first_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Family name.",
+          "history_tracked": true,
+          "name": "prop__last_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rider's personal email address, derived from their name on a consumer provider domain.",
+          "history_tracked": true,
+          "name": "prop__email",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rider's home place \u2014 a coherent city, state, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__home_place_city",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rider's home place \u2014 a coherent city, state, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__home_place_subdivision",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rider's home place \u2014 a coherent city, state, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__home_place_postal_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rider's home place \u2014 a coherent city, state, postal code, and phone area code drawn together.",
+          "history_tracked": true,
+          "name": "prop__home_place_area_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Phone number; a rider's area code matches their home place.",
+          "history_tracked": true,
+          "name": "prop__phone",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Date of birth, consistent with the recorded age.",
+          "history_tracked": true,
+          "name": "prop__date_of_birth",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rider's home street address (street line only).",
+          "history_tracked": true,
+          "name": "prop__home_street",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Two-letter state code of the rider's home place.",
+          "history_tracked": true,
+          "name": "prop__home_state",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Rider's payment card number on file.",
+          "history_tracked": true,
+          "name": "prop__payment_card",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "User-agent string of the rider's mobile booking device.",
+          "history_tracked": true,
+          "name": "prop__app_user_agent",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Driver's account identifier (UUID).",
+          "history_tracked": true,
+          "name": "prop__driver_id",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Driver's full display name (first name followed by last name).",
+          "history_tracked": true,
+          "name": "prop__full_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Make of the driver's vehicle.",
+          "history_tracked": true,
+          "name": "prop__vehicle_make",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Model of the driver's vehicle; always a real pairing with vehicle_make.",
+          "history_tracked": true,
+          "name": "prop__vehicle_model",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Model year of the driver's vehicle.",
+          "history_tracked": true,
+          "name": "prop__vehicle_year",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Color of the driver's vehicle.",
+          "history_tracked": true,
+          "name": "prop__vehicle_color",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "License plate of the driver's vehicle (three letters, dash, four digits).",
+          "history_tracked": true,
+          "name": "prop__license_plate",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__actor",
+      "record_kind": "actor",
+      "rows": 4862
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Zone label as it appears in reporting; the zone itself is referenced by record identity, not by this label.",
+          "history_tracked": false,
+          "name": "prop__name",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Relative likelihood a trip ends in this zone, drawn at rider arrival; the destination skew that drains supply toward high-weight zones and creates deserts elsewhere.",
+          "history_tracked": false,
+          "name": "prop__dest_weight",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "Per-zone count of riders currently seeking a match, written each recompute; joins with supply_pressure to derive local surge.",
+          "history_tracked": true,
+          "name": "prop__demand_pressure",
+          "temporal_class": "tracked",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "Per-zone count of drivers currently available, written each recompute; joins with demand_pressure to derive local surge.",
+          "history_tracked": true,
+          "name": "prop__supply_pressure",
+          "temporal_class": "tracked",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__entity_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zone's place \u2014 the neighborhood display name, state, postal code, and phone area code it covers.",
+          "history_tracked": true,
+          "name": "prop__place_city",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zone's place \u2014 the neighborhood display name, state, postal code, and phone area code it covers.",
+          "history_tracked": true,
+          "name": "prop__place_subdivision",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zone's place \u2014 the neighborhood display name, state, postal code, and phone area code it covers.",
+          "history_tracked": true,
+          "name": "prop__place_postal_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zone's place \u2014 the neighborhood display name, state, postal code, and phone area code it covers.",
+          "history_tracked": true,
+          "name": "prop__place_area_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__entity",
+      "record_kind": "entity",
+      "rows": 3
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor walking this journey.",
+          "history_tracked": false,
+          "name": "prop__actor",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__actor",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the journey type this instance is an execution of.",
+          "history_tracked": false,
+          "name": "prop__journey_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Name of the state the journey instance currently occupies.",
+          "history_tracked": true,
+          "name": "prop__current_state",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time the journey instance entered its current state.",
+          "history_tracked": false,
+          "name": "prop__state_entry_time",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether the journey instance has reached a terminal state.",
+          "history_tracked": false,
+          "name": "prop__complete",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BOOLEAN"
+        }
+      ],
+      "description": "One actor's traversal of one journey: current state, entry time, completion flag, and every role binding acquired along the way.",
+      "name": "records__journey_instance",
+      "record_kind": "journey_instance",
+      "rows": 8980
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor that initiated the match.",
+          "history_tracked": false,
+          "name": "prop__requester",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__requester",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor claimed as the counterpart.",
+          "history_tracked": false,
+          "name": "prop__counterpart",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__counterpart",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Discriminator identifying the matching configuration that produced this pairing.",
+          "history_tracked": false,
+          "name": "prop__match_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "An exclusive claim between two actors created by a match firing; active while claimed, deactivated on release.",
+      "name": "records__pairing",
+      "record_kind": "pairing",
+      "rows": 5443
+    }
+  ]
+}

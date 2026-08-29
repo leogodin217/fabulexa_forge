@@ -34,20 +34,20 @@
 #     exported table's own name (rider / driver / zone / user_session).
 #   - Per-table `rename:` puts reference columns on the <target_table>_id
 #     convention: match.requester -> rider_id and match.counterpart ->
-#     driver_id (verified: all 4,963 matches pair a rider requester with a
+#     driver_id (verified: all 5,443 matches pair a rider requester with a
 #     driver counterpart), zone refs -> zone_id / dest_zone_id / base_zone_id.
 #   - Per-source `rename:` keeps the `changes` payload keys in step.
 #
 #   SPLIT  actor -> rider + driver, two `state` tables over the same `kind: actor`
 #          (one shared wide records table, `actor_type` discriminator), each
-#          narrowed by its own `sub_types:`. Measured 2,533 riders and 2,048
-#          drivers, and `sub_type_columns` gives them 23 and 20 columns
+#          narrowed by its own `sub_types:`. Measured 2,411 riders and 2,451
+#          drivers, and `sub_type_columns` gives them 24 and 21 columns
 #          respectively — overlapping on identity, status, zone, loyalty_band and
 #          basic contact, but disjoint on everything that matters (the rider's
 #          account, payment card and home address; the driver's vehicle and
 #          licence plate).
 #   PLAIN  zone (this market's one entity sub-type), agent_journey (both
-#          lifecycles — measured 6,526 rider journeys and 2,048 driver journeys),
+#          lifecycles — measured 6,529 rider journeys and 2,451 driver journeys),
 #          and match — the rider<->driver pairing record. `match` is untracked, so
 #          it carries no `events` source. Its domain name comes straight from the
 #          atlas ("tied by an actor-to-actor match"); `pairing` is the simulator's
@@ -62,12 +62,11 @@
 #          `presentation_id` columns are dropped from the projections as a second
 #          integer spelling of the same identity.
 #   HYGIENE (realism QA) rider `propensity` and driver `strategy` — the
-#          generator's behavior classes — and the zone selection weights
-#          (origin_weight / dest_weight / base_weight, the generator's draw
-#          weights; measured origin_weight == base_weight on all 3 zones) are
-#          simulation machinery, not operational data, and stay out. Rider
+#          generator's behavior classes — and the zone selection weight
+#          (dest_weight, the generator's draw weight) are simulation
+#          machinery, not operational data, and stay out. Rider
 #          `home_place_subdivision` is dropped as measured equal to `home_state`
-#          on all 2,533 riders. `zone` now enumerates `columns:` for exactly this
+#          on all 2,411 riders. `zone` now enumerates `columns:` for exactly this
 #          reason (and to drop the constant single-value `entity_type`); its
 #          surge signals demand_pressure / supply_pressure stay — they are the
 #          operational state an ops database would genuinely hold.
@@ -84,15 +83,15 @@
 # deactivated_at, last_mutation_sim_time, rendering as created_at, active,
 # deactivated_at, updated_at. `agent_journey` enumerates too, to drop
 # `output_roles` and `bound_roles` (internal coupling bookkeeping, opaque, no
-# domain meaning). `zone` enumerates to drop the generator draw weights (see
+# domain meaning). `zone` enumerates to drop the generator draw weight (see
 # HYGIENE above); `match` keeps the full projection.
 #
 # A `temporal_class: slice_only` column is auto-omitted with a notice whatever
 # this config says — here agent_journey's state_entry_time and complete. The
 # export's `notice:` lines are the authoritative list.
 #
-# `deactivated_at` comes out largely empty, and that is faithful: measured, 2,045
-# of 2,048 drivers log off and are deactivated, while no rider and no zone ever
+# `deactivated_at` comes out largely empty, and that is faithful: measured, 2,440
+# of 2,451 drivers log off and are deactivated, while no rider and no zone ever
 # is — riders lapse out of the market by reaching a terminal journey state, not by
 # being retired as records.
 #
