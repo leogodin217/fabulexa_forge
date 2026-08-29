@@ -135,6 +135,34 @@ silently change its row set (record fold) or its ORDER-BY field tail
 (membership fold) and therefore `seq`. The effective column set is ordered by
 sidecar declaration, whichever selection form named it.
 
+**Identity is projected too.** A record selection's optional `identity` tuple
+governs which identity columns the published maps carry — the event `after`
+map and the `record_state` snapshot table, coherently, because both are
+presentations of the same selected population. `None` resolves to the full
+available set — `record_id`, plus `presentation_id` when the kind mints one —
+the seam's established absence convention (`None` = the full selectable set),
+resolved at open into `ResolvedRecordSelection.identity`
+([`selection.py`](../../src/fabulexa_forge/playback/selection.py)).
+`record_id` is required in the published set — it is the event key, the
+relation spine, and the seam's stated identity — so an empty `identity` is
+refused, never read as "none". The admissible surfaces are `record_id` and
+`presentation_id`: `record_index` is outside the tier-1 domain, because tier 1
+sits below the modes and composes no election relations, so offering a surface
+it cannot source would be an empty option — a caller wanting index identity
+uses tier 2, which inherits the modes' identity rendering. A selected property
+naming an identity surface is refused: identity is projected, never
+property-selected. The projection is applied above the composed relation —
+never threaded into the fold — so the event row set and `seq` are invariant
+under `identity` exactly as under `properties`, and the typed
+`PlaybackEvent.record_id` / `.presentation_id` fields are always populated
+regardless of it (an unread typed field costs nothing; removing one would
+conflate "no surrogate" with "suppressed"). Membership atom selections carry
+no projection: their tier-1 payload is the owner's `record_id` only, and no
+surrogate reaches them. The seam names the surfaces as string literals rather
+than importing the config's `KeySurface` — the layer-direction invariant
+(reader + derivations property helpers + stdlib only) is not spent on a shared
+type.
+
 A `properties` entry naming a **non-exempt** `slice_only` column is refused at
 open: its value at T is unknowable, and the contract forbids presenting a
 `slice_only` column as an as-of-T value. The sub-typed discriminator is
@@ -179,7 +207,10 @@ open emit (each pull runs over its own cursor on the caller's connection), so
 contend. Event content is exactly the shipped fold semantics — `c`/`u`/`d`
 per row-state-events, `join`/`leave` per membership-events
 ([`derivations.md`](derivations.md)); after-image keys are the column-order
-producers' names verbatim; every value is codec `VARCHAR` or `None`. `ts`
+producers' names verbatim, the record `after` map carrying one entry per
+published identity surface (the selection's `identity` — § The atom selection
+surface) in sidecar column order ahead of the selected `prop__<p>` entries;
+every value is codec `VARCHAR` or `None`. `ts`
 renders per the anchor exactly as streaming renders it — offset-bearing
 ISO-8601 with the same microsecond-truncation rule, or the raw
 `event_sim_time` int when no anchor resolves; never a naive local timestamp,
@@ -199,8 +230,11 @@ are always present and ordering always keys on them. **Column order is
 contract**: the composed fold's canonical relation verbatim (properties/fields
 in sidecar declaration order), then the seam-appended stamp
 (`sub_type` / `owner_sub_type`), then the `_ts` siblings in their raw columns'
-order. Presentation-property and identity columns beyond `presentation_id` /
-`record_id` appear in no tier-1 answer.
+order. A `record_state` table carries one identity column per published
+surface (the selection's `identity` — § The atom selection surface); an
+unpublished identity column is absent, the surviving columns keeping the
+canonical relation's order. Presentation-property and identity columns beyond
+`presentation_id` / `record_id` appear in no tier-1 answer.
 
 ### Shaped window (tier 2)
 
@@ -313,7 +347,20 @@ and record/replay stand on it). Totality is the sharpened form: every fold and
 every seam operation is a **total** function of structurally-conformant input —
 no inner join, filter, or cast may drop or error on a row a semantic defect
 made weird. A tier-2 `state` tracked value whose corrupted history text does
-not parse reconstructs `NULL` via `TRY_CAST` (a cast never errors). Behavioral
+not parse reconstructs `NULL` via `TRY_CAST` (a cast never errors). The same
+posture governs published identity: the seam runs no publication gate — the
+uniqueness guard is a data check permissive totality forbids (a `mutate_cells`
+defect on `presentation_id` must play at the layer built to play it, and the
+export's escape — export without election — does not exist where there is no
+election to drop), and the static union-safety gate would require tier 1 to
+reach up into the election, which the layer direction forbids
+([`key-election.md`](key-election.md) § Identity publication). A published
+surface at the seam is the column verbatim, defects included — on a corrupted
+tape the colliding surrogate is the deliverable the answer key scores against,
+which is also why the absent-`identity` default is the full available set: a
+default that suppressed the surrogate would hide the corrupter's own output
+from the environment built to teach from it. The seam shows what the tape
+holds; the caller narrows. Behavioral
 cases per injected defect are exercised in
 [`tests/playback/`](../../tests/playback/).
 
@@ -374,7 +421,11 @@ untouched.
 No config models — the seam is a Python library surface. All checks are
 open-time or ask-time business rules over plain typed values, each raising
 `PlaybackError`; the rule set (selection resolvability, uniqueness,
-slice-only refusal, bound validity) is enforced in
+slice-only refusal, bound validity, and the identity-projection rules — a
+given `identity` non-empty and duplicate-free, every member a tier-1 surface
+(`record_id` / `presentation_id`), `record_id` a member, `presentation_id`
+published only on a kind that mints one, and no selected property naming an
+identity surface) is enforced in
 [`head.py`](../../src/fabulexa_forge/playback/head.py) and
 [`shaped.py`](../../src/fabulexa_forge/playback/shaped.py). Tier-2 additionally
 runs the mode's own full config validation at open (passed through as
@@ -405,6 +456,14 @@ any id.
   full-export compile over a truncated tape makes as-of-T correctness a
   property of the data, not of per-class reassembly rules that would drift from
   the full-export path.
+- **Identity projection reaches the published maps, not the typed fields.**
+  Projection control exists where publishing costs something — where a row
+  leaves as an untyped map (the event `after` map, the `record_state` table)
+  for a consumer who did not declare a schema and would otherwise serialize a
+  second identity onward with no way to say otherwise. A typed field costs an
+  unread consumer nothing, so `PlaybackEvent.record_id` / `.presentation_id`
+  stay always-populated; projection governs the `after` map, never the typed
+  fields.
 
 ## Boundaries
 
@@ -415,6 +474,10 @@ any id.
 - **Named atom groups are deferred.** The seam speaks atoms; a named-group
   vocabulary resolves to a set of atoms before the seam sees it, so it can be
   added above the selection surface later without changing any seam contract.
+- **Tier 2 carries no identity grammar of its own.** Shaped playback compiles
+  a declared target shape through the modes and inherits their identity
+  rendering (the `keys` election, per-mode render rules); a second grammar at
+  that tier would duplicate the modes'.
 - **Re-seaming the shipped verbs is deferred.** `stream` and the incremental
   driver re-seam when next materially touched, with byte-identical output as
   the bar; the seam owns no verb today.
@@ -429,6 +492,7 @@ any id.
 | [`source.md`](source.md) · [`dimensional.md`](dimensional.md) | The modes tier 2 compiles; the `base_relations` compile parameter and the `last_mutation_sim_time` reserved-output-name posture |
 | [`incremental.md`](incremental.md) | The per-table-class window-membership contract tier-2 `window` promotes |
 | [`streaming.md`](streaming.md) | The canonical order and `seq` a single-content stream conforms to |
+| [`key-election.md`](key-election.md) | The identity-publication layer split (§ Identity publication) — why the seam projects published identity but never gates it |
 | [`slice-only.md`](slice-only.md) | The `slice_only` policy the seam inherits at selection and at open |
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` both tiers render wallclock through |
 | [`temporal-elections.md`](temporal-elections.md) | The election vocabulary tier 2 renders by reusing the modes' own compile and validation surfaces directly |

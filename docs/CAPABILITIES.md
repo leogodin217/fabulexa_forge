@@ -222,9 +222,14 @@ Each mode reads the same emit and writes a different target shape.
   `<f>_id` pair), renamable per stream with `rename`, while `kind_labels` maps engine kind
   → domain label wherever a kind name renders as a *value* (the envelope `kind` default,
   member-kind payload entries; identity fall-through for anything unmapped) and a
-  per-stream `kind_label` names the concept that feed represents. Identity columns are
-  never rename-addressable, and one naming authority feeds both the rendered rows and the
-  Debezium value schema, so the two cannot disagree. **Row selection:** `where` — the same
+  per-stream `kind_label` names the concept that feed represents. **Identity
+  projection:** a per-stream `identity` list declares which gated identity surfaces the
+  after-image publishes beside the elected message key (the elected surface alone by
+  default), every published surface running the election's gates; a published
+  surface's contract column name is a legal `rename` key, and the elected surface's
+  resolved key applies to the message key, the after-image entry, the Debezium `d`
+  before-image, and the value schema at once. One naming authority feeds the rendered
+  rows and the Debezium value schema, so they cannot disagree. **Row selection:** `where` — the same
   scalar-or-list predicate gated to `temporal_class: constant` payload properties, so a
   stream's event set is identical at every instant of the tape — on both stream shapes,
   plus owner `sub_types` on a membership stream, read through the shared fan-out-free
@@ -247,8 +252,9 @@ Each mode reads the same emit and writes a different target shape.
   prefix-stripped names with a structural-column collision check. Every output mode can
   name its payload columns: the dimensional grammar names each column outright, source
   and base carry per-table `rename`, and streaming carries per-stream `rename` over bare
-  after-image keys. Identity columns are reserved everywhere — a rename resolving onto one,
-  or onto another output key, is refused rather than silently collided.
+  after-image keys and published identity surfaces (keyed by contract column name).
+  Identity output keys are reserved under their resolved names — a rename colliding
+  with one, or with another output key, is refused rather than silently collided.
 - ◐ **Output transforms** — `derived` columns ship (ordinal, value-map, anchored
   timestamp, SCD window, elapsed, declared temporal parse, decimal precision,
   JSON leaf rounding); arbitrary per-table transforms beyond these are not. On
@@ -268,14 +274,17 @@ Each mode reads the same emit and writes a different target shape.
   explicitly when the emit carries no census. Source proposes one state table per records kind (combined,
   with the per-sub-type split alternative in comments), one junction table per
   membership table, an `events` stub covering every tracked kind
-  (lifecycle-only kinds and membership sources commented out), and the aligned
+  (lifecycle-only kinds and membership sources commented out), and the election-menu
   `keys` block — consuming no `record_roles`; the emitted config always parses
   and plans clean. Streaming proposes one live stream per population — per declared
   sub-type for a sub-typed kind (names verbatim, `properties` from the
   `sub_type_columns` partition), per kind for a flat kind — with the membership-events
   alternative fully commented, name-collision losers and topic-illegal names commented
-  out, and the self-gated `keys` block; the emitted config always parses and streams
-  clean, and a recordless emit is refused rather than proposed.
+  out, and the election-menu `keys` block; the emitted config always parses and streams
+  clean, and a recordless emit is refused rather than proposed. Every mode's `keys`
+  proposal is the one shared election menu — a uniform `record_index` active line
+  with each population's resolvable alternatives as comments, rendered by a single
+  renderer and gate-clean by construction.
 - ✓ **List-valued row predicates** *(dimensional, source, streaming)* — every predicate
   value in
   the dimensional grammar (`source.filter`, `source.where`, `source.value`, a membership
@@ -374,9 +383,14 @@ Each mode reads the same emit and writes a different target shape.
   makes the id-space value surface elective beside its
   always-on index keys; dimensional FKs inherit the destination dim's election
   (`fk.target_key` per-edge override, dim-key agreement check); streaming renders the
-  elected surface as the message key (one stream, one key surface); `init` proposes a
-  self-gated `keys` block. Absent the block, output keeps the `record_id` default.
-  Forge never mints — election selects among surfaces the emit carries. See
+  elected surface as the message key (one stream, one key surface) and lets a
+  per-stream `identity` list publish further gated surfaces in the after-image, every
+  published surface running the election's gates; `init` proposes the `keys` block as
+  a visible election menu — a uniform `record_index` active line plus per-population
+  commented alternatives, gate-clean by construction, with the config loaders
+  refusing duplicate YAML mapping keys so activating an alternative without removing
+  the active line is a named error. Absent the block, output keeps the `record_id`
+  default. Forge never mints — election selects among surfaces the emit carries. See
   [`architecture/key-election.md`](architecture/key-election.md).
 - ✓ **Companion artifacts** *(post-Stage 4; dimensional, source, base)* — every
   file-writing export invocation deposits a human-readable `<prefix>-readme.md`

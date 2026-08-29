@@ -498,6 +498,19 @@ gating are owned by [`declared-keys.md`](declared-keys.md).
 - **No CDC / change-log shape.** Base never emits an `op` / `changed_at` column or a
   version-per-change row; that shape is source's and streaming's. Base delivers the
   merged result, not the change log.
+- **The standalone surrogate is auto-projected — renameable, not droppable, and
+  ungated when unelected.** Base is the one publishing layer that auto-projects an
+  identity surface ([`key-election.md`](key-election.md) § Identity publication):
+  under a `record_id` or `record_index` election the standalone `presentation_id`
+  column ships whenever the kind carries one, and the grammar renames it but
+  cannot drop it. The distinction that carries this is base's alone: every table
+  always ships a complete, election-independent join surface — the `<kind>_key`
+  self key and per-edge `<p>_key`, re-derived from `record_index`, one shared
+  dense space per kind, union-safe by construction (§ Record-index key columns) —
+  so the surrogate sits beside a correct key as payload, where a stream's would
+  sit beside the message key looking equally key-like. Base's identity *slot* is
+  election-gated already; the known limit is that an author who finds the
+  standalone column misleading can rename it and nothing more.
 - **Not a playback consumer.** Base is a CLI file exporter; it does not call `state(T)`
   and does not use the compile-indirection (`base_relations`) wrapping. It reaches
   state-at directly by horizon.

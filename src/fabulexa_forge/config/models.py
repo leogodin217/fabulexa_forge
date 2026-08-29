@@ -1827,8 +1827,10 @@ class KindStream(StrictBaseModel):
     """Change-scope exclusion by bare property name; mutually exclusive with
     `only`."""
     rename: dict[str, str] | None = None
-    """Selected bare property name -> after-image output key. Keys are source
-    identities, never output keys. Identity entries are not addressable."""
+    """Selected bare property name -> after-image output key; additionally, a
+    published identity surface's contract column name -> that surface's wire
+    name (legality against the published set is a business rule). Keys are
+    source identities, never output keys."""
     kind_label: str | None = None
     """This stream's envelope `kind` value, verbatim, overriding the
     kind_labels / kind-name default. Non-empty when present. Feed
@@ -1911,10 +1913,11 @@ class MembershipStream(StrictBaseModel):
     owner-property name; entries AND-joined. Element fields are not
     predicate-addressable. Absent = every owner's intervals."""
     rename: dict[str, str] | None = None
-    """Selected bare element-field name -> after-image output key. A
+    """Selected bare element-field name -> after-image output key; additionally,
+    a published owner identity surface's contract column name -> that surface's
+    wire name (legality against the published set is a business rule). A
     reference field's entry renames its expanded `<f>_kind` / `<f>_id`
-    pair in place. The owner identity entry and the Debezium `event`
-    column are not addressable."""
+    pair in place. The Debezium `event` column is not addressable."""
     kind_label: str | None = None
     """This stream's envelope `kind` value (the owner-kind slot), verbatim.
     Non-empty when present."""

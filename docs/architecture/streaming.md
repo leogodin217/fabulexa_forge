@@ -65,11 +65,11 @@ format: jsonl {seq, op, ts, kind, key:{<elected>}, after}
 
 | Module | Owns |
 |---|---|
-| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `StreamConfig` (the `content` axis, the `streams` declaration list, and the cross-mode `keys` election block), the `StreamDeclaration` union — `KindStream` (name / kind / `sub_types` / `properties`) and `MembershipStream` (name / `MembershipRef` / `fields`), discriminated on which of `kind` / `membership` an entry carries so a shape-mixing declaration is unrepresentable — the optional `DebeziumConfig` (home of `table_identity`) / `DebeziumSourceIdentity` block, and the optional `KafkaConfig` connection block — the top-level streaming envelope and its parse-time validators |
+| [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `StreamConfig` (the `content` axis, the `streams` declaration list, and the cross-mode `keys` election block), the `StreamDeclaration` union — `KindStream` (name / kind / `sub_types` / `identity` / `properties`) and `MembershipStream` (name / `MembershipRef` / `identity` / `fields`), discriminated on which of `kind` / `membership` an entry carries so a shape-mixing declaration is unrepresentable — the optional `DebeziumConfig` (home of `table_identity`) / `DebeziumSourceIdentity` block, and the optional `KafkaConfig` connection block — the top-level streaming envelope and its parse-time validators |
 | [`config/loader.py`](../../src/fabulexa_forge/config/loader.py) | `load_stream_config` — YAML → validated `StreamConfig`, hard-bound (no mode dispatch) |
 | [`exporters/streaming/types.py`](../../src/fabulexa_forge/exporters/streaming/types.py) | `StreamEvent` (one format-agnostic change event — `op` admits `c`/`u`/`d` and `join`/`leave`; carries `topic`, `route_table`, and the rendered `key_column` / `key_value` pair) and `StreamOutcome` (run counts) |
-| [`exporters/streaming/engine.py`](../../src/fabulexa_forge/exporters/streaming/engine.py) | `iter_stream_events` — the up-front business-rule pass (per-stream resolvability, the vocabulary / naming / selection / change-scope gates, the election gates), per-stream fold materialization (kind-shaped: change scope = the stream's declared audited set, projection = the declared `properties`; membership-shaped: the declared table and `fields`), post-fold row scoping (the `sub_types` discriminator index and the resolved satisfying-record set), the cross-stream k-way merge, `seq` stamping, per-event `topic` / `route_table` stamping, elected-key rendering, output-key assembly, and Python-side `ts` rendering; `build_topic_set` — the run's topic set (the declared names, declaration order) |
-| [`exporters/streaming/presentation.py`](../../src/fabulexa_forge/exporters/streaming/presentation.py) | The per-stream naming and vocabulary resolution — `resolve_stream_output_columns` / `resolve_membership_output_columns` (the single naming authority: the ordered `(fold column, output key)` pairs both the after-image assembly and the Debezium value-schema build read), `resolve_stream_kind_vocabulary` (the run's kind vocabulary, validated and returned as the declared value mapping), `resolve_stream_envelope_kind`, and `apply_kind_vocabulary` (the per-value identity-fall-through map). Pure config + sidecar; imports neither the engine nor the drivers |
+| [`exporters/streaming/engine.py`](../../src/fabulexa_forge/exporters/streaming/engine.py) | `iter_stream_events` — the up-front business-rule pass (per-stream resolvability, the vocabulary / naming / selection / change-scope gates, the election gates), per-stream fold materialization (kind-shaped: change scope = the stream's declared audited set, projection = the declared `properties`; membership-shaped: the declared table and `fields`), post-fold row scoping (the `sub_types` discriminator index and the resolved satisfying-record set), the cross-stream k-way merge, `seq` stamping, per-event `topic` / `route_table` stamping, identity-projection resolution and gating (`resolve_identity_projection` / `resolve_stream_identities` — the per-stream gated published-surface set), elected-key rendering, output-key assembly, and Python-side `ts` rendering; `build_topic_set` — the run's topic set (the declared names, declaration order) |
+| [`exporters/streaming/presentation.py`](../../src/fabulexa_forge/exporters/streaming/presentation.py) | The per-stream naming and vocabulary resolution — `IdentityProjection` / `OutputEntry` (the runtime types), `resolve_identity_output_key` (the single producer of every published identity surface's wire name), `resolve_stream_output_columns` / `resolve_membership_output_columns` (the single naming authority: the ordered `OutputEntry` list — identity entries and payload entries with their resolved output keys — both the after-image assembly and the Debezium value-schema build read), `resolve_stream_kind_vocabulary` (the run's kind vocabulary, validated and returned as the declared value mapping), `resolve_stream_envelope_kind`, and `apply_kind_vocabulary` (the per-value identity-fall-through map). Pure config + sidecar; imports neither the engine nor the drivers |
 | [`exporters/streaming/selection.py`](../../src/fabulexa_forge/exporters/streaming/selection.py) | `resolve_stream_selection` — a stream's satisfying record set (owner set, membership-shaped) from its declared `where` / owner `sub_types`: the constant-column gate walk and plan-time literal casts, then the shared parent-lookup relation ([`selection-spine.md`](selection-spine.md)) and the per-element out-of-domain notice |
 | [`exporters/streaming/routing.py`](../../src/fabulexa_forge/exporters/streaming/routing.py) | The Layer-A leaf derivation — `route_attributes` / `membership_route_attributes` / `resolve_subtype_index` (the per-event `route_table`, consumed by the Debezium `source_table` masquerade and the discriminator index) — and the election-support sidecar reads (`kind_reference_targets`, `membership_reference_fields`) |
 | [`exporters/streaming/encoding.py`](../../src/fabulexa_forge/exporters/streaming/encoding.py) | `encode_pinned` — the single byte-stable JSON encoder shared by every sink (stdout / file / kafka), so a given `(event, fmt, anchor, schema)` yields byte-identical message bodies across all three |
@@ -216,8 +216,8 @@ stream is an independent feed, exactly as its real-world counterpart would be.
 |---|---|
 | `state-changes` stream | One row-state-events fold over the kind, `u` rows at the change points of the stream's change scope; rows whose discriminator is outside the stream's `sub_types` scope are dropped before the merge (post-fold, via the `resolve_subtype_index` discriminator index), as are rows outside its resolved satisfying record set (§ Row selection) |
 | `membership-events` stream | One membership-events fold over the declared table and `fields`; intervals whose owner is outside the resolved satisfying owner set are dropped before the merge |
-| After-image column set | Per stream: the stream's declared `properties` resolved in the kind's column order — the single column-order producer (`resolve_stream_columns`) is consulted per stream (it auto-includes `presentation_id` when the kind carries a surrogate; § Message key for its absorption under a `presentation_id` election). Each column's **output key** is resolved beside it by the single naming authority (§ Output names and `rename`), so the Debezium value schema and the rendered rows are the same list, under the same names, by construction |
-| After-image identity | The record's exported identity, rendered in its population's elected surface (§ Message key); identity is never read from an after-image — it rides the fold's `record_id` and renders through the identity join |
+| After-image column set | Per stream: the published identity surfaces (§ Identity projection), then the stream's declared `properties` resolved in the kind's column order — the single column-order producer (`resolve_stream_columns`) is consulted per stream. The fold's own column list is complete by definition (it always carries `record_id`, and the kind's `presentation_id` where minted — [`key-election.md`](key-election.md) § Identity publication); the publication projection applies above the fold, never inside it. Each entry's **output key** is resolved beside it by the single naming authority (§ Output names and `rename`), so the Debezium value schema and the rendered rows are the same list, under the same names, by construction |
+| After-image identity | One entry per published identity surface (§ Identity projection), in the kind's sidecar column order, ahead of the payload entries. Identity is never read from an after-image — every published non-`record_id` surface rides the fold's `record_id` and renders through its identity join (§ Message key) |
 
 The payload-independence of the event set is realized **in the shared fold, not by
 engine-side trimming**. The row-state-events fold takes two independently-scoped property
@@ -250,6 +250,95 @@ text is identical to the table modes' render of the same value
 ([`value-rendering-elections.md`](value-rendering-elections.md) § Streaming
 attach). The temporal elections do not attach (§ Boundaries).
 
+### Identity projection
+
+A stream declares which identity surfaces its rows carry: the optional per-stream
+`identity` list, on both stream shapes. Identity is **projected, never
+property-selected** — `properties` and `fields` are payload, and the three surface
+names sit outside the payload namespace entirely (below). Absent `identity`, the
+stream publishes its elected surface alone: a stream declares what ships
+(`properties` is required with no default; an absent `rename` means bare keys), so
+the absent path publishes the minimum a topic cannot do without — its key.
+
+| Shape | Declaration | Admissible surfaces | Absent |
+|---|---|---|---|
+| Kind-shaped | `identity` | `record_id`, `record_index`, `presentation_id` | The elected surface alone |
+| Membership-shaped | `identity` (over the **owner**) | as above, resolved against the owner's election | The owner's elected surface alone |
+
+The declared set resolves against the stream's gated election into an ordered
+**published set** (`IdentityProjection`, resolved and gated by
+`resolve_identity_projection` — recomputed as the same pure function by the engine's
+eager pass and the driver's Debezium schema build, so the two cannot disagree). The
+published set must contain the elected surface — a topic must publish its own key
+(`StreamIdentityMissingElected`).
+
+**Order is sourced, never invented.** The published set renders in the kind's
+`records__<kind>` sidecar column order restricted to the published surfaces —
+`record_id`, then `presentation_id`, then `record_index`, the contract's own
+positions. A declaration's list order never reaches output; the list is a set.
+
+**Values come through the election relations.** Every published non-`record_id`
+surface renders through key election's identity join relation for that surface,
+keyed on the fold's `record_id` and composed at the end-of-tape entry point — the
+record-index derivation for `record_index`, the presentation-key derivation for
+`presentation_id` — exactly as the elected surface renders. A published surface is
+never read from the fold's after-image and never from a `ref_index__` column, the
+election's standing rule. `record_id` is the fold's own column verbatim and
+composes no relation.
+
+**Every published surface runs the election's gates**, not only the elected one —
+a published identity column cannot reach a row unexamined. This is a widening of
+the gate population, not a new algebra ([`key-election.md`](key-election.md)
+§ Identity publication):
+
+| Gate | Ranges over | On violation |
+|---|---|---|
+| `presentation_id` declared | Each population the stream spans (kind-shaped) or addresses as owner (membership-shaped), when `presentation_id` is published | `ElectionPresentationUndeclared`, naming the stream and the uncovered population |
+| Identity union safety | The spanned/addressed populations' key spaces for each published surface, pairwise | `ElectionUnionUnsafe`, naming the stream, the surface, and the unsafe pair |
+| Published-key uniqueness | Render time, per composed identity relation: `rows = DISTINCT record_id = DISTINCT value`, value non-NULL | `ElectedKeyDuplicate`, naming the stream and the surface |
+
+Two consequences worth naming. Publishing `presentation_id` requires the registry
+to declare every spanned population — the claim-consuming-path posture the
+election and `declare_keys` share; the escape is not publishing it, one line. And
+`record_index` is publishable on any population — one shared space per kind,
+union-safe with itself by the contract's own verdict. `ElectionMixedIdentity`
+stays about the *election* alone: a published non-elected surface is one
+author-named surface applied to every spanned population, so no mixing is
+expressible. The uniqueness guard ranges over surfaces a population did not
+elect, so a violation on a published non-elected surface names the **surface**,
+not the election.
+
+**Identity surfaces are not properties.** One rule replaces what a payload
+reclassification would need as a set of exceptions:
+
+| Condition | Result |
+|---|---|
+| `record_id`, `record_index`, or `presentation_id` in a stream's `properties` | `StreamPropertyNotAddressable` — identity is projected through `identity`, not selected through `properties` |
+| A membership stream's `fields` naming `presentation_id` | `MembershipFieldResolvable` — a membership stream's payload is element fields |
+| `presentation_id` published on a kind that mints no surrogate | `StreamIdentityUnavailable` |
+
+The rule claims the three bare names out of the payload namespace deliberately: a
+producer payload property that shares one — the contract does not forbid a
+property named `record_index`, so `prop__record_index` can exist — is
+unaddressable on a stream, full stop. That is source's posture
+(`SourceColumnNotAddressable`); on the wire an identity name must mean identity,
+and a payload column borrowing one would be a join trap.
+
+Because an identity surface never enters the property namespace, the remaining
+author surfaces need no carve-out. None widens; each already resolves its keys
+against the payload namespace:
+
+| Surface | Why an identity surface stays outside |
+|---|---|
+| `properties` / `fields` slice-only refusal | Its keys resolve to `prop__<p>` / `elem__<f>` columns; identity columns carry no `temporal_class` (the contract omits it on all three), so the question is not askable of them — and, with identity out of the property namespace, is never asked |
+| `only` / `ignore` change scope | Genesis-minted or creation-constant, never re-minted, never in `history` — not in any kind's audited set. Naming one is `StreamChangeScopeUnresolvable` |
+| `where` predicates | Keyed on bare payload-property names of the subject kind |
+| `render` value elections | Keyed on the stream's declared `properties` / `fields`; an identity surface fails as a non-member (`RenderKeyResolves`, not a type mismatch) |
+
+A membership stream's after-image carries the published **owner** identity
+surfaces (in the owner kind's sidecar column order, after the leading Debezium
+`event` column where that format applies), then the selected element fields.
+
 ### Output names and `rename`
 
 Every after-image column resolves one **output key** per stream — the key it carries on
@@ -261,34 +350,56 @@ reader plumbing and do not reach the wire.
 | Kind-stream property `prop__<p>` | `<p>` | `<p>: <target>` → `<target>` |
 | Membership scalar element field `elem__<f>` | `<f>` | `<f>: <target>` → `<target>` |
 | Membership reference field `member__<f>__kind` / `member__<f>__id` | `<f>_kind` / `<f>_id` — the event log's `changes` pair convention | `<f>: <target>` → `<target>_kind` / `<target>_id`, renamed in place as a pair |
-| Identity entry (elected surface), auto-included `presentation_id`, membership owner identity entry, Debezium membership `event` | Contract name, verbatim | Not addressable — a `rename` key naming one names no declared property or field and is unresolvable |
+| A published identity surface (§ Identity projection), the membership owner identity entries included | The surface's contract column name | `<surface>: <target>` → `<target>` — the surface's contract column name is a legal `rename` key exactly when the stream publishes it |
+| Debezium membership `event` | `event`, fixed | Not addressable |
 
-The grammar is source's `rename` grammar, and its rules follow from keys being *source*
-identities:
+The grammar is source's `rename` grammar — keys are *source* identities, never
+output keys — with source's identity-column handle: a state table renames its
+identity column by the elected surface's contract column name, and a stream
+renames a published surface the same way.
 
 | Condition | Result |
 |---|---|
-| `rename` key not in the stream's `properties` / `fields` | Refused — a key must name a selected property or field |
+| No `rename`, or no entry keyed on a published surface | Each published surface ships under its contract column name |
+| `rename` key not in the stream's `properties` / `fields` and not a published surface's contract column name | Refused (`StreamRenameUnresolvable`) — when the key is an *unpublished* surface name the message names the stream's published set; a plain property-name typo does not advertise identity surfaces |
 | Two output keys collide (two targets; a target against an unrenamed bare default; a renamed pair member against anything) | Refused — never a silent collision |
-| An output key equals a reserved name on that stream — the identity entry's contract column, `presentation_id` when the kind carries one and no election absorbs it, or `event` on a membership stream | Refused. `event` is reserved on a membership stream under **both** formats: a config never knows its format, so one eager rule covers both (the topic-name-rule posture) |
+| An output key equals a reserved name on that stream — each published identity surface's **resolved** output key, or `event` on a membership stream | Refused (`StreamOutputNameCollision`). The reservation tracks what actually publishes, under its resolved name, so a rename moves the reservation with it. `event` is reserved on a membership stream under **both** formats: a config never knows its format, so one eager rule covers both (the topic-name-rule posture) |
 | Rename present, after-image order | The single column-order producer's order — rename relabels, never reorders |
 | `render:` map keys | Bare source identities — rename does not move election keys |
+
+Two consequences follow from the reservation tracking what publishes.
+`rename: {record_index: status}` on a stream that publishes `record_index` and
+also selects a `status` property is a collision — the identity moved onto the
+payload's name. And `rename: {status: record_index}` is legal on a stream that
+does not publish `record_index`, and a collision on one that does: a contract
+column name is free for payload use exactly when no identity surface claims it.
+
+The **elected** surface's resolved key applies to **all four** of its sites at
+once — the message key map entry, the after-image identity entry, the Debezium
+key-only `d` before-image entry, and the Debezium value-schema field — one name,
+four sites, one producer (`resolve_identity_output_key`), so key and payload can
+never disagree. A published non-elected surface appears in the after-image and
+the value schema only; it is never a message key. Membership streams resolve
+owner identity keys by the same rule, reading the owner's election and the
+stream's owner projection.
 
 Output keys are produced by **one resolver per stream shape**
 ([`presentation.py`](../../src/fabulexa_forge/exporters/streaming/presentation.py)) — the
 single-producer discipline extended from column order to column naming. The engine's
 after-image assembly and the Debezium value-schema build read the same ordered
-`(fold column, output key)` list, so the declared schema and the rendered rows cannot
-diverge under any rename. The format renderers are not consumers: they write the assembled
-after-image verbatim. The schema builder takes an ordered column-name list and knows
-nothing of naming — its caller supplies the resolver's output keys, after the leading
-membership `event`.
+`OutputEntry` list — identity entries (a surface rendered through its election
+relation, or `record_id` verbatim) and payload entries (a fold column read
+verbatim), each with its resolved output key — so the declared schema and the
+rendered rows cannot diverge under any rename. The format renderers are not
+consumers: they write the assembled after-image verbatim. The schema builder takes
+an ordered column-name list and knows nothing of naming — its caller supplies the
+resolver's output keys, after the leading membership `event`.
 
-The resolver receives the stream's **election-resolved identity output key** — the elected
-surface's contract column name, absorption already applied by the caller — so the
-reserved-name set it enforces is the stream's actual identity surface rather than a guess.
-Naming applies where after-image maps are assembled, never in SQL: the fold's own column
-names are the base-derived ones throughout.
+The resolver takes the stream's **gated identity projection** rather than a
+pre-resolved key, because the published set is what decides which rename keys are
+legal and which names are reserved. Naming applies where after-image maps are
+assembled, never in SQL: the fold's own column names are the base-derived ones
+throughout.
 
 ### Kind vocabulary
 
@@ -511,14 +622,16 @@ held constant; the cross-family interleave lives only at the seam.
 and defaults of [`key-election.md`](key-election.md): per population, elect `record_id`
 (the default), `record_index`, or `presentation_id`. Streaming reuses that
 machinery wholesale — the resolution gates, the union-safety algebra, the identity join
-relations, and the render-time uniqueness guard — and adds only its own combination
-gate (one stream, one key surface — § Validation Rules) and render sites
+relations, and the render-time uniqueness guard — and adds its own combination
+gate (one stream, one key surface — § Validation Rules), the identity projection
+that widens the gated population to every published surface (§ Identity
+projection), and its render sites
 ([`key-election.md`](key-election.md) § Rendering: streaming):
 
 | Render site | Rendering |
 |---|---|
-| Message key (every op, including the `d` tombstone) | The record's elected surface: the Kafka key and the `key: {…}` map (one entry, keyed by the surface's contract column name — `record_id` / `record_index` / `presentation_id`), never schema-wrapped (the value-only stream emits no key message). The Debezium `d` key-only before-image carries the same one entry. For `membership-events`, the **owner's** elected surface |
-| After-image identity (`c`/`u` rows; the membership `after`'s owner entry) | The elected surface, via the identity join at the fold's `record_id`, keyed by the surface's contract column name. A state-changes `d` keeps `after: null` — its identity lives in the message key and the Debezium key-only before-image, both elected-surface-rendered. Under a `presentation_id` election the standalone `presentation_id` payload column is absorbed (it *is* the identity — emitting both would duplicate a column); under `record_id` / `record_index` it ships verbatim whenever the kind carries one (auto-included by the column-order producer — it is never property-selectable) |
+| Message key (every op, including the `d` tombstone) | The record's elected surface: the Kafka key and the `key: {…}` map (one entry, keyed by the elected surface's **resolved output key** — its contract column name, or its `rename` target — § Output names and `rename`), never schema-wrapped (the value-only stream emits no key message). The Debezium `d` key-only before-image carries the same one entry under the same key. For `membership-events`, the **owner's** elected surface. The key stays single: publishing several identity surfaces widens the after-image, never the key |
+| After-image identity (`c`/`u` rows; the membership `after`'s owner entries) | One entry per published surface (§ Identity projection), each via its identity join at the fold's `record_id` (`record_id` itself verbatim), each under its resolved output key, in sidecar column order ahead of the payload entries. A state-changes `d` keeps `after: null` — its identity lives in the message key and the Debezium key-only before-image, both elected-surface-rendered. Under a `presentation_id` election the surface publishes once, as identity; under any other election `presentation_id` ships only when the stream's `identity` declares it |
 | Reference-valued `prop__<p>` entries in the after-image | The **target's** elected surface, translated through the target's identity join — referential integrity is non-negotiable: a consumer must be able to join any stream against any other elected output on equal values |
 | Membership `member__<f>` reference fields | The member row's kind's elected surface (the `__kind` component remains the disambiguator, and its *value* renders through the kind vocabulary — § Kind vocabulary), the junction-member analog. The pair ships under its resolved output keys, `<f>_kind` / `<f>_id` by default |
 
@@ -528,10 +641,10 @@ entries, membership `member__<f>` fields — codec `VARCHAR` (`str`) or `null`, 
 as every after-image value ships. `record_index` renders digit-form, `presentation_id`
 the codec rendering of its sidecar-declared value; no site emits a typed JSON number,
 so serialization stays total and the byte-determinism invariant needs no extra case.
-**The membership owner entry keys by election:** in both formats' membership `after`
-(JSONL, and Debezium's `{event, …}` payload) the owner-identity entry is keyed by the
-owner's elected surface's contract column name; the element-field format-parity
-invariant is unaffected.
+**The membership owner entries key by election:** in both formats' membership `after`
+(JSONL, and Debezium's `{event, …}` payload) the owner-identity entries are the
+published owner surfaces under their resolved output keys; the element-field
+format-parity invariant is unaffected.
 
 Contract consequences, all inherited from the cross-mode election surface:
 
@@ -558,11 +671,13 @@ Contract consequences, all inherited from the cross-mode election surface:
   (`record_index` by construction; `presentation_id` genesis-minted, never re-minted),
   so a record's `c`/`u`/`d` events keep one key for its whole life and the `d` keys the
   tombstone — guaranteed by the election gates.
-- **The uniqueness guard runs.** Every composed identity relation asserts
-  `rows = DISTINCT record_id = DISTINCT elected value`, elected value non-NULL, over
-  the population set drawn through it (`ElectedKeyDuplicate` on violation). Streaming
-  composes every relation at the end-of-tape entry point: a record's creation precedes
-  its every event, the same argument that fixes the source event log's horizon.
+- **The uniqueness guard runs — over every published surface.** Every composed
+  identity relation, elected or published through `identity`, asserts
+  `rows = DISTINCT record_id = DISTINCT value`, value non-NULL, over the population
+  set drawn through it (`ElectedKeyDuplicate` on violation, naming the surface).
+  Streaming composes every relation at the end-of-tape entry point: a record's
+  creation precedes its every event, the same argument that fixes the source event
+  log's horizon.
 - **Ordering is untouched.** The canonical order and merge key still read the fold's
   `record_id`; the election renders identity, it does not re-sort.
 
@@ -672,12 +787,12 @@ difference; every other field carries its usual meaning. Per membership event:
   in the payload and the topic, not in `kind`.
 - `record_id` is the **owner `record_id`**; the message key is the owner's elected
   surface (§ Message key), which equals `record_id` under the default.
-- `presentation_id` is `None` (memberships carry no surrogate).
 - `route_table` is `<owner_kind>__<property>` (§ Topics, empty streams, and `route_table`).
-- `after` is the owner's identity entry (keyed by the owner's elected surface's contract
-  column name) plus one entry per selected element-schema field under its resolved output
-  key (§ Output names and `rename`), each value codec `VARCHAR` (`str`) or `null` —
-  non-null on both `join` and `leave`.
+- `after` is the published owner identity entries (§ Identity projection — the
+  owner's elected surface alone absent an `identity` declaration, each under its
+  resolved output key) plus one entry per selected element-schema field under its
+  resolved output key (§ Output names and `rename`), each value codec `VARCHAR`
+  (`str`) or `null` — non-null on both `join` and `leave`.
 
 **Both formats render a membership event.** `render_jsonl_object` writes `op` / `kind` /
 the elected key map / `after` verbatim — the domain op sits at the top level and `after`
@@ -694,7 +809,7 @@ transparent-JSONL / masquerade-Debezium split.
 `render_jsonl_object` shapes each event as `{seq, op, ts, kind, key: {…}, after}`,
 keys inserted in exactly that serialized order (the encoder does not sort). `kind` is the
 stream's resolved envelope value (§ Kind vocabulary). The key map is the one-entry
-elected-surface map `{<elected surface's contract column>: <codec value>}` —
+elected-surface map `{<elected surface's resolved output key>: <codec value>}` —
 `{record_id: …}` under the default. `after` is the reconstructed full-row map, keyed by
 the stream's resolved output keys (§ Output names and `rename`) — every value codec
 `VARCHAR` (`str`) or `null` — on `c`/`u`, and `null` on `d`.
@@ -763,10 +878,11 @@ resolving to `event` is refused at validation time, under both formats (§ Outpu
 `rename`).
 
 After the leading `event` column the after-image is the membership after-image verbatim —
-the owner identity entry (keyed by the owner's elected surface's contract column name),
-then one column per selected element-schema field in `resolve_membership_columns`
-declaration order, each under its resolved output key (a scalar `f` → `<f>`; a reference
-`f` → the `<f>_kind` / `<f>_id` pair, both null or both non-null). With empty `fields` it is
+the published owner identity entries (each under its resolved output key, in the
+owner kind's sidecar column order), then one column per selected element-schema
+field in `resolve_membership_columns` declaration order, each under its resolved
+output key (a scalar `f` → `<f>`; a reference `f` → the `<f>_kind` / `<f>_id`
+pair, both null or both non-null). With empty `fields` it is
 `{event, <owner identity>}` — owner identity only. The element-field portion equals the
 JSONL `after` byte-for-byte; the `event` column is the Debezium home of the op JSONL
 carries at its top level. The full after-image order — `(event, <owner identity>,
@@ -786,9 +902,9 @@ struct is optional.
 **The value envelope.** When schemas are disabled the message *is* the `payload`
 envelope; when enabled it is `{ "schema": <value schema>, "payload": <envelope> }`. The
 envelope carries `before`, `after`, `source`, `op`, `ts_ms`, `transaction`. The
-after-image (the identity entry, `presentation_id` when the kind carries one and no
-`presentation_id` election absorbs it, one entry per selected property under its resolved
-output key) is codec `VARCHAR` (`str`) or `null`, the same map the JSONL `after` carries. The `source` block
+after-image (one entry per published identity surface under its resolved output
+key, then one entry per selected property under its resolved output key) is codec
+`VARCHAR` (`str`) or `null`, the same map the JSONL `after` carries. The `source` block
 is the author-supplied identity plus the derived `ts_ms` / `lsn` / `sequence` /
 `snapshot` / `txId` / `table`: `lsn` is `StreamEvent.seq`, `sequence` is
 `"[null,\"<seq>\"]"` (mimicking Postgres `[last_commit, current]`), `snapshot` is
@@ -848,8 +964,9 @@ reimplementation:
 - `source`: `version`, `connector`, `name`, `ts_ms`, `snapshot`, `db`, `sequence`,
   `schema`, `table`, `txId`, `lsn`.
 - `before` / `after` maps and the schema's `before`/`after` field lists: the after-image
-  column order (`resolve_stream_columns`) under the resolved output keys — the identity
-  entry, `presentation_id?`, then the projected properties in sidecar order.
+  column order under the resolved output keys — the published identity surfaces in
+  sidecar column order, then the projected properties in sidecar order
+  (`resolve_stream_columns`).
 
 The per-field Connect types and optionality follow `_SOURCE_FIELDS` and
 `build_debezium_value_schema`; `source.ts_ms` is non-optional (always present) while
@@ -902,7 +1019,7 @@ path and the mixer.
 | Field | Value |
 |---|---|
 | topic | `event.topic` — the declaring stream's name. Kafka does not preserve cross-topic order; the global order lives in `seq` / `source.lsn`, exactly as for one-file-per-topic. |
-| key | the pinned-encoded one-entry elected key map (UTF-8, no newline), on every op including `d`. The key is **never** schema-wrapped, even under `schemas_enable`; one key space per topic by the one-stream-one-key-surface gate. |
+| key | the pinned-encoded one-entry elected key map (UTF-8, no newline), on every op including `d`. The key is **never** schema-wrapped, even under `schemas_enable`; one key space per topic by the one-stream-one-key-surface gate. The entry name is the elected surface's resolved output key, so the key bytes are part of what an identity `rename` changes — **value**-identical under rename, not byte-identical; one topic still carries exactly one identity space. |
 | value | `render_value(event)` — the JSONL object or Debezium value message, pinned-encoded without the trailing newline. |
 | record timestamp | `rebased_epoch_ms(event.event_sim_time, anchor)` — the rebased event instant in epoch-milliseconds (equal to the Debezium `source.ts_ms`), never broker append time. |
 | partition | each topic has exactly **one** partition, so produce-order equals `seq`-order on the partition. |
@@ -981,12 +1098,12 @@ parse.
 | A population with no tracked property | Its stream proposed **live**, headed by a comment noting the feed is lifecycle-only (`c`/`d`); deleting it opts out |
 | Two proposals resolve one name (e.g. two kinds sharing a sub-type value, or a sub-type value equal to a flat kind's name) | The later proposal (sidecar order) emitted commented out with a comment naming the collision — the emitted config always parses and streams clean, the self-gating posture. The rule spans both content blocks: membership auto-names collide too (`<K>_<p>` is underscore-ambiguous — kind `a_b` × property `c` and kind `a` × property `b_c` both derive `a_b_c`), and inside the fully-commented membership alternative the loser is excluded from the uncommentable body and carried as a collision comment, so uncommenting the block wholesale yields a config that parses and streams clean |
 | A proposal whose sidecar-derived name fails the topic-name rule (only a sub-type value can — kind names and membership `<K>_<p>` names are table-name segments, identifier-safe by construction) | Emitted commented out with a comment naming the rule and the offending value — the collision-loser posture; the author renames and uncomments. `init` never sanitizes (a rewritten name would be an invented identity) |
-| Key election | The `keys` block per the key-election `init` contract ([`key-election.md`](key-election.md) § `init` proposals): `presentation_id` for registry-declared populations, `record_index` otherwise, run through streaming's own gates (per-stream uniformity over the proposed single-population streams, edge union safety over the proposed after-images' reference columns and membership member fields); every kind implicated in a failure degrades to uniform `record_index` with a comment naming the gate |
+| Key election | The `keys` block per the key-election `init` contract ([`key-election.md`](key-election.md) § `init` proposals): the shared election menu, spliced verbatim — a uniform `record_index` active election plus per-population commented alternatives. The uniform proposal is gate-clean by construction (per-stream uniformity is trivially satisfied over the proposed single-population streams; `record_index` edge spaces are self-union-safe), so the emitted config parses and streams clean with no repair pass |
 | Each `membership__<K>__<p>` table | One membership stream in the fully-commented `content: membership-events` alternative block: `name: <K>_<p>`, `membership: {kind: <K>, property: <p>}`, `fields` = every element-schema field (bare names) |
 | No records kind | Error (`StreamInitNothingToStream`) — a candidate config that cannot stream is not proposed. A membership table cannot exist without its owner's records table (an interval requires an owner record within the slice — the contract's § Membership-category and § Records-category existence rules), so a recordless emit has nothing to stream and no membership-only branch exists |
 | Non-exempt `slice_only` columns | Never proposed; one `slice-only-column-omitted` notice each through the caller-supplied `NoticeSink` |
 | `rebase` / `debezium` / `clock` / `kafka` blocks | Never proposed — delivery and environment knobs, not emit-derived (no invented identities or endpoints); one trailing comment names them and where they would go |
-| `rename` / `kind_label` / `kind_labels` / `where` / `only` / `ignore` | Never proposed — a rename target, a label, a predicate, and a change scope are each author intent with no sidecar-derived value, and proposing one would be invention (Principle #7). They join the same trailing comment naming the never-proposed surfaces and where they would go |
+| `identity` / `rename` / `kind_label` / `kind_labels` / `where` / `only` / `ignore` | Never proposed — an identity projection, a rename target, a label, a predicate, and a change scope are each author intent with no sidecar-derived value, and proposing one would be invention (Principle #7). They join the same trailing comment naming the never-proposed surfaces and where they would go. The consequence for `identity` is the intended default: a generated streaming config publishes each topic's elected surface alone |
 
 `StreamInitNothingToStream` is a direct child of `ExporterError` (the dimensional
 `InitRequiresRecordRoles` posture: `init` runs no engine and reads no config, so its
@@ -1000,10 +1117,13 @@ message with a non-zero exit.
    Byte-identity is the contract of the pinned encoder — shared by the JSONL and
    Debezium writers — not incidental.
 2. **Faithful reshaping.** Every emitted value is a base value, a deterministic
-   recoding of base values (`op` / `event_class` / `seq` / `ts` / an elected identity
+   recoding of base values (`op` / `event_class` / `seq` / `ts` / a published identity
    surface), or `null` with one declared meaning. Nothing is fabricated. Duplication
    across overlapping declared streams is declared intent, each copy tracing to the
-   same base values.
+   same base values. Projection never invents and never hides a value: an identity
+   surface's entry ships iff the stream publishes it — an unpublished surface is
+   absent, not null-filled; a published one is the election relation's value
+   verbatim under the codec.
 3. **Temporal honesty.** No value on an event derives from base state later than the
    event's `sim_time`, except selected type-1 properties (carried at current value on
    every event by their current-value-only contract). Elected identity surfaces are
@@ -1019,17 +1139,33 @@ message with a non-zero exit.
    `render`. Two streams over one population with equal row and change scope carry
    identical event sets, whatever they project or however they name it.
 6. **Presentation invariance.** For a fixed declaration, adding or changing `rename` /
-   `kind_labels` / `kind_label` changes payload key strings and `kind` / member-kind
-   value strings only; event count, order, `seq`, `ts`, message keys, and topic
-   assignment are byte-identical. A run declaring no vocabulary renders byte-identically
-   to one where the vocabulary surfaces did not exist.
-7. **One naming authority.** Every after-image output key on a stream is produced by
-   that stream's one resolver, which the after-image assembly and the Debezium
-   value-schema build both read — so no rename can make the declared schema and the
-   rendered rows disagree, and no output key silently collides.
-8. **One stream, one key surface.** Every population a stream's keys draw from elects
-   one surface, so a topic carries one key space; a record's events keep one key for
-   its whole life (creation-constant surfaces) and the `d` keys the tombstone.
+   `kind_labels` / `kind_label` changes output key strings and `kind` / member-kind
+   value strings only — payload keys, published identity keys, and therefore the
+   Kafka message key bytes, whose one-entry map carries the entry name (the key is
+   **value**-identical under rename, not byte-identical). Event count, order, `seq`,
+   `ts`, elected values, and topic assignment are byte-identical. Adding or removing
+   a published identity surface changes which entries a row carries and nothing
+   else. A run declaring no vocabulary renders byte-identically to one where the
+   vocabulary surfaces did not exist. Renaming never moves a value: every join that
+   holds under contract names holds after a rename.
+7. **One naming authority.** Every after-image output key on a stream — identity and
+   payload alike — is produced by that stream's one resolver, which the after-image
+   assembly and the Debezium value-schema build both read — so no rename can make
+   the declared schema and the rendered rows disagree, and no output key silently
+   collides. The elected surface carries one resolved key across its four sites
+   (message key map, after-image identity entry, Debezium `d` before-image, Debezium
+   value schema): a consumer joining a topic's key against its own payload cannot
+   mismatch.
+8. **One stream, one key surface — and no ungated identity.** Every population a
+   stream's keys draw from elects one surface, so a topic carries one key space; a
+   record's events keep one key for its whole life (creation-constant surfaces) and
+   the `d` keys the tombstone. No identity surface reaches a published row without
+   passing resolution, union safety, and the uniqueness guard over the populations
+   the stream spans (§ Identity projection). An identity rename is per-stream
+   presentation and does not propagate: a reference column in another stream still
+   renders its target's elected surface under its own property's output key — a
+   topic keyed `id` may be referenced as `patient_id` elsewhere; the values join,
+   the names need not match, the shape real CDC feeds have.
 9. **Ordering reads `record_id`.** The canonical order and merge key read the fold's
    `record_id` regardless of the elected message key — election changes what the
    consumer keys on, never how the stream is sequenced. Scope removes events; it never
@@ -1092,6 +1228,11 @@ stream `name` to match the topic-name rule (`^[A-Za-z0-9._-]+$` and not `.` or `
 non-empty and duplicate-free when present; `membership_stream_well_formed` applies the
 same name rule, requires `fields` entries bare (no `elem__` / `member__` prefix) and
 duplicate-free, and requires owner `sub_types` non-empty and duplicate-free when present.
+On both shapes `identity` is optional with no default — non-empty and duplicate-free
+when present, its members the `KeySurface` literal, so an unknown surface name is
+unrepresentable rather than validated away; whether the set contains the elected
+surface, and whether the kind can source each member, are business rules — parse time
+knows neither the election nor the sidecar.
 Both apply the shared rename- and where-map helpers to the author surfaces: a present
 `rename` is non-empty with non-empty keys and targets and no two keys sharing one target;
 a present `where` is non-empty with non-empty keys, its per-entry value shape carried by
@@ -1149,8 +1290,11 @@ required parameter and passes it through.
 | `StreamPropertySliceOnly` | no author-named property resolves to a non-exempt `temporal_class: slice_only` column ([`slice-only.md`](slice-only.md)) — over `properties` and over the `only` / `ignore` change scope alike, the refuse-only posture applied to each new author-named surface. The after-image is wholly author-named — there is no auto-projection to narrow — so streaming refuses rather than omitting, and emits no notices; `membership-events` is outside the population (membership columns carry no class). The reader's `TemporalClassUnavailableError` surfaces through the same funnel | Leads with `stream '{name}'`; names the kind, the property, and the class |
 | `MembershipResolvable` | each membership-shaped stream's table exists | `"stream '{name}': membership '{kind}.{property}' has no membership__… table"` |
 | `MembershipFieldResolvable` | each selected field resolves to an `elem__<f>` column or a `member__<f>__kind` / `member__<f>__id` pair on its table | `"stream '{name}': field '{field}' has no elem__/member__ column"` |
-| `StreamRenameUnresolvable` | every `rename` key names a selected property (field) of its stream | `"stream '{name}': rename key '{key}' names no selected property"` (field-variant for a membership stream) |
-| `StreamOutputNameCollision` | per stream, output keys pairwise distinct and disjoint from the reserved names — the identity entry's contract column, `presentation_id` when it ships unabsorbed, the membership `event` | `"stream '{name}': output name '{key}' collides with '{other}'"` |
+| `StreamPropertyNotAddressable` | no selected property names an identity surface — identity is projected through `identity`, never selected through `properties` (a distinct authoring mistake from "no such property", warranting its own remedy) | `"stream '{name}': '{property}' is an identity surface — declare it in identity, not properties"` |
+| `StreamIdentityMissingElected` | a declared `identity` contains the stream's elected surface — a topic must publish its own key | `"stream '{name}': identity omits the elected surface '{surface}'; a topic must publish its own key"` |
+| `StreamIdentityUnavailable` | `presentation_id` is published only on a kind that mints a surrogate | `"stream '{name}': the kind '{kind}' mints no presentation_id"` |
+| `StreamRenameUnresolvable` | every `rename` key names a selected property (field) of its stream, or a published identity surface's contract column name | `"stream '{name}': rename key '{key}' names no selected property"` (field-variant for a membership stream) — with `"; this stream publishes {surfaces}"` appended only when the key is an unpublished surface name (a plain property-name typo does not advertise identity surfaces) |
+| `StreamOutputNameCollision` | per stream, output keys pairwise distinct and disjoint from the reserved names — each published identity surface's **resolved** output key, and the membership `event` | `"stream '{name}': output name '{key}' collides with '{other}'"` |
 | `StreamKindLabelUnknown` | every `kind_labels` key names a sidecar kind | `"kind_labels: '{kind}' is not a kind in this emit"` |
 | `StreamKindLabelCollision` | no label, and no per-stream `kind_label`, equals a **different** kind's rendered name over the emit's whole kind universe. Two streams sharing one `kind_label` is legal — the rule is the masquerade refusal, not cross-stream uniqueness | `"stream '{name}': kind_label '{label}' collides with kind '{kind}'"`; the config-level variant carries no stream prefix |
 | `StreamWhereNotConstant` | every `where` key names a `constant`-class payload property of the subject kind (tracked and `slice_only` refused) | `"stream '{name}': where key '{key}' is not a constant-class property of kind '{kind}'"` |
@@ -1162,14 +1306,22 @@ required parameter and passes it through.
 | Election resolution gates | `ElectionKindUnknown` / `ElectionSubTypeUnknown` / `ElectionPresentationUndeclared` — the election surface's gates, reused verbatim ([`key-election.md`](key-election.md) § Static gates) | Those messages |
 | Stream render elections | each `render:` key names a declared property (or membership field) of the stream's projection, and its source column carries the election's admitted sidecar type — `DecimalSourceIsDouble` / `JsonPrecisionSourceIsVarchar`, run per declared stream ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | Leads with `stream '{name}'`; names the property and the type |
 | Stream key uniformity | one stream, one key surface: every population the stream's keys draw from elects the same surface (kind-shaped: the spanned populations; membership-shaped: the addressed owner population set — the declared owner `sub_types`, else the owner kind's full domain); uniform `presentation_id` additionally pairwise union-safe | `ElectionMixedIdentity` / `ElectionUnionUnsafe`, naming the stream and the differing (population, surface) pairs |
+| Identity projection gates | every **published** surface (§ Identity projection) runs the election's own gates over the stream's spanned/addressed populations: `presentation_id` published only where the registry declares each population; each published surface's key spaces pairwise union-safe | `ElectionPresentationUndeclared` / `ElectionUnionUnsafe`, naming the stream, the surface, and the population or pair |
 | Edge union safety | per after-image reference column and per membership member field, admitted target populations' resolved surfaces pairwise union-safe; the admitted set is the kind-targeted posture — the target kind's full declared domain (per member kind for a member field) | `ElectionUnionUnsafe`, naming the stream, the column, and the unsafe pair |
-| Elected-key uniqueness | render-time, per composed identity relation at the end-of-tape entry point: `rows = DISTINCT record_id = DISTINCT elected value`, elected value non-NULL | `ElectedKeyDuplicate`, naming the stream or edge and the surface |
+| Published-key uniqueness | render-time, per composed identity relation (elected or published) at the end-of-tape entry point: `rows = DISTINCT record_id = DISTINCT value`, value non-NULL | `ElectedKeyDuplicate`, naming the stream or edge and the surface — a violation on a published non-elected surface reads as that surface's, never as an election the author did not declare |
 | `DebeziumRequiresConfig` | format `debezium` carries a `debezium` config block (both content types) | `"format 'debezium' requires a 'debezium' config block with a 'source' identity (connector, name, db, schema, version)"` |
 | `DebeziumRequiresAnchor` | format `debezium` has a resolved `EffectiveAnchor` | `"format 'debezium' requires a resolved effective anchor (set rebase.base_date / rebase.timezone, or rely on the sidecar runtime anchor); ts_ms must be epoch-milliseconds"` |
 | `KafkaRequiresAnchor` | sink `kafka` has a resolved `EffectiveAnchor` — for **all** formats, `jsonl` included | `ExportError` — `"sink 'kafka' requires a resolved effective anchor …; the Kafka record timestamp must be epoch-milliseconds"` |
 | `KafkaBootstrapUnresolvable` | sink `kafka` resolves a non-blank bootstrap string from CLI / config / env | `KafkaBootstrapUnresolvable` — `"sink 'kafka' requires a bootstrap-servers address; set --bootstrap-servers, a kafka.bootstrap_servers config block, or FABEXPORT_KAFKA_BOOTSTRAP"` |
 | `KafkaClientUnavailable` | sink `kafka` can import `confluent-kafka` (the `[kafka]` extra) | `KafkaClientUnavailable` — names the fix (install the extra) |
 | Pre-existing topic partition mismatch | each topic in the run's topic set has exactly 1 partition | `KafkaDeliveryError` — checked at delivery time |
+
+**Ordering.** The election's own gates run first: a stream's elected surface is
+resolved and the identity-uniformity gate has already refused a mixed-election
+stream before any projection resolves, so `resolve_identity_projection` takes a
+uniform election as precondition and neither re-checks nor raises
+`ElectionMixedIdentity`. A stream that is both mixed-election and carries a
+malformed `identity` reports the mixing — the earlier and more basic failure.
 
 The resolvability rules are content-conditional: the declaration union already
 guarantees every entry is the right shape, so for `content: membership-events` only the
@@ -1336,10 +1488,44 @@ engine and the writers also assert the sink/out pairing defensively
   order from `resolve_stream_columns`, consulted per stream (see
   [`derivations.md`](derivations.md)). Renaming could have broken that agreement by giving
   the schema builder and the row assembler each their own view of the output names, so the
-  resolver returns `(fold column, output key)` *pairs* and both consumers read the one
-  list — the declared schema and the rendered rows stay the same list under the same names
+  resolver returns ordered `OutputEntry` values — each entry naming its source (an
+  identity surface rendered through its election relation, or a fold column read
+  verbatim) and its resolved output key — and both consumers read the one list: the
+  declared schema and the rendered rows stay the same list under the same names
   by construction, and collisions are caught once, centrally, rather than surfacing as a
   schema/row mismatch at delivery.
+- **Identity is projected, not property-selected.** The alternative — admitting
+  `presentation_id` into a stream's `properties` — reads as the smaller grammar, but
+  it reclassifies a column the base format places in the structural block, gives no
+  `temporal_class`, and holds outside the value-column population, and which key
+  election names as one of three identity surfaces. The reclassification pays for
+  itself in exceptions: a "property" that is not `render`-addressable, not in
+  `only` / `ignore`, not `where`-addressable, has no temporal class for the
+  slice-only rule to read, and duplicates the identity entry when the population
+  elects it. Five carve-outs for one column is the classification being wrong;
+  projection needs none of them, because the surface never enters the payload
+  namespace.
+- **The fold stays complete; publishing layers project.** The row-state-events fold
+  has three consumers with three audiences — the streaming engine, the source event
+  log, the playback seam. A projection applied in the fold would impose one
+  consumer's presentation choice on the other two, so derivation-layer identity is
+  complete by definition and each publishing layer projects above the composed
+  relation ([`key-election.md`](key-election.md) § Identity publication).
+- **Publishing an identity surface earns the gates.** Two populations' key spaces
+  overlapping in one published column is exactly the condition the union-safety
+  algebra exists to refuse — and suppression alone would let an author re-create it
+  by publishing a surrogate deliberately. Running the algebra over every published
+  surface means a published identity column either joins cleanly or the export
+  refuses; the registry tightening (publishing `presentation_id` requires the claim)
+  is the claim-consuming-path posture the election and `declare_keys` already
+  share, and the escape — not publishing — costs one line.
+- **Elected-only is the stream's absence default.** A stream declares what ships —
+  `properties` is required with no default, an absent `rename` means bare keys — so
+  an absent `identity` publishes the minimum a topic cannot do without: its key. An
+  unelected surrogate riding beside the message key would sit there looking equally
+  key-like, the join trap the projection exists to prevent. The playback seam's
+  absence default is deliberately the opposite, per its own convention
+  ([`playback.md`](playback.md)).
 - **No invented bootstrap endpoint.** A bootstrap address is environment-specific; the
   package supplies no default and resolves CLI → config → env, failing loudly when none
   is given (Principle #7) — the same stance anchor and clock resolution take.
@@ -1366,11 +1552,23 @@ What the streaming exporter deliberately does not own:
 - **Cross-stream topic merging.** Two streams cannot share a name; a combined feed is
   declared as one stream (several `sub_types`, one column list). There is no
   post-declaration regrouping surface.
-- **Identity renaming.** `rename` addresses declared payload properties and element
-  fields only. The identity entry, the auto-included `presentation_id`, the membership
-  owner identity entry, and the Debezium `event` column keep their contract names at
-  every site — identity is what a consumer joins on, so it is not author-addressable, and
-  a `rename` key naming one names no declared property and is refused.
+- **The message key stays single.** A topic's key is the one-entry map of the
+  elected surface. Publishing several identity surfaces widens the after-image,
+  never the key.
+- **The `identity` grammar reaches only layers whose identity columns are not
+  author-declared.** The unifying rule is that identity columns are never
+  auto-projected — every publishing surface states what it publishes. Source states
+  it through each declared table's `columns` list and its identity-column rename
+  key; dimensional through author-declared dim columns — both already per-column
+  and author-owned, so a second grammar saying the same thing would be a
+  regression, not a unification. `identity` exists for the streaming after-image
+  and the playback seam's tier-1 maps. Base is the one deliberate exception —
+  its standalone surrogate ships auto-projected beside the re-derived key columns
+  ([`base.md`](base.md) § Boundaries).
+- **The three surface names are outside the payload namespace.** A producer payload
+  property named `record_id`, `record_index`, or `presentation_id` is unaddressable
+  on a stream (§ Identity projection) — on the wire an identity name means
+  identity.
 - **Reordering.** `rename` relabels; it never reorders. After-image order is the single
   column-order producer's, and no author surface moves a column within it.
 - **Row selection over non-constant state.** `where` reaches `constant`-class payload
@@ -1420,7 +1618,7 @@ What the streaming exporter deliberately does not own:
 
 | Document | Why |
 |---|---|
-| [`key-election.md`](key-election.md) | The cross-mode election surface streaming consumes — the `keys` grammar, resolution gates, union-safety algebra, identity join relations, uniqueness guard, and the streaming render sites (§ Rendering: streaming) |
+| [`key-election.md`](key-election.md) | The cross-mode election surface streaming consumes — the `keys` grammar, resolution gates, union-safety algebra, identity join relations, uniqueness guard, the streaming render sites (§ Rendering: streaming), and the derivation/publication identity layer split (§ Identity publication) |
 | [`streaming-pacing.md`](streaming-pacing.md) | The realtime-pacing surface this driver composes — clock resolution (config × CLI), the drift-free release schedule, paced per-line-flush delivery, and the clock validation rules |
 | [`derivations.md`](derivations.md) | The row-state-events fold (`state-changes` — including the change-scope / projection two-scope contract) and the membership-events fold (`membership-events`) this driver composes — `c`/`u`/`d` and `join`/`leave` generation, op classification, after-image reconstruction, and per-source order; the source of the shared `require_single_branch` guard |
 | [`playback.md`](playback.md) | The seam that owns the canonical total order and the global-`seq` definition this stream conforms to; the tier-1 `events` head that re-seams `stream` later |

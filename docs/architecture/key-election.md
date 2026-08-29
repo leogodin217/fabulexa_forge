@@ -21,6 +21,9 @@ block, every mode keys and renders record identity by `record_id`.
 uniqueness guard),
 [`derivations/presentation_key.py`](../../src/fabulexa_forge/derivations/presentation_key.py)
 (the presentation-key join relation),
+[`exporters/keys_init.py`](../../src/fabulexa_forge/exporters/keys_init.py)
+(`propose_key_election` / `render_keys_block` — the cross-mode `init` election
+menu, § `init` proposals),
 [`config/models.py`](../../src/fabulexa_forge/config/models.py) (`KeySurface`,
 `ExportConfig.keys`, `FkClause.target_key`),
 [`errors.py`](../../src/fabulexa_forge/errors.py) (the `Election*` /
@@ -100,7 +103,7 @@ source's and base's and dimensional runs only the edge gates).
 |---|---|---|---|
 | Kind exists | resolution | Every `keys` key names a kind with a declared `records__<kind>` table | `ElectionKindUnknown` |
 | Sub-type exists | resolution | Every map key is in the kind's discriminator domain | `ElectionSubTypeUnknown` |
-| `presentation_id` declared | resolution | A population electing `presentation_id` has a registry entry — the flat kind's `key`, or the sub-type's `sub_types` entry (`key_for` presence). The uniform-scalar shorthand on a sub-typed kind requires *every* domain sub-type declared | `ElectionPresentationUndeclared`, naming kind, population, and (when the block is absent entirely) that the emit carries no claims |
+| `presentation_id` declared | resolution | A population electing `presentation_id` — or, on a stream, *publishing* it through the `identity` projection (§ Identity publication) — has a registry entry: the flat kind's `key`, or the sub-type's `sub_types` entry (`key_for` presence). The uniform-scalar shorthand on a sub-typed kind requires *every* domain sub-type declared | `ElectionPresentationUndeclared`, naming kind, population, and (when the block is absent entirely) that the emit carries no claims |
 | Identity uniformity | mode plan (source, base, streaming) | An output table — or a declared stream: a topic's key is one identity space — whose rows span several populations of one kind requires every spanned population to elect the **same surface**. One table, one identity surface; one stream, one key surface (kind-shaped: the spanned populations; membership-shaped: the addressed owner population set — the declared owner `sub_types`, else the owner kind's full domain) | `ElectionMixedIdentity`, naming the table or stream and the differing (population, surface) pairs |
 | Identity union safety | mode plan (source, base, streaming) | Under a uniform `presentation_id` election, the spanned populations' key spaces must additionally be pairwise union-safe (`union_safe` over the table above) — two bare-counter siblings collide even on one surface | `ElectionUnionUnsafe`, naming the table or stream and the unsafe pair |
 | Edge union safety | mode plan | Every referencing column — a reference edge, a junction owner column, a junction member column, a streaming after-image reference column, or a membership member field — requires its **admitted** target populations' key spaces pairwise union-safe, applied per column. The admitted set is the target kind's full declared domain in the kind-targeted modes — source, base, and streaming (the owner kind's domain for a junction owner column; per member kind for a junction/membership member column; a stream's `sub_types` scope narrows its own rows, never which target populations an edge admits) — and the destination dim's source population set in dimensional. The spaces range over the edge's **resolved surfaces**: the populations' own elections in the kind-targeted modes; in dimensional, the FK's one resolved surface (inherited, or the explicit `target_key`) applied to every admitted population | `ElectionUnionUnsafe`, naming the referencing table/stream · column and the unsafe pair |
@@ -206,6 +209,52 @@ emitting silently-broken joins would violate integrity preservation
 (Principle #4). It complements, not replaces, the static gates — the registry
 describes the emit as produced, and a downstream corruption may falsify it
 (the contract anticipates exactly this).
+
+### Identity publication
+
+Identity has two layers, and the election means something different in each:
+
+| Layer | What identity means there | Who decides |
+|---|---|---|
+| Derivation | Complete: a fold carries `record_id` and the kind's `presentation_id`, always, so every consumer can key and re-derive from one honest row | The contract — never a config |
+| Publication | Projected: what a published row actually carries, and under what names | The author, per publishing declaration |
+
+The row-state-events fold has three consumers with three audiences — the
+streaming engine, the source event log, the playback seam. A projection applied
+in the fold would be one consumer's presentation choice imposed on the other
+two, so the fold stays complete and each publishing layer projects **above** the
+composed relation, never inside a shared resident (`mode: base` and the
+incremental driver read the same state-at resident).
+
+At the publication layer the unifying rule is that **identity columns are never
+auto-projected** — every publishing surface states what it publishes:
+
+| Publishing layer | How the author states it |
+|---|---|
+| Source | Each declared table's `columns` list; the identity column renames by the elected surface's contract column name |
+| Dimensional | Author-declared dim columns |
+| Streaming | The per-stream `identity` projection ([`streaming.md`](streaming.md) § Identity projection) |
+| Playback tier 1 | The record selection's `identity` tuple ([`playback.md`](playback.md)) |
+| Base | The one deliberate exception: the standalone surrogate ships auto-projected beside the re-derived key columns ([`base.md`](base.md) § Boundaries) |
+
+Projection control exists where publishing costs something — where a row leaves
+as an untyped map for a consumer who did not declare a schema (the streaming
+wire, the seam's tier-1 maps). It does not reach typed fields like
+`PlaybackEvent.record_id` / `.presentation_id`, where an unread field costs
+nothing and removing one would conflate "no surrogate" with "suppressed".
+
+On a stream, every published surface — elected or not — runs the election's
+resolution gates, the union-safety algebra, and the render-time uniqueness
+guard, so no identity column reaches a published row unexamined; the gate
+population widens, the algebra does not change. The playback seam is outside
+this by its own contract rather than by omission: the uniqueness guard is a
+data check that permissive totality forbids (a corrupted surrogate must play,
+not refuse — on a corrupted tape the colliding surrogate is the deliverable the
+answer key scores against), and the static union-safety gate would require
+tier 1 to reach up into the election, which the layer direction forbids. The
+seam's control is projection alone, and it declares its own surface vocabulary
+as string literals rather than importing the config's `KeySurface` — the two
+layers share the concept and the surface names, not a Python type.
 
 ### Per-row population resolution
 
@@ -384,8 +433,8 @@ rows the predicate selects. The render sites are:
 
 | Render site | Rendering |
 |---|---|
-| Message key (every op, including the `d` tombstone) | The record's — for membership-events, the **owner's** — elected surface, as the one-entry key map `{<surface's contract column>: <codec value>}`: the Kafka key, the JSONL `key` map, and the Debezium `d` key-only before-image |
-| After-image identity (`c`/`u`; the membership `after`'s owner entry) | The elected surface via the identity join at the fold's `record_id`, keyed by the surface's contract column name. Under a `presentation_id` election the standalone `presentation_id` payload column is absorbed (source's absorption rule); under `record_id` / `record_index` it ships verbatim when the kind carries one |
+| Message key (every op, including the `d` tombstone) | The record's — for membership-events, the **owner's** — elected surface, as the one-entry key map `{<resolved output key>: <codec value>}` (the surface's contract column name, or its per-stream `rename` target — [`streaming.md`](streaming.md) § Output names and `rename`): the Kafka key, the JSONL `key` map, and the Debezium `d` key-only before-image |
+| After-image identity (`c`/`u`; the membership `after`'s owner entries) | One entry per **published** surface — the stream's `identity` projection, the elected surface alone absent it ([`streaming.md`](streaming.md) § Identity projection) — each via its identity join at the fold's `record_id`, each under its resolved output key, in sidecar column order. Under a `presentation_id` election the surface publishes once, as identity; no surface ships unelected and undeclared |
 | Reference-valued `prop__<p>` after-image entries | The target's elected surface through the target's identity join — the state-render analog |
 | Membership `member__<f>` reference fields | The member row's kind's elected surface (`__kind` remains the disambiguator) — the junction-member analog |
 
@@ -395,7 +444,11 @@ value's codec rendering — so no site emits a typed JSON number and streaming's
 byte-determinism needs no extra case. Streaming composes every identity
 relation at the **end-of-tape entry point** (a record's creation precedes its
 every event — the event-log argument), and the uniqueness guard runs per
-composed relation naming the stream or edge. The canonical order and merge key
+composed relation naming the stream or edge. The per-stream `identity`
+projection widens the gated population: every published surface, elected or
+not, runs the resolution gates, the union-safety algebra, and the uniqueness
+guard (§ Identity publication) — a guard violation on a published non-elected
+surface names the surface, not the election. The canonical order and merge key
 still read the fold's `record_id`: election renders identity, it never
 re-sorts. Every electable surface is creation-constant, so a record's events
 keep one key for life and the `d` keys the tombstone — the compaction property
@@ -425,50 +478,78 @@ so the cross-kind union feeds the type rule only, never a collision verdict.
 
 ### `init` proposals
 
-`init` proposes a complete `keys` block from the sidecar (consulting the
-strict accessor, sharing its refusal behavior). The natural proposal:
+`init` proposes the `keys` block as a **visible election menu**, in every mode
+(dimensional, source, streaming) — the pick is the feature, so the generated
+config shows the choice, not just a value. The proposal is cross-mode and
+sidecar-only, produced by `propose_key_election` and rendered by
+`render_keys_block`
+([`exporters/keys_init.py`](../../src/fabulexa_forge/exporters/keys_init.py)):
+one renderer, spliced verbatim by the three mode `init` engines, so one menu
+cannot render three ways — the menu is the first thing the proposal engines
+emit that an author is meant to *edit*, and the single-producer discipline
+holds for it exactly as it does for after-image column order.
 
-| Population state | Proposed election |
-|---|---|
-| Declared in `presentation_keys` (flat `key`, or the sub-type's entry) | `presentation_id` |
-| Undeclared (no entry, or block absent) | `record_index` |
+| Population state | Active proposal | Commented alternatives |
+|---|---|---|
+| Any population | `record_index` | `record_id`; and `presentation_id` iff the population is registry-declared |
+| Partitioned kind, no sub-type registry-declared | The `record_index` scalar | `record_id` for the kind |
+| Partitioned kind, ≥ 1 sub-type registry-declared | The per-sub-type map, `record_index` throughout | Per sub-type, as above |
 
-Partitioned kinds propose the per-sub-type map (mirroring the registry's own
-shape); flat kinds propose the scalar; a map whose values all agree collapses
-to the scalar.
+The rules:
 
-**`init` gates its own proposal.** Proposing a config that fails its own gate
-would be a broken proposal — and no per-case analysis is maintained to prevent
-it; the gates *are* the spec. `init` runs the natural proposal through the
-exact machinery the export runs: `resolve_election` plus the target mode's
-plan-time gates (identity uniformity + union safety over the mode's table
-shapes, edge union safety over the emit's reference graph). Every kind
-implicated in a failure degrades to uniform `record_index`, with a YAML
-comment naming the gate that forced it. Termination is by construction: a
-`record_index`-uniform kind passes every gate — always present, one shared
-space per kind, and `""` collides only with digit-prefixed spaces, which the
-degradation just removed.
+- **The active proposal is uniform `record_index` across every population of
+  every kind.** It is always available (every emit carries `record_index`),
+  needs no registry declaration, and is gate-clean by construction: one shared
+  space per kind, and the empty prefix collides only with digit-prefixed
+  spaces, of which a uniform proposal contains none. Because the proposal
+  cannot fail its own gates, no repair pass exists — the keys block is
+  gate-clean by construction, not by degradation.
+- **The map/scalar shape follows the alternatives, not the active values.** A
+  per-sub-type map whose values agree collapses to the scalar, and under a
+  uniform active election every map would collapse, leaving per-sub-type
+  alternatives nowhere to attach. So a partitioned kind's proposal is a map
+  when at least one sub-type carries a **population-specific** alternative — a
+  `presentation_id` line, the only alternative whose availability varies by
+  population — and the scalar otherwise. `record_id` is offered for every
+  population and never decides the shape: it is kind-wide, and on a scalar
+  proposal it attaches as the kind-wide shorthand. The collapse rule's input is
+  the proposal *with* its alternatives.
+- **Only resolvable alternatives are emitted.** A `presentation_id` line
+  appears only for a registry-declared population (the strict accessor,
+  sharing its refusal behavior) — an alternative that could not resolve would
+  be a trap, not an offer.
+- **Alternatives are resolvability-checked, not gate-checked.** An author who
+  activates an alternative may still hit a union-safety or uniformity gate;
+  that failure is loud and names its remedy. Gate-checking hypothetical
+  variants would require enumerating combinations across populations, which
+  the proposal does not do.
+- **Alternatives are a swap, not an uncomment.** The comment block leads with
+  one line stating that an alternative replaces the active line. The safety
+  net is load-time: every config loader parses through `load_yaml_mapping`
+  ([`config/loader.py`](../../src/fabulexa_forge/config/loader.py)), which
+  refuses a YAML mapping carrying the same key twice at any depth —
+  `ConfigError`, naming the file, the key, and its line — a config-wide rule
+  shared by the export, streaming, and corrupt loaders. Duplicate keys are
+  refused rather than resolved last-wins, so activating an alternative while
+  the active line remains is a named error, never silent order-dependent
+  behavior.
+- **No mode proposes author-intent surfaces alongside the menu.** A stream's
+  `identity` projection, like `rename` and `where`, has no sidecar-derived
+  value and is never proposed ([`streaming.md`](streaming.md)
+  § `init --mode streaming`).
 
-Mode-awareness falls out of using the mode's own gates: a base proposal
-degrades every partially-declared sub-typed kind to the kind-wide
-`record_index` scalar (base never splits); a source proposal runs the gates
-over its own proposed tables — one combined (full-domain) state table per
-kind, so a partially-declared sub-typed kind degrades the same way, with the
-per-population-tables escape left to the author's edit; a dimensional
-proposal keeps mixed maps (its `init` proposes
-discriminator-filtered dims) and aligns its dim proposals: each proposed dim's
-key column keeps its default name and sources `from:` the population's elected
-surface's contract column — the dim-key agreement check holds by
-construction, and where the election is `presentation_id` the natural-key
-advisory comment is not emitted (the key sourcing consumes the claim) — while
-FK candidates remain comments and remain `target_key`-free (an uncommented
-candidate inherits, which *is* the aligned rendering; the self-gate runs over
-the proposal's grammar, and comments are not grammar); a streaming proposal
-runs the gates over its proposed single-population streams (per-stream
-uniformity is trivially satisfied there; edge union safety ranges over the
-proposed after-images' reference columns and membership member fields). As
-with every `init` output, the proposal lands in the author's file where they
-see, edit, and own it.
+Dimensional's `init` aligns its dim proposals with the active election: each
+proposed dim's key column keeps its default name and sources `from:` the
+population's elected surface's contract column — `record_index` under the
+uniform proposal — so the dim-key agreement check holds by construction, and
+the natural-key advisory comment naming `presentation_id` as the
+contract-declared natural key is emitted wherever a surrogate is declared (the
+alignment rule is indifferent to which surface is active; only a
+`presentation_id` key sourcing would consume the claim and suppress the
+advisory). FK candidates remain comments and remain `target_key`-free — an
+uncommented candidate inherits, which *is* the aligned rendering. As with
+every `init` output, the proposal lands in the author's file where they see,
+edit, and own it.
 
 ### Interplay
 
@@ -598,6 +679,14 @@ uniqueness guard) is the single data-touching rule, raising
   joined onto the fold's output by the source and streaming renders; the
   fold's column set, ordering contract, and two-scope contract are the fold's
   own.
+- **The playback seam composes no election.** Tier 1 sits below the modes and
+  imports no config; its identity control is projection alone, and it runs no
+  publication gate — permissive totality obliges it to deliver a corrupted
+  tape's colliding surrogate rather than refuse it (§ Identity publication;
+  [`playback.md`](playback.md)). `record_index` is outside the tier-1 domain
+  for the same layer reason: tier 1 composes no election relations, so
+  offering a surface it cannot source would be an empty option — a caller
+  wanting index identity uses tier 2, which inherits the modes'.
 - **No new notice codes.** Election's failure modes are errors, not
   degradations; `rename`, `exclude`, `slice_only`, anchor resolution, and the
   notice channel compose with their own semantics.
@@ -613,7 +702,7 @@ uniqueness guard) is the single data-touching rule, raising
 | [`reader.md`](reader.md) | The strict `presentation_keys` accessor and the union-safety algebra every gate composes |
 | [`derivations.md`](derivations.md) | The record-index and presentation-key join relations elected values resolve through |
 | [`source.md`](source.md) · [`base.md`](base.md) | The kind-targeted modes — identity columns rendered from the election, per-declared-table / per-table render surfaces; source's event-log `item_id` edge render |
-| [`streaming.md`](streaming.md) | The fourth consuming mode — the elected surface as the message key, the after-image render sites, and streaming's per-stream uniformity gate |
+| [`streaming.md`](streaming.md) | The fourth consuming mode — the elected surface as the message key, the per-stream `identity` projection and its gate widening, the after-image render sites, and streaming's per-stream uniformity gate |
 | [`dimensional.md`](dimensional.md) | The FK pathfind the resolved surface rides; author-declared keys, `target_key`, `init` stubs |
 | [`declared-keys.md`](declared-keys.md) | The declared primary key follows the elected identity column |
 | [`incremental.md`](incremental.md) | The window driver; elected values are creation-constant merge keys |
