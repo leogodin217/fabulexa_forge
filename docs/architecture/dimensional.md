@@ -740,7 +740,11 @@ so ordering on the interval start (raw ns) is what makes that grain deterministi
 [`generate_init_config`](../../src/fabulexa_forge/exporters/dimensional/init.py) reads
 the emit and emits a **commented candidate config** the author edits — a starting point
 (~70–80% on a clean scenario) whose every `role` / `scd` proposal is author-authoritative,
-confirmed or flipped, never a decision the engine enforces.
+confirmed or flipped, never a decision the engine enforces. The proposal is annotated
+with the emit's forwarded documentation as YAML comments — scenario narrative, table
+descriptions, per-property description/unit, discriminator glosses — under the shared
+annotation contract ([`documentation-channel.md`](documentation-channel.md) § `init`
+annotations); comments are not grammar, so the self-gating posture is untouched.
 
 **Role is read from `record_roles`, never inferred from topology.** A bare-string kind
 takes its role from `record_roles[<kind>]`; the object-valued kind (today only `actor`)

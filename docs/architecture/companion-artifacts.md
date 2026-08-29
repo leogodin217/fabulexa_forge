@@ -38,8 +38,11 @@ sourced per-export facts for tooling.
 - **Entry-point shape.** Every file-writing export entry point
   (`export_dimensional` / `export_source` / `export_base` and the incremental
   driver's windowed entry) takes an `overlay` parameter and returns an
-  `ExportReport` — per-table columns/types, row counts, declared keys, in plan
-  iteration order — the same object the companion writer renders from. The
+  `ExportReport` — per-table columns/types, row counts, declared keys, and the
+  per-column provenance maps
+  ([`documentation-channel.md`](documentation-channel.md) § Provenance
+  carriage), in plan iteration order — the same object the companion writer
+  renders from. The
   engine is `validate_overlay_tables`' caller (it is the only component
   holding both the compiled plan and the overlay), invoking it immediately
   after plan compile, before any write; it finishes by invoking
@@ -117,11 +120,21 @@ examples [`tests/exporters/companion/`](../../tests/exporters/companion/).
 
 The README is rendered output, never hand-edited. Its **ordering contract**: a
 title identifying the mode and a generated-artifact marker naming the manifest
-file; the overlay's `overview` (when present); the mode template's semantics
+file; the overlay's `overview` (when present), then the emit's
+`scenario_description` (when present) — author prose first; either or both may
+be absent, and absence renders nothing; the mode template's semantics
 prose; one section per output table in plan iteration order — the table's
-overlay note (when present), then its derived column inventory (names, types,
-key markings) and row count (full exports only); then the resolved anchor
-facts (start instant and IANA zone, or their absence); then emit identity.
+overlay note (when present), then the forwarded `tables[].description` (when
+present), then its derived column inventory (names, types, key markings, and
+per-column description and unit where the documentation channel's inheritance
+rule yields them), then declared-value gloss lists for closed-domain and
+kind-name-as-value columns, then row count (full exports only); then the
+resolved anchor facts (start instant and IANA zone, or their absence); then
+emit identity. Per-column documentation resolves through the reader's
+documentation view via the provenance maps on the report
+([`documentation-channel.md`](documentation-channel.md) § The
+column-inheritance rule, § Provenance carriage); an undocumented item renders
+nothing — no placeholder, no TODO.
 
 Exact prose is authored in the templates, not specified here — but each mode's
 template must cover how to read its shape: the dimensional template the star
@@ -158,6 +171,15 @@ Normative rules the code conforms to:
   physical projection: the view is not a written relation, so it gets no entry
   of its own. Bookkeeping objects (`_export_meta`, `_export_windows`, the CSV
   cursor file) are driver state, not output tables, and never appear.
+- **Documentation fields mirror the resolved dictionary.** Top-level
+  `scenario_description`; per-table `description`; per-column `description`,
+  `unit`, and `enum_options` (the ordered `[{value, description}]` list where
+  the column's source property carries a declared domain) — all resolved
+  through the reader's documentation view under the channel's inheritance
+  rule ([`documentation-channel.md`](documentation-channel.md)), never
+  re-derived from SQL, config, or the materialized schema. Absent → JSON
+  `null`, the manifest's stable-field-set posture, matching `primary_key`:
+  `null` encodes absence faithfully, never a default.
 - **Keys are transcribed declarations, never inferences.** `primary_key` /
   `unique` carry only what `declare_keys` declared — a surface the base and
   source modes have and the dimensional mode does not, so a dimensional
@@ -198,7 +220,9 @@ Invariants relied on: plan iteration order is deterministic (the notice
 channel already depends on it); the writers' Arrow materialization is the
 single truth of output schema; the incremental fingerprint refuses a changed
 config or emit mid-drip, so whole-state manifest rewrites can never describe a
-target written under a different plan.
+target written under a different plan; documentation is run-level
+(contract-fixed at run initialization), so every window of an incremental
+export renders identical documentation.
 
 ## Validation Rules
 
@@ -272,6 +296,8 @@ the overlay pointer or content never raises `IncrementalFingerprintMismatch`
 
 | Document | Why |
 |---|---|
+| [`documentation-channel.md`](documentation-channel.md) | The inheritance and provenance rules the README's per-column documentation and the manifest's documentation fields render under |
+| [`reader.md`](reader.md) | The documentation view (§ The documentation view) the builders resolve every provenance entry through |
 | [`incremental.md`](incremental.md) | The windowed caller — whole-state artifact rewrite after data + cursor commit, the CSV census exclusion, the fingerprint's `readme_overlay` exclusion |
 | [`writers.md`](writers.md) | The Arrow transcription authority the report's columns/types come from |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` declarations the manifest transcribes |

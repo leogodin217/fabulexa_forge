@@ -1459,19 +1459,26 @@ never touched — in source table order, each table's columns in working-schema 
 `rows` is the written row count and each column's `{name, type}` is read back from what
 was written (this holds whether an operation grows a table, as `duplicate_rows` does, or
 shrinks one, as `drop_events` and a `freeze_series` tail do — `rows` is simply the count
-actually written), while table-level `category` / `record_kind` / `property` and per-column
-`references` / `history_tracked` / `temporal_class` are carried from the (drift-updated)
+actually written), while table-level `category` / `record_kind` / `property` /
+`description` and per-column `references` / `history_tracked` / `temporal_class` — plus
+the documentation and value-declaration attributes (`description`, `unit`, `min`, `max`,
+`immutable`, `required`, `extra_data`) — are carried from the (drift-updated)
 `WorkingTable.spec`, joined to the written catalog by post-drift name — never re-looked-up
 from the source sidecar by name, so a renamed column carries its metadata on its relabeled
-spec and a dropped column drops it. Every other top-level sidecar field
+spec and a dropped column drops it. A retyped column keeps its documentation — the meaning
+claim outlives the type, which is realistic drift. Every other top-level sidecar field
 (`base_format_version`, `branches`, `runtime`, `pinned_ids`, `enum_domains`,
 `record_roles`) is copied verbatim from the source `Sidecar.raw`.
 
 **The writer round-trips every sidecar column attribute the reader models** — a declared
 attribute is carried verbatim, an absent attribute stays absent. Identity columns
 (`fork_path`, `record_id`, `record_index`, `ref_index__<name>`) therefore regenerate as
-bare `{name, type}` entries — no `references` annotation, no temporal pair — a stated,
-test-guarded invariant. Both halves are
+bare `{name, type}` entries — no `references` annotation, no temporal pair, and no
+documentation (structural columns carry no sidecar documentation by contract) — a stated,
+test-guarded invariant. The documentation carriage is what keeps a corrupted emit's data
+dictionary intact for every corrupt→export composition — the documentation channel reads
+the regenerated sidecar like any other emit's
+([`documentation-channel.md`](documentation-channel.md)). Both halves are
 load-bearing. A stripped `temporal_class` would emit a sidecar claiming conformance
 while violating C13's structural clauses *by construction and undeclared* — and would produce a
 tape forge's own class-consulting surfaces could not read. And absence is the only

@@ -868,7 +868,12 @@ commented-out with a comment naming the collision — the emitted config always
 parses and plans clean, the key-election `init` self-gating posture. Splits are
 proposed exactly where the sidecar declares the partition — deterministic from
 the discriminator domain, with no value read — and nowhere else: no `where` is
-proposed on any unit.
+proposed on any unit. The proposal is annotated with the emit's forwarded
+documentation as YAML comments — scenario narrative, table descriptions,
+per-property description/unit, discriminator glosses — under the shared
+annotation contract ([`documentation-channel.md`](documentation-channel.md)
+§ `init` annotations); comments are not grammar, so the self-gating posture is
+untouched.
 
 | Emit condition | Proposal |
 |---|---|

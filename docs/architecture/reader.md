@@ -32,6 +32,7 @@ open_emit(emit_dir)
 | [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) | `Sidecar` and its frozen descriptors `ColumnSpec` / `TableSpec` / `BranchEntry` / `RuntimeAnchor`; the typed `RecordRoles` registry view + `Sidecar.record_roles()`; the typed `PresentationKeys` registry view (`KeySpace` / `PartitionKey` / `WholeColumnClaim`) + `Sidecar.presentation_keys()` and the union-safety algebra (`union_safe`, `combined_claim`); the per-column temporal pair — the `history_tracked` flag + `history_tracked_available()`, the `TemporalClass` literal, and the `Sidecar.temporal_class()` accessor (the single narrowing point); the version gate + structural floor (`Sidecar.from_raw`) |
 | [`records_columns.py`](../../src/fabulexa_forge/reader/records_columns.py) | The records-column taxonomy — `records_column_role`, `ref_index_sibling`, `REF_INDEX_PREFIX`: the one classifier every records-column consumer reads through (§ The records-column taxonomy). The structural-temporal surface — `StructuralInstant`, `structural_instant_columns`, `records_structural_column_is_mutable`: the one answer to which structural columns carry a sim-time instant and which may change after creation (§ The structural-temporal surface) |
 | [`relations.py`](../../src/fabulexa_forge/reader/relations.py) | The faithful-read SQL builders (`build_records_relation_sql`, `build_history_relation_sql`, `build_membership_relation_sql`) and the faithful introspection helper `distinct_prop_values` — the reader's compose-time surface, the sole faithful namer of base tables |
+| [`documentation.py`](../../src/fabulexa_forge/reader/documentation.py) | The documentation view — `Documentation` / `ColumnDoc` / `EnumOption`, the contract-pinned structural-column strings, `Sidecar.documentation()` construction (§ The documentation view) |
 | [`errors.py`](../../src/fabulexa_forge/reader/errors.py) | The reader error hierarchy — operational/structural failures only |
 
 ## Boundary
@@ -114,6 +115,7 @@ learns what exists by reading the `Sidecar`:
 | Allowed values for a closed-domain property? | `Sidecar.enum_domains()` (`{kind: {prop: (opt,…)}}`; empty when absent) |
 | Is a kind sub-typed, and into which sub-types? | `Sidecar.subtype_values(kind)` (the `<kind>_type` domain in declaration order; `()` when not sub-typed) |
 | What is a column's point-in-time class? | `Sidecar.temporal_class(table, column)` — the single narrowing point; raises rather than infers (§ Per-column temporal semantics) |
+| What does a table, column, or declared value mean, in domain terms — and what is the run's narrative? | `Sidecar.documentation()` (§ The documentation view) |
 
 Field shapes of the descriptors and accessors are the dataclass and method
 definitions in [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py) — that is
@@ -357,6 +359,75 @@ no checking obligation should not be able to refuse an emit.
 The record types are the definitions in
 [`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py); its one consumer today
 is dimensional `init`'s versions-per-record evidence ([`dimensional.md`](dimensional.md)).
+
+### The documentation view
+
+`Sidecar.documentation()` exposes the emit's five documentation surfaces —
+per-column `description` / `unit`, per-table `description`, `enum_domains`
+per-value glosses, the run's `scenario_description`, and the vendored
+contract's pinned structural-column strings — as one typed, read-only
+`Documentation` view. Construction is lazy and **permissive**, like the
+sibling registries and unlike the strict `presentation_keys` accessor:
+documentation has no consistency rules to enforce, so nothing is validated,
+nothing inferred, and entry order and text are the sidecar's / the contract's
+verbatim. Identifier errors surface per query (`TableNotFoundError` /
+`ColumnNotFoundError` / `KeyError`) — the reader's identifiers-are-strict
+posture.
+
+**One authority per column — never both, never a fallback.** A column is
+contract-answered iff the vendored pinned strings carry an entry for its
+(family, name): the fixed `history` table's columns, the records-family
+structural names (the structural taxonomy's identity / presentation /
+lifecycle classes), and the membership-family structural names. Every other
+declared column answers from its own sidecar entry — the `prop__` / `elem__`
+/ `member__` families *and* any declared column matching no name family (the
+taxonomy's no-role outcome, e.g. a `schema_drift`-renamed payload column read
+back through corrupt→export). Sidecar authority for every non-structural
+declared column is a total rule, not a silent fall-through: the view answers
+a *meaning* question, and the taxonomy's loud no-role posture for data
+pass-through is untouched. A per-run column carrying neither `description`
+nor `unit` answers `None` — absence is silence, never placeholder prose.
+
+**Placeholder substitution.** A placeholder in a pinned string is substituted
+exactly when the concrete column instance binds it: the column name binds
+`<name>` (`ref_index__opened_by` renders "…the sibling `prop__opened_by`
+column…"), the table name binds `<K>` / `<kind>` for records- and
+membership-family strings. The `history` family's placeholders vary per row,
+are bound by nothing, and are left verbatim — exactly the contract's
+"embed verbatim" license, no more. The pinned strings are a contract-pinned
+module literal — the same hardcoding class as the structural-temporal
+mappings and the conformance checks' pinned column lists (§ Rationale).
+
+**Table prose and the scenario.** `table_description` answers
+`tables[].description` verbatim, `None` when absent; the fixed `history`
+table answers `None` by construction — the contract carries its meaning as
+contract prose, not sidecar prose. `scenario_description` answers the
+top-level field verbatim, `None` when absent, with no name-derived fallback.
+
+**Enum glosses share the routing surface's parse floor.**
+`enum_options(kind, prop)` answers the ordered declared value objects as
+`(value, gloss-or-None)` pairs. Membership and order equal the typed
+values-only `enum_domains` surface — one parse floor
+([`_enum_domains.py`](../../src/fabulexa_forge/reader/_enum_domains.py))
+shared by both views, so the value sequence of `enum_options` is exactly the
+typed tuple and the two surfaces can never disagree on the declared value
+set. The typed routing surface is values-only; glosses live in the
+documentation view alone. A sub-typed kind's discriminator glosses are
+`enum_options(kind, "<kind>_type")` — no special surface.
+
+`ColumnSpec` carries the contract's seven optional per-column documentation
+and value-declaration attributes (`description`, `unit`, `min`, `max`,
+`immutable`, `required`, `extra_data`) and `TableSpec` carries `description`,
+all verbatim, absent → `None`; the corrupter's round-trip invariant
+quantifies over them ([`corrupters.md`](corrupters.md) § The base-emit
+writer). `nullable` — the schema's eighth optional per-column attribute — is
+deliberately unmodeled (§ Rationale). Method signatures and field shapes are
+the definitions in
+[`documentation.py`](../../src/fabulexa_forge/reader/documentation.py) and
+[`sidecar.py`](../../src/fabulexa_forge/reader/sidecar.py); the downstream
+consumers — the companion data dictionary, `init` annotations, corrupter
+forwarding — are [`documentation-channel.md`](documentation-channel.md)'s
+contract.
 
 ### Typed `prop__` columns and DuckDB read-back
 
@@ -607,7 +678,14 @@ elections emit invoke it.
     nothing inferred, nothing narrowed to surviving rows — and an incoherent
     present block raises `PresentationKeysInvalidError` at the accessor rather
     than yielding a silently-mended view. Absence is "no claims", never an error.
-11. **The session-zone pin is the reader's alone to set.** Only the
+11. **Documentation resolves from one authority, verbatim.** Every
+    `Documentation` answer traces to exactly one source — the vendored
+    contract strings for structural columns, the sidecar for every other
+    declared column — with no fallback across authorities and no inference
+    from names, types, or rows; the only transformation is
+    instance-placeholder substitution, which binds names the contract says
+    the instance binds.
+12. **The session-zone pin is the reader's alone to set.** Only the
     anchor-resolving caller pins the connection's time zone, and only through
     the reader; no mode or writer touches session state. The pin is a pure
     function of the resolved anchor.
@@ -636,6 +714,14 @@ six coherence clauses lazily, on first call, raising `PresentationKeysInvalidErr
 (a `ReaderError`) naming the kind, sub-type, and violated clause (§ The
 presentation-keys registry is strict on read). A defective block therefore fails
 the claim-consuming call, never the open.
+
+The structural floor extends to the documentation attributes permissively: a
+mis-typed optional attribute (a non-string `description`, a boolean `min`)
+parses as absent (`None`) — schema conformance is C1's job, and the floor
+stays a floor. A mis-shaped `enum_domains` gloss likewise parses as
+gloss-absent, while a malformed value object drops whole under the typed
+surface's floor — one floor, two views, so the documentation view never
+answers a value the routing surface dropped.
 
 ## Rationale
 
@@ -710,6 +796,19 @@ the claim-consuming call, never the open.
   keys to a consumer building a merge or join key on them. So the accessor
   refuses instead, placing enforcement at the moment claims are about to be
   used: a defective block fails exactly the claim-consuming paths and no others.
+- **The documentation view is permissive where `presentation_keys` is
+  strict.** Strictness exists to refuse claims a consumer would key on;
+  documentation has no consistency rules and no consumer keys on it, so a
+  lenient verbatim carry (the sibling-registry posture) is the honest read,
+  and identifier strictness per query is the only refusal that means
+  anything.
+- **`nullable` is deliberately unmodeled.** The schema's eighth optional
+  per-column attribute is not documentation: it restates the written catalog
+  (C2's territory), the schema licenses its omission, and a corrupter may
+  legitimately change a column's effective nullability. Because the reader
+  does not model it, the corrupter writer's round-trip invariant — quantified
+  over the attributes the reader models — regenerates columns without it,
+  correctly describing what was written.
 - **Exposing `pinned_ids` / `enum_domains` / `runtime` as typed accessors.** These are
   the reader's named deliverables, and `pinned_ids` is a conformance input (C9 reads
   it). Fixing them as typed accessors gives exporters a stable reader surface to build
@@ -780,6 +879,7 @@ What the reader deliberately does not own:
 | [`dimensional.md`](dimensional.md) | The first reshaping consumer — uses `query_arrow`, the `history_tracked` flag, and the faithful-read builders |
 | [`corrupters.md`](corrupters.md) | The base-emit-writing consumer — materializes every table via `query_arrow`, reads column metadata and reference targets from the `Sidecar`, and reuses the single-branch guard |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability — the consumer the strict `presentation_keys` accessor and the union-safety algebra exist for |
+| [`documentation-channel.md`](documentation-channel.md) | The downstream documentation channel — the inheritance/provenance rules and render sites built on the documentation view |
 | [`temporal-elections.md`](temporal-elections.md) | The session-zone pin's consumer — the elected temporal renderings whose zone-bearing serialization the pin makes machine-independent |
 | [`value-rendering-elections.md`](value-rendering-elections.md) | The value-election surface whose rendering scalar the reader registers at open — the session-zone pin's sibling species of connection-scoped setup |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored input contract the reader adapts to (sidecar shape, table categories, type mapping) |

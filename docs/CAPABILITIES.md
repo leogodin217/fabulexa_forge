@@ -95,6 +95,15 @@ See [`architecture/reader.md`](architecture/reader.md) and
   Beside it, the contract's union-safety algebra (`union_safe`, `combined_claim`) as
   pure, kind-scoped functions. See [`architecture/reader.md`](architecture/reader.md)
   § The presentation-keys registry is strict on read.
+- ✓ **Documentation view** — `Sidecar.documentation()` resolves the emit's five
+  documentation surfaces (per-column `description`/`unit`, `tables[].description`,
+  `enum_domains` per-value glosses, `scenario_description`, and the vendored
+  contract's pinned structural-column strings) behind one authority-per-column
+  rule — contract strings for structural columns, the sidecar for every other
+  declared column, absence is silence. `ColumnSpec`/`TableSpec` carry the
+  contract's optional documentation and value-declaration attributes verbatim.
+  See [`architecture/reader.md`](architecture/reader.md) § The documentation
+  view.
 
 ---
 
@@ -409,6 +418,17 @@ Each mode reads the same emit and writes a different target shape.
   [`architecture/companion-artifacts.md`](architecture/companion-artifacts.md).
   *Teaches: reading an unfamiliar dataset from its own docs — the habit real
   handed-off extracts demand.*
+- ✓ **Documentation channel (data dictionary + annotated proposals)** — the
+  companion README and manifest embed the emit's forwarded documentation:
+  scenario narrative, per-table descriptions, per-column description/unit under
+  the single-source inheritance rule (provenance stamped at plan compile), and
+  declared-value gloss lists; the manifest mirrors it machine-readably (`null`
+  for absence). All three `init` engines annotate their proposals with the same
+  documentation as YAML comments (comments are not grammar — proposals still
+  plan clean), and the corrupter's base-emit writer forwards the attributes so
+  a corrupted emit keeps its dictionary. Sourced, never invented — an
+  undocumented item renders nothing. See
+  [`architecture/documentation-channel.md`](architecture/documentation-channel.md).
 - ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
   through a required caller-supplied sink; CLI renders one line per notice to stderr,
   off stdout. See [`architecture/notices.md`](architecture/notices.md).
@@ -497,6 +517,13 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   units the draw hits: `entity_scoped` (seeded entity subset), `clustered_temporal`
   (sim-time windows), `correlated` (MNAR cross-column weighting); a seeded weighted draw
   that preserves `amount`'s exactness.
+- ✓ **Documentation fidelity** — the base-emit writer round-trips every sidecar
+  column attribute the reader models, the documentation and value-declaration
+  attributes included, plus `tables[].description`: attributes follow a
+  `schema_drift` rename, drop with a dropped column, and survive a retype, so a
+  corrupted emit keeps its data dictionary for every corrupt→export
+  composition. See
+  [`architecture/documentation-channel.md`](architecture/documentation-channel.md).
 
 ---
 

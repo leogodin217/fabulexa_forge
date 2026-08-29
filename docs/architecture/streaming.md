@@ -1079,7 +1079,12 @@ per-column temporal classes fails with the reader's own refusal
 — no dedicated `init` error exists (`SourceHistoryTrackedRequired` is source's posture
 because source *export* requires the flags; streaming's does not). It infers no intent:
 names are sidecar identity verbatim, and the degenerate sub-type value `default` is
-proposed as `name: default` — the author renames if they care.
+proposed as `name: default` — the author renames if they care. The proposal is
+annotated with the emit's forwarded documentation as YAML comments — scenario
+narrative, table descriptions on stream stubs, per-property description/unit,
+discriminator glosses — under the shared annotation contract
+([`documentation-channel.md`](documentation-channel.md) § `init` annotations);
+comments are not grammar, so the self-gating posture is untouched.
 
 Every proposed stream is **live**. The commented-out mechanism is reserved for genuine
 alternatives (the membership-events block, collision losers, topic-illegal names) —
