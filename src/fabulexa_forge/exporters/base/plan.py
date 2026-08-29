@@ -202,6 +202,13 @@ class BaseTableSpec:
     at any horizon. Defaults to empty so a direct test construction
     bypassing the builder needs no change; `_resolve_specs` always stamps
     it."""
+    author_descriptions: "Mapping[str, str]" = field(default_factory=dict)
+    """Output column name -> author-supplied rendered description, translated
+    from the matched `RenameEntry.descriptions` (state-at column identities)
+    through `column_renames` (§ `_resolve_descriptions_map`). Empty when no
+    rename entry matches this kind, or it declares no `descriptions`.
+    Defaults to empty so a direct test construction bypassing the builder
+    needs no change; `_resolve_specs` always stamps it."""
 
 
 @dataclass(frozen=True)
@@ -767,6 +774,44 @@ def _resolve_naming(
     return name, column_renames
 
 
+def _resolve_descriptions_map(
+    matched_entry: "RenameEntry | None",
+    column_renames: dict[str, str],
+    valid_identities: frozenset[str],
+    omitted: frozenset[str],
+) -> "Mapping[str, str]":
+    """Translate a matched rename entry's `descriptions` to output-name keys.
+
+    Gated exactly as `columns` (same key vocabulary and gate point):
+    `_check_column_domain` raises the specific resolution error for a key
+    that names no state-at or key column identity this kind's table emits.
+
+    Args:
+        matched_entry: The rename entry targeting this kind's table, or None.
+        column_renames: The kind's resolved column-rename map (post
+            `columns`), state-at identity -> output name.
+        valid_identities: The kind's full state-at + key column identity set.
+        omitted: The kind's `slice_only`-omitted identities.
+
+    Returns:
+        Output column name -> author-supplied prose, `descriptions`
+        iteration order; empty when `matched_entry` is None or declares no
+        `descriptions`.
+
+    Raises:
+        BaseRenameSliceOnly, BaseRenameUnresolved: A `descriptions` key names
+            an omitted `slice_only` column, or no state-at/key column
+            identity this emit produces.
+    """
+    if matched_entry is None or matched_entry.descriptions is None:
+        return {}
+    result: dict[str, str] = {}
+    for key, prose in matched_entry.descriptions.items():
+        _check_column_domain(key, valid_identities, omitted, matched_entry.table)
+        result[column_renames.get(key, key)] = prose
+    return result
+
+
 # ---------------------------------------------------------------------------
 # `render`: the unified rendering-election map
 # ---------------------------------------------------------------------------
@@ -1156,6 +1201,9 @@ def _resolve_specs(
             omitted_domain,
             reference_keys,
         )
+        author_descriptions = _resolve_descriptions_map(
+            matched_entry, column_renames, valid_identities, omitted_domain
+        )
 
         matched_render_entry = render_by_table.get(table)
         if matched_render_entry is not None:
@@ -1187,6 +1235,7 @@ def _resolve_specs(
                 column_renames=column_renames,
                 render=render_pairs,
                 provenance=provenance,
+                author_descriptions=author_descriptions,
             )
         )
 

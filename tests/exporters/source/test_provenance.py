@@ -30,6 +30,7 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.query_spec import ColumnProvenance, KindValueEntry
+from fabulexa_forge.exporters.source.engine import build_source_query_specs
 from fabulexa_forge.exporters.source.plan import (
     SourceJunctionTablePlan,
     SourceStateTablePlan,
@@ -138,6 +139,52 @@ def test_state_table_provenance_covers_exactly_its_projected_columns(
 
 
 # ---------------------------------------------------------------------------
+# author_descriptions: source-identity keys translated through `rename`
+# ---------------------------------------------------------------------------
+
+
+def test_state_table_description_key_lands_under_renamed_output_name(
+    tmp_path: Path,
+) -> None:
+    """A `descriptions` key addressed by source identity lands under its
+    post-`rename` output name."""
+    emit_dir = build_source_test_emit(tmp_path)
+    tables = (
+        SourceTableDecl(
+            name="visit",
+            kind="visit",
+            rename={"prop__status": "current_status"},
+            descriptions={"prop__status": "The visit's current status."},
+        ),
+    )
+    plan = _build_plan(emit_dir, tables)
+
+    assert plan.tables[0].author_descriptions == {
+        "current_status": "The visit's current status."
+    }
+
+
+def test_state_table_description_key_on_unrenamed_column_lands_under_own_name(
+    tmp_path: Path,
+) -> None:
+    """A `descriptions` key on an un-renamed column lands under its own
+    (already output-equal) name."""
+    emit_dir = build_source_test_emit(tmp_path)
+    tables = (
+        SourceTableDecl(
+            name="visit",
+            kind="visit",
+            descriptions={"prop__priority": "How urgent the visit is."},
+        ),
+    )
+    plan = _build_plan(emit_dir, tables)
+
+    assert plan.tables[0].author_descriptions == {
+        "priority": "How urgent the visit is."
+    }
+
+
+# ---------------------------------------------------------------------------
 # Junction table
 # ---------------------------------------------------------------------------
 
@@ -170,6 +217,27 @@ def test_junction_table_carried_columns_keyed_against_membership_table(
     assert unit.provenance["actor_id"] == ColumnProvenance(
         source_table=source_table, source_column="member__actor__id"
     )
+
+
+def test_junction_table_description_key_lands_under_renamed_output_name(
+    tmp_path: Path,
+) -> None:
+    """A junction table's `descriptions` key translates through `rename`
+    the same way a state table's does."""
+    emit_dir = build_source_test_emit(tmp_path)
+    tables = (
+        SourceTableDecl(
+            name="visit_team",
+            membership=MembershipRef(kind="visit", property="team"),
+            rename={"elem__role_name": "role"},
+            descriptions={"elem__role_name": "The member's role on the team."},
+        ),
+    )
+    plan = _build_plan(emit_dir, tables)
+    unit = plan.tables[0]
+    assert isinstance(unit, SourceJunctionTablePlan)
+
+    assert unit.author_descriptions == {"role": "The member's role on the team."}
 
 
 # ---------------------------------------------------------------------------
@@ -212,6 +280,20 @@ def test_event_log_provenance_always_empty(tmp_path: Path) -> None:
     assert plan.events.provenance == {}
     for column in ("id", "item_type", "item_id", "event", "occurred_at", "changes"):
         assert column not in plan.events.provenance
+
+
+def test_event_log_spec_stamps_empty_author_descriptions(tmp_path: Path) -> None:
+    """The event log declares no `descriptions` surface -- its compiled spec
+    stamps an empty `author_descriptions`."""
+    emit_dir = build_source_test_emit(tmp_path)
+    events = SourceEventsDecl(
+        name="audit", sources=(SourceEventSourceDecl(kind="visit"),)
+    )
+    plan = _build_plan(emit_dir, (), events=events)
+    specs = build_source_query_specs(plan, None)
+    log_spec = next(s for s in specs if s.table_name == "audit")
+
+    assert log_spec.author_descriptions == {}
 
 
 # ---------------------------------------------------------------------------

@@ -271,6 +271,13 @@ class SourceStateTablePlan:
     projection, rename, or cast-back carry, so every column gets an entry.
     Defaults to empty so a direct test construction bypassing the builder
     needs no change; `_build_state_table_plan` always stamps it."""
+    author_descriptions: "Mapping[str, str]" = _field(default_factory=dict)
+    """Output column name -> author-supplied rendered description, translated
+    from `SourceTableDecl.descriptions` (source-identity keys) through
+    `columns` (§ `_resolve_state_table_descriptions`). Empty when
+    `descriptions` is absent. Defaults to empty so a direct test construction
+    bypassing the builder needs no change; `_build_state_table_plan` always
+    stamps it."""
 
 
 @dataclass(frozen=True)
@@ -332,6 +339,13 @@ class SourceJunctionTablePlan:
     projection, rename, or cast-back carry, so every column gets an entry.
     Defaults to empty so a direct test construction bypassing the builder
     needs no change; `_build_junction_table_plan` always stamps it."""
+    author_descriptions: "Mapping[str, str]" = _field(default_factory=dict)
+    """Output column name -> author-supplied rendered description, translated
+    from `SourceTableDecl.descriptions` (source-identity keys) through
+    `columns` (§ `_resolve_junction_table_descriptions`). Empty when
+    `descriptions` is absent. Defaults to empty so a direct test construction
+    bypassing the builder needs no change; `_build_junction_table_plan`
+    always stamps it."""
 
 
 @dataclass(frozen=True)
@@ -1011,6 +1025,66 @@ def _apply_state_table_rename(
     return tuple((src, rename.get(src, out)) for src, out in columns)
 
 
+def _resolve_state_table_descriptions(
+    columns: tuple[tuple[str, str], ...],
+    descriptions: "dict[str, str] | None",
+    identity_surface: "KeySurface",
+    windowed: bool,
+    sidecar: "Sidecar",
+    kind: str,
+    table_name: str,
+    all_source_columns: frozenset[str],
+) -> "Mapping[str, str]":
+    """Translate a state table's declared `descriptions` map to output-name keys.
+
+    Gated exactly as `rename` (same key vocabulary and gate point): each key
+    must name one of the table's final projected column sources —
+    `_check_state_column_name` with `allow_identity=True` (the identity
+    slot's rename key, the elected surface's contract name, is equally
+    addressable for a description) raises the specific resolution error when
+    it does not.
+
+    Args:
+        columns: The table's final (source, output) pairs, post `columns` /
+            `rename`.
+        descriptions: The `tables[].descriptions` entry, or None.
+        identity_surface: The table's gated elected identity surface.
+        windowed: Whether the invocation is windowed.
+        sidecar: The open emit's sidecar.
+        kind: The table's record kind.
+        table_name: The table's output name, for errors.
+        all_source_columns: Every real column name of the kind's records
+            table.
+
+    Returns:
+        Output column name -> author-supplied prose; empty when
+        `descriptions` is None.
+
+    Raises:
+        SourceColumnUnresolved, SourceColumnNotAddressable, SourceSliceOnlyRead:
+            A `descriptions` key resolves to no projected column.
+    """
+    sources = frozenset(src for src, _ in columns)
+    resolved = _resolve_temporal_key_map(
+        descriptions,
+        sources,
+        table_name,
+        lambda key: _check_state_column_name(
+            key,
+            identity_surface,
+            windowed,
+            all_source_columns,
+            sidecar,
+            kind,
+            table_name,
+            allow_identity=True,
+        ),
+        lambda key, value: None,
+    )
+    output_by_source = dict(columns)
+    return {output_by_source[key]: value for key, value in resolved}
+
+
 # ---------------------------------------------------------------------------
 # `render`: the unified rendering-election map (shared, state + junction)
 # ---------------------------------------------------------------------------
@@ -1458,6 +1532,48 @@ def _apply_junction_rename(
     return tuple((src, rename.get(src, out)) for src, out in columns)
 
 
+def _resolve_junction_table_descriptions(
+    columns: tuple[tuple[str, str], ...],
+    descriptions: "dict[str, str] | None",
+    table_name: str,
+    all_source_columns: frozenset[str],
+) -> "Mapping[str, str]":
+    """Translate a junction table's declared `descriptions` map to output-name keys.
+
+    Gated exactly as `rename` (same key vocabulary and gate point):
+    `_check_junction_column_name` with `allow_owner=True` (the owner's rename
+    key, `record_id`, is equally addressable for a description) raises the
+    specific resolution error for an unresolved key.
+
+    Args:
+        columns: The table's final (source, output) pairs, post `columns` /
+            `rename`.
+        descriptions: The `tables[].descriptions` entry, or None.
+        table_name: The table's output name, for errors.
+        all_source_columns: Every real column name of the membership table.
+
+    Returns:
+        Output column name -> author-supplied prose; empty when
+        `descriptions` is None.
+
+    Raises:
+        SourceColumnUnresolved, SourceColumnNotAddressable: A `descriptions`
+            key resolves to no projected column.
+    """
+    sources = frozenset(src for src, _ in columns)
+    resolved = _resolve_temporal_key_map(
+        descriptions,
+        sources,
+        table_name,
+        lambda key: _check_junction_column_name(
+            key, all_source_columns, table_name, allow_owner=True
+        ),
+        lambda key, value: None,
+    )
+    output_by_source = dict(columns)
+    return {output_by_source[key]: value for key, value in resolved}
+
+
 def _resolve_junction_table_render(
     columns: tuple[tuple[str, str], ...],
     render: "dict[str, RenderElection] | None",
@@ -1745,6 +1861,16 @@ def _build_state_table_plan(
         decl.name,
         all_source_columns,
     )
+    author_descriptions = _resolve_state_table_descriptions(
+        columns,
+        decl.descriptions,
+        identity_surface,
+        windowed,
+        sidecar,
+        kind,
+        decl.name,
+        all_source_columns,
+    )
 
     render = _resolve_state_table_render(
         columns,
@@ -1799,6 +1925,7 @@ def _build_state_table_plan(
         where=where,
         render=render,
         provenance=build_carried_provenance(source_table, columns),
+        author_descriptions=author_descriptions,
     )
 
 
@@ -1871,6 +1998,9 @@ def _build_junction_table_plan(
     columns = _apply_junction_rename(
         columns, decl.rename, decl.name, all_source_columns
     )
+    author_descriptions = _resolve_junction_table_descriptions(
+        columns, decl.descriptions, decl.name, all_source_columns
+    )
 
     edge_surfaces = _resolve_junction_edges(
         sidecar,
@@ -1918,6 +2048,7 @@ def _build_junction_table_plan(
         where=where,
         render=render,
         provenance=build_carried_provenance(source_table, columns),
+        author_descriptions=author_descriptions,
     )
 
 

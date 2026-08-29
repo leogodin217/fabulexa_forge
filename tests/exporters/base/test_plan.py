@@ -543,6 +543,36 @@ def test_rename_columns_key_not_state_at_column_raises() -> None:
         build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
 
 
+def test_descriptions_key_not_state_at_column_raises() -> None:
+    """A `descriptions` key that is not a state-at or key column identity
+    raises BaseRenameUnresolved -- the same gate `columns` uses."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__doctor",
+                descriptions={"prop__nonexistent": "Does not exist."},
+            )
+        ]
+    )
+    with pytest.raises(BaseRenameUnresolved):
+        build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
+
+
+def test_descriptions_key_naming_omitted_slice_only_column_raises() -> None:
+    """A `descriptions` key naming an omitted slice_only column raises
+    BaseRenameSliceOnly -- the slice-only-unsatisfiable gate `columns` uses."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__patient",
+                descriptions={"prop__loyalty_tier": "The patient's tier."},
+            )
+        ]
+    )
+    with pytest.raises(BaseRenameSliceOnly):
+        build_base_plan(_slice_only_sidecar(), config, discard_notice_sink)
+
+
 def test_two_kinds_renamed_to_same_output_name_raises_collision() -> None:
     """Two kinds renamed to the same output name raises BaseNameCollision."""
     config = BaseConfig(

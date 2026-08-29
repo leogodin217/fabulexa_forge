@@ -2,7 +2,7 @@ sprint: desc-override
 parent_branch: base-format-v9
 baseline_sha: 1787c48b9b191b7c5b38dbf53cd605bfdd8309fe  # parent code baseline incl. the trailing-newline fixture fix
 started: 2026-08-29
-current_phase: 2
+current_phase: 3
 capabilities:
   - companion-documentation: [per-column description override]
 gates:
@@ -30,7 +30,7 @@ phases:
           - "tests/config/test_models.py"
           - "tests/exporters/test_query_spec.py"
   2:
-    status: pending
+    status: complete
     name: "Plan-compile stamping + descriptions key gates"
     demo: "docs/sprints/desc-override/demos/phase_2_plan_stamping.py"
     steps:

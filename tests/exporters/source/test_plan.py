@@ -515,6 +515,54 @@ def test_identity_rename_keyed_on_elected_surface_contract_name(
 
 
 # ---------------------------------------------------------------------------
+# `descriptions`: same key vocabulary and gate point as `rename`
+# ---------------------------------------------------------------------------
+
+
+def test_descriptions_key_naming_no_projected_column_raises_unresolved(
+    tmp_path: Path,
+) -> None:
+    """A `descriptions` key naming a column the table does not select raises
+    SourceColumnUnresolved, naming the table and the offending key -- the
+    same error the key would raise as a `rename` key."""
+    with pytest.raises(
+        SourceColumnUnresolved, match="table 'locs'.*'prop__nonexistent'"
+    ):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                tables=(
+                    SourceTableDecl(
+                        name="locs",
+                        kind="location",
+                        descriptions={"prop__nonexistent": "Does not exist."},
+                    ),
+                ),
+            ),
+        )
+
+
+def test_descriptions_key_structurally_unaddressable_raises_not_addressable(
+    tmp_path: Path,
+) -> None:
+    """A `descriptions` key naming a mechanism column (structurally
+    unaddressable, same as a `rename` key) raises SourceColumnNotAddressable."""
+    with pytest.raises(SourceColumnNotAddressable):
+        _open_plan(
+            build_source_test_emit(tmp_path),
+            _config(
+                tables=(
+                    SourceTableDecl(
+                        name="visits",
+                        kind="visit",
+                        descriptions={"fork_path": "The branch."},
+                    ),
+                ),
+            ),
+        )
+
+
+# ---------------------------------------------------------------------------
 # Mechanism columns: unaddressable
 # ---------------------------------------------------------------------------
 

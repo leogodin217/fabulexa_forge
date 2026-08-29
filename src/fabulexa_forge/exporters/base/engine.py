@@ -241,9 +241,10 @@ def build_base_query_specs(
 
     Returns:
         One QuerySpec per surviving kind, in deterministic sidecar order.
-        Every spec's `provenance` is copied verbatim from its `BaseTableSpec`
-        (stamped at plan build); `kind_values` stays empty — base carries no
-        kind-name-as-value column.
+        Every spec's `provenance` and `author_descriptions` are copied
+        verbatim from its `BaseTableSpec` (stamped at plan build);
+        `kind_values` stays empty — base carries no kind-name-as-value
+        column.
 
     Raises:
         ElectedKeyDuplicate: A corrupted elected key fails the uniqueness
@@ -306,6 +307,7 @@ def build_base_query_specs(
                     else None
                 ),
                 provenance=table_spec.provenance,
+                author_descriptions=table_spec.author_descriptions,
             )
         )
     return specs

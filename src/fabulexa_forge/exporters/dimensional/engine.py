@@ -234,6 +234,28 @@ def _guard_dim_side_legs(
             )
 
 
+def _table_author_descriptions(table_decl: "TableDecl") -> "Mapping[str, str]":
+    """One table's `author_descriptions`, keyed by the entry's own output name.
+
+    Every column entry mode (`from`, `derived`, `null`, `fk`, `correlation`,
+    `lookup`) may carry a `description` — the entry's own `name` is already
+    the output name, so no rename translation applies (dimensional has no
+    `descriptions`-key gate).
+
+    Args:
+        table_decl: The table declaration.
+
+    Returns:
+        Output column name -> author-supplied prose, `columns` declaration
+        order; empty when no entry carries a `description`.
+    """
+    return {
+        col_decl.name: col_decl.description
+        for col_decl in table_decl.columns
+        if col_decl.description is not None
+    }
+
+
 def build_query_specs(
     emit: "Emit",
     config: DimensionalConfig,
@@ -296,7 +318,9 @@ def build_query_specs(
         One QuerySpec per declared table, in declaration order. Each spec's
         `provenance` is `build_grain_sql`'s fifth element, stamped
         verbatim; `kind_values` stays empty — dimensional has no
-        kind-name-as-value output column.
+        kind-name-as-value output column. `author_descriptions` is stamped
+        from the table's column entries (§ `_table_author_descriptions`),
+        keyed by each entry's own output name.
 
     Raises:
         ExportError: The existing rules; plus, when window is not None:
@@ -376,6 +400,7 @@ def build_query_specs(
                 view_name=view_name,
                 view_sql=view_sql,
                 provenance=provenance,
+                author_descriptions=_table_author_descriptions(table_decl),
             )
         )
 

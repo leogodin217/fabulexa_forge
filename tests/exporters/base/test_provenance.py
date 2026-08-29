@@ -78,6 +78,52 @@ def test_renamed_column_keyed_by_output_name(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# author_descriptions: translated through the matched entry's `columns`
+# ---------------------------------------------------------------------------
+
+
+def test_descriptions_only_rename_entry_compiles_and_stamps(tmp_path: Path) -> None:
+    """A descriptions-only rename entry (no `name`, no `columns`) compiles,
+    stamping its descriptions keyed on the unrenamed default output name."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__actor",
+                descriptions={"prop__lead_id": "The lead's identity."},
+            )
+        ]
+    )
+    spec = _actor_spec(tmp_path, config)
+
+    assert spec.author_descriptions == {"prop__lead_id": "The lead's identity."}
+
+
+def test_descriptions_key_translates_through_columns_rename(tmp_path: Path) -> None:
+    """A `descriptions` key translates through the entry's `columns` renames
+    to the resulting output name."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__actor",
+                columns={"prop__lead_id": "leader"},
+                descriptions={"prop__lead_id": "The lead's identity."},
+            )
+        ]
+    )
+    spec = _actor_spec(tmp_path, config)
+
+    assert spec.author_descriptions == {"leader": "The lead's identity."}
+    assert "prop__lead_id" not in spec.author_descriptions
+
+
+def test_descriptions_absent_when_no_rename_entry_matches(tmp_path: Path) -> None:
+    """No matching rename entry -- `author_descriptions` stays empty."""
+    spec = _actor_spec(tmp_path)
+
+    assert spec.author_descriptions == {}
+
+
+# ---------------------------------------------------------------------------
 # Re-derived edge keys: no entry, any horizon
 # ---------------------------------------------------------------------------
 

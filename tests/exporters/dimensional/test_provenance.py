@@ -445,6 +445,82 @@ def test_kind_values_empty_on_every_dimensional_spec(tmp_path: Path) -> None:
         assert spec.kind_values == {}
 
 
+# ---------------------------------------------------------------------------
+# author_descriptions: keyed by each column entry's own output name
+# ---------------------------------------------------------------------------
+
+
+def test_dim_table_descriptions_stamped_for_entries_carrying_one(
+    tmp_path: Path,
+) -> None:
+    """`author_descriptions` carries exactly the entries with a `description`,
+    keyed by the entry's own output name -- no rename translation applies."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_actor",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["actor_id"],
+        columns=[
+            ColumnDecl(
+                name="actor_id",
+                **{"from": "record_id"},
+                description="The actor's identity.",
+            ),
+            ColumnDecl(name="display_name", correlation="prop__full_name"),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(table_decl))
+
+    assert specs["dim_actor"].author_descriptions == {
+        "actor_id": "The actor's identity."
+    }
+
+
+def test_dim_derived_and_null_column_description_stamped(tmp_path: Path) -> None:
+    """A `derived` column's and a `null:` column's own `description` both
+    stamp -- every column entry mode may carry one."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_actor",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["actor_id"],
+        columns=[
+            ColumnDecl(name="actor_id", **{"from": "record_id"}),
+            ColumnDecl(
+                name="joined_at",
+                derived=DerivedSpec(timestamp=TimestampSpec(source="created_sim_time")),
+                description="When the actor joined.",
+            ),
+            ColumnDecl(
+                name="placeholder",
+                null=True,
+                description="Reserved for future use.",
+            ),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(table_decl))
+
+    assert specs["dim_actor"].author_descriptions == {
+        "joined_at": "When the actor joined.",
+        "placeholder": "Reserved for future use.",
+    }
+
+
+def test_dim_table_with_no_descriptions_stamps_empty_map(tmp_path: Path) -> None:
+    """A table whose entries carry no `description` stamps an empty map."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(_dim_actor_table_decl()))
+
+    assert specs["dim_actor"].author_descriptions == {}
+
+
 def test_provenance_deterministic_across_compiles(tmp_path: Path) -> None:
     """Two compiles of the same plan against the same emit yield equal
     provenance maps."""
