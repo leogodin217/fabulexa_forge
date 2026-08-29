@@ -35,6 +35,7 @@ def _report(table_name: str = "patients") -> ExportReport:
                 keys=None,
                 provenance={},
                 kind_values={},
+                author_descriptions={},
             ),
         )
     )

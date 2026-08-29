@@ -52,6 +52,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 keys=TableKeys(primary_key=("id",), unique=(("name",),)),
                 provenance={},
                 kind_values={},
+                author_descriptions={},
             ),
             TableReport(
                 name="visits",
@@ -60,6 +61,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 keys=None,
                 provenance={},
                 kind_values={},
+                author_descriptions={},
             ),
         )
     )
@@ -371,6 +373,7 @@ def test_table_spanning_multiple_source_tables_forwards_no_description(
                         "b": ColumnProvenance("records__team", "prop__team_name"),
                     },
                     kind_values={},
+                    author_descriptions={},
                 ),
             )
         )

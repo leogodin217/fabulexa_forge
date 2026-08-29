@@ -2,7 +2,7 @@ sprint: desc-override
 parent_branch: base-format-v9
 baseline_sha: 1787c48b9b191b7c5b38dbf53cd605bfdd8309fe  # parent code baseline incl. the trailing-newline fixture fix
 started: 2026-08-29
-current_phase: 1
+current_phase: 2
 capabilities:
   - companion-documentation: [per-column description override]
 gates:
@@ -10,7 +10,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Config surfaces + compiled-plan carriage"
     demo: "docs/sprints/desc-override/demos/phase_1_config_carriage.py"
     steps:

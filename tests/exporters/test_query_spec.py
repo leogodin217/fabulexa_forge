@@ -82,8 +82,9 @@ def test_write_query_specs_csv_arm_ignores_keys(tmp_path: Path) -> None:
 def test_write_query_specs_duckdb_arm_forwards_provenance_verbatim(
     tmp_path: Path,
 ) -> None:
-    """`write_query_specs` forwards a spec's `provenance` and `kind_values`
-    onto the matching `TableReport` unchanged, under the DuckDB arm."""
+    """`write_query_specs` forwards a spec's `provenance`, `kind_values`, and
+    `author_descriptions` onto the matching `TableReport` unchanged, under
+    the DuckDB arm."""
     emit_dir = build_test_emit(tmp_path)
     out_path = tmp_path / "out.duckdb"
 
@@ -93,6 +94,7 @@ def test_write_query_specs_duckdb_arm_forwards_provenance_verbatim(
         )
     }
     kind_values = {"item_type": (KindValueEntry(label="Entity", source_kind="entity"),)}
+    author_descriptions = {"id": "The entity's stable identifier."}
     spec = QuerySpec(
         table_name="dim_entity",
         sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
@@ -101,6 +103,7 @@ def test_write_query_specs_duckdb_arm_forwards_provenance_verbatim(
         view_sql=None,
         provenance=provenance,
         kind_values=kind_values,
+        author_descriptions=author_descriptions,
     )
 
     with open_emit(emit_dir) as emit:
@@ -109,13 +112,15 @@ def test_write_query_specs_duckdb_arm_forwards_provenance_verbatim(
     table = report.tables[0]
     assert table.provenance == provenance
     assert table.kind_values == kind_values
+    assert table.author_descriptions == author_descriptions
 
 
 def test_write_query_specs_csv_arm_forwards_provenance_verbatim(
     tmp_path: Path,
 ) -> None:
-    """`write_query_specs` forwards a spec's `provenance` and `kind_values`
-    onto the matching `TableReport` unchanged, under the CSV arm."""
+    """`write_query_specs` forwards a spec's `provenance`, `kind_values`, and
+    `author_descriptions` onto the matching `TableReport` unchanged, under
+    the CSV arm."""
     emit_dir = build_test_emit(tmp_path)
     out_dir = tmp_path / "csv_out"
     out_dir.mkdir()
@@ -126,6 +131,7 @@ def test_write_query_specs_csv_arm_forwards_provenance_verbatim(
         )
     }
     kind_values = {"item_type": (KindValueEntry(label="Entity", source_kind="entity"),)}
+    author_descriptions = {"id": "The entity's stable identifier."}
     spec = QuerySpec(
         table_name="dim_entity",
         sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
@@ -134,6 +140,7 @@ def test_write_query_specs_csv_arm_forwards_provenance_verbatim(
         view_sql=None,
         provenance=provenance,
         kind_values=kind_values,
+        author_descriptions=author_descriptions,
     )
 
     with open_emit(emit_dir) as emit:
@@ -142,11 +149,13 @@ def test_write_query_specs_csv_arm_forwards_provenance_verbatim(
     table = report.tables[0]
     assert table.provenance == provenance
     assert table.kind_values == kind_values
+    assert table.author_descriptions == author_descriptions
 
 
 def test_write_query_specs_forwards_empty_maps_by_default(tmp_path: Path) -> None:
-    """A spec that stamps nothing forwards empty `provenance` / `kind_values`
-    onto its `TableReport` -- absence is not silently upgraded."""
+    """A spec that stamps nothing forwards empty `provenance`, `kind_values`,
+    and `author_descriptions` onto its `TableReport` -- absence is not
+    silently upgraded."""
     emit_dir = build_test_emit(tmp_path)
     out_path = tmp_path / "out.duckdb"
 
@@ -164,3 +173,4 @@ def test_write_query_specs_forwards_empty_maps_by_default(tmp_path: Path) -> Non
     table = report.tables[0]
     assert table.provenance == {}
     assert table.kind_values == {}
+    assert table.author_descriptions == {}

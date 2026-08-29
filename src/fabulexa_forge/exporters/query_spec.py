@@ -114,9 +114,10 @@ class TableReport:
     from the materialized relation via the writers' DESCRIBE authority.
     `row_count` is None on windowed invocations. `keys` is the table's
     declared `TableKeys`, or None when nothing was declared or the
-    declaration was CSV-dropped. `provenance` and `kind_values` are forwarded
-    verbatim from the compiled `QuerySpec` that produced this table — no
-    default, so every report-assembly call site states them explicitly.
+    declaration was CSV-dropped. `provenance`, `kind_values`, and
+    `author_descriptions` are forwarded verbatim from the compiled
+    `QuerySpec` that produced this table — no default, so every
+    report-assembly call site states them explicitly.
     """
 
     name: str
@@ -125,6 +126,7 @@ class TableReport:
     keys: TableKeys | None
     provenance: "Mapping[str, ColumnProvenance]"
     kind_values: "Mapping[str, tuple[KindValueEntry, ...]]"
+    author_descriptions: "Mapping[str, str]"
 
 
 @dataclass(frozen=True)
@@ -147,9 +149,9 @@ class QuerySpec:
     tables 'append', type-1 dims 'replace', and carries the companion view
     (name + DDL SELECT body) for SCD-2 dims that declare a valid_to column.
 
-    `provenance` and `kind_values` are keyed by output column name
-    (post-rename). Empty means nothing stamped; every mode engine stamps at
-    plan compile (tests pin per-mode stamping).
+    `provenance`, `kind_values`, and `author_descriptions` are keyed by
+    output column name (post-rename). Empty means nothing stamped; every
+    mode engine stamps at plan compile (tests pin per-mode stamping).
     """
 
     table_name: str
@@ -162,6 +164,7 @@ class QuerySpec:
     kind_values: "Mapping[str, tuple[KindValueEntry, ...]]" = field(
         default_factory=dict
     )
+    author_descriptions: "Mapping[str, str]" = field(default_factory=dict)
 
 
 NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"
@@ -280,6 +283,7 @@ def write_query_specs(
                     keys=spec.keys,
                     provenance=spec.provenance,
                     kind_values=spec.kind_values,
+                    author_descriptions=spec.author_descriptions,
                 )
                 for spec in specs
             )
@@ -298,6 +302,7 @@ def write_query_specs(
                 keys=None,
                 provenance=spec.provenance,
                 kind_values=spec.kind_values,
+                author_descriptions=spec.author_descriptions,
             )
         )
     return ExportReport(tables=tuple(tables))

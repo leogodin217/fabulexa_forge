@@ -25,6 +25,7 @@ from fabulexa_forge.config.models import (
     IncrementalConfig,
     JsonPrecisionSpec,
     RebaseConfig,
+    RenameEntry,
     ScdWindowSpec,
     SourceDecl,
     SourceTableDecl,
@@ -1377,6 +1378,158 @@ def test_from_alias_on_value_map_spec() -> None:
     """value_map.from: alias loads into from_ field."""
     vm = ValueMapSpec.model_validate({"from": "value", "map": {"a": 1}})
     assert vm.from_ == "value"
+
+
+# ---------------------------------------------------------------------------
+# description_nonempty (ColumnDecl.description)
+# ---------------------------------------------------------------------------
+
+
+def test_column_description_beside_from_parses() -> None:
+    """A `description` beside a `from` column mode parses."""
+    col = ColumnDecl.model_validate(
+        {"name": "id", "from": "record_id", "description": "The record's id."}
+    )
+    assert col.description == "The record's id."
+
+
+def test_column_description_beside_derived_parses() -> None:
+    """A `description` beside a `derived` column mode parses."""
+    col = ColumnDecl.model_validate(
+        {
+            "name": "seq",
+            "derived": {"ordinal": {"partition_by": "a", "order_by": "b"}},
+            "description": "Sequence within the partition.",
+        }
+    )
+    assert col.description == "Sequence within the partition."
+
+
+def test_column_description_beside_null_parses() -> None:
+    """A `description` beside a `null: true` column mode parses."""
+    col = ColumnDecl.model_validate(
+        {"name": "placeholder", "null": True, "description": "Filled in later."}
+    )
+    assert col.description == "Filled in later."
+
+
+def test_column_description_empty_string_raises() -> None:
+    """An empty-string `description` raises."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        ColumnDecl.model_validate(
+            {"name": "id", "from": "record_id", "description": ""}
+        )
+
+
+def test_column_description_whitespace_only_raises() -> None:
+    """A whitespace-only `description` raises."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        ColumnDecl.model_validate(
+            {"name": "id", "from": "record_id", "description": "   "}
+        )
+
+
+def test_column_description_absent_defaults_to_none() -> None:
+    """Absent `description` parses to None (inheritance as before)."""
+    col = ColumnDecl.model_validate({"name": "id", "from": "record_id"})
+    assert col.description is None
+
+
+# ---------------------------------------------------------------------------
+# table_shape — SourceTableDecl.descriptions
+# ---------------------------------------------------------------------------
+
+
+def test_source_table_descriptions_valid_map_parses() -> None:
+    """A well-formed `descriptions` map parses."""
+    decl = SourceTableDecl.model_validate(
+        {
+            "name": "visits",
+            "kind": "actor",
+            "descriptions": {"prop__tier": "The customer's loyalty tier."},
+        }
+    )
+    assert decl.descriptions == {"prop__tier": "The customer's loyalty tier."}
+
+
+def test_source_table_descriptions_empty_map_raises() -> None:
+    """A present-but-empty `descriptions` map raises."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        SourceTableDecl.model_validate(
+            {"name": "visits", "kind": "actor", "descriptions": {}}
+        )
+
+
+def test_source_table_descriptions_empty_key_raises() -> None:
+    """A `descriptions` entry with an empty key raises."""
+    with pytest.raises(ValidationError, match="keys must be non-empty"):
+        SourceTableDecl.model_validate(
+            {"name": "visits", "kind": "actor", "descriptions": {"": "prose"}}
+        )
+
+
+def test_source_table_descriptions_whitespace_value_raises() -> None:
+    """A `descriptions` entry with a whitespace-only value raises."""
+    with pytest.raises(ValidationError, match="non-empty and non-whitespace"):
+        SourceTableDecl.model_validate(
+            {"name": "visits", "kind": "actor", "descriptions": {"prop__tier": "   "}}
+        )
+
+
+def test_source_table_descriptions_absent_defaults_to_none() -> None:
+    """Absent `descriptions` parses to None (inheritance as before)."""
+    decl = SourceTableDecl.model_validate({"name": "visits", "kind": "actor"})
+    assert decl.descriptions is None
+
+
+# ---------------------------------------------------------------------------
+# entry_well_formed — RenameEntry.descriptions
+# ---------------------------------------------------------------------------
+
+
+def test_rename_entry_descriptions_only_is_valid() -> None:
+    """A `RenameEntry` with only `descriptions` set (no `name`, no `columns`)
+    is now valid."""
+    entry = RenameEntry.model_validate(
+        {
+            "table": "records__patient",
+            "descriptions": {"prop__tier": "The patient's loyalty tier."},
+        }
+    )
+    assert entry.name is None
+    assert entry.columns is None
+    assert entry.descriptions == {"prop__tier": "The patient's loyalty tier."}
+
+
+def test_rename_entry_no_fields_set_raises() -> None:
+    """An entry with none of name/columns/descriptions still raises."""
+    with pytest.raises(ValidationError, match="at least one"):
+        RenameEntry.model_validate({"table": "records__patient"})
+
+
+def test_rename_entry_descriptions_empty_map_raises() -> None:
+    """A present-but-empty `descriptions` map raises."""
+    with pytest.raises(ValidationError, match="non-empty"):
+        RenameEntry.model_validate({"table": "records__patient", "descriptions": {}})
+
+
+def test_rename_entry_descriptions_empty_key_raises() -> None:
+    """A `descriptions` entry with an empty key raises."""
+    with pytest.raises(ValidationError, match="keys must be non-empty"):
+        RenameEntry.model_validate(
+            {"table": "records__patient", "descriptions": {"": "prose"}}
+        )
+
+
+def test_rename_entry_descriptions_whitespace_value_raises() -> None:
+    """A `descriptions` entry with a whitespace-only value raises."""
+    with pytest.raises(ValidationError, match="non-empty and non-whitespace"):
+        RenameEntry.model_validate(
+            {
+                "table": "records__patient",
+                "descriptions": {"prop__tier": "   "},
+            }
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -290,6 +290,7 @@ def documented_actor_table_report(
                 KindValueEntry(label="Team", source_kind="team"),
             )
         },
+        author_descriptions={},
     )
 
 
@@ -322,6 +323,7 @@ def history_interval_table_report(
             "exited_at": ColumnProvenance("history", "lead_sim_time"),
         },
         kind_values={},
+        author_descriptions={},
     )
 
 
@@ -350,6 +352,7 @@ def value_mapped_table_report(
             ),
         },
         kind_values={},
+        author_descriptions={},
     )
 
 
@@ -389,4 +392,5 @@ def structural_identity_table_report(
             "changed_id": ColumnProvenance("history", "record_id"),
         },
         kind_values={},
+        author_descriptions={},
     )

@@ -713,6 +713,11 @@ class ColumnDecl(StrictBaseModel):
     """Emits a NULL column — a placeholder the author intends to fill externally."""
     lookup: LookupClause | None = None
     """Enriches the row with a type-1 scalar property of a related record."""
+    description: str | None = None
+    """Author-supplied rendered description for this output column. Replaces
+    the inherited (or forge-pinned) description in the companion README and
+    manifest; unit and declared-value resolution are unaffected. Absent ->
+    inheritance as before. Non-empty when present."""
 
     @model_validator(mode="before")
     @classmethod
@@ -758,6 +763,16 @@ class ColumnDecl(StrictBaseModel):
             ValueError: `name` does not match ^[A-Za-z_][A-Za-z0-9_]*$.
         """
         _require_sql_identifier(self.name, "column name")
+        return self
+
+    @model_validator(mode="after")
+    def description_nonempty(self) -> Self:
+        """`description`, when present, is non-empty and non-whitespace.
+
+        Raises:
+            ValueError: `description` is present and empty or whitespace-only.
+        """
+        _require_nonblank_str(self.description, f"column '{self.name}'.description")
         return self
 
 
@@ -938,20 +953,31 @@ class RenameEntry(StrictBaseModel):
     `event_sim_time`, `record_id`, `presentation_id`, `prop__<p>`). Never the derived
     default output name, so two source columns that share a default output name stay
     individually addressable."""
+    descriptions: dict[str, str] | None = None
+    """Source column identity -> author-supplied rendered description, keyed
+    like `columns` (state-at column identities). Replaces the inherited
+    description in the companion README and manifest. Keys validated at plan
+    time against the target table's columns. Counts toward the entry's
+    at-least-one-field rule. Absent -> inheritance as before."""
 
     @model_validator(mode="after")
     def entry_well_formed(self) -> Self:
-        """At least one of name/columns is set; columns (when present) is non-empty
-        with non-empty keys/values and distinct values; name/table/sub_type
+        """At least one of name/columns/descriptions is set; columns (when
+        present) is non-empty with non-empty keys/values and distinct
+        values; descriptions (when present) is non-empty with non-empty
+        keys and non-empty, non-whitespace values; name/table/sub_type
         (when set) are non-empty strings.
 
         Raises:
-            ValueError: Neither name nor columns is set; columns is empty or has
-                an empty key/value; two columns entries share an output name; or
-                name/table/sub_type is an empty string.
+            ValueError: None of name/columns/descriptions is set; columns is
+                empty or has an empty key/value; two columns entries share an
+                output name; descriptions is empty or has an empty key or a
+                blank value; or name/table/sub_type is an empty string.
         """
-        if self.name is None and self.columns is None:
-            raise ValueError("RenameEntry must set at least one of name / columns")
+        if self.name is None and self.columns is None and self.descriptions is None:
+            raise ValueError(
+                "RenameEntry must set at least one of name / columns / descriptions"
+            )
         if not self.table:
             raise ValueError("RenameEntry.table must be a non-empty string")
         if self.sub_type is not None and not self.sub_type:
@@ -977,6 +1003,7 @@ class RenameEntry(StrictBaseModel):
                     "RenameEntry.columns values must be distinct (two source"
                     f" columns may not rename to one output name): {duplicate_values}"
                 )
+        _require_descriptions_map_valid(self.descriptions, "RenameEntry.descriptions")
         return self
 
     @model_validator(mode="after")
@@ -1137,6 +1164,38 @@ def _require_dict_entries_nonempty(
             raise ValueError(f"{field_name} values must be non-empty")
 
 
+def _require_descriptions_map_valid(
+    value: dict[str, str] | None, field_name: str
+) -> None:
+    """A `descriptions` map: when present, non-empty, with non-empty keys and
+    non-empty, non-whitespace values.
+
+    Shared by `SourceTableDecl.descriptions` and `RenameEntry.descriptions` —
+    both key an author-supplied rendered description by source column
+    identity, and neither carries rename semantics, so no distinct-values
+    check applies (unlike `_require_rename_map_valid`).
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty dict, has an empty key, or a value
+            that is empty or whitespace-only.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    for key, prose in value.items():
+        if not key:
+            raise ValueError(f"{field_name} keys must be non-empty")
+        if not prose.strip():
+            raise ValueError(
+                f"{field_name} values must be non-empty and non-whitespace"
+            )
+
+
 def _require_exactly_one_population_source(
     kind: str | None, membership: "MembershipRef | None", label: str
 ) -> None:
@@ -1193,6 +1252,12 @@ class SourceTableDecl(StrictBaseModel):
     payload column (`prop__<p>` on `state`, `elem__<f>` on `junction`). One
     column, one election; keys and shape validated at plan time. Absent =
     default rendering."""
+    descriptions: dict[str, str] | None = None
+    """Source column identity -> author-supplied rendered description, keyed
+    like `rename` (source identity, never the output name). Replaces the
+    inherited description in the companion README and manifest for the
+    addressed output column. Keys validated at plan time against the table's
+    source columns. Absent -> inheritance as before."""
 
     @model_validator(mode="after")
     def table_shape(self) -> Self:
@@ -1204,10 +1269,11 @@ class SourceTableDecl(StrictBaseModel):
                 present-but-empty or carries a duplicate entry; `rename` is
                 present-but-empty or two keys share a target value; `where` is
                 present-but-empty or has an empty key; `render` is
-                present-but-empty or has an empty key. (Value emptiness /
-                duplication is carried by `PredicateValue` per entry; each
-                `render` entry's own shape is carried by its `RenderElection`
-                model.)
+                present-but-empty or has an empty key; `descriptions` is
+                present-but-empty or has an empty key or a blank value.
+                (Value emptiness / duplication is carried by `PredicateValue`
+                per entry; each `render` entry's own shape is carried by its
+                `RenderElection` model.)
         """
         _require_nonempty_str(self.name, "SourceTableDecl.name")
         label = f"table {self.name!r}"
@@ -1217,6 +1283,9 @@ class SourceTableDecl(StrictBaseModel):
         _require_rename_map_valid(self.rename, "SourceTableDecl.rename")
         _require_where_map_valid(self.where, "SourceTableDecl.where")
         _require_render_map_valid(self.render, "SourceTableDecl.render")
+        _require_descriptions_map_valid(
+            self.descriptions, "SourceTableDecl.descriptions"
+        )
         return self
 
 

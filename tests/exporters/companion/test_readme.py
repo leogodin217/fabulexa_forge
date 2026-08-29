@@ -75,6 +75,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 keys=TableKeys(primary_key=("id",), unique=(("mrn",),)),
                 provenance={},
                 kind_values={},
+                author_descriptions={},
             ),
             TableReport(
                 name="visits",
@@ -83,6 +84,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 keys=None,
                 provenance={},
                 kind_values={},
+                author_descriptions={},
             ),
         )
     )
