@@ -2,7 +2,7 @@ sprint: documentation-channel
 parent_branch: base-format-v9
 baseline_sha: d949348858aa2e1b024ad0dd8d07d5dcab88e1a3
 started: 2026-08-28
-current_phase: 5
+current_phase: 6
 capabilities:
   - reader: [documentation-view, column-attribute-model]
   - corrupters: [documentation-fidelity]
@@ -62,7 +62,7 @@ phases:
           - "tests/exporters/source/test_provenance.py"
           - "tests/exporters/base/test_provenance.py"
   5:
-    status: pending
+    status: complete
     name: "Companion data dictionary"
     demo: "docs/sprints/documentation-channel/demos/phase_5_data_dictionary.py"
     steps:

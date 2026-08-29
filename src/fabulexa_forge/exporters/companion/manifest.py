@@ -4,7 +4,12 @@ Assembles the manifest's field set
 (`docs/architecture/companion-artifacts.md` § The manifest) from the emit,
 config, resolved anchor, and one invocation's
 `ExportReport`, and owns the pinned byte serialization every companion write
-renders through.
+renders through. Format version 2 adds the machine-readable documentation
+mirror -- top-level `scenario_description`, per-table `description`,
+per-column `description` / `unit` / `enum_options` -- resolved through
+`emit.sidecar.documentation()` via the report's carried provenance
+(`companion/dictionary.py`), the same resolution the README renders.
+Absent -> JSON `null` (the manifest's stable-field-set posture).
 """
 
 from __future__ import annotations
@@ -15,6 +20,11 @@ from typing import TYPE_CHECKING, Literal
 
 from fabulexa_forge import __version__
 from fabulexa_forge.anchor import anchor_to_json
+from fabulexa_forge.exporters.companion.dictionary import (
+    resolve_column_doc,
+    resolve_column_enum_options,
+    resolve_table_description,
+)
 from fabulexa_forge.reader.emit import compute_sidecar_sha256
 
 if TYPE_CHECKING:
@@ -22,9 +32,10 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.exporters.companion.artifacts import WindowedArtifactState
     from fabulexa_forge.exporters.query_spec import ExportReport, TableKeys, TableReport
+    from fabulexa_forge.reader.documentation import Documentation
     from fabulexa_forge.reader.emit import Emit
 
-_MANIFEST_FORMAT_VERSION = 1
+_MANIFEST_FORMAT_VERSION = 2
 """The manifest's own format version -- mode-definitional, like the event
 log's dense first id: every manifest of this design renders it identically."""
 
@@ -119,13 +130,34 @@ def _keys_json(
     return list(keys.primary_key), [list(columns) for columns in keys.unique]
 
 
-def _table_json(table: "TableReport") -> dict[str, object]:
-    """One `tables` entry: name, ordered columns, declared keys, row count."""
+def _column_json(
+    doc: "Documentation", table: "TableReport", name: str, type_text: str
+) -> dict[str, object]:
+    """One `columns` entry: name, type, and its resolved documentation mirror."""
+    column_doc = resolve_column_doc(doc, table, name, type_text)
+    enum_options = [
+        {"value": option.value, "description": option.description}
+        for option in resolve_column_enum_options(doc, table, name)
+    ]
+    return {
+        "name": name,
+        "type": type_text,
+        "description": None if column_doc is None else column_doc.description,
+        "unit": None if column_doc is None else column_doc.unit,
+        "enum_options": enum_options or None,
+    }
+
+
+def _table_json(doc: "Documentation", table: "TableReport") -> dict[str, object]:
+    """One `tables` entry: name, forwarded description, documented columns,
+    declared keys, row count."""
     primary_key, unique = _keys_json(table.keys)
     return {
         "name": table.name,
+        "description": resolve_table_description(doc, table),
         "columns": [
-            {"name": name, "type": type_text} for name, type_text in table.columns
+            _column_json(doc, table, name, type_text)
+            for name, type_text in table.columns
         ],
         "primary_key": primary_key,
         "unique": unique,
@@ -168,16 +200,18 @@ def build_manifest_document(
         A JSON-serializable mapping of the manifest's field set, ready
         for `render_manifest_bytes`.
     """
+    doc = emit.sidecar.documentation()
     return {
         "manifest_format_version": _MANIFEST_FORMAT_VERSION,
         "mode": config.mode,
         "format": fmt,
         "forge_version": __version__,
+        "scenario_description": doc.scenario_description(),
         "emit": _emit_identity_json(build_emit_identity(emit)),
         "anchor": anchor_to_json(anchor),
         "config": config.model_dump(mode="json"),
         "incremental": _incremental_json(windowed),
-        "tables": [_table_json(table) for table in report.tables],
+        "tables": [_table_json(doc, table) for table in report.tables],
     }
 
 

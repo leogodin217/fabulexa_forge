@@ -1,10 +1,15 @@
 """Companion README renderer: mode template x overlay x derived facts.
 
 Renders the ordering contract (`docs/architecture/companion-artifacts.md`
-§ The README): title + generated-artifact marker naming the manifest ->
-overlay overview (when present) -> the mode template's semantics prose ->
-one section per output table (overlay note, derived column inventory, row
-count) -> resolved anchor facts -> emit identity.
+§ The README, delta per design doc § README ordering): title +
+generated-artifact marker naming the manifest -> overlay overview then the
+run's scenario narrative (either or both absent renders nothing) -> the mode
+template's semantics prose -> one section per output table (overlay note,
+forwarded table description, documented column inventory, declared-value
+gloss lists, row count) -> resolved anchor facts -> emit identity. Every
+resolved string comes from `emit.sidecar.documentation()` via the report's
+carried provenance (`companion/dictionary.py`); a column with no entry, and
+any absent attribute, renders nothing.
 """
 
 from __future__ import annotations
@@ -13,6 +18,12 @@ import importlib.resources
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
+from fabulexa_forge.exporters.companion.dictionary import (
+    resolve_column_doc,
+    resolve_column_enum_options,
+    resolve_kind_value_glosses,
+    resolve_table_description,
+)
 from fabulexa_forge.exporters.companion.manifest import build_emit_identity
 
 if TYPE_CHECKING:
@@ -20,6 +31,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.exporters.companion.manifest import EmitIdentity
     from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
     from fabulexa_forge.exporters.query_spec import ExportReport, TableKeys, TableReport
+    from fabulexa_forge.reader.documentation import ColumnDoc, Documentation
     from fabulexa_forge.reader.emit import Emit
 
 _MODE_TITLES: dict[str, str] = {
@@ -86,20 +98,100 @@ def _mark_column(name: str, keys: "TableKeys | None") -> str:
     return ""
 
 
-def _render_table_section(table: "TableReport", overlay: "ReadmeOverlay | None") -> str:
-    """One output table's section: overlay note, column inventory, row count."""
+def _render_column_line(
+    name: str, type_text: str, keys: "TableKeys | None", column_doc: "ColumnDoc | None"
+) -> str:
+    """One column inventory line: name, type, key marker, then description/unit.
+
+    An undocumented column (`column_doc` None, or carrying neither
+    attribute) renders name/type only -- no placeholder prose.
+    """
+    line = f"- `{name}` ({type_text}){_mark_column(name, keys)}"
+    if column_doc is None:
+        return line
+    doc_text = column_doc.description or ""
+    if column_doc.unit:
+        doc_text = (
+            f"{doc_text} [{column_doc.unit}]" if doc_text else f"[{column_doc.unit}]"
+        )
+    return f"{line}: {doc_text}" if doc_text else line
+
+
+def _render_gloss_list(
+    column_name: str, options: "list[tuple[str, str | None]]"
+) -> str:
+    """One column's declared-value gloss list: value bullets, label without
+    prose where a value carries no gloss."""
+    values = "\n".join(
+        f"  - `{value}`" + (f": {gloss}" if gloss else "") for value, gloss in options
+    )
+    return f"- `{column_name}`:\n{values}"
+
+
+def _render_column_gloss_lists(
+    doc: "Documentation", table: "TableReport"
+) -> str | None:
+    """The table's gloss-list block: one entry per closed-domain or
+    kind-name-as-value column, in column order; None when none qualify."""
+    blocks: list[str] = []
+    for name, _type_text in table.columns:
+        kind_glosses = resolve_kind_value_glosses(doc, table, name)
+        if kind_glosses:
+            blocks.append(_render_gloss_list(name, list(kind_glosses)))
+            continue
+        enum_options = resolve_column_enum_options(doc, table, name)
+        if enum_options:
+            blocks.append(
+                _render_gloss_list(
+                    name,
+                    [(option.value, option.description) for option in enum_options],
+                )
+            )
+    return "Declared values:\n\n" + "\n".join(blocks) if blocks else None
+
+
+def _render_table_section(
+    doc: "Documentation", table: "TableReport", overlay: "ReadmeOverlay | None"
+) -> str:
+    """One output table's section: overlay note, forwarded description,
+    documented column inventory, declared-value gloss lists, row count."""
     lines = [f"### {table.name}"]
     note = None if overlay is None else overlay.table_notes.get(table.name)
     if note:
         lines.append(note)
+    description = resolve_table_description(doc, table)
+    if description:
+        lines.append(description)
     columns = "\n".join(
-        f"- `{name}` ({type_text}){_mark_column(name, table.keys)}"
+        _render_column_line(
+            name, type_text, table.keys, resolve_column_doc(doc, table, name, type_text)
+        )
         for name, type_text in table.columns
     )
     lines.append(f"Columns:\n\n{columns}")
+    gloss_lists = _render_column_gloss_lists(doc, table)
+    if gloss_lists is not None:
+        lines.append(gloss_lists)
     if table.row_count is not None:
         lines.append(f"Row count: {table.row_count}")
     return "\n\n".join(lines)
+
+
+def _render_overview_section(
+    overlay: "ReadmeOverlay | None", doc: "Documentation"
+) -> str | None:
+    """The overview slot: overlay prose, then the run's scenario narrative.
+
+    Either or both absent renders nothing (None); present pieces render in
+    that order under one `## Overview` heading.
+    """
+    parts: list[str] = []
+    if overlay is not None and overlay.overview:
+        parts.append(overlay.overview)
+    narrative = doc.scenario_description()
+    if narrative:
+        parts.append(narrative)
+    return "## Overview\n\n" + "\n\n".join(parts) if parts else None
 
 
 def _render_anchor_section(anchor: "EffectiveAnchor | None") -> str:
@@ -157,11 +249,15 @@ def render_readme(
     Returns:
         The complete README text, ending in a single trailing newline.
     """
+    doc = emit.sidecar.documentation()
     sections = [_render_title(mode, manifest_filename)]
-    if overlay is not None and overlay.overview:
-        sections.append(f"## Overview\n\n{overlay.overview}")
+    overview = _render_overview_section(overlay, doc)
+    if overview is not None:
+        sections.append(overview)
     sections.append(_load_mode_template(mode).strip())
-    sections.extend(_render_table_section(table, overlay) for table in report.tables)
+    sections.extend(
+        _render_table_section(doc, table, overlay) for table in report.tables
+    )
     sections.append(_render_anchor_section(anchor))
     sections.append(_render_emit_identity_section(build_emit_identity(emit)))
     return "\n\n".join(sections) + "\n"

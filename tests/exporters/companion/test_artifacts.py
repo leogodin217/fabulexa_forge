@@ -4,11 +4,16 @@ is_companion_artifact_name."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 
-from exporters.companion._fixtures import write_minimal_emit
+from exporters.companion._fixtures import (
+    documented_actor_table_report,
+    write_documented_emit,
+    write_minimal_emit,
+)
 from fabulexa_forge.config.models import ExportConfig
 from fabulexa_forge.errors import ExportRuntimeError
 from fabulexa_forge.exporters.companion.artifacts import (
@@ -142,6 +147,75 @@ def test_unrecognized_names_are_not_companion_names(name: str) -> None:
 # ---------------------------------------------------------------------------
 # Failure surface
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# Inertness -- documentation presence never reshapes the table set
+# ---------------------------------------------------------------------------
+
+
+def _write_documented_manifest(
+    tmp_path: Path, subdir: str, *, documented: bool
+) -> dict[str, object]:
+    """Write companion artifacts over `write_documented_emit`'s fixture
+    (documented or stripped) and return the parsed manifest document."""
+    emit_dir = tmp_path / subdir / "emit"
+    emit_dir.mkdir(parents=True)
+    write_documented_emit(emit_dir, documented=documented)
+    out_dir = tmp_path / subdir / "out"
+    out_dir.mkdir()
+    with open_emit(emit_dir) as emit:
+        write_companion_artifacts(
+            emit=emit,
+            config=ExportConfig(mode="base"),
+            fmt="csv",
+            anchor=None,
+            report=ExportReport(tables=(documented_actor_table_report(),)),
+            overlay=None,
+            target=out_dir,
+            windowed=None,
+        )
+    return json.loads((out_dir / "base-manifest.json").read_text(encoding="utf-8"))
+
+
+def test_documentation_presence_does_not_reshape_the_table_set(
+    tmp_path: Path,
+) -> None:
+    """Whether the sidecar carries documentation or not, the manifest's
+    table/column names, types, keys, and row counts are identical -- only
+    the description/unit/enum_options fields vary."""
+    documented = _write_documented_manifest(tmp_path, "documented", documented=True)
+    stripped = _write_documented_manifest(tmp_path, "stripped", documented=False)
+
+    def _structural_fields(table: dict[str, object]) -> dict[str, object]:
+        columns = table["columns"]
+        assert isinstance(columns, list)
+        return {
+            "name": table["name"],
+            "primary_key": table["primary_key"],
+            "unique": table["unique"],
+            "row_count": table["row_count"],
+            "columns": [{"name": c["name"], "type": c["type"]} for c in columns],
+        }
+
+    documented_tables = documented["tables"]
+    stripped_tables = stripped["tables"]
+    assert isinstance(documented_tables, list)
+    assert isinstance(stripped_tables, list)
+    assert [_structural_fields(t) for t in documented_tables] == [
+        _structural_fields(t) for t in stripped_tables
+    ]
+
+    documented_columns = documented_tables[0]["columns"]
+    stripped_columns = stripped_tables[0]["columns"]
+    assert isinstance(documented_columns, list)
+    assert isinstance(stripped_columns, list)
+    documented_full_name = next(
+        c for c in documented_columns if c["name"] == "full_name"
+    )
+    stripped_full_name = next(c for c in stripped_columns if c["name"] == "full_name")
+    assert documented_full_name["description"] is not None
+    assert stripped_full_name["description"] is None
 
 
 def test_unwritable_target_raises_export_runtime_error(tmp_path: Path) -> None:

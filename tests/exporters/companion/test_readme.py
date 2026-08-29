@@ -9,7 +9,11 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from exporters.companion._fixtures import write_minimal_emit
+from exporters.companion._fixtures import (
+    documented_actor_table_report,
+    write_documented_emit,
+    write_minimal_emit,
+)
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.exporters.companion import readme as readme_module
 from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
@@ -214,6 +218,141 @@ def test_overview_absent_when_overlay_is_none(tmp_path: Path) -> None:
     """No overlay at all renders no '## Overview' section."""
     text = _render(tmp_path, overlay=None, anchor=None)
     assert "## Overview" not in text
+
+
+# ---------------------------------------------------------------------------
+# Data dictionary -- table section order + column/gloss resolution
+# ---------------------------------------------------------------------------
+
+
+def _render_documented(
+    tmp_path: Path,
+    *,
+    overlay: ReadmeOverlay | None,
+    row_count: int | None = 1,
+    emit_subdir: str = "emit",
+) -> str:
+    """Render the documented fixture's single `actor_state` table section."""
+    emit_dir = tmp_path / emit_subdir
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+    with open_emit(emit_dir) as emit:
+        return render_readme(
+            mode="source",
+            emit=emit,
+            report=ExportReport(
+                tables=(documented_actor_table_report(row_count=row_count),)
+            ),
+            overlay=overlay,
+            anchor=None,
+            manifest_filename="source-manifest.json",
+        )
+
+
+def _column_line(text: str, name: str) -> str:
+    """The single column-inventory line for `name` (`` - `<name>` ... ``)."""
+    for line in text.splitlines():
+        if line.startswith(f"- `{name}`"):
+            return line
+    raise AssertionError(f"no column inventory line for {name!r} in:\n{text}")
+
+
+def test_table_section_order_overlay_note_then_description_then_columns_then_glosses_then_row_count(
+    tmp_path: Path,
+) -> None:
+    """One table section orders: overlay note -> table description -> column
+    inventory -> declared-value gloss lists -> row count."""
+    overlay = ReadmeOverlay(overview=None, table_notes={"actor_state": "A note."})
+    text = _render_documented(tmp_path, overlay=overlay)
+    section = text[text.index("### actor_state") :]
+
+    note_index = section.index("A note.")
+    description_index = section.index("Hospital staff members.")
+    columns_index = section.index("Columns:")
+    glosses_index = section.index("Declared values:")
+    row_count_index = section.index("Row count: 1")
+
+    assert (
+        note_index < description_index < columns_index < glosses_index < row_count_index
+    )
+
+
+def test_documented_column_line_shapes(tmp_path: Path) -> None:
+    """Column inventory: description-only, description+unit, and
+    undocumented (name/type only, no placeholder prose) column shapes."""
+    text = _render_documented(tmp_path, overlay=None)
+
+    assert (
+        _column_line(text, "full_name")
+        == "- `full_name` (VARCHAR): Staff member's full legal name."
+    )
+    assert (
+        _column_line(text, "shift_minutes")
+        == "- `shift_minutes` (DECIMAL(10,2)): Length of the current shift. [minutes]"
+    )
+    assert _column_line(text, "team_id") == "- `team_id` (VARCHAR)"
+
+
+def test_structural_column_renders_contract_string_with_unit(tmp_path: Path) -> None:
+    """A carried structural column renders the pinned contract string, unit
+    kept where the rendering still counts as raw nanoseconds (an integer
+    type)."""
+    text = _render_documented(tmp_path, overlay=None)
+    assert _column_line(text, "created_sim_time") == (
+        "- `created_sim_time` (BIGINT): Simulation time the record was "
+        "created. Set once; never changed by later writes or deactivation. "
+        "[ns]"
+    )
+
+
+def test_temporal_rendering_drops_ns_unit_keeps_description(tmp_path: Path) -> None:
+    """The same structural source rendered as a TIMESTAMPTZ (a temporal/
+    instant rendering) drops the 'ns' unit but keeps the description."""
+    text = _render_documented(tmp_path, overlay=None)
+    assert _column_line(text, "created_at") == (
+        "- `created_at` (TIMESTAMPTZ): Simulation time the record was "
+        "created. Set once; never changed by later writes or deactivation."
+    )
+
+
+def test_non_ns_unit_kept_under_a_decimal_rendering(tmp_path: Path) -> None:
+    """A non-'ns' unit (minutes) rides its rendering unchanged -- a decimal
+    output type keeps both description and unit."""
+    text = _render_documented(tmp_path, overlay=None)
+    assert "[minutes]" in _column_line(text, "shift_minutes")
+
+
+def test_closed_domain_column_renders_declared_value_glosses(tmp_path: Path) -> None:
+    """A closed-domain column renders its declared values with glosses."""
+    text = _render_documented(tmp_path, overlay=None)
+    glosses = text[text.index("Declared values:") :]
+    status_block = glosses[glosses.index("- `status`:") :]
+    assert "- `A`: Active and on duty." in status_block
+    assert "- `I`: Inactive; off duty." in status_block
+
+
+def test_kind_name_as_value_column_glosses_present_and_absent(
+    tmp_path: Path,
+) -> None:
+    """A kind-name-as-value column glosses each label from its source kind's
+    table description; a label without prose (an undocumented kind) renders
+    bare."""
+    text = _render_documented(tmp_path, overlay=None)
+    glosses = text[text.index("Declared values:") :]
+    kind_block = glosses[glosses.index("- `kind`:") :]
+    assert "- `Actor`: Hospital staff members." in kind_block
+    assert "- `Team`\n" in kind_block or kind_block.rstrip().endswith("- `Team`")
+    assert "- `Team`:" not in kind_block
+
+
+def test_two_renders_are_byte_identical(tmp_path: Path) -> None:
+    """Two renders of the same documented inputs are byte-identical."""
+    overlay = ReadmeOverlay(
+        overview="Overlay prose.", table_notes={"actor_state": "A note."}
+    )
+    first = _render_documented(tmp_path, overlay=overlay, emit_subdir="emit1")
+    second = _render_documented(tmp_path, overlay=overlay, emit_subdir="emit2")
+    assert first == second
 
 
 # ---------------------------------------------------------------------------

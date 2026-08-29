@@ -130,9 +130,9 @@ def _assert_manifest_matches_report(
     assert len(entries) == len(report.tables)
     for entry, table in zip(entries, report.tables, strict=True):
         assert entry["name"] == table.name
-        assert entry["columns"] == [
-            {"name": name, "type": type_text} for name, type_text in table.columns
-        ]
+        assert [
+            {"name": col["name"], "type": col["type"]} for col in entry["columns"]
+        ] == [{"name": name, "type": type_text} for name, type_text in table.columns]
         assert entry["row_count"] == table.row_count
         if table.keys is None:
             assert entry["primary_key"] is None
