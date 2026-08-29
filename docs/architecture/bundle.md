@@ -141,7 +141,10 @@ per-column `history_tracked` (which properties have change rows in
 normative semantics: contract § The sidecar.
 
 Further surfaces describe the emit for a consumer choosing a target shape.
-All are optional, and the reader exposes none of them today. Per column,
+All are optional; the reader carries the per-column declarations verbatim on
+`ColumnSpec`, resolves the documentation surfaces through
+`Sidecar.documentation()` ([`reader.md`](reader.md) § The documentation
+view), and exposes the census as `Sidecar.row_census`. Per column,
 `min` / `max`, `immutable`, and `required` are declarations the producer
 enforces on every write — `immutable` is the guarantee that no post-creation
 write is permitted, which `temporal_class: constant` (a value that merely

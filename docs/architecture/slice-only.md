@@ -7,7 +7,10 @@ unknowable, and the contract states a consumer MUST NOT present it as an as-of-T
 value. This doc owns the export-wide posture that enforces that clause: **no
 exporter output value, row membership, linkage, or ordering derives from a
 `slice_only` column's value**, with one mechanical carve-out for the sub-typed
-discriminator. Enforcement is surface-appropriate — author-named reads are
+discriminator. The carve-out runs **permissive**: it grants the one value-read
+exception (classification reads of `prop__<K>_type`), never adds a
+restriction — and sub-typed discriminators are `temporal_class: constant`, so
+the policy population never contains them in the first place. Enforcement is surface-appropriate — author-named reads are
 refused at validation, auto-projected surfaces omit with a
 [notice](notices.md) — and is not author-configurable: the policy is
 contract-mandated, so there is no opt-out knob, no new YAML field.
