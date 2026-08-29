@@ -93,6 +93,7 @@ def _actor_records_columns(*, documented: bool) -> list[dict[str, object]]:
     return [
         identity_column("fork_path", "VARCHAR"),
         identity_column("record_id", "VARCHAR"),
+        {"name": "presentation_id", "type": "VARCHAR"},
         {"name": "created_sim_time", "type": "BIGINT"},
         {"name": "active", "type": "BOOLEAN"},
         {"name": "deactivated_at", "type": "BIGINT"},
@@ -162,8 +163,11 @@ def write_documented_emit(dest: "Path", *, documented: bool = True) -> None:
     kind (`records__team`, no `description`), a description-only property
     (`prop__full_name`), a description+unit property (`prop__shift_minutes`),
     a closed-domain property (`prop__status`), an undocumented property
-    (`prop__team_id`), and the fixed `history` table for the
-    `sim_time`/`lead_sim_time` structural resolutions.
+    (`prop__team_id`), the fixed `history` table for the
+    `sim_time`/`lead_sim_time` structural resolutions, a
+    `membership__actor__team` table for the membership-family pinned
+    strings, and a `presentation_id` column (with its mandatory
+    `presentation_keys` entry) for the presentation pinned string.
 
     Args:
         dest: The emit directory; base.json and run.duckdb are written inside it.
@@ -171,6 +175,24 @@ def write_documented_emit(dest: "Path", *, documented: bool = True) -> None:
             scenario_description value while keeping table/column names,
             types, and references identical -- the inertness fixture pair.
     """
+    extra: dict[str, object] = {
+        # Structural coherence, not documentation: a records table carrying
+        # presentation_id must have a presentation_keys entry, documented
+        # or not.
+        "presentation_keys": {
+            "actor": {
+                "key": {
+                    "unique_within": "branch",
+                    "branch_stable": True,
+                    "slice_stable": True,
+                    "key_space": {"class": "uuid"},
+                }
+            }
+        },
+    }
+    if documented:
+        extra["scenario_description"] = SCENARIO_DESCRIPTION
+        extra["enum_domains"] = _DOCUMENTED_ENUM_DOMAINS
     write_emit(
         dest,
         tables=[
@@ -195,15 +217,21 @@ def write_documented_emit(dest: "Path", *, documented: bool = True) -> None:
                 "rows": 0,
                 "columns": _history_columns(),
             },
-        ],
-        extra=(
             {
-                "scenario_description": SCENARIO_DESCRIPTION,
-                "enum_domains": _DOCUMENTED_ENUM_DOMAINS,
-            }
-            if documented
-            else None
-        ),
+                "name": "membership__actor__team",
+                "category": "membership",
+                "record_kind": "actor",
+                "property": "team",
+                "rows": 0,
+                "columns": [
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    {"name": "joined_sim_time", "type": "BIGINT"},
+                    {"name": "left_sim_time", "type": "BIGINT"},
+                ],
+            },
+        ],
+        extra=extra,
     )
     duckdb.connect(str(dest / "run.duckdb")).close()
 
@@ -320,6 +348,45 @@ def value_mapped_table_report(
             "status": ColumnProvenance(
                 "records__actor", "prop__status", value_map=(("A", "active"),)
             ),
+        },
+        kind_values={},
+    )
+
+
+def structural_identity_table_report(
+    *, table_name: str = "actor_identity", row_count: int | None = 1
+) -> TableReport:
+    """One output table carrying every pinned identity surface whose contract
+    string points at base-layer structure -- the export-rewrite fixture:
+
+    - `event_id` <- `records__actor.record_id` (the "use record_index" advice)
+    - `public_id` <- `records__actor.presentation_id` (the sidecar clause)
+    - `owner_id` <- `membership__actor__team.record_id` (the table-name
+      segment claim)
+    - `changed_id` <- `history.record_id` (the records__<kind> join advice)
+
+    Args:
+        table_name: The output table's name.
+        row_count: The report's row count (None for a windowed invocation).
+
+    Returns:
+        The `TableReport`.
+    """
+    return TableReport(
+        name=table_name,
+        columns=(
+            ("event_id", "VARCHAR"),
+            ("public_id", "VARCHAR"),
+            ("owner_id", "VARCHAR"),
+            ("changed_id", "VARCHAR"),
+        ),
+        row_count=row_count,
+        keys=None,
+        provenance={
+            "event_id": ColumnProvenance("records__actor", "record_id"),
+            "public_id": ColumnProvenance("records__actor", "presentation_id"),
+            "owner_id": ColumnProvenance("membership__actor__team", "record_id"),
+            "changed_id": ColumnProvenance("history", "record_id"),
         },
         kind_values={},
     )

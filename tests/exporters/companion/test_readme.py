@@ -12,6 +12,7 @@ import pytest
 from exporters.companion._fixtures import (
     documented_actor_table_report,
     history_interval_table_report,
+    structural_identity_table_report,
     value_mapped_table_report,
     write_documented_emit,
     write_minimal_emit,
@@ -380,6 +381,47 @@ def test_history_interval_end_column_gets_end_of_validity_description(
         "- `exited_at` (TIMESTAMP): Simulation time the value stopped holding "
         "— the instant the series' next change took effect; NULL while the "
         "value is still current at the slice boundary."
+    )
+
+
+def test_structural_identity_strings_rewritten_for_export(tmp_path: Path) -> None:
+    """The four pinned identity strings whose prose points at base-layer
+    structure (a records__<kind> join target, the record_index column, the
+    membership table-name segment, the sidecar) render with that pointer
+    clause rewritten out; each string's factual core survives."""
+    text = _render_report(tmp_path, structural_identity_table_report())
+    section = text[text.index("### actor_identity") :]
+
+    assert _column_line(section, "event_id") == (
+        "- `event_id` (VARCHAR): Opaque identifier of the record within its "
+        "branch and kind. Not ordered by creation."
+    )
+    assert _column_line(section, "public_id") == (
+        "- `public_id` (VARCHAR): Presentation surrogate identity minted for this kind."
+    )
+    assert _column_line(section, "owner_id") == (
+        "- `owner_id` (VARCHAR): Id of the record that owns the collection."
+    )
+    assert _column_line(section, "changed_id") == (
+        "- `changed_id` (VARCHAR): Id of the record whose property changed. Opaque."
+    )
+    assert "record_index" not in section
+    assert "records__" not in section
+    assert "segment" not in section
+    assert "sidecar" not in section
+
+
+def test_structural_string_without_rewrite_stays_contract_verbatim(
+    tmp_path: Path,
+) -> None:
+    """A pinned string outside the rewrite set (created_sim_time) still
+    renders contract-verbatim -- the rewrite is an enumerated exception, not
+    a general paraphrase pass."""
+    text = _render_documented(tmp_path, overlay=None)
+    assert _column_line(text, "created_sim_time") == (
+        "- `created_sim_time` (BIGINT): Simulation time the record was "
+        "created. Set once; never changed by later writes or deactivation. "
+        "[ns]"
     )
 
 

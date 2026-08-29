@@ -51,18 +51,35 @@ An output column inherits documentation **iff its value is the faithful carry
 of exactly one source column** — projection, rename, cast-back, a
 temporal/value rendering election, dimensional `lookup`. The inherited
 documentation is the *source* column's resolved answer, so a carried
-structural column gets the contract-verbatim string and a carried payload
-column its sidecar prose. A column fed by computation or by more than one
-source inherits nothing:
+structural column gets the contract string and a carried payload column its
+sidecar prose. A column fed by computation or by more than one source
+inherits nothing:
 
 | Output column | Documentation |
 |---|---|
 | Pass-through / renamed payload column | source property's `description` / `unit` |
-| Structural column projected as stored (`record_id`, `presentation_id`, an elected key surface carried without re-derivation) | contract-verbatim string, placeholders bound to the source instance |
+| Structural column projected as stored (`record_id`, `presentation_id`, an elected key surface carried without re-derivation) | the contract string, placeholders bound to the source instance — verbatim except the export-rewrite set below |
 | Dimensional `lookup` column | looked-up property's `description` / `unit` |
+| Dimensional `derived: value_map` column | source property's `description`; its declared value list is the **post-map domain** — the source options translated through the stamped map (glosses kept, unmapped options dropped — they render NULL), never the source's raw values, which the column does not contain |
+| history_interval's interval-end column (the virtual `lead_sim_time`) | `sim_time`'s unit/origin with a **forge-authored end-of-validity description** — the contract documents only the one `sim_time` axis, and the start column's took-effect prose is false of the end bound |
 | Derived measure, elapsed, `seq`, SCD-2 `valid_from` / `valid_to`, event-log `changes` / `event_type`, re-derived identity key (base's `<kind>_key` / `<p>_key`, any horizon-re-derived `record_index` / `ref_index` surface) | none — mode-template prose owns their meaning |
 | Kind-name-as-value column (the source event log's `item_type` — README only) | per-value gloss list: each rendered label (post-`kind_labels`) glossed by the source kind's `tables[].description`, when present |
 | Closed-domain property column | its declared value list rendered with per-value glosses where present (the list itself is `enum_domains` intent — sourced) |
+
+**Export rewrites of base-pointing contract strings.** Four pinned structural
+strings carry prose that points at base-layer structure a shaped export does
+not contain — "equality-join against `records__<kind>.record_id`" (history's
+`record_id`), "use `record_index` for creation order" (records `record_id`),
+"its kind is the table name's `<K>` segment" (membership `record_id`), and
+"present only when the sidecar declares it" (`presentation_id`). The contract
+makes verbatim embedding a MAY, not an obligation (contract § Structural
+column descriptions); the companion dictionary renders these four with the
+dangling pointer clause rewritten out, keeping each string's factual core.
+The rewrite set is enumerated (`_EXPORT_STRUCTURAL_REWRITES` in
+[`dictionary.py`](../../src/fabulexa_forge/exporters/companion/dictionary.py)),
+applies only to contract-answered docs, and never touches sidecar prose or
+units. The reader's `Documentation` view itself stays contract-verbatim —
+the rewrite is a companion-rendering concern, not a reader one.
 
 **Re-derived keys are computed, not carried.** A key surface produced by
 re-derivation rather than projection — base's `<kind>_key` self key and
@@ -156,9 +173,13 @@ uncommenting keeps the documentation.
    placeholder prose ("no description"), a TODO, or derived text for an
    undocumented item.
 3. **Sourced, never invented.** Every rendered documentation string traces
-   verbatim to the sidecar or the vendored contract; the only transformation
-   is instance-placeholder substitution, which binds names the contract says
-   the instance binds.
+   to the sidecar, the vendored contract, or a forge-pinned dictionary
+   constant (the interval-end description; the four export rewrites of
+   base-pointing contract strings). The only transformations are
+   instance-placeholder substitution and those two enumerated constant sets
+   — nothing is ever derived from data, column names, or types, and a
+   declared value list renders sourced values only: the sidecar's options,
+   or their author-declared `value_map` images.
 4. **Inheritance only under single-source provenance.** An output column
    carries documentation iff exactly one source column faithfully fed it —
    answered once at plan compile, carried on the report, never re-derived

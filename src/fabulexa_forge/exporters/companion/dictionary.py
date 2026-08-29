@@ -7,7 +7,12 @@ doc § The data dictionary in companion artifacts).
 
 **Column resolution.** A column with no carried provenance entry (computed,
 or fed by more than one source) inherits nothing. A carried column's
-documentation is its source column's resolved `ColumnDoc`. Unit inheritance
+documentation is its source column's resolved `ColumnDoc` — except the
+pinned structural strings whose prose points at base-layer structure a
+shaped export does not contain, which render here with that pointer clause
+rewritten out (`_EXPORT_STRUCTURAL_REWRITES`; the contract's § Structural
+column descriptions makes verbatim embedding a MAY, and a renamed export
+has left the naming domain those clauses point into). Unit inheritance
 stops where a rendering election left the source's raw-nanosecond ("ns")
 form for something else -- a temporal/instant rendering turns a raw ns
 integer into a DATE/TIMESTAMPTZ value the unit no longer describes; every
@@ -69,6 +74,55 @@ _LEAD_SIM_TIME_DESCRIPTION = (
     " slice boundary."
 )
 
+#: The `membership__<K>__<p>` table-name prefix — family membership only;
+#: nothing here parses the owner kind or property out of the name.
+_MEMBERSHIP_TABLE_PREFIX = "membership__"
+
+#: Export-facing rewrites of the pinned structural strings whose prose
+#: points at base-layer structure a shaped export does not contain — a
+#: `records__<kind>` table to equality-join, the `membership__<K>__<p>`
+#: table-name shape ("the table name's <K> segment"), the `record_index`
+#: column most shaped exports render under another name or not at all, and
+#: the sidecar ("present only when the sidecar declares it" beside a column
+#: that visibly is present). The contract *permits* verbatim embedding
+#: ("MAY embed the strings below verbatim", contract § Structural column
+#: descriptions) — permission, not obligation; an export has left the base
+#: layer's naming domain, so each rewrite keeps the string's factual core
+#: and drops only the dangling pointer clause. Keyed by (pinned family,
+#: source column); applied only to a contract-answered doc, never to
+#: sidecar prose; units are untouched.
+_EXPORT_STRUCTURAL_REWRITES: "dict[tuple[str, str], str]" = {
+    ("history", "record_id"): "Id of the record whose property changed. Opaque.",
+    ("records", "record_id"): (
+        "Opaque identifier of the record within its branch and kind. Not"
+        " ordered by creation."
+    ),
+    ("records", "presentation_id"): (
+        "Presentation surrogate identity minted for this kind."
+    ),
+    ("membership", "record_id"): "Id of the record that owns the collection.",
+}
+
+
+def _structural_family(source_table: str) -> str | None:
+    """The pinned-block family a provenance source table answers under.
+
+    Args:
+        source_table: A `ColumnProvenance.source_table` value.
+
+    Returns:
+        "history" / "records" / "membership", or None for a source table
+        outside the three pinned families.
+    """
+    if source_table == _HISTORY_TABLE:
+        return "history"
+    if records_kind_from_table(source_table) is not None:
+        return "records"
+    if source_table.startswith(_MEMBERSHIP_TABLE_PREFIX):
+        return "membership"
+    return None
+
+
 #: DuckDB's integer type literals -- the forms a raw-nanosecond ("ns") value
 #: still counts as itself under. Any other rendered type is a
 #: temporal/instant rendering that has left the "ns" claim behind.
@@ -123,10 +177,12 @@ def resolve_column_doc(
         `lead_sim_time` resolves through `sim_time`'s entry for unit/origin
         but carries the forge-authored end-of-interval description — the
         start column's took-effect prose would be wrong on the end bound),
-        unit dropped where `output_type` shows the rendering left the
-        source's raw-nanosecond form behind; None for a column with no
-        carried provenance, or whose source carries neither description nor
-        unit.
+        a contract-answered description rewritten per
+        `_EXPORT_STRUCTURAL_REWRITES` where the pinned string points at
+        base-layer structure the export does not contain, unit dropped where
+        `output_type` shows the rendering left the source's raw-nanosecond
+        form behind; None for a column with no carried provenance, or whose
+        source carries neither description nor unit.
     """
     provenance = table.provenance.get(column_name)
     if provenance is None:
@@ -147,6 +203,15 @@ def resolve_column_doc(
         column_doc = doc.column_doc(provenance.source_table, source_column)
     if column_doc is None:
         return None
+    if column_doc.origin == "contract":
+        family = _structural_family(provenance.source_table)
+        rewrite = (
+            None
+            if family is None
+            else _EXPORT_STRUCTURAL_REWRITES.get((family, source_column))
+        )
+        if rewrite is not None:
+            column_doc = replace(column_doc, description=rewrite)
     if column_doc.unit == "ns" and output_type.upper() not in _INTEGER_DUCKDB_TYPES:
         return replace(column_doc, unit=None)
     return column_doc
