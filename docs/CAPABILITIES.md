@@ -413,8 +413,8 @@ Each mode reads the same emit and writes a different target shape.
   The manifest embeds the full config and per-table facts under a pinned byte
   form. Artifacts are inert (dataset bytes, notices, exit codes identical with
   or without them) and rewritten whole-state per emitting incremental window;
-  the incremental fingerprint ignores `readme_overlay`, so documentation can
-  improve mid-drip. See
+  the incremental fingerprint ignores `readme_overlay` and the per-column
+  description overrides, so documentation can improve mid-drip. See
   [`architecture/companion-artifacts.md`](architecture/companion-artifacts.md).
   *Teaches: reading an unfamiliar dataset from its own docs — the habit real
   handed-off extracts demand.*
@@ -423,7 +423,11 @@ Each mode reads the same emit and writes a different target shape.
   scenario narrative, per-table descriptions, per-column description/unit under
   the single-source inheritance rule (provenance stamped at plan compile), and
   declared-value gloss lists; the manifest mirrors it machine-readably (`null`
-  for absence). All three `init` engines annotate their proposals with the same
+  for absence). An optional per-column `description` override in each
+  companion-writing mode's config (dimensional column entry, source / base
+  `descriptions` maps) re-voices a column's rendered description author-first
+  — inherited prose replaced, computed columns documentable, units and value
+  lists untouched. All three `init` engines annotate their proposals with the same
   documentation as YAML comments (comments are not grammar — proposals still
   plan clean), and the corrupter's base-emit writer forwards the attributes so
   a corrupted emit keeps its dictionary. Sourced, never invented — an

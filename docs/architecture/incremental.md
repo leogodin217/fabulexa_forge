@@ -248,10 +248,13 @@ field.
 | `csv` | `out/.fabulexa-forge-cursor.json` — keys are exactly the `Cursor` field names | Window staged in `out/.tmp_<label>`, atomically renamed to `out/<label>`, then the cursor is written. A crash between rename and cursor write re-derives the same window and overwrites the identical drop — idempotent |
 
 The **fingerprint** is a SHA-256 over a canonical JSON document (UTF-8, sorted keys,
-compact separators, no NaN/Infinity) of: the parsed `ExportConfig` (model dump,
-`readme_overlay` excluded — the fingerprint guards data-seam consistency, and the
-overlay provably never affects data, so improving documentation mid-drip must not
-halt a drip; the manifest's embedded config keeps the field —
+compact separators, no NaN/Infinity) of: the parsed `ExportConfig` (model dump, the
+documentation-presentation surfaces excluded — `readme_overlay` and the three
+per-column description-override surfaces
+([`documentation-channel.md`](documentation-channel.md) § The author description
+override) — the fingerprint guards data-seam consistency, and those fields provably
+never affect data, so improving documentation mid-drip must not halt a drip; the
+manifest's embedded config keeps the fields —
 [`companion-artifacts.md`](companion-artifacts.md) § The manifest), the
 resolved anchor (`start_instant` ISO + IANA key, or null), the SHA-256 of `base.json`'s
 bytes, the sole branch's `fork_path`, the `fmt`, and the package version. `--next`
