@@ -1,1 +1,100 @@
-datasets: []
+# The authored allowlist of published datasets (docs/architecture/datasets.md).
+# Entry order is authored order and is preserved everywhere. The stamped
+# fields (sha256, size_bytes, base_format_version) are builder-supplied:
+# run `uv run python tools/build_dataset_pack.py <name> --out <dir>` and
+# paste the printed fragment — never hand-type them.
+datasets:
+  - name: nhs
+    description: >-
+      An acute NHS hospital trust — emergency and elective patients flowing
+      from one arrivals stream through A&E, wards, clinics, diagnostics and
+      surgical pathways, competing for consultants, beds and theatres under
+      seasonal demand pressure.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v1/nhs.tar.gz
+    sha256: 04ce3e2eaaa14bd0a85d782990a5d36284bc6a4db8477f8fa7fc5050982768f6
+    size_bytes: 11046858
+    base_format_version: 9
+    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
+    commands:
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml nhs-star.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/source.yaml nhs-app.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/base.yaml nhs-base.duckdb --fmt duckdb
+      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout
+  - name: retail
+    description: >-
+      TechMart Electronics, a three-year online consumer-electronics retailer
+      — customers, a popularity-weighted product catalog, storefront
+      infrastructure, and funnel-grain customer actions shaped by a seasonal
+      calendar of peaks and outages.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v1/retail.tar.gz
+    sha256: 71b9edede2ca977e4fc56cef897f7e9c2848e82d1e5904d95619c0bb29a60001
+    size_bytes: 10723717
+    base_format_version: 9
+    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
+    commands:
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml retail-star.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/source.yaml retail-app.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/base.yaml retail-base.duckdb --fmt duckdb
+      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout
+  - name: saas
+    description: >-
+      A B2B SaaS vendor over five years — companies on plan tiers, seat-holding
+      users cycling between use and idleness, a usage-event firehose, and
+      renewal reviews that renegotiate each account's pricing or churn it.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v1/saas.tar.gz
+    sha256: 19089f26d19fa916e32df311ae52fcb3736179364031e1508b42c22727813f8f
+    size_bytes: 33184187
+    base_format_version: 9
+    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
+    commands:
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml saas-star.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/source.yaml saas-app.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/base.yaml saas-base.duckdb --fmt duckdb
+      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout
+  - name: ride-sharing
+    description: >-
+      A single-region ride-sharing marketplace over one week — riders, a small
+      finite driver fleet, and per-trip lifecycles from request to a completed
+      or cancelled outcome, with match-wait emerging from peak demand.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v1/ride-sharing.tar.gz
+    sha256: 16a11a92d4486597a815e79ad304380c92bf404612c73cfd56e395f3935465f7
+    size_bytes: 591532
+    base_format_version: 9
+    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
+    commands:
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml ride-sharing-star.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/source.yaml ride-sharing-app.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/base.yaml ride-sharing-base.duckdb --fmt duckdb
+      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout
+  - name: ride-sharing-marketplace
+    description: >-
+      A two-sided ride-hailing marketplace across three city zones — riders and
+      drivers on one clock, tied by actor-to-actor matching and a surge price
+      signal, with waits, supply deserts and loyalty-driven churn emerging from
+      the supply/demand balance.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v1/ride-sharing-marketplace.tar.gz
+    sha256: db133f744d9a14312348ebcd477a0496d68e011443f3d15bb86808a66ba51ac8
+    size_bytes: 2942257
+    base_format_version: 9
+    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
+    commands:
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml ride-sharing-marketplace-star.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/source.yaml ride-sharing-marketplace-app.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/base.yaml ride-sharing-marketplace-base.duckdb --fmt duckdb
+      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout
+  - name: security-logs
+    description: >-
+      A 90-day SIEM log corpus of correlated firewall and authentication
+      records over a segmented network — role-driven benign traffic against a
+      42-server estate, with a staged intrusion unfolding after a 30-day clean
+      baseline.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v1/security-logs.tar.gz
+    sha256: be3d0c3a557165beb47fcced4bb30fa27bb8bdbc85eecd7dc6b5607a8faa65ca
+    size_bytes: 20827715
+    base_format_version: 9
+    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
+    commands:
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml security-logs-star.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/source.yaml security-logs-app.duckdb --fmt duckdb
+      - fabulexa-forge export {dir}/bundle {dir}/base.yaml security-logs-base.duckdb --fmt duckdb
+      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout

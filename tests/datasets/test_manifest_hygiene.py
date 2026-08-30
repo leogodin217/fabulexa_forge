@@ -2,9 +2,8 @@
 
 Business rules enforced by tests, not the runtime — the runtime never sees a
 manifest that violates them, since the manifest ships pre-validated in the
-wheel. Each check is exercised against the shipped (currently empty)
-manifest and against constructed violating manifests, so the checks are
-proven non-vacuous.
+wheel. Each check is exercised against the shipped manifest and against
+constructed violating manifests, so the checks are proven non-vacuous.
 """
 
 from __future__ import annotations

@@ -1,0 +1,105 @@
+# StreamConfig — SaaS bundle, state-changes CDC stream
+# ============================================================
+# Drives `fabulexa-forge stream` / `fabulexa-forge mixer` over the SaaS emit at
+# docs/examples/saas/bundle/.
+#
+# VOCABULARY (parity with source.yaml): topics, envelope kinds, payload keys
+# and identity surfaces all speak the app database's schema — the same
+# mapping source.yaml applies (actor/company -> company, actor/user -> user,
+# entity/company_hub -> account, entity/sku -> sku, journey_instance ->
+# lifecycle_instance, tick_decision -> usage_event):
+#   - Sub-typing follows the `<kind>_type` discriminator domain in
+#     enum_domains: actor_type = [company, user] and entity_type =
+#     [company_hub, sku] are sub-typed; journey_instance and tick_decision
+#     carry single-valued or no discriminators and are not split.
+#   - actor and entity are SPLIT kinds, so each stream declares its own
+#     `kind_label`, mirroring source.yaml's per-source `item_type`.
+#   - `keys:` is source.yaml's block verbatim: company/user events key on
+#     the CMP-/USR- business ids and account/sku on ACC-/SKU-;
+#     lifecycle_instance and usage_event key on the sequential
+#     record_index — the same ids source.yaml's tables carry.
+#   - PARTITIONS: each sub-typed stream projects only its own
+#     `sub_type_columns`, so no payload key is structurally-NULL on every
+#     row of its topic.
+#   - `ignore:` keeps entity.attach_weight (how strongly an account draws
+#     newly-arriving seats — a simulation arrival-sampling knob, dropped
+#     from source.yaml's accounts table for the same reason) out of
+#     saas.account's change scope; it is zeroed on the same tick
+#     churn_flag flips, so the churn u-event survives intact.
+#   - RENDERS mirror source.yaml: engagement_score (raw float64 noise) ->
+#     DECIMAL(5,2); usage_event context's volume leaf rounded to 2dp.
+#
+# Topic set — SIX topics:
+#   saas.company            (actor/company)      — status: onboarding ->
+#                                                  active -> churned
+#   saas.user               (actor/user)         — status: the weekly
+#                                                  active <-> using cycle
+#                                                  and churn offboarding
+#   saas.account            (entity/company_hub) — the commercial trail:
+#                                                  seat_price uplifts,
+#                                                  negotiated
+#                                                  pct_of_list_rate,
+#                                                  churn_flag, the daily
+#                                                  engagement_score
+#   saas.sku                (entity/sku)         — catalogue creates (3
+#                                                  rows, constant after)
+#   saas.lifecycle_instance (journey_instance)   — the 940k-change state
+#                                                  timeline behind both
+#                                                  lifecycles
+#   saas.usage_event        (tick_decision)      — 457k create-only usage
+#                                                  sessions, the product's
+#                                                  event firehose
+#
+# Anchor resolves from the sidecar runtime (start 2026-01-01, UTC).
+# Bootstrap is supplied at the CLI (`--bootstrap-servers localhost:9092`).
+
+content: state-changes
+
+# source.yaml's elections, verbatim — stream identities join the app database.
+keys:
+  actor: presentation_id
+  entity: presentation_id
+  journey_instance: record_index
+  tick_decision: record_index
+
+streams:
+  - name: saas.company
+    kind: actor
+    sub_types: [company]
+    properties: [status]
+    kind_label: company
+  - name: saas.user
+    kind: actor
+    sub_types: [user]
+    properties: [status, company, email]
+    rename:
+      company: account_id
+    kind_label: user
+  - name: saas.account
+    kind: entity
+    sub_types: [company_hub]
+    properties: [plan, seat_price, churn_flag, pct_of_list_rate, engagement_score, name]
+    render:
+      engagement_score: {decimal: [5, 2]}
+    ignore: [attach_weight]
+    kind_label: account
+  - name: saas.sku
+    kind: entity
+    sub_types: [sku]
+    properties: [name, popularity, standard_rate]
+    kind_label: sku
+  - name: saas.lifecycle_instance
+    kind: journey_instance
+    properties: [current_state, actor, journey_type]
+    rename:
+      actor: owner_id
+      journey_type: lifecycle_type
+    kind_label: lifecycle_instance
+  - name: saas.usage_event
+    kind: tick_decision
+    properties: [journey_instance, context]
+    rename:
+      journey_instance: lifecycle_instance_id
+    render:
+      context: {json_precision: {volume: 2}}
+    kind_label: usage_event

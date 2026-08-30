@@ -1,0 +1,243 @@
+# ExportConfig — SaaS bundle, base mode (flat current-state dump)
+# ============================================================
+# `fabulexa-forge export docs/examples/saas/bundle docs/examples/saas/base.yaml <out> --fmt duckdb`
+#
+# Base mode reconstructs one flat table per records kind at the tape's end:
+# every tracked property (actor.status, entity.seat_price / churn_flag /
+# pct_of_list_rate / engagement_score, journey_instance.current_state)
+# carries its LATEST history value. No sub-type split, no FK joins, no
+# membership tables — the faithful "current state of every record" landing
+# shape. Table names mirror source.yaml's mapping where a table maps 1:1
+# (accounts, lifecycle_instances, usage_events); base never splits a kind,
+# so the two kinds source.yaml splits take whole-kind names instead:
+#
+#   records__actor            -> customers          (companies + users;
+#                                                    customer_type says which)
+#   records__entity           -> accounts           (541 account rows + the
+#                                                    3-row SKU catalogue;
+#                                                    record_type says which)
+#   records__journey_instance -> lifecycle_instances
+#   records__tick_decision    -> usage_events
+#
+# WHOLE-KIND NAMES: actor spans company (541, the subscribing organisation)
+# and user (9,858, the seat holder) — both customer records of the vendor,
+# so `customers` with a `customer_type` discriminator. entity spans
+# company_hub (541, the commercial record of an account) and sku (3, the
+# product catalogue) — named `accounts` for the dominant population, with
+# the catalogue rows flagged by `record_type` (the retail bundle's
+# products-plus-storefront precedent). Sub-type-specific columns are NULL
+# on the other sub-type's rows by construction; the descriptions say so.
+#
+# Columns are domainized the same way as source.yaml: every prop__ prefix
+# is stripped, created_sim_time -> created_at, references land on the id
+# convention already published by source.yaml (actor.prop__company ->
+# account_id, entity.prop__company -> company_id), and the record-index
+# key columns follow their tables (customer_key / account_key /
+# lifecycle_instance_key / usage_event_key, edge keys likewise).
+#
+# DROPPED KINDS: none. This emit has no queue and no engine-bookkeeping
+# kind: tick_decision IS the usage-event fact (456,975 rows, one per
+# product usage session — the atlas's `usage_event` decision), kept.
+# The SKU binding lives only in membership__tick_decision__bindings, which
+# base does not export (records kinds only); source.yaml's
+# usage_event_skus junction is the shape that carries it.
+#
+# SLICE-ONLY: journey_instance carries two slice_only columns
+# (prop__state_entry_time, prop__complete); each is auto-omitted with a
+# `slice-only-column-omitted` notice, not an error.
+#
+# KEYS: source.yaml's elections verbatim, so identity values line up
+# across the two configs' outputs. actor and entity elect presentation_id
+# (the registry declares every population of both kinds: CMP-/USR- and
+# ACC-/SKU- counter spaces — distinct prefixes, pairwise union-safe, as
+# base's unsplit whole-kind tables require); journey_instance and
+# tick_decision elect record_index. Under a record_index election base
+# drops the id-space value columns (the `<table>_key` index key IS the
+# election — key-election.md § Rendering: base), so lifecycle_instances /
+# usage_events carry no separate id column and the usage_event ->
+# lifecycle edge is the lifecycle_instance_key column alone; its values
+# equal source.yaml's sequential lifecycle_instances.id.
+#
+# Anchor: no `rebase:` block — the sidecar carries a runtime anchor
+# (2026-01-01T00:00:00 UTC), so lifecycle columns (`created_at`,
+# `deactivated_at`) land as wallclock TIMESTAMPs.
+#
+# ELECTED renders, mirroring source.yaml: engagement_score is a 0-100
+# score carrying raw float64 noise -> DECIMAL(5,2); usage_events.context's
+# volume leaf rounded in place to 2dp, every other payload byte verbatim.
+
+mode: base
+
+base:
+  rename:
+    - table: records__actor
+      name: customers
+      description: "One customer record: a subscribing company, or a seat
+        holder (user) working inside one — customer_type says which."
+      columns:
+        record_index: customer_key
+        created_sim_time: created_at
+        prop__status: status
+        prop__company: account_id
+        ref_index__company: account_key
+        prop__actor_type: customer_type
+        prop__first_name: first_name
+        prop__last_name: last_name
+        prop__company_name: company_name
+        prop__company_domain: company_domain
+        prop__email_convention: email_convention
+        prop__email: email
+      descriptions:
+        presentation_id: "Unique identifier: CMP-prefixed for companies,
+          USR-prefixed for users."
+        record_index: "Integer join key for this row."
+        created_sim_time: "When the company signed up, or the user's seat
+          was created."
+        active: "FALSE if the row was soft-deleted; TRUE otherwise."
+        deactivated_at: "When the row was soft-deleted; NULL while active."
+        prop__actor_type: "Type of customer record: company (a subscribing
+          organisation) or user (a seat holder inside one)."
+        prop__status: "Lifecycle status. Companies: onboarding / active /
+          churned. Users: provisioned / active / using / offboarded."
+        prop__company: "The account this user's seat belongs to; matches
+          accounts.id. NULL on company rows."
+        ref_index__company: "Join key of the user's account; joins to
+          accounts.account_key. NULL on company rows."
+        prop__first_name: "User's given name; NULL on company rows."
+        prop__last_name: "User's family name; NULL on company rows."
+        prop__company_name: "Display name of the company the user belongs
+          to; NULL on company rows."
+        prop__company_domain: "Web domain of the company the user belongs
+          to; NULL on company rows."
+        prop__email_convention: "Email local-part convention the user's
+          company uses (e.g. first.last, flast); NULL on company rows."
+        prop__email: "User's work email address on their company's domain;
+          NULL on company rows."
+    - table: records__entity
+      name: accounts
+      description: "One account's commercial record — plan, pricing trail,
+        churn status, engagement — or one of the catalogue's three product
+        lines (SKUs); record_type says which."
+      columns:
+        record_index: account_key
+        created_sim_time: created_at
+        prop__company: company_id
+        ref_index__company: company_key
+        prop__plan: plan
+        prop__seat_price: seat_price
+        prop__attach_weight: attach_weight
+        prop__churn_flag: churn_flag
+        prop__pct_of_list_rate: pct_of_list_rate
+        prop__engagement_score: engagement_score
+        prop__popularity: popularity
+        prop__standard_rate: standard_rate
+        prop__entity_type: record_type
+        prop__name: name
+        prop__domain: domain
+      descriptions:
+        presentation_id: "Unique identifier: ACC-prefixed for accounts,
+          SKU-prefixed for product lines."
+        record_index: "Integer join key for this row; customers'
+          account_key references the account rows."
+        created_sim_time: "When the account was provisioned, or the SKU
+          was added to the catalogue."
+        active: "FALSE if the row was soft-deleted; TRUE otherwise."
+        deactivated_at: "When the row was soft-deleted; NULL while active."
+        prop__entity_type: "Type of record: company_hub (an account's
+          commercial record) or sku (a product line in the catalogue)."
+        prop__company: "The subscribing company this account belongs to;
+          matches customers.id. NULL on SKU rows."
+        ref_index__company: "Join key of the owning company; joins to
+          customers.customer_key. NULL on SKU rows."
+        prop__plan: "Plan tier picked at onboarding: starter, professional,
+          or enterprise. NULL on SKU rows."
+        prop__seat_price: "Current per-seat price, uplifted ~10% by each
+          renewal renegotiation. NULL on SKU rows."
+        prop__attach_weight: "How strongly the account draws newly-arriving
+          seat holders; zeroed on churn so a churned account stops growing.
+          NULL on SKU rows."
+        prop__churn_flag: "1 once the account's subscription has ended,
+          else 0; churned accounts' users begin offboarding. NULL on SKU
+          rows."
+        prop__pct_of_list_rate: "Percent of the SKU standard rate this
+          account is billed for usage; 100 until an enterprise renewal
+          negotiates a discount. NULL on SKU rows."
+        prop__engagement_score: "Daily 0-100 health score derived from the
+          account's count of actively-seated users. NULL on SKU rows."
+        prop__popularity: "Relative weight a usage session is attributed to
+          this SKU over the others in the catalogue; NULL on account rows."
+        prop__standard_rate: "List price per unit of usage volume,
+          discounted by an account's pct_of_list_rate when billed; NULL on
+          account rows."
+        prop__name: "Account or SKU display name."
+        prop__domain: "Company account's web domain; NULL on SKU rows."
+    - table: records__journey_instance
+      name: lifecycle_instances
+      description: "One company or user lifecycle traversal — the account's
+        onboarding-to-churn run, or a seat's provisioned-to-offboarded
+        run."
+      columns:
+        record_index: lifecycle_instance_key
+        created_sim_time: created_at
+        prop__actor: owner_id
+        ref_index__actor: owner_key
+        prop__journey_type: lifecycle_type
+        prop__current_state: current_state
+      descriptions:
+        record_index: "Integer join key for this lifecycle;
+          usage_events.lifecycle_instance_key references it."
+        created_sim_time: "When the lifecycle started."
+        active: "FALSE once the row was soft-deleted; TRUE otherwise
+          (unrelated to current_state)."
+        deactivated_at: "When the row was soft-deleted; NULL while live."
+        prop__actor: "The company (CMP-) or user (USR-) walking this
+          lifecycle; lifecycle_type says which population, and the value
+          matches customers.id."
+        ref_index__actor: "Join key of the lifecycle's owner; joins to
+          customers.customer_key."
+        prop__journey_type: "Which lifecycle this is: company_lifecycle or
+          user_lifecycle."
+        prop__current_state: "State the lifecycle currently occupies.
+          Company lifecycles: onboarding / active / churned (`active` =
+          live subscription). User lifecycles: provisioned / active /
+          using / offboarded (`active` = idle seat between sessions)."
+    - table: records__tick_decision
+      name: usage_events
+      description: "One product usage session a seat holder ran, recorded
+        against the user lifecycle it occurred under."
+      columns:
+        record_index: usage_event_key
+        created_sim_time: created_at
+        ref_index__journey_instance: lifecycle_instance_key
+        prop__decision_type: event_type
+        prop__context: context
+      descriptions:
+        record_index: "Integer join key for this event."
+        created_sim_time: "When the usage session occurred."
+        active: "FALSE if the event row was soft-deleted; usage events are
+          never deleted, so TRUE on every row."
+        deactivated_at: "When the event row was soft-deleted; always NULL —
+          usage events are never deleted."
+        ref_index__journey_instance: "The user lifecycle this session was
+          recorded under; joins to
+          lifecycle_instances.lifecycle_instance_key."
+        prop__decision_type: "The kind of event; always usage_event in this
+          dataset."
+        prop__context: "JSON detail of the usage session (e.g. volume)."
+  render:
+    - table: records__entity
+      render:
+        prop__engagement_score: {decimal: [5, 2]}
+    # context.volume rounded in place to 2dp (raw float64 noise
+    # otherwise); every other payload byte verbatim.
+    - table: records__tick_decision
+      render:
+        prop__context: {json_precision: {volume: 2}}
+
+# source.yaml's elections verbatim — identity values line up across the
+# two configs' outputs.
+keys:
+  actor: presentation_id
+  entity: presentation_id
+  journey_instance: record_index
+  tick_decision: record_index

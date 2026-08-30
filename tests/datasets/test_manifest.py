@@ -39,10 +39,17 @@ ENTRY_TWO = DatasetEntry.model_validate(
 )
 
 
-def test_load_manifest_returns_shipped_empty_manifest() -> None:
-    """load_manifest() returns the shipped empty manifest, offline."""
+def test_load_manifest_returns_shipped_catalog() -> None:
+    """load_manifest() returns the shipped catalog, offline, in authored order."""
     manifest = load_manifest()
-    assert manifest.datasets == []
+    assert [entry.name for entry in manifest.datasets] == [
+        "nhs",
+        "retail",
+        "saas",
+        "ride-sharing",
+        "ride-sharing-marketplace",
+        "security-logs",
+    ]
 
 
 def test_text_render_of_empty_manifest_is_no_datasets_line() -> None:
