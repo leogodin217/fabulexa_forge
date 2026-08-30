@@ -521,6 +521,51 @@ def test_dim_table_with_no_descriptions_stamps_empty_map(tmp_path: Path) -> None
     assert specs["dim_actor"].author_descriptions == {}
 
 
+# ---------------------------------------------------------------------------
+# author_table_description / event_log
+# ---------------------------------------------------------------------------
+
+
+def test_dim_described_table_stamps_declaration_prose(tmp_path: Path) -> None:
+    """A table declaration carrying `description` stamps its spec's
+    `author_table_description` verbatim."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_actor",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["actor_id"],
+        description="The actor dimension.",
+        columns=[ColumnDecl(name="actor_id", **{"from": "record_id"})],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(table_decl))
+
+    assert specs["dim_actor"].author_table_description == "The actor dimension."
+
+
+def test_dim_undescribed_table_stamps_none(tmp_path: Path) -> None:
+    """A table declaration with no `description` stamps `None`."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(_dim_actor_table_decl()))
+
+    assert specs["dim_actor"].author_table_description is None
+
+
+def test_dim_event_log_false_on_every_spec(tmp_path: Path) -> None:
+    """Dimensional has no event log: `event_log` stays False on every
+    compiled spec."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    config = _build_config(_dim_actor_table_decl(), _fact_decision_table_decl())
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, config)
+
+    for spec in specs.values():
+        assert spec.event_log is False
+
+
 def test_provenance_deterministic_across_compiles(tmp_path: Path) -> None:
     """Two compiles of the same plan against the same emit yield equal
     provenance maps."""

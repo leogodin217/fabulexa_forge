@@ -301,6 +301,98 @@ def test_fingerprint_unaffected_by_base_rename_descriptions_map() -> None:
     assert _fp(config=with_descriptions) == _fp(config=changed_descriptions)
 
 
+# ---------------------------------------------------------------------------
+# Table-description-surface exclusion: authored prose, never a drip-identity
+# input
+# ---------------------------------------------------------------------------
+
+
+def _dimensional_config_with_table_description(description: str | None) -> ExportConfig:
+    """A single-table dimensional config whose table carries `description`
+    (or not, when None)."""
+    table: dict[str, object] = {
+        "name": "dim_x",
+        "role": "dim",
+        "scd": "type1",
+        "source": {"grain": "records", "kind": "actor"},
+        "key": ["id"],
+        "columns": [{"name": "id", "from": "record_id"}],
+    }
+    if description is not None:
+        table["description"] = description
+    return ExportConfig.model_validate(
+        {"mode": "dimensional", "dimensional": {"tables": [table]}}
+    )
+
+
+def test_fingerprint_unaffected_by_dimensional_table_description_added() -> None:
+    """A dimensional `tables[].description` added, otherwise unchanged
+    config, -> same fingerprint."""
+    without_description = _dimensional_config_with_table_description(None)
+    with_description = _dimensional_config_with_table_description(
+        "The dim's own table."
+    )
+    assert _fp(config=without_description) == _fp(config=with_description)
+
+
+def test_fingerprint_unaffected_by_dimensional_table_description_changed() -> None:
+    """Different dimensional `tables[].description` prose -> same
+    fingerprint."""
+    first = _dimensional_config_with_table_description("First prose.")
+    second = _dimensional_config_with_table_description("Second prose.")
+    assert _fp(config=first) == _fp(config=second)
+
+
+def test_fingerprint_unaffected_by_dimensional_table_description_removed() -> None:
+    """`tables[].description` present vs. removed (same otherwise) -> same
+    fingerprint."""
+    with_description = _dimensional_config_with_table_description("Some prose.")
+    without_description = _dimensional_config_with_table_description(None)
+    assert _fp(config=with_description) == _fp(config=without_description)
+
+
+def _source_config_with_table_description(description: str | None) -> ExportConfig:
+    """A single-table source config whose `tables[]` declaration carries
+    `description` (or not, when None)."""
+    table: dict[str, object] = {"name": "actor_state", "kind": "actor"}
+    if description is not None:
+        table["description"] = description
+    return ExportConfig.model_validate(
+        {"mode": "source", "source": {"tables": [table]}}
+    )
+
+
+def test_fingerprint_unaffected_by_source_table_description() -> None:
+    """A source `tables[].description` added, changed, or removed -> same
+    fingerprint as an otherwise-identical config with no `description`."""
+    without_description = _source_config_with_table_description(None)
+    with_description = _source_config_with_table_description(
+        "Visit records, operationally."
+    )
+    changed_description = _source_config_with_table_description("Different prose.")
+    assert _fp(config=without_description) == _fp(config=with_description)
+    assert _fp(config=with_description) == _fp(config=changed_description)
+
+
+def _base_config_with_rename_description(description: str | None) -> ExportConfig:
+    """A single-rename-entry base config whose entry carries `description`
+    (or not, when None)."""
+    entry: dict[str, object] = {"table": "records__actor", "name": "actors"}
+    if description is not None:
+        entry["description"] = description
+    return ExportConfig.model_validate({"mode": "base", "base": {"rename": [entry]}})
+
+
+def test_fingerprint_unaffected_by_base_rename_description() -> None:
+    """A base `rename[].description` added, changed, or removed -> same
+    fingerprint as an otherwise-identical config with no `description`."""
+    without_description = _base_config_with_rename_description(None)
+    with_description = _base_config_with_rename_description("The actor records table.")
+    changed_description = _base_config_with_rename_description("Different prose.")
+    assert _fp(config=without_description) == _fp(config=with_description)
+    assert _fp(config=with_description) == _fp(config=changed_description)
+
+
 def test_fingerprint_changes_on_config() -> None:
     """Different config (extra table) → different fingerprint."""
     cfg_a = _config()

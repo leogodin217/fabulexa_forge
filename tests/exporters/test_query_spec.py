@@ -152,6 +152,61 @@ def test_write_query_specs_csv_arm_forwards_provenance_verbatim(
     assert table.author_descriptions == author_descriptions
 
 
+def test_write_query_specs_duckdb_arm_forwards_table_description_verbatim(
+    tmp_path: Path,
+) -> None:
+    """`write_query_specs` forwards a spec's `author_table_description` and
+    `event_log` onto the matching `TableReport` unchanged, under the DuckDB
+    arm."""
+    emit_dir = build_test_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+
+    spec = QuerySpec(
+        table_name="dim_entity",
+        sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
+        write_mode="create",
+        view_name=None,
+        view_sql=None,
+        author_table_description="The entity dimension.",
+        event_log=True,
+    )
+
+    with open_emit(emit_dir) as emit:
+        report = write_query_specs(emit, [spec], out_path, "duckdb")
+
+    table = report.tables[0]
+    assert table.author_table_description == "The entity dimension."
+    assert table.event_log is True
+
+
+def test_write_query_specs_csv_arm_forwards_table_description_verbatim(
+    tmp_path: Path,
+) -> None:
+    """`write_query_specs` forwards a spec's `author_table_description` and
+    `event_log` onto the matching `TableReport` unchanged, under the CSV
+    arm."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "csv_out"
+    out_dir.mkdir()
+
+    spec = QuerySpec(
+        table_name="dim_entity",
+        sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
+        write_mode="create",
+        view_name=None,
+        view_sql=None,
+        author_table_description="The entity dimension.",
+        event_log=True,
+    )
+
+    with open_emit(emit_dir) as emit:
+        report = write_query_specs(emit, [spec], out_dir, "csv")
+
+    table = report.tables[0]
+    assert table.author_table_description == "The entity dimension."
+    assert table.event_log is True
+
+
 def test_write_query_specs_forwards_empty_maps_by_default(tmp_path: Path) -> None:
     """A spec that stamps nothing forwards empty `provenance`, `kind_values`,
     and `author_descriptions` onto its `TableReport` -- absence is not
@@ -174,3 +229,5 @@ def test_write_query_specs_forwards_empty_maps_by_default(tmp_path: Path) -> Non
     assert table.provenance == {}
     assert table.kind_values == {}
     assert table.author_descriptions == {}
+    assert table.author_table_description is None
+    assert table.event_log is False

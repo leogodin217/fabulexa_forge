@@ -278,6 +278,10 @@ class SourceStateTablePlan:
     `descriptions` is absent. Defaults to empty so a direct test construction
     bypassing the builder needs no change; `_build_state_table_plan` always
     stamps it."""
+    description: str | None = None
+    """The declaration's table-level `description`, stamped verbatim
+    (`_build_state_table_plan`); None when absent. `_compile_table_spec`
+    copies it verbatim onto the compiled `QuerySpec`."""
 
 
 @dataclass(frozen=True)
@@ -346,6 +350,10 @@ class SourceJunctionTablePlan:
     `descriptions` is absent. Defaults to empty so a direct test construction
     bypassing the builder needs no change; `_build_junction_table_plan`
     always stamps it."""
+    description: str | None = None
+    """The declaration's table-level `description`, stamped verbatim
+    (`_build_junction_table_plan`); None when absent. `_compile_table_spec`
+    copies it verbatim onto the compiled `QuerySpec`."""
 
 
 @dataclass(frozen=True)
@@ -1926,6 +1934,7 @@ def _build_state_table_plan(
         render=render,
         provenance=build_carried_provenance(source_table, columns),
         author_descriptions=author_descriptions,
+        description=decl.description,
     )
 
 
@@ -2049,6 +2058,7 @@ def _build_junction_table_plan(
         render=render,
         provenance=build_carried_provenance(source_table, columns),
         author_descriptions=author_descriptions,
+        description=decl.description,
     )
 
 

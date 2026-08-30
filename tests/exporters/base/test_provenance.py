@@ -157,6 +157,48 @@ def test_edge_key_columns_absent_under_a_slice_at_horizon(tmp_path: Path) -> Non
 
 
 # ---------------------------------------------------------------------------
+# description: the matched rename entry's table-level prose
+# ---------------------------------------------------------------------------
+
+
+def test_described_rename_entry_stamps_declaration_prose(tmp_path: Path) -> None:
+    """A matched rename entry's `description` stamps the target table
+    spec's `description` verbatim."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(
+                table="records__actor",
+                name="actors",
+                description="The actor records table.",
+            )
+        ]
+    )
+    spec = _actor_spec(tmp_path, config)
+
+    assert spec.description == "The actor records table."
+
+
+def test_description_only_rename_entry_compiles_and_stamps(tmp_path: Path) -> None:
+    """A description-only rename entry (no `name`, no `columns`) compiles,
+    stamping its `description` on the matched table."""
+    config = BaseConfig(
+        rename=[
+            RenameEntry(table="records__actor", description="The actor records table.")
+        ]
+    )
+    spec = _actor_spec(tmp_path, config)
+
+    assert spec.description == "The actor records table."
+
+
+def test_unmatched_table_stamps_none(tmp_path: Path) -> None:
+    """A kind with no matching rename entry stamps `description=None`."""
+    spec = _actor_spec(tmp_path)
+
+    assert spec.description is None
+
+
+# ---------------------------------------------------------------------------
 # Determinism + builder-only construction
 # ---------------------------------------------------------------------------
 

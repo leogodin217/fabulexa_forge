@@ -297,6 +297,68 @@ def test_event_log_spec_stamps_empty_author_descriptions(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# author_table_description / event_log
+# ---------------------------------------------------------------------------
+
+
+def test_state_table_described_declaration_stamps_prose(tmp_path: Path) -> None:
+    """A `tables[]` declaration carrying `description` stamps its unit's
+    `description`, and the compiled spec copies it verbatim."""
+    emit_dir = build_source_test_emit(tmp_path)
+    tables = (
+        SourceTableDecl(
+            name="visit", kind="visit", description="Visit records, operationally."
+        ),
+    )
+    plan = _build_plan(emit_dir, tables)
+
+    assert plan.tables[0].description == "Visit records, operationally."
+    specs = build_source_query_specs(plan, None)
+    spec = next(s for s in specs if s.table_name == "visit")
+    assert spec.author_table_description == "Visit records, operationally."
+
+
+def test_state_table_undescribed_declaration_stamps_none(tmp_path: Path) -> None:
+    """A `tables[]` declaration with no `description` stamps `None`."""
+    emit_dir = build_source_test_emit(tmp_path)
+    tables = (SourceTableDecl(name="visit", kind="visit"),)
+    plan = _build_plan(emit_dir, tables)
+
+    assert plan.tables[0].description is None
+    specs = build_source_query_specs(plan, None)
+    spec = next(s for s in specs if s.table_name == "visit")
+    assert spec.author_table_description is None
+
+
+def test_event_log_spec_is_the_only_marked_spec(tmp_path: Path) -> None:
+    """The event log's compiled spec is the only one with `event_log=True`,
+    and its `author_table_description` stays `None` -- no config surface
+    exists for it."""
+    emit_dir = build_source_test_emit(tmp_path)
+    tables = (SourceTableDecl(name="visit", kind="visit"),)
+    events = SourceEventsDecl(
+        name="audit", sources=(SourceEventSourceDecl(kind="visit"),)
+    )
+    plan = _build_plan(emit_dir, tables, events=events)
+    specs = build_source_query_specs(plan, None)
+
+    marked = [spec for spec in specs if spec.event_log]
+    assert len(marked) == 1
+    assert marked[0].table_name == "audit"
+    assert marked[0].author_table_description is None
+
+
+def test_plan_with_no_events_declaration_marks_nothing(tmp_path: Path) -> None:
+    """A plan with no `events` declaration marks no spec `event_log`."""
+    emit_dir = build_source_test_emit(tmp_path)
+    tables = (SourceTableDecl(name="visit", kind="visit"),)
+    plan = _build_plan(emit_dir, tables)
+    specs = build_source_query_specs(plan, None)
+
+    assert all(spec.event_log is False for spec in specs)
+
+
+# ---------------------------------------------------------------------------
 # Determinism + builder-only construction
 # ---------------------------------------------------------------------------
 

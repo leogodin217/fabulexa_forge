@@ -401,6 +401,7 @@ def build_query_specs(
                 view_sql=view_sql,
                 provenance=provenance,
                 author_descriptions=_table_author_descriptions(table_decl),
+                author_table_description=table_decl.description,
             )
         )
 

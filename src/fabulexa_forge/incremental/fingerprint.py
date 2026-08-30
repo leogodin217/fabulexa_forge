@@ -18,14 +18,22 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import ExportConfig
 
 #: Config surfaces excluded from the canonical dump — presentation-only or
-#: (the three description overrides) authored prose that re-voices but never
-#: reshapes an export. Changing any of these mid-drip must not raise a
-#: fingerprint mismatch. Nested dict form per Pydantic's `model_dump(exclude=)`.
+#: (the column- and table-level description overrides) authored prose that
+#: re-voices but never reshapes an export. Changing any of these mid-drip
+#: must not raise a fingerprint mismatch. Nested dict form per Pydantic's
+#: `model_dump(exclude=)`.
 _FINGERPRINT_EXCLUDE: "dict[str, Any]" = {
     "readme_overlay": True,
-    "dimensional": {"tables": {"__all__": {"columns": {"__all__": {"description"}}}}},
-    "source": {"tables": {"__all__": {"descriptions"}}},
-    "base": {"rename": {"__all__": {"descriptions"}}},
+    "dimensional": {
+        "tables": {
+            "__all__": {
+                "description": True,
+                "columns": {"__all__": {"description"}},
+            }
+        }
+    },
+    "source": {"tables": {"__all__": {"descriptions", "description"}}},
+    "base": {"rename": {"__all__": {"descriptions", "description"}}},
 }
 
 
@@ -41,12 +49,13 @@ def compute_fingerprint(
 
     Canonical JSON: UTF-8 bytes, keys sorted, compact (',', ':') separators,
     no NaN/Infinity — over the parsed config (model dump, `readme_overlay`
-    and the three description-override surfaces excluded — presentation-only
-    fields an author may add, change, or remove mid-drip without it counting
-    as a drip-identity change), the resolved anchor (start_instant ISO + IANA
-    key, or null), the base.json digest, the sole branch's fork_path, the
-    fmt, and the package version. Any change to any other input yields a new
-    fingerprint, halting --next rather than splicing inconsistent windows.
+    and every column- and table-level description-override surface excluded
+    — presentation-only fields an author may add, change, or remove mid-drip
+    without it counting as a drip-identity change), the resolved anchor
+    (start_instant ISO + IANA key, or null), the base.json digest, the sole
+    branch's fork_path, the fmt, and the package version. Any change to any
+    other input yields a new fingerprint, halting --next rather than
+    splicing inconsistent windows.
 
     Args:
         config: The parsed export config.

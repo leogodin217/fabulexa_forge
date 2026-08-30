@@ -212,6 +212,35 @@ def _simple_config_with_description(with_incremental: bool = True) -> ExportConf
     return ExportConfig.model_validate(data)
 
 
+def _simple_config_with_table_description(
+    with_incremental: bool = True,
+) -> ExportConfig:
+    """Build `_simple_config`'s dim config with a table-level `description`
+    override, for the `author_table_description` forwarding test."""
+    data: dict[str, object] = {
+        "mode": "dimensional",
+        "dimensional": {
+            "tables": [
+                {
+                    "name": "dim_entity",
+                    "role": "dim",
+                    "scd": "type1",
+                    "source": {"grain": "records", "kind": "entity"},
+                    "key": ["id"],
+                    "description": "The entity dimension.",
+                    "columns": [
+                        {"name": "id", "from": "record_id"},
+                        {"name": "name", "from": "prop__name"},
+                    ],
+                }
+            ]
+        },
+    }
+    if with_incremental:
+        data["incremental"] = {"sim_period_ns": _PERIOD_NS}
+    return ExportConfig.model_validate(data)
+
+
 def _fact_config(with_incremental: bool = True) -> ExportConfig:
     """Build a config with a facts table (records grain, role=fact)."""
     data: dict[str, object] = {
@@ -2120,6 +2149,53 @@ def test_windowed_and_full_author_descriptions_forwarding_identical(
         == full_descriptions
         == {"name": "The entity's display name."}
     )
+
+
+def test_windowed_and_full_table_description_forwarding_identical(
+    tmp_path: Path,
+) -> None:
+    """For a config with a table-level `description` override, a windowed
+    export's `TableReport.author_table_description` equals the full
+    export's for the same table -- `_build_windowed_report` forwards
+    `author_table_description` and `event_log` verbatim, same as
+    `provenance`."""
+    emit_dir = _build_emit(tmp_path)
+    config = _simple_config_with_table_description()
+    out = tmp_path / "wh.duckdb"
+    assert config.dimensional is not None
+
+    with open_emit(emit_dir) as emit:
+        outcome = export_incremental_next(
+            emit,
+            config,
+            out,
+            "duckdb",
+            None,
+            notice_sink=discard_notice_sink,
+            overlay=None,
+        )
+        assert outcome.report is not None
+        windowed_table = next(
+            t for t in outcome.report.tables if t.name == "dim_entity"
+        )
+
+        full_specs = build_query_specs(
+            emit,
+            config.dimensional,
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+            base_relations=None,
+        )
+
+    full_spec = next(spec for spec in full_specs if spec.table_name == "dim_entity")
+    assert (
+        windowed_table.author_table_description
+        == full_spec.author_table_description
+        == "The entity dimension."
+    )
+    assert windowed_table.event_log is False
+    assert full_spec.event_log is False
 
 
 # ---------------------------------------------------------------------------

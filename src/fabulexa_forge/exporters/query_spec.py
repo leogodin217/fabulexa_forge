@@ -114,10 +114,11 @@ class TableReport:
     from the materialized relation via the writers' DESCRIBE authority.
     `row_count` is None on windowed invocations. `keys` is the table's
     declared `TableKeys`, or None when nothing was declared or the
-    declaration was CSV-dropped. `provenance`, `kind_values`, and
-    `author_descriptions` are forwarded verbatim from the compiled
-    `QuerySpec` that produced this table — no default, so every
-    report-assembly call site states them explicitly.
+    declaration was CSV-dropped. `provenance`, `kind_values`,
+    `author_descriptions`, `author_table_description`, and `event_log` are
+    forwarded verbatim from the compiled `QuerySpec` that produced this
+    table — no default, so every report-assembly call site states them
+    explicitly.
     """
 
     name: str
@@ -127,6 +128,8 @@ class TableReport:
     provenance: "Mapping[str, ColumnProvenance]"
     kind_values: "Mapping[str, tuple[KindValueEntry, ...]]"
     author_descriptions: "Mapping[str, str]"
+    author_table_description: str | None
+    event_log: bool
 
 
 @dataclass(frozen=True)
@@ -152,6 +155,12 @@ class QuerySpec:
     `provenance`, `kind_values`, and `author_descriptions` are keyed by
     output column name (post-rename). Empty means nothing stamped; every
     mode engine stamps at plan compile (tests pin per-mode stamping).
+
+    `author_table_description` is the mode's table-level override translated
+    at plan compile; None means no override. `event_log` is True iff this
+    spec is the source mode's compiled polymorphic event log — the one table
+    whose documentation the companion dictionary answers from the
+    forge-pinned event-log set; stamped only by the source plan compiler.
     """
 
     table_name: str
@@ -165,6 +174,8 @@ class QuerySpec:
         default_factory=dict
     )
     author_descriptions: "Mapping[str, str]" = field(default_factory=dict)
+    author_table_description: str | None = None
+    event_log: bool = False
 
 
 NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"
@@ -284,6 +295,8 @@ def write_query_specs(
                     provenance=spec.provenance,
                     kind_values=spec.kind_values,
                     author_descriptions=spec.author_descriptions,
+                    author_table_description=spec.author_table_description,
+                    event_log=spec.event_log,
                 )
                 for spec in specs
             )
@@ -303,6 +316,8 @@ def write_query_specs(
                 provenance=spec.provenance,
                 kind_values=spec.kind_values,
                 author_descriptions=spec.author_descriptions,
+                author_table_description=spec.author_table_description,
+                event_log=spec.event_log,
             )
         )
     return ExportReport(tables=tuple(tables))

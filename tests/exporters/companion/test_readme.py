@@ -76,6 +76,8 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 provenance={},
                 kind_values={},
                 author_descriptions={},
+                author_table_description=None,
+                event_log=False,
             ),
             TableReport(
                 name="visits",
@@ -85,6 +87,8 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 provenance={},
                 kind_values={},
                 author_descriptions={},
+                author_table_description=None,
+                event_log=False,
             ),
         )
     )
@@ -514,6 +518,8 @@ def test_override_on_computed_column_with_no_provenance_renders_description_only
         provenance={},
         kind_values={},
         author_descriptions={"computed_flag": "A derived flag."},
+        author_table_description=None,
+        event_log=False,
     )
     text = _render_report(tmp_path, report)
     assert (

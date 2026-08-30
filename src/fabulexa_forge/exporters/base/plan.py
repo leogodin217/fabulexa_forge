@@ -209,6 +209,11 @@ class BaseTableSpec:
     rename entry matches this kind, or it declares no `descriptions`.
     Defaults to empty so a direct test construction bypassing the builder
     needs no change; `_resolve_specs` always stamps it."""
+    description: str | None = None
+    """The matched `RenameEntry.description`, stamped verbatim; None when no
+    rename entry matches this kind, or the matched entry declares no
+    `description`. Defaults to None for the same reason `author_descriptions`
+    defaults to empty; `_resolve_specs` always stamps it."""
 
 
 @dataclass(frozen=True)
@@ -1236,6 +1241,9 @@ def _resolve_specs(
                 render=render_pairs,
                 provenance=provenance,
                 author_descriptions=author_descriptions,
+                description=(
+                    matched_entry.description if matched_entry is not None else None
+                ),
             )
         )
 

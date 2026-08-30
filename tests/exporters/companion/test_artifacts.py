@@ -36,6 +36,8 @@ def _report(table_name: str = "patients") -> ExportReport:
                 provenance={},
                 kind_values={},
                 author_descriptions={},
+                author_table_description=None,
+                event_log=False,
             ),
         )
     )
