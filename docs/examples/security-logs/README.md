@@ -13,8 +13,8 @@ One bundle (`bundle/`), four export configs — each a different data product
 over the same 440,107 events.
 
 > **⚠️ The base export is the answer key.** `base.yaml` deliberately exports
-> every ground-truth label the other three configs hide — `host.prop__role`
-> (`'external'` flags the four attackers), `session.prop__journey_type`
+> every ground-truth label the other three configs hide — `host.role`
+> (`'external'` flags the four attackers), `session.session_type`
 > (`approach_*` flags the intrusion sessions), and the engine's state
 > narration. Hand students the dimensional, source, or stream outputs;
 > keep the base export for grading and hint-giving.

@@ -85,6 +85,12 @@ source:
                 prop__name, prop__ip_address, prop__zone, prop__subnet]
       rename:
         prop__name: hostname
+      descriptions:
+        record_index: Surrogate key for the host; join target of sessions.host_id.
+        created_sim_time: Time the row was created.
+        active: FALSE if the row was soft-deleted from inventory.
+        deactivated_at: Time the row was retired from inventory; NULL while active.
+        last_mutation_sim_time: Time the row was last modified.
 
     - name: servers
       kind: entity
@@ -92,6 +98,14 @@ source:
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__hostname, prop__ip_address, prop__zone, prop__port,
                 prop__service]
+      descriptions:
+        record_index: >-
+          Surrogate key for the server; join target of event_entities.entity_id
+          (CAST to BIGINT).
+        created_sim_time: Time the row was created.
+        active: FALSE if the row was soft-deleted from inventory.
+        deactivated_at: Time the row was retired from inventory; NULL while active.
+        last_mutation_sim_time: Time the row was last modified.
 
     - name: accounts
       kind: entity
@@ -101,6 +115,14 @@ source:
                 prop__owner_first, prop__owner_last]
       rename:
         prop__owner_host: owner_hostname
+      descriptions:
+        record_index: >-
+          Surrogate key for the account; join target of
+          event_entities.entity_id (CAST to BIGINT).
+        created_sim_time: Time the row was created.
+        active: FALSE if the row was soft-deleted from inventory.
+        deactivated_at: Time the row was retired from inventory; NULL while active.
+        last_mutation_sim_time: Time the row was last modified.
 
     - name: firewall_rules
       kind: entity
@@ -108,6 +130,14 @@ source:
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__rule_name, prop__src_zone, prop__dst_zone, prop__dst_port,
                 prop__action]
+      descriptions:
+        record_index: >-
+          Surrogate key for the firewall rule; join target of
+          event_entities.entity_id (CAST to BIGINT).
+        created_sim_time: Time the row was created.
+        active: FALSE if the row was soft-deleted from inventory.
+        deactivated_at: Time the row was retired from inventory; NULL while active.
+        last_mutation_sim_time: Time the row was last modified.
 
     # correlation table: one row per session / probe sequence; every
     # security_events row carries its id as session_id
@@ -117,6 +147,15 @@ source:
                 prop__actor]
       rename:
         prop__actor: host_id
+      descriptions:
+        record_index: >-
+          Surrogate key for the session; join target of
+          security_events.session_id.
+        created_sim_time: Time the row was created (the session's start).
+        active: FALSE if the row was soft-deleted from inventory.
+        deactivated_at: Time the row was retired; NULL while active.
+        last_mutation_sim_time: Time the row was last modified.
+        prop__actor: Host that ran this session; join to hosts.id.
 
     # the log itself: one immutable row per event
     - name: security_events
@@ -128,6 +167,25 @@ source:
         prop__journey_instance: session_id
         prop__decision_type: event_type
         prop__context: context
+      # source mode has no value-remap surface, so event_type keeps the
+      # collector's raw vocabulary; the description below glosses each value
+      # with the warehouse name the dimensional export maps it to.
+      descriptions:
+        record_index: >-
+          Surrogate key for the event; join target of event_entities.event_id.
+        created_sim_time: Time the event was logged.
+        prop__journey_instance: >-
+          Correlation id shared by every event in one session; join to
+          sessions.id.
+        prop__decision_type: >-
+          Event category, in the collector's raw vocabulary:
+          destination_chosen (a connection attempt), firewall_evaluated (an
+          allow/deny firewall decision), account_presented (an authentication
+          attempt), auth_rejected (a failed authentication), session_opened
+          (a session established).
+        prop__context: >-
+          Raw JSON detail; carries bytes_transferred on session_opened
+          events, '{}' otherwise.
 
     # polymorphic event -> entity link: which server / rule / account an
     # event involved (the entity's own table tells which it is). entity_id
@@ -143,3 +201,8 @@ source:
       rename:
         record_id: event_id
         member__entity__id: entity_id
+      descriptions:
+        record_id: The security_events.id this link belongs to.
+        member__entity__id: >-
+          Id of the server, account, or firewall rule involved in the event
+          (VARCHAR; CAST to BIGINT to join its inventory table).

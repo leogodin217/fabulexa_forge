@@ -38,6 +38,13 @@
 #     driver counterpart), zone refs -> zone_id / dest_zone_id / base_zone_id.
 #   - Per-source `rename:` keeps the `changes` payload keys in step.
 #
+# DESCRIPTIONS: each state table carries a `descriptions:` map (keyed by SOURCE
+# identity, pre-rename — the same vocabulary as `rename:`) replacing the
+# engine-voiced inherited prose (creation-order ordinals, sim-time phrasing,
+# copy-pasted place blobs, rider-voiced text on driver columns) with per-table
+# domain sentences. The event log declares no descriptions surface, so
+# audit_log's columns stay undescribed.
+#
 #   SPLIT  actor -> rider + driver, two `state` tables over the same `kind: actor`
 #          (one shared wide records table, `actor_type` discriminator), each
 #          narrowed by its own `sub_types:`. Measured 2,411 riders and 2,451
@@ -131,6 +138,28 @@ source:
       # %Y-%m-%d, no exceptions) — declared, not sniffed.
       render:
         prop__date_of_birth: {date_parse: "%Y-%m-%d"}
+      descriptions:
+        record_index: Unique integer identifier of the rider.
+        created_sim_time: When the rider signed up.
+        active: FALSE if the rider account has been soft-deleted.
+        deactivated_at: When the rider account was deactivated; NULL while active.
+        last_mutation_sim_time: When this rider row last changed.
+        prop__status: >-
+          Where the rider is in the trip flow right now (e.g. seeking, on_trip)
+          — or how their last trip ended (completed, no_show, abandoned,
+          declined).
+        prop__zone: The zone where the rider hails rides; joins zone.id.
+        prop__dest_zone: The zone where the rider's trips usually end; joins zone.id.
+        prop__ride_count: >-
+          Lifetime number of completed rides; enough rides lifts the rider
+          into the next loyalty tier.
+        prop__loyalty_band: >-
+          The rider's loyalty tier — new, silver, or gold. It climbs with
+          completed rides and drops after a no-show, decline, or abandoned
+          request.
+        prop__home_place_city: City of the rider's home address.
+        prop__home_place_postal_code: Postal code of the rider's home address.
+        prop__home_place_area_code: Phone area code of the rider's home address.
     - name: driver
       kind: actor
       sub_types: [driver]
@@ -145,12 +174,51 @@ source:
         prop__base_zone: base_zone_id
       render:
         prop__date_of_birth: {date_parse: "%Y-%m-%d"}
+      descriptions:
+        record_index: Unique integer identifier of the driver.
+        created_sim_time: When the driver first logged on to the platform.
+        active: >-
+          FALSE if the driver account has been deactivated — set when a driver
+          logs off for good.
+        deactivated_at: >-
+          When the driver logged off and left the platform; NULL while the
+          driver is still active.
+        last_mutation_sim_time: When this driver row last changed.
+        prop__status: "The driver's current shift state — available, driving, or offline."
+        prop__zone: >-
+          The zone the driver is currently in; trips and repositioning move
+          it. Joins zone.id.
+        prop__base_zone: >-
+          The driver's home zone — where they log on and return when idle;
+          joins zone.id.
+        prop__session_rides: Number of rides the driver has completed in their current shift.
+        prop__loyalty_band: "The driver's loyalty tier: new, silver, or gold."
+        prop__phone: The driver's phone number.
     - name: zone
       kind: entity
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__demand_pressure, prop__supply_pressure,
                 prop__place_city, prop__place_subdivision, prop__place_postal_code,
                 prop__place_area_code]
+      descriptions:
+        record_index: Unique integer identifier of the zone.
+        created_sim_time: When the zone was set up.
+        active: FALSE if the zone has been retired; every zone here is active.
+        deactivated_at: When the zone was retired; NULL while active.
+        last_mutation_sim_time: >-
+          When this zone row last changed — the pressure gauges update it
+          continually.
+        prop__name: "The zone's display name: Downtown, Midtown, or Riverside."
+        prop__demand_pressure: >-
+          How many riders in this zone are currently looking for a ride;
+          against supply_pressure it gives the zone's surge level.
+        prop__supply_pressure: >-
+          How many drivers in this zone are currently free to take a ride —
+          the denominator of the zone's surge level.
+        prop__place_city: City the zone covers.
+        prop__place_subdivision: Two-letter state code of the zone's city.
+        prop__place_postal_code: Postal code of the zone.
+        prop__place_area_code: Phone area code of the zone.
     - name: user_session
       kind: journey_instance
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
@@ -158,11 +226,41 @@ source:
       rename:
         prop__actor: user_id
         prop__journey_type: session_type
+      descriptions:
+        record_index: Unique integer identifier of the session.
+        created_sim_time: >-
+          When the session started — a rider opening a trip request, or a
+          driver logging on.
+        active: FALSE once the session has ended.
+        deactivated_at: When the session ended; NULL while still open.
+        last_mutation_sim_time: When the session last changed state.
+        prop__actor: >-
+          The rider or driver this session belongs to; joins rider.id or
+          driver.id depending on session_type.
+        prop__journey_type: >-
+          Which side's session this is — rider_journey (a rider's trip through
+          the app) or driver_journey (a driver's shift).
+        prop__current_state: >-
+          The state the session is in right now (e.g. waiting, on_trip, or
+          lapsed for riders; available, driving, or offline for drivers).
     - name: match
       kind: pairing
       rename:
         prop__requester: rider_id
         prop__counterpart: driver_id
+      descriptions:
+        record_index: Unique integer identifier of the match.
+        created_sim_time: When the rider and driver were matched.
+        active: TRUE while the match is held; FALSE once released.
+        deactivated_at: >-
+          When the match was released — the trip finished or fell through;
+          NULL while held.
+        last_mutation_sim_time: When this match row last changed.
+        prop__requester: The rider who requested the trip; joins rider.id.
+        prop__counterpart: The driver dispatched to serve it; joins driver.id.
+        prop__match_type: >-
+          What kind of match this is; every match in this dataset is a
+          ride_match — one rider dispatched to one driver for one trip.
   events:
     name: audit_log
     sources:

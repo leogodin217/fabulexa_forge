@@ -176,23 +176,41 @@ dimensional:
       key: [customer_id, valid_from]
       columns:
         # the elected surface: the CUST_-prefixed registry key (KEYS note)
-        - {name: customer_id, from: presentation_id}
-        - {name: acquisition_source, from: prop__acquisition_source}
-        - {name: tier, from: prop__tier}
-        - {name: segment, from: prop__segment}
-        - {name: income, from: prop__income}
-        - {name: age, from: prop__age}
-        - {name: country, from: prop__country}
+        - {name: customer_id, from: presentation_id,
+           description: "Unique customer identifier (CUST_-prefixed)."}
+        - {name: acquisition_source, from: prop__acquisition_source,
+           description: "Marketing channel the customer first arrived through:
+             organic, paid_search, social, or referral."}
+        - {name: tier, from: prop__tier,
+           description: "Loyalty tier: most customers are regular, with a small
+             vip minority who buy and return more often."}
+        - {name: segment, from: prop__segment,
+           description: "Price segment the customer shops in: budget,
+             mainstream, or premium."}
+        - {name: income, from: prop__income,
+           description: "Household income in whole dollars; higher-income
+             customers complete checkout more often."}
+        - {name: age, from: prop__age,
+           description: "Customer's age in years when the account was created."}
+        - {name: country, from: prop__country,
+           description: "Country of the customer's home address (US, MX, or UK)."}
         # prop__store (the storefront reference) is NOT projected: one host in
         # this run, so it is a single constant value on every row (SPLIT note).
-        - {name: total_purchases, from: prop__total_purchases}
+        - {name: total_purchases, from: prop__total_purchases,
+           description: "Lifetime number of completed orders; increases by one
+             with each purchase, opening a new version row."}
         - {name: first_name, from: prop__first_name}
         - {name: last_name, from: prop__last_name}
         - {name: full_name, from: prop__name}
-        - {name: city, from: prop__place_city}
-        - {name: state_province, from: prop__place_subdivision}
-        - {name: postal_code, from: prop__place_postal_code}
-        - {name: area_code, from: prop__place_area_code}
+        - {name: city, from: prop__place_city,
+           description: "City of the customer's home address."}
+        - {name: state_province, from: prop__place_subdivision,
+           description: "State or province of the customer's home address."}
+        - {name: postal_code, from: prop__place_postal_code,
+           description: "Postal code of the customer's home address."}
+        - {name: area_code, from: prop__place_area_code,
+           description: "Telephone area code of the customer's home address;
+             matches the customer's phone number."}
         - name: birth_date
           derived:
             date_parse: {from: prop__birth_date, format: "%Y-%m-%d"}
@@ -200,8 +218,11 @@ dimensional:
         - {name: username, from: prop__username}
         - {name: phone, from: prop__phone}
         - {name: street_address, from: prop__street_address}
-        - {name: valid_from, derived: {scd_window: valid_from}}
-        - {name: valid_to, derived: {scd_window: valid_to}}
+        - {name: valid_from, derived: {scd_window: valid_from},
+           description: "When this version row became current."}
+        - {name: valid_to, derived: {scd_window: valid_to},
+           description: "When this version row stopped being current; NULL on
+             the customer's current row."}
 
     # --- dim: ops_agent (the storefront monitor bot) — Type-1, one row.
     #     The actor kind's other sub-type; projects exactly the ops partition of
@@ -217,7 +238,9 @@ dimensional:
         filter: {prop__actor_type: ops}
       key: [agent_id]
       columns:
-        - {name: agent_id, from: presentation_id}
+        - {name: agent_id, from: presentation_id,
+           description: "Unique identifier of the monitoring agent
+             (OPS_-prefixed)."}
         - {name: component, from: prop__component}
 
     # --- dim: product (the catalogue) — Type-1, every column constant ---
@@ -234,16 +257,27 @@ dimensional:
         # uniform counter key space; the dim-key-agreement gate requires the
         # declared key to project it. No separate `sku` column: it would be an
         # exact duplicate of this one.
-        - {name: product_id, from: presentation_id}
+        - {name: product_id, from: presentation_id,
+           description: "Unique product identifier (SKU_-prefixed)."}
         - {name: product_name, from: prop__product_name}
-        - {name: category, from: prop__category}
-        - {name: price_cents, from: prop__price_cents}
-        - {name: margin, from: prop__margin}
+        - {name: category, from: prop__category,
+           description: "Product category: smartphones, laptops, tablets,
+             audio, gaming, or accessories."}
+        - {name: price_cents, from: prop__price_cents,
+           description: "Retail price in cents (129900 = $1,299.00)."}
+        - {name: margin, from: prop__margin,
+           description: "Gross margin on the product, in whole percentage
+             points."}
         # governs how often shoppers view / compare / cart / buy this item
-        - {name: popularity, from: prop__popularity}
-        - {name: brand, from: prop__identity_brand}
-        - {name: product_line, from: prop__identity_line}
-        - {name: brand_tier, from: prop__identity_tier}
+        - {name: popularity, from: prop__popularity,
+           description: "Relative popularity weight: higher values mean
+             shoppers view, cart, compare, and buy this product more often."}
+        - {name: brand, from: prop__identity_brand,
+           description: "Brand the product is sold under."}
+        - {name: product_line, from: prop__identity_line,
+           description: "Product line (series or family) within the brand."}
+        - {name: brand_tier, from: prop__identity_tier,
+           description: "Market tier of the brand, from value to premium."}
 
     # --- dim: storefront (the serving host) — SCD-2: THE incident timeline ---
     #     status/error_rate are the only tracked columns in the entity kind; the
@@ -257,11 +291,20 @@ dimensional:
         filter: {prop__entity_type: infrastructure}
       key: [storefront_id, valid_from]
       columns:
-        - {name: storefront_id, from: presentation_id}
-        - {name: status, from: prop__status}
-        - {name: error_rate, from: prop__error_rate}
-        - {name: valid_from, derived: {scd_window: valid_from}}
-        - {name: valid_to, derived: {scd_window: valid_to}}
+        - {name: storefront_id, from: presentation_id,
+           description: "Unique identifier of the storefront host
+             (INFRA_-prefixed)."}
+        - {name: status, from: prop__status,
+           description: "Health of the storefront host: healthy, or degraded
+             during a site incident."}
+        - {name: error_rate, from: prop__error_rate,
+           description: "Fraction of requests failing on the storefront host;
+             near zero while healthy, elevated during incidents."}
+        - {name: valid_from, derived: {scd_window: valid_from},
+           description: "When this version row became current."}
+        - {name: valid_to, derived: {scd_window: valid_to},
+           description: "When this version row stopped being current; NULL on
+             the current row."}
 
     # --- dim: session — Type-1, shopping sessions only (see SEPARATE).
     #     Only what does NOT version about a session; its state-machine timeline
@@ -275,8 +318,11 @@ dimensional:
         filter: {prop__journey_type: shopping_session}
       key: [session_id]
       columns:
-        - {name: session_id, from: record_id}
-        - {name: customer_id, fk: {to: dim_customer, via: reference}}
+        - {name: session_id, from: record_id,
+           description: "Unique shopping-session identifier."}
+        - {name: customer_id, fk: {to: dim_customer, via: reference},
+           description: "The customer who ran this session; joins to
+             dim_customer.customer_id."}
         - {name: customer_handle, from: prop__customer_handle}
 
     # --- fact: customer_action (the funnel event) — grain: one tick_decision.
@@ -293,8 +339,11 @@ dimensional:
              product_comparison, begin_checkout, purchase]
       key: [action_id]
       columns:
-        - {name: action_id, from: record_id}
-        - {name: session_id, fk: {to: dim_session, via: reference}}
+        - {name: action_id, from: record_id,
+           description: "Unique identifier of this customer action."}
+        - {name: session_id, fk: {to: dim_session, via: reference},
+           description: "The shopping session the action happened in; joins to
+             dim_session.session_id."}
         # the shopper, reached by the two-hop reference path decision -> session
         # -> actor, rendered in dim_customer's elected CUST_ key (KEYS note)
         - name: customer_id
@@ -302,13 +351,20 @@ dimensional:
             to: dim_customer
             via: reference
             path: [prop__journey_instance, prop__actor]
-        - {name: action_type, from: prop__decision_type}
+          description: "The customer who took the action; joins to
+            dim_customer.customer_id."
+        - {name: action_type, from: prop__decision_type,
+           description: "The kind of shopping action: visit, product_view,
+             add_to_cart, product_comparison, begin_checkout, or purchase."}
         # context.discount_pct rounded in place to 4dp (raw float64 noise
         # otherwise — up to 19 fraction digits); other payload bytes verbatim
-        - {name: context, derived: {json_precision: {from: prop__context, leaves: {discount_pct: 4}}}}
+        - {name: context, derived: {json_precision: {from: prop__context, leaves: {discount_pct: 4}}},
+           description: "JSON details of the action (e.g. quantity for cart
+             adds, discount_pct at checkout)."}
         # wallclock event time, so this fact is point-in-time joinable against the
         # SCD-2 dims' valid_from/valid_to windows
-        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}}}
+        - {name: occurred_at, derived: {timestamp: {source: created_sim_time}},
+           description: "When the action happened."}
 
     # --- fact: action_product (the binding bridge) — grain: one binding,
     #     product roles only (see SEPARATE). Single-pick roles contribute one
@@ -328,17 +384,26 @@ dimensional:
           elem__role_name: [viewed_product, carted_product, compared_products]
       key: [action_id, product_id, comparison_position]
       columns:
-        - {name: action_id, from: record_id}
+        - {name: action_id, from: record_id,
+           description: "The customer action this product was part of; joins
+             to fact_customer_action.action_id."}
         # Inherits entity/product's presentation_id election: SKU_xxxxx values.
         - name: product_id
           fk:
             to: dim_product
             via: membership
             member_field: entity
-        - {name: interaction_type, from: elem__role_name}
+          description: "The product the action touched; joins to
+            dim_product.product_id."
+        - {name: interaction_type, from: elem__role_name,
+           description: "How the action touched the product: viewed_product,
+             carted_product, or compared_products."}
         # zero-based slot within one product_comparison's compared pair;
         # 0 for the single-pick view/cart bindings
-        - {name: comparison_position, from: elem__pick_index}
-        - {name: occurred_at, derived: {timestamp: {source: joined_sim_time}}}
+        - {name: comparison_position, from: elem__pick_index,
+           description: "Position of the product among the pair compared in a
+             product_comparison; 0 for views and cart adds."}
+        - {name: occurred_at, derived: {timestamp: {source: joined_sim_time}},
+           description: "When the action touched the product."}
         # left_sim_time is not projected: no product binding is ever released
         # within the run, so the column is empty on every row.

@@ -37,7 +37,7 @@
 #            `status` (29,642 history rows) and `zone` (7,691) — operational
 #            state, exactly the NHS `resource.allocated` judgment.
 #            So the agents are Type-1 reference data and their timelines become
-#            facts: lifecycle state in fact_journey_state, tier movement in
+#            facts: lifecycle state in fact_session_state, tier movement in
 #            fact_loyalty_band. Nothing is lost — every version still exists, at
 #            the grain where it belongs.
 #   KEYS     actor and entity elect `record_index`. The engine's `record_id` for
@@ -61,7 +61,7 @@
 #            keeps the domain name home_state). The raw `*_ns` sim-epoch twins
 #            are gone too: every instant renders once, as a TIMESTAMP via the
 #            anchor, and the interval facts key on `entered_at` — measured zero
-#            journeys or agents with two state changes in the same microsecond,
+#            sessions or agents with two state changes in the same microsecond,
 #            so the truncation from nanoseconds costs no key uniqueness.
 #   FACT     actor.loyalty_band -> fact_loyalty_band, history_interval grain. The
 #            loyalty ladder is the churn story the atlas is built around ("bad
@@ -72,8 +72,8 @@
 #            (drivers, 0..9) stay out of the star entirely: they are running
 #            counters advancing once per completed trip (3,118 changes each) —
 #            measures recoverable by counting facts, not descriptive attributes.
-#   FACT     journey_instance -> fact_journey_state, NOT a dimension. Measured:
-#            8,574 journeys against 53,253 `current_state` history rows — 6.2
+#   FACT     journey_instance -> fact_session_state, NOT a dimension. Measured:
+#            8,574 sessions against 53,253 `current_state` history rows — 6.2
 #            versions each. Its only tracked property is a state-machine position,
 #            so its value is the timeline. This is where the market's emergent
 #            quantities live — measured off this fact: rider wait is time in
@@ -85,15 +85,15 @@
 #            enters it: the 14 state values actually present are requesting,
 #            waiting, enroute, arrived, on_trip, tally, idle, penalty, lapsed and
 #            the five driver states. Read the data, not only the atlas.
-#   ONE      fact_journey_state is ONE table, not one per side. The two journeys
+#   ONE      fact_session_state is ONE table, not one per side. The two lifecycles
 #            have disjoint state vocabularies (measured: 2,048 driver_journey and
 #            6,526 rider_journey rows) but an identical shape — id, state, entered,
-#            exited — so conforming them costs no NULL columns. `journey_type`
+#            exited — so conforming them costs no NULL columns. `session_type`
 #            rides on the fact to separate them, and `filter` is records-only so it
 #            could not split them at this grain anyway. Its agent identity is the
-#            rider_id / driver_id FK pair over the journey's `prop__actor` edge:
+#            rider_id / driver_id FK pair over the session's `prop__actor` edge:
 #            each edge resolves only inside its own dim's population, so exactly
-#            one of the pair is set per row — filter by journey_type (or by which
+#            one of the pair is set per row — filter by session_type (or by which
 #            FK is non-NULL) and join that side's dim.
 #   FACT     pairing -> fact_pairing, the rider<->driver match — the distinctive
 #            join of this marketplace. Measured 4,963 matches; every one has a
@@ -109,6 +109,10 @@
 #   DROPPED  journey_instance.bound_roles / output_roles — internal coupling
 #            bookkeeping, opaque, no domain meaning. state_entry_time and complete
 #            are slice_only and not projectable in any mode.
+#
+# DESCRIPTIONS: per-column `description:` overrides replace the engine-voiced
+# inherited prose (creation-order ordinals, sim-time phrasing, copy-pasted place
+# blobs) with domain sentences a data-engineering learner can read cold.
 #
 # TIME: the sidecar carries a `runtime` anchor (2026-01-09T00:00:00 UTC), so no
 # `rebase:` block is needed. A records grain accepts three structural instant
@@ -148,12 +152,24 @@ dimensional:
         kind: entity
       key: [zone_id]
       columns:
-        - {name: zone_id, from: record_index}
-        - {name: zone_name, from: prop__name}
-        - {name: place_city, from: prop__place_city}
-        - {name: place_subdivision, from: prop__place_subdivision}
-        - {name: place_postal_code, from: prop__place_postal_code}
-        - {name: place_area_code, from: prop__place_area_code}
+        - name: zone_id
+          from: record_index
+          description: Unique integer identifier of the zone.
+        - name: zone_name
+          from: prop__name
+          description: "The zone's display name: Downtown, Midtown, or Riverside."
+        - name: place_city
+          from: prop__place_city
+          description: City the zone covers.
+        - name: place_subdivision
+          from: prop__place_subdivision
+          description: Two-letter state code of the zone's city.
+        - name: place_postal_code
+          from: prop__place_postal_code
+          description: Postal code of the zone.
+        - name: place_area_code
+          from: prop__place_area_code
+          description: Phone area code of the zone.
 
     # --- dim: rider (demand side) — Type-1; tier movement is fact_loyalty_band ---
     - name: dim_rider
@@ -165,7 +181,9 @@ dimensional:
         filter: {prop__actor_type: rider}
       key: [rider_id]
       columns:
-        - {name: rider_id, from: record_index}
+        - name: rider_id
+          from: record_index
+          description: Unique integer identifier of the rider.
         - {name: account_id, from: prop__account_id}
         - {name: first_name, from: prop__first_name}
         - {name: last_name, from: prop__last_name}
@@ -175,15 +193,30 @@ dimensional:
           derived: {date_parse: {from: prop__date_of_birth, format: "%Y-%m-%d"}}
         - {name: home_street, from: prop__home_street}
         - {name: home_state, from: prop__home_state}
-        - {name: home_city, from: prop__home_place_city}
-        - {name: home_postal_code, from: prop__home_place_postal_code}
-        - {name: home_area_code, from: prop__home_place_area_code}
+        - name: home_city
+          from: prop__home_place_city
+          description: City of the rider's home address.
+        - name: home_postal_code
+          from: prop__home_place_postal_code
+          description: Postal code of the rider's home address.
+        - name: home_area_code
+          from: prop__home_place_area_code
+          description: Phone area code of the rider's home address.
         - {name: payment_card, from: prop__payment_card}
         - {name: app_user_agent, from: prop__app_user_agent}
         # current tier; its history is fact_loyalty_band
-        - {name: loyalty_band, from: prop__loyalty_band}
+        - name: loyalty_band
+          from: prop__loyalty_band
+          description: >-
+            The rider's current loyalty tier — new, silver, or gold. It climbs
+            with completed rides and drops after a no-show, decline, or
+            abandoned request; tier history is in fact_loyalty_band.
         # habitual destination zone (constant)
-        - {name: dest_zone_id, fk: {to: dim_zone, via: reference, path: [prop__dest_zone]}}
+        - name: dest_zone_id
+          fk: {to: dim_zone, via: reference, path: [prop__dest_zone]}
+          description: >-
+            The zone where the rider's trips usually end; joins
+            dim_zone.zone_id.
 
     # --- dim: driver (supply side) — Type-1; tier movement is fact_loyalty_band ---
     - name: dim_driver
@@ -195,13 +228,17 @@ dimensional:
         filter: {prop__actor_type: driver}
       key: [driver_id]
       columns:
-        - {name: driver_id, from: record_index}
+        - name: driver_id
+          from: record_index
+          description: Unique integer identifier of the driver.
         # the operator's own driver reference, distinct from the record identity
         - {name: driver_reference, from: prop__driver_id}
         - {name: full_name, from: prop__full_name}
         - {name: first_name, from: prop__first_name}
         - {name: last_name, from: prop__last_name}
-        - {name: phone, from: prop__phone}
+        - name: phone
+          from: prop__phone
+          description: The driver's phone number.
         - name: date_of_birth
           derived: {date_parse: {from: prop__date_of_birth, format: "%Y-%m-%d"}}
         - {name: vehicle_make, from: prop__vehicle_make}
@@ -210,9 +247,17 @@ dimensional:
         - {name: vehicle_color, from: prop__vehicle_color}
         - {name: license_plate, from: prop__license_plate}
         # current tier; its history is fact_loyalty_band
-        - {name: loyalty_band, from: prop__loyalty_band}
+        - name: loyalty_band
+          from: prop__loyalty_band
+          description: >-
+            The driver's current loyalty tier — new, silver, or gold; tier
+            history is in fact_loyalty_band.
         # home base zone (constant)
-        - {name: base_zone_id, fk: {to: dim_zone, via: reference, path: [prop__base_zone]}}
+        - name: base_zone_id
+          fk: {to: dim_zone, via: reference, path: [prop__base_zone]}
+          description: >-
+            The driver's home zone — where they log on and return when idle;
+            joins dim_zone.zone_id.
 
     # --- fact: pairing (the match) — grain: one rider<->driver match ---
     - name: fact_pairing
@@ -222,38 +267,77 @@ dimensional:
         kind: pairing
       key: [pairing_id]
       columns:
-        - {name: pairing_id, from: record_index}
+        - name: pairing_id
+          from: record_index
+          description: Unique integer identifier of the match.
         # requester is always a rider, counterpart always a driver (measured
         # across all 4,963 matches), so both edges resolve
-        - {name: rider_id, fk: {to: dim_rider, via: reference, path: [prop__requester]}}
-        - {name: driver_id, fk: {to: dim_driver, via: reference, path: [prop__counterpart]}}
-        - {name: match_type, from: prop__match_type}
+        - name: rider_id
+          fk: {to: dim_rider, via: reference, path: [prop__requester]}
+          description: The matched rider; joins dim_rider.rider_id.
+        - name: driver_id
+          fk: {to: dim_driver, via: reference, path: [prop__counterpart]}
+          description: The matched driver; joins dim_driver.driver_id.
+        - name: match_type
+          from: prop__match_type
+          description: >-
+            What kind of match this is; every match in this dataset is a
+            ride_match — one rider dispatched to one driver for one trip.
         # opened and closed — their difference is how long the match was held
-        - {name: matched_at, derived: {timestamp: {source: created_sim_time}}}
-        - {name: closed_at, derived: {timestamp: {source: deactivated_at}}}
+        - name: matched_at
+          derived: {timestamp: {source: created_sim_time}}
+          description: When the rider and driver were matched.
+        - name: closed_at
+          derived: {timestamp: {source: deactivated_at}}
+          description: >-
+            When the match was released — the trip finished or fell through;
+            NULL if still open.
 
-    # --- fact: journey state (history_interval grain) — one row per state
+    # --- fact: session state (history_interval grain) — one row per state
     #     occupancy, both sides of the market. Rider wait = time in waiting;
     #     idle supply = driver time in available; churn = reaching lapsed.
-    - name: fact_journey_state
+    - name: fact_session_state
       role: fact
       source:
         grain: history_interval
         kind: journey_instance
         property: current_state
-      key: [journey_id, entered_at]
+      key: [session_id, entered_at]
       columns:
-        - {name: journey_id, from: record_id}
-        # the journey's agent, rendered in its own dim's elected key: exactly one
+        - name: session_id
+          from: record_id
+          description: Unique identifier of the session this state belongs to.
+        # the session's agent, rendered in its own dim's elected key: exactly one
         # of the pair is set per row (a rider on rider_journey rows, a driver on
-        # driver_journey rows) — filter by journey_type, then join that dim.
-        - {name: rider_id, fk: {to: dim_rider, via: reference, path: [prop__actor]}}
-        - {name: driver_id, fk: {to: dim_driver, via: reference, path: [prop__actor]}}
-        - {name: journey_type, lookup: {property: journey_type}}
-        - {name: state, from: value}
-        - {name: entered_at, derived: {timestamp: {source: sim_time}}}
-        # lead_sim_time = LEAD(sim_time): NULL on the journey's last (open) state
-        - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
+        # driver_journey rows) — filter by session_type, then join that dim.
+        - name: rider_id
+          fk: {to: dim_rider, via: reference, path: [prop__actor]}
+          description: >-
+            The rider whose session this is; set on rider_journey rows, NULL
+            on driver_journey rows. Joins dim_rider.rider_id.
+        - name: driver_id
+          fk: {to: dim_driver, via: reference, path: [prop__actor]}
+          description: >-
+            The driver whose session this is; set on driver_journey rows, NULL
+            on rider_journey rows. Joins dim_driver.driver_id.
+        - name: session_type
+          lookup: {property: journey_type}
+          description: >-
+            Which side's session this is — rider_journey (a rider's trip
+            through the app) or driver_journey (a driver's shift).
+        - name: state
+          from: value
+          description: >-
+            The lifecycle state the session occupied during this interval —
+            e.g. waiting, enroute, or on_trip for riders; available or driving
+            for drivers.
+        - name: entered_at
+          derived: {timestamp: {source: sim_time}}
+          description: When the session entered this state.
+        # lead_sim_time = LEAD(sim_time): NULL on the session's last (open) state
+        - name: exited_at
+          derived: {timestamp: {source: lead_sim_time}}
+          description: When the session left this state; NULL if still in it.
 
     # --- fact: loyalty band (history_interval grain) — one row per tenure in one
     #     tier. The churn ladder: how long an agent held a band, which band it fell
@@ -269,11 +353,29 @@ dimensional:
         # the agent itself, rendered in its own dim's elected key: the fk is the
         # zero-hop self edge, resolving only inside each dim's population, so
         # exactly one of the pair is set per row
-        - {name: rider_id, fk: {to: dim_rider, via: reference}}
-        - {name: driver_id, fk: {to: dim_driver, via: reference}}
+        - name: rider_id
+          fk: {to: dim_rider, via: reference}
+          description: >-
+            The rider who held this tier; NULL on driver rows. Joins
+            dim_rider.rider_id.
+        - name: driver_id
+          fk: {to: dim_driver, via: reference}
+          description: >-
+            The driver who held this tier; NULL on rider rows. Joins
+            dim_driver.driver_id.
         # rider or driver — join the matching dim
-        - {name: actor_type, lookup: {property: actor_type}}
-        - {name: loyalty_band, from: value}
-        - {name: entered_at, derived: {timestamp: {source: sim_time}}}
+        - name: user_type
+          lookup: {property: actor_type}
+          description: "Which side of the market this row describes: rider or driver."
+        - name: loyalty_band
+          from: value
+          description: "The loyalty tier held during this interval: new, silver, or gold."
+        - name: entered_at
+          derived: {timestamp: {source: sim_time}}
+          description: When the rider or driver entered this tier.
         # NULL on the agent's current (open) band
-        - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
+        - name: exited_at
+          derived: {timestamp: {source: lead_sim_time}}
+          description: >-
+            When the rider or driver left this tier; NULL if it is still their
+            current tier.

@@ -25,6 +25,11 @@
 #            (also 1,399 rows) — same event, written twice by the engine.
 #            dim_company's SCD-2 already carries it; a second copy would be
 #            redundant, not additional fidelity.
+#   DROPPED  entity.prop__attach_weight from dim_account. It is a pure
+#            simulation arrival-sampling knob (how strongly the account
+#            pulls newly-arriving seats), not a business attribute a SaaS
+#            warehouse would carry; exporting it would leak simulation
+#            mechanics into the star.
 #   KEPT     journey_instance's user_lifecycle slice, but NOT as a
 #            dimension. Its current_state toggles active<->using at 105
 #            versions/user on average (up to 434) — confirmed via
@@ -46,14 +51,19 @@
 #            dwell.
 #   POLYMORPHIC actor is the target of TWO independent references in this
 #            domain: journey_instance.prop__actor can land on either
-#            actor.company or actor.user depending on journey_type, and
+#            actor.company or actor.user depending on lifecycle_type, and
 #            both sub-types are genuinely disjoint in their real columns
 #            (see `sub_type_columns`). Split into dim_company / dim_user
 #            (never conformed into one dim_actor), and fact_lifecycle_interval
 #            carries the reference as a resolved-per-row NULLABLE pair
-#            (company_fk / user_fk) rather than a single ambiguous column —
+#            (company_id / user_id) rather than a single ambiguous column —
 #            exactly one of the pair is populated per row, discriminated by
-#            journey_type.
+#            lifecycle_type.
+#   RENAMED  fact_lifecycle_interval's engine-facing column names to the
+#            domain's: journey_id -> lifecycle_id, journey_type ->
+#            lifecycle_type (matching the source export's vocabulary),
+#            company_fk/user_fk -> company_id/user_id (named for the key
+#            columns they point at).
 #   ELECTED  tick_decision.prop__context is a genuine, well-formed JSON
 #            payload — confirmed via consult(composite) NOT to be engine
 #            noise. It stays a single `context` column on fact_usage_event
@@ -103,6 +113,11 @@
 #            recompute with genuine same-day pricing changes (544 collision
 #            days measured), so collapsing to date grain would blend a
 #            cosmetic update with a real billing change.
+#   DESCRIBED per-column `description:` overrides rewrite the inherited
+#            engine-voice prose (surrogate-identity, simulation-time,
+#            journey-stage wording) into the learner-facing domain voice the
+#            readme should carry, and fill columns the base layer left
+#            undescribed (valid_from/valid_to, FKs).
 
 mode: dimensional
 
@@ -124,23 +139,28 @@ dimensional:
       columns:
         - name: company_id
           from: presentation_id
+          description: Unique company identifier (CMP-#####).
         - name: status
           from: prop__status
+          description: "Lifecycle status: onboarding / active / churned."
         - name: created_at
           derived:
             timestamp:
               source: created_sim_time
+          description: When the company signed up.
         - name: valid_from
           derived:
             scd_window: {bound: valid_from, as: date}
+          description: Date this version of the row took effect.
         - name: valid_to
           derived:
             scd_window: {bound: valid_to, as: date}
+          description: Date this version was superseded; NULL on the current version.
 
     # --- dim_account: billing/workspace tenant (entity.company_hub) ---
     - name: dim_account
       role: dim
-      scd: type2  # attach_weight / churn_flag / engagement_score are tracked
+      scd: type2  # seat_price / churn_flag / engagement_score are tracked
       source:
         grain: records
         kind: entity
@@ -149,16 +169,16 @@ dimensional:
       columns:
         - name: account_id
           from: presentation_id
+          description: Unique account identifier (ACC-#####).
         - name: name
           from: prop__name
+          description: Account display name.
         - name: domain
           from: prop__domain
         - name: plan
           from: prop__plan
         - name: seat_price
           from: prop__seat_price
-        - name: attach_weight
-          from: prop__attach_weight
         - name: churn_flag
           from: prop__churn_flag
         - name: engagement_score
@@ -168,12 +188,15 @@ dimensional:
           derived:
             timestamp:
               source: created_sim_time
+          description: When the account was created.
         - name: valid_from
           derived:
             scd_window: valid_from
+          description: Instant this version of the row took effect.
         - name: valid_to
           derived:
             scd_window: valid_to
+          description: Instant this version was superseded; NULL on the current version.
 
     # --- dim_sku: product/feature catalog (entity.sku) ---
     - name: dim_sku
@@ -187,14 +210,17 @@ dimensional:
       columns:
         - name: sku_id
           from: presentation_id
+          description: Unique SKU identifier (SKU-###).
         - name: name
           from: prop__name
+          description: SKU display name (Core, Analytics, API).
         - name: popularity
           from: prop__popularity
         - name: created_at
           derived:
             timestamp:
               source: created_sim_time
+          description: When the SKU was added to the catalogue.
 
     # --- dim_user: individual product user, Type-1 identity (actor.user) ---
     - name: dim_user
@@ -208,11 +234,13 @@ dimensional:
       columns:
         - name: user_id
           from: presentation_id
+          description: Unique user identifier (USR-######).
         - name: account_id
           fk:
             to: dim_account
             via: reference
             path: [prop__company]
+          description: dim_account.account_id of the account this user's seat belongs to.
         - name: first_name
           from: prop__first_name
         - name: last_name
@@ -229,6 +257,7 @@ dimensional:
           derived:
             timestamp:
               source: created_sim_time
+          description: When the user's seat was created.
 
     # --- dim_user_status: SCD-2 satellite, user lifecycle status only ---
     - name: dim_user_status
@@ -242,14 +271,18 @@ dimensional:
       columns:
         - name: user_id
           from: presentation_id
+          description: Unique user identifier (USR-######).
         - name: status
           from: prop__status
+          description: "Seat lifecycle status: provisioned / active / using / offboarded."
         - name: valid_from
           derived:
             scd_window: {bound: valid_from, as: date}
+          description: Date this version of the row took effect.
         - name: valid_to
           derived:
             scd_window: {bound: valid_to, as: date}
+          description: Date this version was superseded; NULL on the current version.
 
     # --- fact_usage_event: one row per product usage event (tick_decision) ---
     - name: fact_usage_event
@@ -261,15 +294,18 @@ dimensional:
       columns:
         - name: usage_event_id
           from: record_index
+          description: Sequential event id (0-based), ascending in event order.
         - name: occurred_at
           derived:
             timestamp:
               source: created_sim_time
+          description: When the usage session occurred.
         - name: user_id
           fk:
             to: dim_user
             via: reference
             path: [prop__journey_instance, prop__actor]
+          description: dim_user.user_id of the user who ran the session.
         - name: sku_id
           fk:
             to: dim_sku
@@ -277,11 +313,13 @@ dimensional:
             property: bindings
             member_field: entity
             where: {elem__role_name: sku}
+          description: dim_sku.sku_id of the product line the session was recorded against.
         - name: context
           derived:
             json_precision:
               from: prop__context
               leaves: {volume: 2}
+          description: JSON detail of the usage session (e.g. volume).
 
     # --- fact_lifecycle_interval: state-occupancy timeline (journey_instance) ---
     - name: fact_lifecycle_interval
@@ -290,30 +328,37 @@ dimensional:
         grain: history_interval
         kind: journey_instance
         property: current_state
-      key: [journey_id, started_at]
+      key: [lifecycle_id, started_at]
       columns:
-        - name: journey_id
+        - name: lifecycle_id
           from: record_id
-        - name: journey_type
+          description: Id of the lifecycle this interval belongs to; rows sharing an id form one company or user lifecycle timeline.
+        - name: lifecycle_type
           lookup:
             property: journey_type
-        - name: company_fk
+          description: "Which lifecycle this is: company_lifecycle or user_lifecycle."
+        - name: company_id
           fk:
             to: dim_company
             via: reference
             path: [prop__actor]
-        - name: user_fk
+          description: dim_company.company_id for company_lifecycle rows; NULL on user_lifecycle rows.
+        - name: user_id
           fk:
             to: dim_user
             via: reference
             path: [prop__actor]
+          description: dim_user.user_id for user_lifecycle rows; NULL on company_lifecycle rows.
         - name: state
           from: value
+          description: "Lifecycle state occupied during this interval: onboarding / active / churned for companies, provisioned / active / using / offboarded for users."
         - name: started_at
           derived:
             timestamp:
               source: sim_time
+          description: When the lifecycle entered this state.
         - name: ended_at
           derived:
             timestamp:
               source: lead_sim_time
+          description: When the lifecycle left this state; NULL if it was still in this state at the end of the extract.

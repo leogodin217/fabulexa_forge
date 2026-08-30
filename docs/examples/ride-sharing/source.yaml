@@ -45,7 +45,12 @@
 #          zone union-unsafe with each other inside entity), so the standalone
 #          `presentation_id` columns are dropped as a second integer spelling of
 #          the same identity. tick_decision is unexported and unelected; the
-#          junction owner column keeps its verbatim record id as `match_id`.
+#          junction owner column keeps its verbatim record id as `trip_match_id`.
+#   DOCS   every declared table carries a `descriptions:` map (keyed by SOURCE
+#          identity, pre-rename) overriding the inherited prose so the README
+#          reads in the platform's own voice, not the simulator's. The audit
+#          log has no such surface — its column docs are the mode's own — and
+#          table blurbs / declared-value glosses come from the bundle.
 #   HYGIENE (realism QA) constants and mechanism internals stay out:
 #          journey_type ('trip' on all 1,496), the bindings' pick_index (0 on
 #          all 2,992) and entity_kind ('entity' — the junction binds entity
@@ -104,40 +109,93 @@ source:
       kind: actor
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__status]
+      descriptions:
+        record_index: "Unique numeric identifier for the trip, assigned in creation order."
+        created_sim_time: "When the rider requested the trip."
+        active: "TRUE while the trip is still open; FALSE once it finished (completed or cancelled)."
+        deactivated_at: "When the trip finished; NULL for trips still open at the end of the week."
+        last_mutation_sim_time: "When the trip row was last updated."
+        prop__status: "Trip lifecycle stage: requested, matching, en_route, on_trip, completed, or cancelled."
     - name: driver
       kind: resource
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__region, prop__capacity, prop__allocated,
                 prop__retiring]
+      descriptions:
+        record_index: "Unique numeric identifier for the driver, assigned in creation order."
+        created_sim_time: "When the driver joined the fleet."
+        active: "TRUE while the driver is on the platform; FALSE if the driver was removed."
+        deactivated_at: "When the driver was removed from the fleet; NULL while active."
+        last_mutation_sim_time: "When the driver row was last updated."
+        prop__name: "Driver's display name."
+        prop__region: "Driver's operating region."
+        prop__capacity: "Concurrent trips this driver can carry."
+        prop__allocated: "Trips currently assigned to this driver."
+        prop__retiring: "TRUE while the driver is winding down before going offline — finishing current trips, taking no new ones."
     - name: rider
       kind: entity
       sub_types: [rider]
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__loyalty]
+      descriptions:
+        record_index: "Unique numeric identifier for the rider, assigned in creation order."
+        created_sim_time: "When the rider account was created."
+        active: "TRUE while the rider account is active; FALSE if it was deactivated."
+        deactivated_at: "When the rider account was deactivated; NULL while active."
+        last_mutation_sim_time: "When the rider row was last updated."
+        prop__name: "Rider's display name."
+        prop__loyalty: "Rider's loyalty program tier: gold, silver, or bronze."
     - name: pickup_zone
       kind: entity
       sub_types: [zone]
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__zone_type]
+      descriptions:
+        record_index: "Unique numeric identifier for the pickup zone, assigned in creation order."
+        created_sim_time: "When the zone was added to the map."
+        active: "TRUE while the zone is a live pickup location; FALSE if it was retired."
+        deactivated_at: "When the zone was retired; NULL while active."
+        last_mutation_sim_time: "When the zone row was last updated."
+        prop__name: "Pickup zone's display name."
     - name: trip_lifecycle
       kind: journey_instance
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__actor, prop__current_state]
       rename:
         prop__actor: trip_id
+      descriptions:
+        record_index: "Unique numeric identifier for the lifecycle record, assigned in creation order (one per trip)."
+        created_sim_time: "When the trip lifecycle began — the moment the trip was requested."
+        active: "TRUE while the trip is still in progress; FALSE once its lifecycle finished."
+        deactivated_at: "When the lifecycle finished; NULL for trips still in progress at the end of the week."
+        last_mutation_sim_time: "When this row last changed — the trip's most recent stage transition."
+        prop__actor: "The trip this row belongs to; joins trip.id."
+        prop__current_state: "The stage the trip is in right now: requested, matching, en_route, on_trip, completed, or cancelled."
     - name: driver_assignment
       membership: {kind: resource, property: holders}
       columns: [joined_sim_time, left_sim_time, member__actor__id, elem__slots_held]
       rename:
         record_id: driver_id
         member__actor__id: trip_id
+      descriptions:
+        record_id: "Driver holding this assignment; joins driver.id."
+        member__actor__id: "The trip this assignment belongs to; joins trip.id."
+        joined_sim_time: "When the driver was assigned to the trip."
+        left_sim_time: "When the driver was released at drop-off or cancellation; NULL if the assignment was still open at the end of the week."
+        elem__slots_held: "How much of the driver's capacity this trip occupies."
     - name: trip_binding
       membership: {kind: tick_decision, property: bindings}
       columns: [joined_sim_time, left_sim_time, elem__role_name, member__entity__id]
       rename:
-        record_id: match_id
+        record_id: trip_match_id
         elem__role_name: role
-        member__entity__id: target_id
+        member__entity__id: participant_id
+      descriptions:
+        record_id: "Matching decision that produced this binding."
+        joined_sim_time: "When the rider or pickup zone was bound to the trip, at request time."
+        left_sim_time: "When the binding was released; always NULL here — a rider or zone stays bound to its trip."
+        elem__role_name: "Which side of the trip this row binds: rider or pickup_zone."
+        member__entity__id: "The bound rider or pickup zone; joins rider.id or pickup_zone.id, depending on role."
   events:
     name: audit_log
     sources:

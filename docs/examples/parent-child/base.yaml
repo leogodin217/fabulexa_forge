@@ -1,6 +1,6 @@
 # ExportConfig — parent-child bundle, base mode (flat current-state dump)
 # ============================================================
-# `fabulexa-forge export docs/examples/parent-child/bundle docs/examples/parent-child/base.yaml`
+# `fabulexa-forge export docs/examples/parent-child/bundle docs/examples/parent-child/base.yaml <out> --fmt duckdb`
 #
 # parent-child is the smallest fixture — a deliberately minimal example for
 # UNDERSTANDING the bundle shape, not a domain showcase. It carries three
@@ -8,33 +8,100 @@
 # so the base mode's faithful flat dump needs no author-declared exclusions.
 # (Author exclusions are the only thing being waived here: `slice_only` columns
 # are ALWAYS auto-omitted with a `slice-only-column-omitted` notice, whatever the
-# author excludes or does not exclude.) The kinds:
-#   actor (member)     — the child records.
-#   entity             — the parent groups.
-#   journey_instance   — the tiny journey spine (current_state tracked).
+# author excludes or does not exclude.) The kinds, renamed to the domain:
+#   actor            -> members      (the child records)
+#   entity           -> groups       (the parent records)
+#   journey_instance -> memberships  (the tiny lifecycle spine; status tracked)
 #
 # One flat table per kind, reconstructed at the tape's end; `record_id` -> `id`.
-# The bare `mode: base` (no `base:` section) is the complete config. This is the
-# clearest way to see exactly what the bundle contains.
+#
+# Author decisions:
+#
+#   RENAME   every table and every prop__ column to domain-native names, and
+#            supply learner-voice descriptions for the columns whose inherited
+#            prose speaks engine ontology (surrogate keys, lifecycle columns,
+#            the sub-type discriminators). `columns` / `descriptions` are keyed
+#            by state-at SOURCE identity: `record_id`, `record_index`,
+#            `ref_index__<p>`, `created_sim_time`, `prop__<p>` — never the
+#            derived output name.
+#   EXCLUDE  nothing. All three kinds are domain data.
 #
 # The membership join in the OUTPUT. Base emits the STATE_AT_COLUMNS prefix
 # (`record_id` -> `id`, `created_sim_time`, `active`, `deactivated_at`) plus one
-# `prop__<p>` per surviving property — it carries no `record_index` and no
-# `ref_index__*` surrogate columns, in any mode. So the one join the exported
-# tables support is the reference property itself:
-#     actor.prop__group  ->  entity.id
-# On this bundle that resolves cleanly: 32 members, 29 with a group (0 dangling)
-# and 3 honest NULLs — the group-less `solo_arrivals` stream. The `entity.id`
+# `prop__<p>` per surviving property and one `<p>_key` per surviving reference —
+# after the renames below the one id-space join the exported tables support is
+#     members.group_id  ->  groups.id
+# On this bundle that resolves cleanly: 30 members, 28 with a group (0
+# dangling) and 2 honest NULLs — the group-less `solo_arrivals` stream. The `groups.id`
 # values are the record ids as-is: '0'..'4' for the five groups that exist from
-# the start, and hex digests for the four mid-run `group_arrivals`, so the join
+# the start, and hex digests for the mid-run `group_arrivals`, so the join
 # key is visibly an opaque string, which is the point of the fixture.
 #
 # Timestamps: this emit's sidecar carries NO `runtime` anchor and there is no
 # `rebase:` block, so no effective anchor resolves and the lifecycle columns
-# (`created_sim_time`, `deactivated_at`) stay raw sim-time ns as BIGINT. That is
+# (`created_at`, `deactivated_at`) stay raw sim-time ns as BIGINT. That is
 # the contrast case — see docs/examples/ride-sharing-marketplace/base.yaml, whose
 # sidecar DOES carry an anchor and whose same two columns land as TIMESTAMP. Add
 # a `rebase:` block here to supply an origin instant and zone and get wallclock
 # dates out of this bundle.
 
 mode: base
+
+base:
+  rename:
+    - table: records__actor
+      name: members
+      columns:
+        record_index: member_key
+        created_sim_time: created_at
+        prop__group: group_id
+        prop__actor_type: member_type
+        prop__first_name: first_name
+        prop__last_name: last_name
+        prop__group_domain: group_domain
+        prop__email: email
+      descriptions:
+        record_index: "Surrogate key for this member, stable across exports."
+        record_id: "Unique identifier for this member; treat as an opaque string."
+        created_sim_time: "When this member was created."
+        active: "TRUE while the member record still exists; FALSE once removed."
+        deactivated_at: "When the member record was removed; NULL while active."
+        prop__group: "Identifier of the group this member joined at signup; joins to groups.id. NULL for members in no group."
+        ref_index__group: "Surrogate key of the member's group; NULL when the member has no group."
+        prop__actor_type: "Kind of member record; always 'member' in this dataset."
+    - table: records__entity
+      name: groups
+      columns:
+        record_index: group_key
+        created_sim_time: created_at
+        prop__label: label
+        prop__entity_type: group_type
+        prop__name: name
+        prop__domain: domain
+      descriptions:
+        record_index: "Surrogate key for this group, stable across exports."
+        record_id: "Unique identifier for this group; treat as an opaque string. Members reference it through their group_id column."
+        created_sim_time: "When this group was created."
+        active: "TRUE while the group record still exists; FALSE once removed."
+        deactivated_at: "When the group record was removed; NULL while active."
+        prop__label: "Always NULL; use `name` for the group's readable identity."
+        prop__entity_type: "Kind of group record; always 'group' in this dataset."
+    - table: records__journey_instance
+      name: memberships
+      columns:
+        record_index: membership_key
+        created_sim_time: created_at
+        prop__actor: member_id
+        ref_index__actor: member_key
+        prop__journey_type: membership_type
+        prop__current_state: status
+      descriptions:
+        record_index: "Surrogate key for this membership record, stable across exports."
+        record_id: "Unique identifier for this membership record; treat as an opaque string."
+        created_sim_time: "When this membership record was created."
+        active: "TRUE while the membership record still exists; FALSE once removed."
+        deactivated_at: "When the membership record was removed; NULL while active."
+        prop__actor: "The member this record tracks; joins to members.id."
+        ref_index__actor: "Surrogate key of the member this record tracks."
+        prop__journey_type: "How this membership was established; always 'membered' here — assigned once at signup."
+        prop__current_state: "Membership status; always 'joined' here — members stay in their group for life."
