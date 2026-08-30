@@ -67,6 +67,7 @@ base:
   rename:
     - table: records__actor
       name: trip
+      description: "A single ride request and its lifecycle, from the rider's request through matching to a completed or cancelled outcome."
       columns:
         record_index: trip_key
         presentation_id: trip_number
@@ -85,6 +86,7 @@ base:
 
     - table: records__entity
       name: participant
+      description: "A rider or pickup zone: a lookup-join target assigned to trips, discriminated by participant_type."
       columns:
         record_index: participant_key
         presentation_id: participant_code

@@ -131,8 +131,9 @@
 # DESCRIPTIONS: every `descriptions:` map below overrides the inherited
 # engine-voice column prose with domain sentences for the generated README /
 # manifest, keyed by SOURCE identity (the same pre-rename vocabulary as
-# `rename:`). The `events:` declaration carries no descriptions surface, so
-# audit_log's columns keep their generated prose.
+# `rename:`). The `events:` declaration carries no descriptions surface —
+# audit_log's table and column docs are forge-pinned instead, mode-definitional
+# like the log's first id.
 
 mode: source
 
@@ -146,6 +147,7 @@ source:
     - name: customer
       kind: actor
       sub_types: [customer]
+      description: "One TechMart shopper account."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__first_name, prop__last_name, prop__name, prop__email, prop__username,
                 prop__phone, prop__birth_date, prop__street_address, prop__place_city,
@@ -189,6 +191,9 @@ source:
     - name: ops_agent
       kind: actor
       sub_types: [ops]
+      description: "The storefront operations monitor: the automated agent
+        that watches the storefront host and flips it degraded during
+        incidents."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__component]
       descriptions:
@@ -202,6 +207,7 @@ source:
     - name: product
       kind: entity
       sub_types: [product]
+      description: "One catalog item TechMart sells."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__product_name, prop__category, prop__price_cents, prop__margin,
                 prop__popularity, prop__identity_brand, prop__identity_line,
@@ -229,6 +235,7 @@ source:
     - name: storefront
       kind: entity
       sub_types: [infrastructure]
+      description: "The storefront host serving the shop."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__status, prop__error_rate]
       descriptions:

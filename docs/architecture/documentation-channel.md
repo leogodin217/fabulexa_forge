@@ -9,8 +9,9 @@ the companion builders in
 [`exporters/companion/`](../../src/fabulexa_forge/exporters/companion/),
 the override surfaces in
 [`config/models.py`](../../src/fabulexa_forge/config/models.py)
-(`ColumnDecl.description`, `SourceTableDecl.descriptions`,
-`RenameEntry.descriptions`), and
+(`ColumnDecl.description`, `TableDecl.description`,
+`SourceTableDecl.descriptions` / `.description`,
+`RenameEntry.descriptions` / `.description`), and
 [`reader/documentation.py`](../../src/fabulexa_forge/reader/documentation.py).
 Tests: per-mode
 [`test_provenance.py`](../../tests/exporters/dimensional/test_provenance.py)
@@ -28,13 +29,15 @@ embed the resolved dictionary in their companion README and manifest
 proposal engines annotate generated configs with it as YAML comments; and the
 corrupter's base-emit writer forwards the attributes so a corrupted emit keeps
 its dictionary ([`corrupters.md`](corrupters.md) § The base-emit writer).
-The channel has exactly one author input: an optional per-column
-`description` override in the three companion-writing modes' export configs,
-consumed only by the companion dictionary — where present, the author's prose
-is the column's rendered description (§ The author description override).
-Every rendered string is sourced from the emit, the vendored contract, or the
-author's export config (Principle #3); an undocumented item renders nothing —
-no placeholder, no fallback, no inference.
+The channel has two author inputs, both consumed only by the companion
+dictionary: an optional per-column `description` override and an optional
+per-table `description` override in the three companion-writing modes'
+export configs — where present, the author's prose is the column's or
+table's rendered description (§ The author description override, § The
+table-description resolution). Every rendered string is sourced from the
+emit, the vendored contract, a forge-pinned dictionary constant, or the
+author's export config (Principle #3); an undocumented item renders nothing
+— no placeholder, no fallback, no inference.
 
 ---
 
@@ -46,8 +49,9 @@ no placeholder, no fallback, no inference.
 - **Outputs.** Documentation fields in the companion README and manifest;
   YAML comments in `init` proposals; forwarded documentation attributes in
   the corrupter's regenerated sidecar. Streams carry none (§ Boundaries).
-- **Config surface.** Exactly one author input: per-column description prose
-  (§ The author description override). Everything else the dictionary and
+- **Config surface.** Two author inputs: per-column description prose
+  (§ The author description override) and per-table description prose
+  (§ The table-description resolution). Everything else the dictionary and
   the annotations carry is unconditional derived output, like the column
   inventory; `readme_overlay` remains the author's table- and export-level
   prose channel and composes with forwarded documentation (author prose
@@ -88,7 +92,7 @@ dangling pointer clause rewritten out, keeping each string's factual core.
 The rewrite set is enumerated (`_EXPORT_STRUCTURAL_REWRITES` in
 [`dictionary.py`](../../src/fabulexa_forge/exporters/companion/dictionary.py)),
 applies only to contract-answered docs, and never touches sidecar prose or
-units. The reader's `Documentation` view itself stays contract-verbatim —
+units. The reader's `Documentation` view itself is contract-verbatim —
 the rewrite is a companion-rendering concern, not a reader one.
 
 **Re-derived keys are computed, not carried.** A key surface produced by
@@ -126,7 +130,7 @@ first present answer wins, and each later tier is the inheritance rule above:
 | Tier | Source | Applies to |
 |---|---|---|
 | 1 | The author override | Any output column of the table |
-| 2 | Forge-pinned dictionary constants (the interval-end description; the four export rewrites) | Carried columns those constants address |
+| 2 | Forge-pinned dictionary constants (the event-log column set; the interval-end description; the four export rewrites) | The marked event-log table's columns; carried columns the other constants address |
 | 3 | The inherited source-column answer (sidecar prose / contract string) | Columns with single-source provenance |
 | 4 | Nothing | Everything else |
 
@@ -148,6 +152,81 @@ same gate point, before any write (source — `SourceColumnUnresolved` /
 needs no key gate: the description rides the column entry itself and cannot
 address a column that does not exist.
 
+### The table-description resolution
+
+Each companion-writing mode's table-addressing idiom carries an optional
+table-level `description`, parallel to the per-column override: a field on
+the dimensional table entry, on the source declared table, and on the base
+rename entry — where it counts toward the entry's at-least-one-field rule,
+so a description-only rename entry is legal and touches no name. The events
+declaration carries no such field; strict models make a `description` key on
+it a parse error. Field shapes and parse-time validation (non-empty,
+non-whitespace — the column-override string rule) are the models
+([`config/models.py`](../../src/fabulexa_forge/config/models.py)). No
+plan-time key gate exists or is needed: each field rides a declaration whose
+table addressing is already gated — dimensional and source by the
+declaration itself, base by the rename entry's existing `table` / `sub_type`
+resolution errors.
+
+For one output table, the rendered description resolves first-present-wins:
+
+| Tier | Source | Applies to |
+|---|---|---|
+| 1 | The author table override | Any table of the three batch modes |
+| 2 | The forge-pinned event-log table description | The marked event-log table |
+| 3 | The single-source sidecar forward (`tables[].description`, when every carried column agrees on one source table) | Tables with single-source provenance |
+| 4 | Nothing | Everything else |
+
+Tiers 1 and 2 never compete: the events declaration has no `description`
+field, so the marked table can never carry an author entry. The resolved
+answer renders in the README's per-table description slot and in the
+manifest's per-table `description` field; absence renders nothing / JSON
+`null`. An overlay `table:` note composes — the note renders first, then the
+resolved description, both, never either-or. Resolution is
+`resolve_table_description` in
+[`dictionary.py`](../../src/fabulexa_forge/exporters/companion/dictionary.py).
+
+### The pinned event-log documentation
+
+The source event log's table and six columns are forge-constructed, so under
+the inheritance rule they inherit nothing, and no config surface addresses
+them: their documentation is mode-definitional, owned and versioned with the
+mode's contract like the log's fixed column set and first id. The companion
+dictionary carries a pinned table description and six pinned column
+descriptions (`_EVENT_LOG_TABLE_DESCRIPTION` /
+`_EVENT_LOG_COLUMN_DESCRIPTIONS` in
+[`dictionary.py`](../../src/fabulexa_forge/exporters/companion/dictionary.py)),
+applied only to a table whose report carries the event-log marker. A pinned
+column doc resolves with `origin: "forge"`, no unit, and no enum options;
+`item_type`'s kind-value gloss list renders beneath its pinned description
+under the ordinary gloss rule.
+
+The pinned prose is contract-bound to stay true under every author knob and
+both source shapes the log carries; an edit to the strings must honor the
+same constraints:
+
+- It speaks of *items*, never tables or rows — a kind may be audited with no
+  declared table, and a membership source's item is the owner's collection;
+  `(item_type, item_id)` is the log's dereference key, not a table-row
+  address.
+- It names no id surface — `item_id` renders the elected surface per target;
+  every elected surface is creation-constant, so the prose claims only that
+  one item keeps one identifier.
+- It claims no time unit or rendering — `occurred_at` may render raw
+  nanoseconds or any elected temporal form.
+- It claims no `item_type` vocabulary — values are kind labels or verbatim
+  kinds.
+- The `changes` pair encoding it states holds across every event shape:
+  creations and membership joins carry `[null, value]`, deletions and leaves
+  `[value, null]`, updates only the fields whose values differ — and a
+  lifecycle event over an empty audited set renders `{}`, which the prose
+  does not contradict.
+
+The `changes`-key vocabulary (bare names, per-source `rename`) needs no
+per-column prose: it is the mode template's subject. The pinned prose
+depends on nothing inherited, so it renders even against an undocumented
+emit.
+
 ### Provenance carriage
 
 The inheritance rule is answered once, **at plan compile** — the one point
@@ -162,9 +241,18 @@ order is the plan's own event-source compile order — the deterministic order
 the event log unions its sources — so the README's gloss list renders in the
 order the column's values are sourced, never an order chosen at render time.
 
+Beside the three maps, each spec carries two table-level facts stamped the
+same way: the author table description (`author_table_description` — the
+mode's table-level override translated while compiling; dimensional and
+source stamp it from the table declaration, base from the matched rename
+entry) and the event-log marker (`event_log`), set only by the source
+compiler and only on the one event-log spec it compiles — exactly one marked
+spec when the plan carries an events declaration, none otherwise. Absence
+(`None` / `False`) is the answer.
+
 Both report-assembly sites — the shared full-export write dispatch and the
-incremental driver's windowed report assembler — forward all three maps
-verbatim from the spec onto `TableReport`, which is how they reach the
+incremental driver's windowed report assembler — forward all three maps and
+both table-level facts verbatim from the spec onto `TableReport`, which is how they reach the
 companion builders on the report those builders already receive; no builder
 entry-point signature carries a separate documentation parameter. The
 builders resolve each entry through the documentation view and never
@@ -182,12 +270,13 @@ The companion README and manifest are the channel's rendered surfaces; their
 placement and byte-form rules are
 [`companion-artifacts.md`](companion-artifacts.md)'s contract (§ The README,
 § The manifest). The README renders the scenario narrative, per-table
-forwarded descriptions, per-column description and unit, and declared-value
+resolved descriptions, per-column description and unit, and declared-value
 gloss lists; the manifest mirrors the same resolution machine-readably, with
 JSON `null` encoding absence. The two surfaces render the same author-first
 resolution and can never disagree, because resolution lives in the one shared
-dictionary. An author-answered description carries `origin: "author"`,
-stamped only by the companion dictionary — the reader's documentation view
+dictionary. An author-answered description carries `origin: "author"` and a
+pinned event-log answer `origin: "forge"`, both stamped only by the companion
+dictionary — the reader's documentation view
 remains two-authority (contract / sidecar) and never sees export config. The
 manifest's embedded config carries the override fields like any other config
 content, so the provenance of authored prose is on record. Documentation is
@@ -229,19 +318,22 @@ uncommenting keeps the documentation.
 ## Invariants
 
 1. **Author-first, then one authority.** With an override present, the
-   author's prose is the column's description; with none, its documentation
-   resolves from exactly one source — the vendored contract strings for
-   structural columns, the sidecar for per-run columns. Never a blend, no
+   author's prose is the column's or table's description; with none,
+   documentation resolves from exactly one source — the forge-pinned
+   event-log set for the marked table, the vendored contract strings for
+   structural columns, the sidecar for per-run columns and single-source
+   tables. Never a blend, no
    fallback across authorities, no inference from names, types, or rows.
 2. **Absence is absence, end to end.** No rendered surface ever emits
    placeholder prose ("no description"), a TODO, or derived text for an
    undocumented item.
 3. **Sourced, never invented.** Every rendered documentation string traces
    to the sidecar, the vendored contract, a forge-pinned dictionary
-   constant (the interval-end description; the four export rewrites of
+   constant (the event-log table + column set; the interval-end
+   description; the four export rewrites of
    base-pointing contract strings), or the author's export config — the
    same standing `readme_overlay` has on its surface. The only transformations are
-   instance-placeholder substitution and those two enumerated constant sets
+   instance-placeholder substitution and those enumerated constant sets
    — nothing is ever derived from data, column names, or types, and a
    declared value list renders sourced values only: the sidecar's options,
    or their author-declared `value_map` images.
@@ -257,6 +349,14 @@ uncommenting keeps the documentation.
 6. **Run-level determinism.** Same emit + same config + same code version →
    byte-identical rendered documentation, identical across every window of an
    incremental export.
+7. **The marked table has no author tier.** No config surface addresses the
+   event log's documentation — the events declaration rejects a
+   `description` key (strict models) — so the author tier and the
+   forge-pinned event-log tier never compete.
+8. **At most one marked table per source plan, zero elsewhere.** Only the
+   source compiler sets the event-log marker, only on the event-log spec:
+   exactly one marked table when the plan carries an events declaration,
+   none otherwise, and never in any other mode.
 
 ## Rationale
 
@@ -288,7 +388,15 @@ uncommenting keeps the documentation.
   kinds, by the contract's own design. Sub-type meaning renders where the
   discriminator column itself renders (the state table's closed-domain gloss
   list, the `init` `sub_types` comments) and is not duplicated onto the
-  event log.
+  event log. An author table-level override on a *declared* table does not
+  feed glosses: glosses are sidecar-sourced by design — they describe the
+  bundle's kinds, not the export's tables.
+- **The event log's documentation is forge-pinned because its columns are
+  forge-constructed.** The log's columns mean exactly the same thing in
+  every export and every domain — their semantics are the mode's published
+  contract (the fixed column set, the first id, the changeset encoding) —
+  which makes author prose the wrong tool and a config knob a surface with
+  no legitimate use. Forge constructed these columns; forge describes them.
 - **Annotations are comments because grammar must not move.** The `init`
   engines' self-gating posture — the emitted config parses and plans clean —
   is a contract; documentation that altered emitted grammar would put that
@@ -301,14 +409,14 @@ uncommenting keeps the documentation.
 
 ## Boundaries
 
-- **One author input — description prose only.** The override re-voices a
-  column's description and nothing else: there is no unit override, no
-  enum-gloss override, and no table-description override or suppression —
-  units and declared value lists are facts about the value, not voice, and
-  the forwarded `tables[].description` renders as sourced. `readme_overlay`
-  is the author's table- and export-level prose channel. The source event
-  log's columns are mode-definitional and template-documented; the log
-  declaration carries no description surface.
+- **Author input is description prose only.** The overrides re-voice a
+  column's or table's description and nothing else: there is no unit
+  override, no enum-gloss override, and no suppression — units and declared
+  value lists are facts about the value, not voice. `readme_overlay` is the
+  author's *additive* table- and export-level prose channel: its `table:`
+  note renders beside the resolved description and replaces nothing. The
+  source event log carries no author surface at either granularity — its
+  documentation is forge-pinned (§ The pinned event-log documentation).
 - **Corrupt configs carry no description surface.** The corrupter's
   base-emit writer forwards producer documentation attributes verbatim;
   re-voicing has no place in a corrupted base emit.
@@ -325,7 +433,9 @@ uncommenting keeps the documentation.
 - **Conformance is untouched.** No C1–C15 check ranges over documentation;
   the channel adds no checks and changes none.
 - **The incremental fingerprint excludes documentation.** The canonical
-  config dump excludes the three description-override surfaces and
+  config dump excludes the description-override surfaces at both
+  granularities — the per-column surfaces and the three table-description
+  fields — and
   `readme_overlay` alike; documentation is run-level presentation and can
   never make a resumed drip refuse. Editing a description mid-drip renders
   from the next emitting window's whole-state artifact rewrite

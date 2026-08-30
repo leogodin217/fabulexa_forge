@@ -102,6 +102,8 @@ dimensional:
     - name: dim_host
       role: dim
       scd: type1
+      description: >-
+        One machine that originates connections, internal or external.
       source:
         grain: records
         kind: actor
@@ -122,6 +124,9 @@ dimensional:
     - name: dim_server
       role: dim
       scd: type2
+      description: >-
+        One version of one destination in the service estate a host can
+        connect to.
       source:
         grain: records
         kind: entity
@@ -151,6 +156,8 @@ dimensional:
     - name: dim_account
       role: dim
       scd: type1
+      description: >-
+        One credential principal an authentication event reports on.
       source:
         grain: records
         kind: entity
@@ -173,6 +180,9 @@ dimensional:
     - name: dim_firewall_rule
       role: dim
       scd: type1
+      description: >-
+        One entry in the authored firewall ruleset, matching a route to a
+        disposition.
       source:
         grain: records
         kind: entity

@@ -129,6 +129,7 @@ dimensional:
   tables:
     # --- dim_company: CRM/sales-stage account (actor.company) ---
     - name: dim_company
+      description: One row per subscribing company, the account holder whose lifecycle runs from onboarding through renewal reviews to churn.
       role: dim
       scd: type2  # status is history-tracked: onboarding -> active -> churned
       source:
@@ -159,6 +160,7 @@ dimensional:
 
     # --- dim_account: billing/workspace tenant (entity.company_hub) ---
     - name: dim_account
+      description: One row per account, the commercial record of a company's plan, pricing, churn status, and engagement score.
       role: dim
       scd: type2  # seat_price / churn_flag / engagement_score are tracked
       source:
@@ -200,6 +202,7 @@ dimensional:
 
     # --- dim_sku: product/feature catalog (entity.sku) ---
     - name: dim_sku
+      description: One row per product line in the catalogue, the feature a usage session is attributed to.
       role: dim
       scd: type1  # 3 rows, no tracked properties
       source:
@@ -224,6 +227,7 @@ dimensional:
 
     # --- dim_user: individual product user, Type-1 identity (actor.user) ---
     - name: dim_user
+      description: One row per seat holder, an individual working inside a subscribing company's account.
       role: dim
       scd: type1  # identity + FK; the tracked status lives on dim_user_status
       source:
@@ -261,6 +265,7 @@ dimensional:
 
     # --- dim_user_status: SCD-2 satellite, user lifecycle status only ---
     - name: dim_user_status
+      description: One row per seat's status interval, tracking a user's lifecycle from provisioned through active/using to offboarded.
       role: dim
       scd: type2  # provisioned -> active -> using -> offboarded
       source:
@@ -323,6 +328,7 @@ dimensional:
 
     # --- fact_lifecycle_interval: state-occupancy timeline (journey_instance) ---
     - name: fact_lifecycle_interval
+      description: One row per state interval occupied by a company or user lifecycle.
       role: fact
       source:
         grain: history_interval

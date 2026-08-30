@@ -42,8 +42,9 @@
 # identity, pre-rename — the same vocabulary as `rename:`) replacing the
 # engine-voiced inherited prose (creation-order ordinals, sim-time phrasing,
 # copy-pasted place blobs, rider-voiced text on driver columns) with per-table
-# domain sentences. The event log declares no descriptions surface, so
-# audit_log's columns stay undescribed.
+# domain sentences. The event log has no `description:` / `descriptions:`
+# config surface — its table and column docs are forge-pinned instead,
+# generated automatically for every export of this mode.
 #
 #   SPLIT  actor -> rider + driver, two `state` tables over the same `kind: actor`
 #          (one shared wide records table, `actor_type` discriminator), each
@@ -124,6 +125,9 @@ source:
     - name: rider
       kind: actor
       sub_types: [rider]
+      description: >-
+        A demand-side user hailing rides, carrying their current status,
+        zone, and loyalty tier alongside their account details.
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__account_id, prop__first_name, prop__last_name, prop__email, prop__phone,
                 prop__date_of_birth, prop__home_street, prop__home_state, prop__home_place_city,
@@ -163,6 +167,9 @@ source:
     - name: driver
       kind: actor
       sub_types: [driver]
+      description: >-
+        A supply-side user serving trips, carrying their current status,
+        zone, and loyalty tier alongside their vehicle details.
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__driver_id, prop__full_name, prop__first_name, prop__last_name,
                 prop__phone, prop__date_of_birth, prop__vehicle_make, prop__vehicle_model,
@@ -196,6 +203,9 @@ source:
         prop__phone: The driver's phone number.
     - name: zone
       kind: entity
+      description: >-
+        A city zone — the spatial grain of the market — carrying its current
+        demand and supply pressure.
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__demand_pressure, prop__supply_pressure,
                 prop__place_city, prop__place_subdivision, prop__place_postal_code,

@@ -107,6 +107,7 @@ source:
   tables:
     - name: trip
       kind: actor
+      description: "A single ride request and its lifecycle, from the rider's request through matching to a completed or cancelled outcome."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__status]
       descriptions:
@@ -135,6 +136,7 @@ source:
     - name: rider
       kind: entity
       sub_types: [rider]
+      description: "A rider account: a lookup-join target carrying a name and loyalty tier, assigned to each trip at request time."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__loyalty]
       descriptions:
@@ -148,6 +150,7 @@ source:
     - name: pickup_zone
       kind: entity
       sub_types: [zone]
+      description: "A pickup zone: a lookup-join target carrying a name and zone type (commercial, transit, residential, campus) for each trip's origin."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__zone_type]
       descriptions:

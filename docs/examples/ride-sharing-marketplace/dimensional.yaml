@@ -147,6 +147,7 @@ dimensional:
     - name: dim_zone
       role: dim
       scd: type1
+      description: "A city zone — the spatial grain of the market."
       source:
         grain: records
         kind: entity
@@ -175,6 +176,9 @@ dimensional:
     - name: dim_rider
       role: dim
       scd: type1
+      description: >-
+        A rider — a demand-side user hailing rides — with their constant
+        profile and current loyalty tier; tier history is fact_loyalty_band.
       source:
         grain: records
         kind: actor
@@ -222,6 +226,9 @@ dimensional:
     - name: dim_driver
       role: dim
       scd: type1
+      description: >-
+        A driver — a supply-side user serving trips — with their constant
+        profile and current loyalty tier; tier history is fact_loyalty_band.
       source:
         grain: records
         kind: actor
@@ -298,6 +305,10 @@ dimensional:
     #     idle supply = driver time in available; churn = reaching lapsed.
     - name: fact_session_state
       role: fact
+      description: >-
+        One row per state occupancy in a rider's trip or a driver's shift
+        session, from when it entered until it exited (or NULL if still in
+        it).
       source:
         grain: history_interval
         kind: journey_instance
@@ -344,6 +355,10 @@ dimensional:
     #     to after a bad outcome, and how tier movement tracks lapse.
     - name: fact_loyalty_band
       role: fact
+      description: >-
+        One row per tenure a rider or driver held in one loyalty tier, from
+        when they entered it until they left (or NULL if it's their current
+        tier).
       source:
         grain: history_interval
         kind: actor

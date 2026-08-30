@@ -85,6 +85,8 @@ source:
                 prop__name, prop__ip_address, prop__zone, prop__subnet]
       rename:
         prop__name: hostname
+      description: >-
+        One machine that originates connections.
       descriptions:
         record_index: Surrogate key for the host; join target of sessions.host_id.
         created_sim_time: Time the row was created.
@@ -98,6 +100,8 @@ source:
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__hostname, prop__ip_address, prop__zone, prop__port,
                 prop__service]
+      description: >-
+        One destination in the service estate a host can connect to.
       descriptions:
         record_index: >-
           Surrogate key for the server; join target of event_entities.entity_id
@@ -115,6 +119,8 @@ source:
                 prop__owner_first, prop__owner_last]
       rename:
         prop__owner_host: owner_hostname
+      description: >-
+        One credential principal owned by one host.
       descriptions:
         record_index: >-
           Surrogate key for the account; join target of
@@ -130,6 +136,9 @@ source:
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__rule_name, prop__src_zone, prop__dst_zone, prop__dst_port,
                 prop__action]
+      description: >-
+        One entry in the authored firewall ruleset, matching a route to a
+        disposition.
       descriptions:
         record_index: >-
           Surrogate key for the firewall rule; join target of

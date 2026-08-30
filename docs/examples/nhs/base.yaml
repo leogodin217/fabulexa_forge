@@ -84,6 +84,8 @@ base:
   rename:
     - table: records__actor
       name: patient
+      description: "One row per patient, latest tracked state as of the tape's
+        end."
       columns:
         record_index: patient_key
         presentation_id: hospital_number
@@ -313,6 +315,9 @@ base:
           clinic, two-week-wait cancer clinic, or elective operating list."
     - table: records__entity
       name: catalogue_item
+      description: "One row per reference catalogue item — ward, theatre,
+        diagnostic test, procedure, or medication — latest state as of the
+        tape's end."
       columns:
         record_index: catalogue_item_key
         presentation_id: item_number

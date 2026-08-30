@@ -169,6 +169,8 @@ dimensional:
     - name: dim_customer
       role: dim
       scd: type2
+      description: "One TechMart shopper, versioned as their lifetime order
+        count changes."
       source:
         grain: records
         kind: actor
@@ -232,6 +234,9 @@ dimensional:
     - name: dim_ops_agent
       role: dim
       scd: type1
+      description: "The storefront operations monitor: the automated agent
+        that watches the storefront host and flips it degraded during
+        incidents."
       source:
         grain: records
         kind: actor
@@ -247,6 +252,7 @@ dimensional:
     - name: dim_product
       role: dim
       scd: type1
+      description: "One catalog item TechMart sells."
       source:
         grain: records
         kind: entity
@@ -285,6 +291,8 @@ dimensional:
     - name: dim_storefront
       role: dim
       scd: type2
+      description: "The storefront host serving the shop, versioned through
+        every incident."
       source:
         grain: records
         kind: entity

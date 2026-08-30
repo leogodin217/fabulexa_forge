@@ -61,6 +61,9 @@ base:
   rename:
     - table: records__actor
       name: host
+      description: >-
+        One connection-originating machine — internal workstation, kiosk, or
+        service box, or one of the four external approach hosts.
       columns:
         record_index: host_key
         record_id: host_id
@@ -93,6 +96,9 @@ base:
 
     - table: records__entity
       name: asset
+      description: >-
+        One item of the SIEM's polymorphic inventory — a server, an account,
+        or a firewall rule, told apart by asset_type.
       columns:
         record_index: asset_key
         record_id: asset_id

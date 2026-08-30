@@ -210,6 +210,7 @@ source:
   tables:
     - name: patient
       kind: actor
+      description: "One row per patient, current state."
       # presentation_id is not listed: under the actor presentation election it
       # IS the id column (absorption).
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
@@ -344,6 +345,7 @@ source:
     # --- the reference catalogue, one table per sub-type ---
     - name: ward
       kind: entity
+      description: "One row per hospital ward."
       sub_types: [ward]
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__ward_type,
@@ -362,6 +364,7 @@ source:
         prop__name: "Ward name."
     - name: theatre
       kind: entity
+      description: "One row per operating theatre."
       sub_types: [theatre]
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__theatre_specialty,
@@ -380,6 +383,8 @@ source:
         prop__name: "Theatre name."
     - name: diagnostic_test
       kind: entity
+      description: "One row per diagnostic test type in the trust's
+        diagnostics catalogue."
       sub_types: [diagnostic]
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__test_type,
@@ -399,6 +404,7 @@ source:
         prop__name: "Test name."
     - name: procedure
       kind: entity
+      description: "One row per surgical procedure in the OPCS-4 catalogue."
       sub_types: [procedure]
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__specialty_group,
@@ -417,6 +423,7 @@ source:
         prop__name: "Procedure name."
     - name: medication
       kind: entity
+      description: "One row per medication in the trust's formulary."
       sub_types: [medication]
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__specialty_group,

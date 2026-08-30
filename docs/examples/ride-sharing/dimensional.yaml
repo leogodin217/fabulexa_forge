@@ -111,6 +111,7 @@ dimensional:
     - name: dim_rider
       role: dim
       scd: type1
+      description: "One row per rider. A lookup-join target carrying a name and loyalty tier, assigned to each trip at request time."
       source:
         grain: records
         kind: entity
@@ -131,6 +132,7 @@ dimensional:
     - name: dim_zone
       role: dim
       scd: type1
+      description: "One row per pickup zone. A lookup-join target carrying a name and zone type (commercial, transit, residential, campus) for each trip's origin."
       source:
         grain: records
         kind: entity
@@ -171,6 +173,7 @@ dimensional:
     # --- fact: trip — grain: one ride request ---
     - name: fact_trip
       role: fact
+      description: "One row per trip. The transactional fact whose history-tracked status becomes the CDC changelog."
       source:
         grain: records
         kind: actor
@@ -199,6 +202,7 @@ dimensional:
     #     bundle exists to produce. ---
     - name: fact_trip_state
       role: fact
+      description: "One row per trip lifecycle stage occupancy: requested, matching, en_route, on_trip, and the completed or cancelled outcome."
       source:
         grain: history_interval
         kind: journey_instance
@@ -256,6 +260,7 @@ dimensional:
     #     actor; both hops are temporal_class: constant, so the lookup is exact.
     - name: fact_trip_rider
       role: fact
+      description: "One row per trip, binding the rider assigned to it at request time."
       source:
         grain: membership
         kind: tick_decision
@@ -280,6 +285,7 @@ dimensional:
     #     apart — narrowing by role is exactly what `where` is for.
     - name: fact_trip_pickup_zone
       role: fact
+      description: "One row per trip, binding the pickup zone recorded for it at request time."
       source:
         grain: membership
         kind: tick_decision

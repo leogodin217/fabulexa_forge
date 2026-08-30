@@ -233,6 +233,8 @@ dimensional:
         kind: actor
         filter: {prop__actor_type: default}
       key: [patient_id]
+      description: "One row per patient: identity, demographics, and the
+        constant clinical attributes the atlas names."
       columns:
         # the elected surface: the PAT_-prefixed hospital number (KEYS note)
         - {name: patient_id, from: presentation_id,
@@ -285,6 +287,7 @@ dimensional:
         kind: entity
         filter: {prop__entity_type: ward}
       key: [ward_id]
+      description: "One row per hospital ward."
       columns:
         - {name: ward_id, from: record_index,
            description: "Surrogate key for this ward."}
@@ -305,6 +308,7 @@ dimensional:
         kind: entity
         filter: {prop__entity_type: theatre}
       key: [theatre_id]
+      description: "One row per operating theatre."
       columns:
         - {name: theatre_id, from: record_index,
            description: "Surrogate key for this operating theatre."}
@@ -322,6 +326,8 @@ dimensional:
         kind: entity
         filter: {prop__entity_type: diagnostic}
       key: [test_id]
+      description: "One row per diagnostic test type in the trust's
+        diagnostics catalogue."
       columns:
         - {name: test_id, from: record_index,
            description: "Surrogate key for this diagnostic test type."}
@@ -341,6 +347,7 @@ dimensional:
         kind: entity
         filter: {prop__entity_type: procedure}
       key: [procedure_id]
+      description: "One row per surgical procedure in the OPCS-4 catalogue."
       columns:
         - {name: procedure_id, from: record_index,
            description: "Surrogate key for this surgical procedure."}
@@ -361,6 +368,7 @@ dimensional:
         kind: entity
         filter: {prop__entity_type: medication}
       key: [medication_id]
+      description: "One row per medication in the trust's formulary."
       columns:
         - {name: medication_id, from: record_index,
            description: "Surrogate key for this medication."}
@@ -430,6 +438,9 @@ dimensional:
         kind: journey_instance
         property: current_state
       key: [episode_id, entered_at]
+      description: "One row per state-occupancy interval of a care episode —
+        the time-in-state fact for ED 4-hour breaches, 2WW waits, and LoS by
+        state."
       columns:
         - {name: episode_id, from: record_id,
            description: "Surrogate key for the care episode; joins the event
@@ -498,6 +509,8 @@ dimensional:
         kind: resource
         property: allocated
       key: [consultant_id, entered_at]
+      description: "One row per constant-caseload interval of a consultant —
+        caseload as it stood over time."
       columns:
         # zero-hop self edge (see fact_consultant_allocation)
         - {name: consultant_id, fk: {to: dim_consultant, via: reference},
@@ -538,6 +551,8 @@ dimensional:
         kind: actor
         property: status
       key: [patient_id, entered_at]
+      description: "One row per interval of the patient's cross-episode care
+        position (active, in_ed, admitted, ... recovered, deceased)."
       columns:
         - {name: patient_id, fk: {to: dim_patient, via: reference},
            description: "The patient whose care status this interval describes
@@ -564,6 +579,9 @@ dimensional:
         kind: actor
         property: hai_status
       key: [patient_id, entered_at]
+      description: "One row per infection-status interval (clear /
+        colonized) — the trust's hospital-acquired-infection burden over
+        time."
       columns:
         - {name: patient_id, fk: {to: dim_patient, via: reference},
            description: "The patient whose infection status this interval
@@ -592,6 +610,7 @@ dimensional:
         property: fft_outcome
         value: [very_good, good, neutral, poor, very_poor, no_response]
       key: [patient_id, recorded_at]
+      description: "One row per recorded Friends and Family Test response."
       columns:
         - {name: patient_id, fk: {to: dim_patient, via: reference},
            description: "The patient who returned the survey (dim_patient)."}
@@ -874,6 +893,8 @@ dimensional:
         kind: tick_decision
         filter: {prop__decision_type: waiting_list_deterioration}
       key: [event_id]
+      description: "One row per waiting-list deterioration event, spanning the
+        cancer, outpatient, and surgical pathways."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this deterioration event."}

@@ -1,0 +1,47 @@
+# Recipe: source-descriptions
+# ============================================================
+# The author description overrides in the source idiom: a table-level
+# `description:` on a declared table, and a `descriptions:` map for its
+# columns — keyed by SOURCE identity (`prop__<p>`, `created_sim_time`),
+# like `rename`, never by the output name. Each replaces the description
+# the companion README and manifest would otherwise forward/inherit;
+# author-first, prose only.
+#
+# The `events` log takes NO description surface — a `description` key on
+# `events:` is a load error (strict models). Its table and six columns
+# render forge-pinned prose in the companions instead: the log's columns
+# are forge-constructed and mean the same thing in every export, so their
+# documentation is mode-definitional, like the log's fixed column set.
+#
+# Where the effect lands: the companion artifacts written beside the
+# dataset. The DATASET IS BYTE-IDENTICAL with or without every
+# `description` below (documentation inertness) — the expectations here
+# are the union of source-state-tables' patient table and
+# source-event-log's log, unchanged.
+#
+# Fixture world (recipe emit):
+#   records__patient   — p001/p002; prop__status history-tracked
+#   records__admission — a001 active, a002 created then deactivated
+#
+# Output:
+#   patient  — 2 current-state rows, exactly as in source-state-tables
+#   versions — 3 audit rows, exactly as in source-event-log
+
+mode: source
+
+source:
+  tables:
+    - name: patient
+      kind: patient
+      # Table-level override: replaces the forwarded source-table
+      # (`tables[].description`) prose in the README/manifest.
+      description: "One row per patient, at their latest recorded state."
+      # Column overrides, keyed by source identity (never output names).
+      descriptions:
+        prop__status: "Where the patient is in the care pathway."
+        created_sim_time: "When the patient record was first registered."
+  events:
+    name: versions
+    sources:
+      - kind: admission
+    # No `description:` here — the log's documentation is forge-pinned.

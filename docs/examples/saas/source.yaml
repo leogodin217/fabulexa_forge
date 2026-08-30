@@ -64,8 +64,8 @@
 #            same vocabulary as `rename`) rewrite the inherited engine-voice
 #            prose (surrogate-identity, simulation-time, journey-stage
 #            wording) into the plain app-database voice the readme should
-#            carry. The `versions` log has no descriptions surface — its
-#            columns render undescribed.
+#            carry. The `versions` log has no `descriptions:` config surface —
+#            its table and column docs are forge-pinned instead.
 
 mode: source
 
@@ -81,6 +81,7 @@ source:
       kind: actor
       sub_types: [company]
       columns: [prop__status, created_sim_time, active, deactivated_at, last_mutation_sim_time]
+      description: One row per subscribing company, the account holder whose lifecycle runs from onboarding through renewal reviews to churn.
       descriptions:
         presentation_id: Unique company identifier (CMP-#####).
         prop__status: "Lifecycle status: onboarding / active / churned."
@@ -109,6 +110,7 @@ source:
         ]
       rename:
         prop__company: account_id
+      description: One row per seat holder, an individual working inside a subscribing company's account.
       descriptions:
         presentation_id: Unique user identifier (USR-######).
         prop__status: "Seat lifecycle status: provisioned / active / using / offboarded."
@@ -139,6 +141,7 @@ source:
       # elected form also reaches this kind's `versions` audit entries.
       render:
         prop__engagement_score: {decimal: [5, 2]}
+      description: One row per account, the commercial record of a company's plan, pricing, churn status, and engagement score.
       descriptions:
         presentation_id: Unique account identifier (ACC-#####).
         prop__name: Account display name.
@@ -151,6 +154,7 @@ source:
       kind: entity
       sub_types: [sku]
       columns: [prop__popularity, prop__name, created_sim_time, active, deactivated_at, last_mutation_sim_time]
+      description: One row per product line in the catalogue, the feature a usage session is attributed to.
       descriptions:
         presentation_id: Unique SKU identifier (SKU-###).
         prop__name: SKU display name (Core, Analytics, API).

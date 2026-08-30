@@ -51,6 +51,7 @@ base:
   rename:
     - table: records__actor
       name: members
+      description: "The child record. Joins exactly one group at creation, or none at all for the rare group-less arrivals."
       columns:
         record_index: member_key
         created_sim_time: created_at
@@ -71,6 +72,7 @@ base:
         prop__actor_type: "Kind of member record; always 'member' in this dataset."
     - table: records__entity
       name: groups
+      description: "The parent record. Exists to be referenced by members; carries no mechanism traits of its own."
       columns:
         record_index: group_key
         created_sim_time: created_at

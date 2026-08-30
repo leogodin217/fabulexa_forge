@@ -124,8 +124,10 @@ file; the overlay's `overview` (when present), then the emit's
 `scenario_description` (when present) — author prose first; either or both may
 be absent, and absence renders nothing; the mode template's semantics
 prose; one section per output table in plan iteration order — the table's
-overlay note (when present), then the forwarded `tables[].description` (when
-present), then its derived column inventory (names, types, key markings, and
+overlay note (when present), then the resolved table description (when
+present — author override, forge-pinned event-log prose, or the forwarded
+`tables[].description`; [`documentation-channel.md`](documentation-channel.md)
+§ The table-description resolution), then its derived column inventory (names, types, key markings, and
 per-column description and unit where the documentation channel's inheritance
 rule yields them), then declared-value gloss lists for closed-domain and
 kind-name-as-value columns, then row count (full exports only); then the

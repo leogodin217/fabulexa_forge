@@ -85,6 +85,8 @@ base:
   rename:
     - table: records__actor
       name: customers
+      description: "One TechMart shopper account, or the storefront's automated
+        monitoring agent."
       columns:
         record_index: customer_key
         created_sim_time: created_at
@@ -148,6 +150,8 @@ base:
           address; matches the customer's phone number."
     - table: records__entity
       name: products
+      description: "One catalog item TechMart sells, or the storefront host
+        serving the shop."
       columns:
         record_index: product_key
         created_sim_time: created_at

@@ -351,6 +351,7 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | [`rebase-timestamp`](../../examples/recipes/rebase-timestamp/config.yaml) | top-level `rebase` block: repin the wallclock origin/zone (`base_date` / `timezone`) that all timestamp columns render through |
 | [`table-column-rename`](../../examples/recipes/table-column-rename/config.yaml) | Author-verbatim output naming: rename the table and each column; `from` decouples output names from base-layer columns |
 | [`exclude-kinds-tables`](../../examples/recipes/exclude-kinds-tables/config.yaml) | `exclude` guard: declare kinds/tables no output may source; fails loudly on accidental inclusion (it is a guard, not a filter) |
+| [`table-descriptions`](../../examples/recipes/table-descriptions/config.yaml) | Author description overrides, both granularities: a table entry's `description` and a column entry's `description` replace the forwarded/inherited prose in the companion README and manifest — documentation-inert (the dataset is byte-identical), prose only |
 
 ### Source
 
@@ -363,6 +364,7 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | [`source/source-log-only`](../../examples/recipes/source/source-log-only/config.yaml) | A `source:` section declaring only `events` (no `tables`) is a legal, complete config — the audit-stream-only extract; a membership events source audits a junction's fields (`item_type` = `<K>.<property>`, `item_id` = the owner), member references expanding to `<f>_kind`/`<f>_id` entry pairs |
 | [`source/source-columns-rename`](../../examples/recipes/source/source-columns-rename/config.yaml) | Per-table `columns` / `rename` narrow and relabel a table's projection — both keyed on source column names (`prop__<p>`, `created_sim_time`), never derived output names; the identity column always projects and is renamed by its elected surface's contract name |
 | [`source/source-render-election`](../../examples/recipes/source/source-render-election/config.yaml) | A declared table's unified `render` map elects a structural instant's rendering (`created_sim_time: date`) and, in the same map, declares a payload VARCHAR column a date string (a `date_parse` typed election) — both re-render the projected column in place, keyed on source identity |
+| [`source/source-descriptions`](../../examples/recipes/source/source-descriptions/config.yaml) | A declared table's `description` and `descriptions` map (keyed by source identity, like `rename`) replace the forwarded/inherited prose in the companion README and manifest; `events` takes no description surface — the log's table and columns render forge-pinned prose. Documentation-inert (the dataset is byte-identical) |
 
 ### Base
 
@@ -377,6 +379,7 @@ flat table by default. These recipes exercise `base:`'s escape hatches
 | [`base/base-rename-table`](../../examples/recipes/base/base-rename-table/config.yaml) | `base: {rename: [...]}` overrides a table's derived default output name; `table` is sidecar identity (`records__<kind>`), never the derived output name |
 | [`base/base-slice-at`](../../examples/recipes/base/base-slice-at/config.yaml) | `base: {slice_at: T}` reconstructs every table as of an inclusive point-in-time horizon instead of the tape's end — a tracked property's value as-of T, not its final value |
 | [`base/base-render-election`](../../examples/recipes/base/base-render-election/config.yaml) | `base: {render: [...]}` elects a lifecycle-instant's rendering and declares a payload VARCHAR column a date string, per table — the mode's mirror of `rename`'s per-table structure, keyed on the same pre-default column identities |
+| [`base/base-rename-descriptions`](../../examples/recipes/base/base-rename-descriptions/config.yaml) | A rename entry's `description` and `descriptions` map replace the forwarded/inherited prose in the companion README and manifest; a description-only entry is legal (it counts toward the entry's at-least-one-field rule) and renames nothing. Documentation-inert (the dataset is byte-identical) |
 
 ### Streaming
 
