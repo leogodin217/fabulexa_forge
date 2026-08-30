@@ -517,6 +517,20 @@ def test_events_decl_extra_field_forbidden() -> None:
         )
 
 
+def test_events_decl_description_key_rejected() -> None:
+    """A `description` key on the events declaration is a parse error — no
+    per-table description config surface exists there; the event log's
+    documentation is entirely forge-pinned (StrictBaseModel extra_forbidden)."""
+    with pytest.raises(ValidationError):
+        SourceEventsDecl.model_validate(
+            {
+                "name": "versions",
+                "sources": [{"kind": "trip"}],
+                "description": "Should not parse.",
+            }
+        )
+
+
 # ---------------------------------------------------------------------------
 # SourceEventsDecl.render — the log's instant-column rendering election
 # ---------------------------------------------------------------------------

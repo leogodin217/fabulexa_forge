@@ -833,6 +833,10 @@ class TableDecl(StrictBaseModel):
     """The output column names forming the primary key of this table."""
     columns: list[ColumnDecl]
     """The ordered list of output column declarations for this table."""
+    description: str | None = None
+    """Author-supplied rendered description for this output table. Replaces
+    the forwarded source-table description in the companion README and
+    manifest. Absent -> forwarding as before."""
 
     @model_validator(mode="after")
     def name_is_sql_identifier(self) -> Self:
@@ -856,11 +860,13 @@ class TableDecl(StrictBaseModel):
 
     @model_validator(mode="after")
     def non_empty_collections(self) -> Self:
-        """columns and key are non-empty."""
+        """columns and key are non-empty; description, when present, is
+        non-empty and non-whitespace."""
         if not self.columns:
             raise ValueError(f"table '{self.name}': 'columns' must not be empty")
         if not self.key:
             raise ValueError(f"table '{self.name}': 'key' must not be empty")
+        _require_nonblank_str(self.description, f"table '{self.name}': 'description'")
         return self
 
     @model_validator(mode="after")
@@ -959,24 +965,37 @@ class RenameEntry(StrictBaseModel):
     description in the companion README and manifest. Keys validated at plan
     time against the target table's columns. Counts toward the entry's
     at-least-one-field rule. Absent -> inheritance as before."""
+    description: str | None = None
+    """Author-supplied rendered description for the entry's target table.
+    Replaces the forwarded source-table description in the companion README
+    and manifest. Counts toward the entry's at-least-one-field rule.
+    Absent -> forwarding as before."""
 
     @model_validator(mode="after")
     def entry_well_formed(self) -> Self:
-        """At least one of name/columns/descriptions is set; columns (when
-        present) is non-empty with non-empty keys/values and distinct
-        values; descriptions (when present) is non-empty with non-empty
-        keys and non-empty, non-whitespace values; name/table/sub_type
+        """At least one of name/columns/descriptions/description is set;
+        columns (when present) is non-empty with non-empty keys/values and
+        distinct values; descriptions (when present) is non-empty with
+        non-empty keys and non-empty, non-whitespace values; description
+        (when present) is non-empty and non-whitespace; name/table/sub_type
         (when set) are non-empty strings.
 
         Raises:
-            ValueError: None of name/columns/descriptions is set; columns is
-                empty or has an empty key/value; two columns entries share an
-                output name; descriptions is empty or has an empty key or a
-                blank value; or name/table/sub_type is an empty string.
+            ValueError: None of name/columns/descriptions/description is
+                set; columns is empty or has an empty key/value; two columns
+                entries share an output name; descriptions is empty or has
+                an empty key or a blank value; description is empty or
+                whitespace-only; or name/table/sub_type is an empty string.
         """
-        if self.name is None and self.columns is None and self.descriptions is None:
+        if (
+            self.name is None
+            and self.columns is None
+            and self.descriptions is None
+            and self.description is None
+        ):
             raise ValueError(
-                "RenameEntry must set at least one of name / columns / descriptions"
+                "RenameEntry must set at least one of name / columns /"
+                " descriptions / description"
             )
         if not self.table:
             raise ValueError("RenameEntry.table must be a non-empty string")
@@ -1004,6 +1023,7 @@ class RenameEntry(StrictBaseModel):
                     f" columns may not rename to one output name): {duplicate_values}"
                 )
         _require_descriptions_map_valid(self.descriptions, "RenameEntry.descriptions")
+        _require_nonblank_str(self.description, "RenameEntry.description")
         return self
 
     @model_validator(mode="after")
@@ -1258,6 +1278,10 @@ class SourceTableDecl(StrictBaseModel):
     inherited description in the companion README and manifest for the
     addressed output column. Keys validated at plan time against the table's
     source columns. Absent -> inheritance as before."""
+    description: str | None = None
+    """Author-supplied rendered description for this output table. Replaces
+    the forwarded source-table description in the companion README and
+    manifest. Absent -> forwarding as before."""
 
     @model_validator(mode="after")
     def table_shape(self) -> Self:
@@ -1270,7 +1294,8 @@ class SourceTableDecl(StrictBaseModel):
                 present-but-empty or two keys share a target value; `where` is
                 present-but-empty or has an empty key; `render` is
                 present-but-empty or has an empty key; `descriptions` is
-                present-but-empty or has an empty key or a blank value.
+                present-but-empty or has an empty key or a blank value;
+                `description` is present and empty or whitespace-only.
                 (Value emptiness / duplication is carried by `PredicateValue`
                 per entry; each `render` entry's own shape is carried by its
                 `RenderElection` model.)
@@ -1286,6 +1311,7 @@ class SourceTableDecl(StrictBaseModel):
         _require_descriptions_map_valid(
             self.descriptions, "SourceTableDecl.descriptions"
         )
+        _require_nonblank_str(self.description, "SourceTableDecl.description")
         return self
 
 

@@ -1483,7 +1483,42 @@ def test_source_table_descriptions_absent_defaults_to_none() -> None:
 
 
 # ---------------------------------------------------------------------------
-# entry_well_formed — RenameEntry.descriptions
+# table_shape — SourceTableDecl.description
+# ---------------------------------------------------------------------------
+
+
+def test_source_table_decl_description_parses() -> None:
+    """A `description` on a SourceTableDecl parses and is retained verbatim."""
+    decl = SourceTableDecl.model_validate(
+        {"name": "visits", "kind": "actor", "description": "Patient visits."}
+    )
+    assert decl.description == "Patient visits."
+
+
+def test_source_table_decl_description_absent_defaults_to_none() -> None:
+    """Absent `description` parses to None (forwarding as before)."""
+    decl = SourceTableDecl.model_validate({"name": "visits", "kind": "actor"})
+    assert decl.description is None
+
+
+def test_source_table_decl_description_empty_raises() -> None:
+    """An empty-string `description` raises."""
+    with pytest.raises(ValidationError, match="description"):
+        SourceTableDecl.model_validate(
+            {"name": "visits", "kind": "actor", "description": ""}
+        )
+
+
+def test_source_table_decl_description_whitespace_only_raises() -> None:
+    """A whitespace-only `description` raises."""
+    with pytest.raises(ValidationError, match="description"):
+        SourceTableDecl.model_validate(
+            {"name": "visits", "kind": "actor", "description": "   "}
+        )
+
+
+# ---------------------------------------------------------------------------
+# entry_well_formed — RenameEntry.descriptions / RenameEntry.description
 # ---------------------------------------------------------------------------
 
 
@@ -1501,8 +1536,32 @@ def test_rename_entry_descriptions_only_is_valid() -> None:
     assert entry.descriptions == {"prop__tier": "The patient's loyalty tier."}
 
 
+def test_rename_entry_description_only_is_valid() -> None:
+    """A `RenameEntry` with only `description` set (no name/columns/descriptions)
+    is a legal entry."""
+    entry = RenameEntry.model_validate(
+        {"table": "records__patient", "description": "Patient records, renamed."}
+    )
+    assert entry.name is None
+    assert entry.columns is None
+    assert entry.descriptions is None
+    assert entry.description == "Patient records, renamed."
+
+
+def test_rename_entry_description_empty_raises() -> None:
+    """An empty-string `description` raises."""
+    with pytest.raises(ValidationError, match="description"):
+        RenameEntry.model_validate({"table": "records__patient", "description": ""})
+
+
+def test_rename_entry_description_whitespace_only_raises() -> None:
+    """A whitespace-only `description` raises."""
+    with pytest.raises(ValidationError, match="description"):
+        RenameEntry.model_validate({"table": "records__patient", "description": "   "})
+
+
 def test_rename_entry_no_fields_set_raises() -> None:
-    """An entry with none of name/columns/descriptions still raises."""
+    """An entry with none of name/columns/descriptions/description still raises."""
     with pytest.raises(ValidationError, match="at least one"):
         RenameEntry.model_validate({"table": "records__patient"})
 
@@ -1815,6 +1874,35 @@ def test_plain_identifier_table_and_column_names_pass() -> None:
     )
     assert t.name == "_dim_customer_2"
     assert t.columns[0].name == "Id_2"
+
+
+# ---------------------------------------------------------------------------
+# TableDecl.description — author table-level description override
+# ---------------------------------------------------------------------------
+
+
+def test_table_decl_description_parses() -> None:
+    """A `description` on a TableDecl parses and is retained verbatim."""
+    t = TableDecl.model_validate(_make_table(description="Customer dimension."))
+    assert t.description == "Customer dimension."
+
+
+def test_table_decl_description_absent_defaults_to_none() -> None:
+    """Absent `description` parses to None (forwarding as before)."""
+    t = TableDecl.model_validate(_make_table())
+    assert t.description is None
+
+
+def test_table_decl_description_empty_raises() -> None:
+    """An empty-string `description` raises."""
+    with pytest.raises(ValidationError, match="description"):
+        TableDecl.model_validate(_make_table(description=""))
+
+
+def test_table_decl_description_whitespace_only_raises() -> None:
+    """A whitespace-only `description` raises."""
+    with pytest.raises(ValidationError, match="description"):
+        TableDecl.model_validate(_make_table(description="   "))
 
 
 # ---------------------------------------------------------------------------

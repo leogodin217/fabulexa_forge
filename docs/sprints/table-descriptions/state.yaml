@@ -2,7 +2,7 @@ sprint: table-descriptions
 parent_branch: base-format-v9
 baseline_sha: 6b66759f6b7e15a83d300f75bfbf8a2db0b155f6
 started: 2026-08-30
-current_phase: 1
+current_phase: 2
 capabilities:
   - documentation-channel: [table-description-override, forge-pinned-event-log-docs]
 gates:
@@ -10,7 +10,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Config surface — table-level description fields"
     demo: "docs/sprints/table-descriptions/demos/phase_1_config_surface.py"
   2:
