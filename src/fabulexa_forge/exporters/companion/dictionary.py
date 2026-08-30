@@ -5,14 +5,17 @@ manifest's machine-readable mirror must never disagree -- so the resolution
 lives here once and each companion builder renders it its own way (design
 doc § The data dictionary in companion artifacts).
 
-**Column resolution.** The export config's `author_descriptions` (dimensional
-`columns[].description`, source `descriptions`, base `rename[].descriptions`
-— stamped onto `TableReport.author_descriptions` at plan compile, keyed by
-output column name) is consulted first: an entry re-voices a carried
-column's description while its unit still inherits under the rules below, or
-gives a column with no carried provenance a description-only doc where one
-otherwise wouldn't exist. Without an entry, resolution is exactly the
-carried-column rule that follows.
+**Column resolution.** Author-first: the export config's `author_descriptions`
+(dimensional `columns[].description`, source `descriptions`, base
+`rename[].descriptions` — stamped onto `TableReport.author_descriptions` at
+plan compile, keyed by output column name) is consulted first, on any
+report; an entry re-voices a carried column's description while its unit
+still inherits under the rules below, or gives a column with no carried
+provenance a description-only doc where one otherwise wouldn't exist. Absent
+an author entry, a report marked as the source event log resolves its
+forge-pinned per-column descriptions next (mode-definitional, no config
+surface — see `_EVENT_LOG_COLUMN_DESCRIPTIONS`). Absent both, resolution
+falls to the carried-column rule that follows.
 
 A column with no carried provenance entry (computed,
 or fed by more than one source) inherits nothing. A carried column's
@@ -28,11 +31,15 @@ integer into a DATE/TIMESTAMPTZ value the unit no longer describes; every
 other declared unit rides its rendering (decimal, json_precision,
 cast-back) unchanged, since none of those change *what* the value counts.
 
-**Table resolution.** A table's description forwards iff every one of its
-carried columns agrees on a single source table -- the "one authority"
-resolution generalised to table granularity. A table spanning several
-source tables (a dimensional lookup, the source event log's multi-kind
-union) forwards nothing; there is no single subject to attribute it to.
+**Table resolution.** Author-first: the report's `author_table_description`
+(stamped from the export config) is consulted first. Absent that, a report
+marked as the source event log resolves to the forge-pinned event-log table
+description (mode-definitional, no config surface). Absent both, a table's
+description forwards iff every one of its carried columns agrees on a single
+source table -- the "one authority" resolution generalised to table
+granularity. A table spanning several source tables (a dimensional lookup,
+the source event log's multi-kind union) forwards nothing; there is no
+single subject to attribute it to.
 
 **Closed-domain columns.** A carried column whose source is a
 `records__<kind>` table's `prop__<name>` (or bare-named) property renders

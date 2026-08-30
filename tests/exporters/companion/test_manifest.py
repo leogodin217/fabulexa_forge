@@ -502,8 +502,8 @@ def test_event_log_table_and_columns_carry_pinned_descriptions(
     tmp_path: Path,
 ) -> None:
     """A marked event-log report's manifest entry carries the pinned table
-    description and all six pinned column descriptions, no units, no
-    enum_options."""
+    description and all six pinned column descriptions verbatim, with no
+    units and no enum_options (except item_type's gloss list)."""
     emit_dir = tmp_path / "emit"
     emit_dir.mkdir()
     write_documented_emit(emit_dir)
@@ -526,8 +526,27 @@ def test_event_log_table_and_columns_carry_pinned_descriptions(
     assert columns["item_type"]["description"] == EVENT_LOG_ITEM_TYPE_DESCRIPTION
     assert columns["item_type"]["unit"] is None
     assert columns["item_type"]["enum_options"] is None
+    assert columns["id"]["description"] == (
+        "Sequence number of this log row: dense, ascending in event order,"
+        " starting at 1."
+    )
+    assert columns["item_id"]["description"] == (
+        "Identifier of the changed item, scoped by item_type: one item"
+        " keeps one identifier across its rows."
+    )
+    assert columns["event"]["description"] == (
+        "What happened to the item: 'create', 'update', or 'destroy'."
+    )
+    assert columns["occurred_at"]["description"] == (
+        "When the change took effect. Changes are logged in order, so this"
+        " never decreases as id ascends."
+    )
+    assert columns["changes"]["description"] == (
+        "JSON object of the fields this change touched, each mapped to an"
+        " [old, new] value pair — old is null on a creation, new is null on"
+        " a deletion."
+    )
     for name in ("id", "item_id", "event", "occurred_at", "changes"):
-        assert columns[name]["description"] is not None
         assert columns[name]["unit"] is None
 
 
