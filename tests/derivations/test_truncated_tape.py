@@ -12,7 +12,12 @@ from typing import Any
 
 import duckdb
 import pytest
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from fabulexa_forge.derivations.truncated_tape import (
     build_truncated_history_sql,
@@ -172,10 +177,9 @@ def _build_full_emit(
         ],
         branches=[
             {"fork_path": FORK_PATH, "parent": None, "slice_at": 9999},
-            {"fork_path": OTHER_FORK_PATH, "parent": FORK_PATH, "slice_at": 9999},
         ],
         extra={
-            "enum_domains": {"widget": {"widget_type": ["alpha", "beta"]}},
+            "enum_domains": {"widget": {"widget_type": enum_options("alpha", "beta")}},
             "pinned_ids": {"widget": {"first": "w1"}},
             "runtime": {
                 "timezone": "UTC",

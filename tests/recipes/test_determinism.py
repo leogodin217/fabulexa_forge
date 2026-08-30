@@ -96,6 +96,7 @@ def _export_once(
             "duckdb",
             anchor,
             notice_sink=discard_notice_sink,
+            overlay=None,
         )
 
 

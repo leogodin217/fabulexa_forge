@@ -37,7 +37,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 DAY_NS = 86_400 * 1_000_000_000  # one civil day, in sim-time nanoseconds
 
@@ -321,7 +326,7 @@ def build_election_emit(
     conn.close()
 
     extra: dict[str, object] = {
-        "enum_domains": {"creature": {"creature_type": ["cat", "dog"]}},
+        "enum_domains": {"creature": {"creature_type": enum_options("cat", "dog")}},
         "runtime": {
             "timezone": "UTC",
             "start_datetime": "2024-01-01T00:00:00+00:00",

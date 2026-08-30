@@ -26,7 +26,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 from _support.sidecar_builder import write_emit as _write_emit_sidecar
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
@@ -179,10 +179,11 @@ def _write_sidecar(tmp_path: Path, sidecar: dict[str, object]) -> None:
 def _base_sidecar(
     tables: list[dict[str, object]],
     record_roles: dict[str, object] | None,
-    enum_domains: dict[str, dict[str, list[str]]] | None = None,
+    enum_domains: dict[str, dict[str, list[dict[str, object]]]] | None = None,
     sub_type_columns: dict[str, dict[str, list[str]]] | None = None,
     presentation_keys: dict[str, object] | None = None,
     row_census: dict[str, object] | None = None,
+    scenario_description: str | None = None,
 ) -> dict[str, object]:
     """Build a minimal sidecar dict with optional record_roles/enum_domains/partition."""
     result: dict[str, object] = {
@@ -199,6 +200,8 @@ def _base_sidecar(
         result["presentation_keys"] = presentation_keys
     if row_census is not None:
         result["row_census"] = row_census
+    if scenario_description is not None:
+        result["scenario_description"] = scenario_description
     return result
 
 
@@ -434,7 +437,9 @@ def build_bare_subtyped_dim_emit(tmp_path: Path) -> Path:
                 ),
             ],
             record_roles={"equipment": "dimension"},
-            enum_domains={"equipment": {"equipment_type": ["forklift", "scanner"]}},
+            enum_domains={
+                "equipment": {"equipment_type": enum_options("forklift", "scanner")}
+            },
         ),
     )
     return tmp_path
@@ -470,7 +475,9 @@ def build_bare_subtyped_fact_emit(tmp_path: Path) -> Path:
                 ),
             ],
             record_roles={"delivery": "fact"},
-            enum_domains={"delivery": {"delivery_type": ["express", "standard"]}},
+            enum_domains={
+                "delivery": {"delivery_type": enum_options("express", "standard")}
+            },
         ),
     )
     return tmp_path
@@ -510,7 +517,9 @@ def build_object_valued_actor_emit(
             record_roles={
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
             },
-            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            enum_domains={
+                "actor": {"actor_type": enum_options("driver", "ride", "bus")}
+            },
         ),
     )
     return tmp_path
@@ -548,7 +557,9 @@ def build_actor_emit_with_sub_type_columns(tmp_path: Path) -> Path:
             record_roles={
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
             },
-            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            enum_domains={
+                "actor": {"actor_type": enum_options("driver", "ride", "bus")}
+            },
             sub_type_columns={
                 "actor": {
                     "driver": ["prop__name"],
@@ -1056,6 +1067,156 @@ def test_bare_subtyped_dim_proposal_passes_its_own_gates(tmp_path: Path) -> None
 
 
 # ---------------------------------------------------------------------------
+# `init` documentation annotations (documentation-channel Phase 6)
+# ---------------------------------------------------------------------------
+
+#: A bare-role, sub-typed dim kind ('equipment') carrying a documented table
+#: description, a partially-glossed sub-type domain (forklift glossed,
+#: scanner not), a documented tracked column (triggers the SCD-2 stub, so
+#: every payload column is proposed), a documented untracked column, and an
+#: undocumented discriminator.
+_DOCUMENTED_EQUIPMENT_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {"name": "prop__equipment_type", "type": "VARCHAR"},
+    prop_column(
+        "prop__label",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        description="Equipment's asset tag.",
+    ),
+    prop_column(
+        "prop__status",
+        "VARCHAR",
+        history_tracked=True,
+        temporal_class="tracked",
+        description="Current operating state.",
+    ),
+]
+
+
+def build_documented_subtyped_dim_emit(
+    tmp_path: Path, *, scenario_description: str | None
+) -> Path:
+    """A documented, bare-role, sub-typed dim kind ('equipment')."""
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__equipment", _DOCUMENTED_EQUIPMENT_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__equipment" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e1", 10, True, 10, 0, "forklift", "Forklift 1", "idle"],
+    )
+    conn.execute(
+        'INSERT INTO "records__equipment" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "e2", 10, True, 10, 1, "scanner", "Scanner 1", "active"],
+    )
+    conn.close()
+    forklift_option, scanner_option = enum_options("forklift", "scanner")
+    forklift_option["description"] = "A powered lift truck."
+    equipment_table = _table_spec(
+        "records__equipment",
+        "records",
+        _DOCUMENTED_EQUIPMENT_COLUMNS,
+        2,
+        record_kind="equipment",
+    )
+    equipment_table["description"] = "Warehouse handling equipment."
+    _write_sidecar(
+        tmp_path,
+        _base_sidecar(
+            tables=[equipment_table],
+            record_roles={"equipment": "dimension"},
+            enum_domains={
+                "equipment": {"equipment_type": [forklift_option, scanner_option]}
+            },
+            scenario_description=scenario_description,
+        ),
+    )
+    return tmp_path
+
+
+def test_scenario_comment_present_when_declared(tmp_path: Path) -> None:
+    """A declared `scenario_description` renders as a `# Scenario:` block."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description="A warehouse equipment scenario."
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "# Scenario:\n#   A warehouse equipment scenario.\n" in content
+
+
+def test_scenario_comment_absent_when_not_declared(tmp_path: Path) -> None:
+    """No `scenario_description` -> no `# Scenario:` block anywhere."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description=None
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "# Scenario:" not in content
+
+
+def test_table_description_annotates_every_sub_type_stub(tmp_path: Path) -> None:
+    """The source table's description comments each per-sub-type stub."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description=None
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert content.count("      # Warehouse handling equipment.") == 2
+
+
+def test_documented_columns_carry_description_comment(tmp_path: Path) -> None:
+    """A documented tracked/untracked column's proposal entry carries its
+    sidecar description as a trailing comment."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description=None
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "{name: label, from: prop__label}  # Equipment's asset tag." in content
+    assert (
+        "{name: status, from: prop__status}  # tracked -> per-version;"
+        " versions/record unknown (no row_census in this emit);"
+        " Current operating state." in content
+    )
+
+
+def test_undocumented_discriminator_carries_no_comment(tmp_path: Path) -> None:
+    """The undocumented discriminator column proposes with no trailing comment."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description=None
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert "{name: equipment_type, from: prop__equipment_type}" in content, (
+        "the discriminator itself is proposed among the SCD-2 columns"
+    )
+    assert "{name: equipment_type, from: prop__equipment_type}  #" not in content
+
+
+def test_documented_proposal_passes_its_own_gates(tmp_path: Path) -> None:
+    """The annotated candidate config still loads and plans clean."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit", scenario_description="A warehouse equipment scenario."
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    _assert_proposal_passes_its_own_gates(out_path, emit_dir)
+
+
+# ---------------------------------------------------------------------------
 # Tests: sub_type_columns partition prunes per-sub-type stub columns
 # ---------------------------------------------------------------------------
 
@@ -1427,26 +1588,29 @@ def build_object_valued_actor_emit_with_presentation_id(
             record_roles={
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"}
             },
-            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            enum_domains={
+                "actor": {"actor_type": enum_options("driver", "ride", "bus")}
+            },
             presentation_keys=presentation_keys,
         ),
     )
     return tmp_path
 
 
-def test_claimed_flat_kind_dim_key_subsumes_advisory_comment(tmp_path: Path) -> None:
-    """A flat kind's whole-column claim elects `presentation_id` (key election),
-    aligning the dim's id column and subsuming the advisory comment on that
-    stub — declared-key election supersedes the older advisory-only note."""
+def test_claimed_flat_kind_dim_key_sources_record_index(tmp_path: Path) -> None:
+    """A flat kind's whole-column claim still proposes the uniform
+    `record_index` active election; the dim's id column sources from it, and
+    the advisory comment names `presentation_id` as an available alternative
+    rather than being subsumed."""
     emit_dir = build_flat_dim_emit_with_presentation_id(
         tmp_path / "emit", _LOCATION_PRESENTATION_KEYS
     )
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
-    assert "{name: id, from: presentation_id}" in content
-    assert "keys:\n  location: presentation_id" in content
-    assert "presentation_id` a natural key for 'location'" not in content
+    assert "{name: id, from: record_index}" in content
+    assert "  # location: presentation_id\n  location: record_index\n" in content
+    assert "presentation_id` a natural key for 'location'" in content
 
 
 def test_partitioned_kind_with_rollup_claim_carries_advisory_comment(
@@ -1595,7 +1759,9 @@ def build_actor_with_referencing_booking_emit(
                 "actor": {"driver": "dimension", "ride": "fact", "bus": "dimension"},
                 "booking": "fact",
             },
-            enum_domains={"actor": {"actor_type": ["driver", "ride", "bus"]}},
+            enum_domains={
+                "actor": {"actor_type": enum_options("driver", "ride", "bus")}
+            },
             presentation_keys=presentation_keys,
         ),
     )
@@ -1628,20 +1794,28 @@ def _assert_proposal_passes_its_own_gates(out_path: Path, emit_dir: Path) -> Non
 
 def test_undeclared_kind_proposes_record_index_scalar(tmp_path: Path) -> None:
     """A flat kind with no presentation_keys entry proposes the record_index
-    scalar."""
+    scalar, with only the always-available record_id alternative commented."""
     emit_dir = build_bare_dim_emit(tmp_path / "emit")
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
-    assert "keys:\n  location: record_index\n" in content
+    assert (
+        "keys:\n"
+        "  # NOTE: an uncommented alternative below SWAPS the active line for"
+        " this population -- delete the active line, don't just uncomment\n"
+        "  # location: record_id\n"
+        "  location: record_index\n" in content
+    )
+    assert "# location: presentation_id" not in content
     assert "{name: id, from: record_index}" in content
     _assert_proposal_passes_its_own_gates(out_path, emit_dir)
 
 
 def test_partial_declaration_proposes_per_sub_type_map(tmp_path: Path) -> None:
-    """Driver/bus declared with distinct, union-safe prefixes and ride
-    undeclared proposes the per-sub-type map with the record_index
-    fallback."""
+    """Driver/bus declared and ride undeclared still proposes the uniform
+    record_index active for every sub-type, as a per-sub-type map (shape
+    follows the alternatives, not the active values); only driver/bus offer
+    the presentation_id alternative."""
     emit_dir = build_object_valued_actor_emit_with_presentation_id(
         tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_CLAIMED
     )
@@ -1649,36 +1823,62 @@ def test_partial_declaration_proposes_per_sub_type_map(tmp_path: Path) -> None:
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
     assert (
-        "keys:\n  actor:\n    driver: presentation_id\n    ride: record_index\n"
-        "    bus: presentation_id\n" in content
+        "    # driver: record_id\n"
+        "    # driver: presentation_id\n"
+        "    driver: record_index\n" in content
+    )
+    assert "    # ride: record_id\n    ride: record_index\n" in content
+    assert "# ride: presentation_id" not in content
+    assert (
+        "    # bus: record_id\n"
+        "    # bus: presentation_id\n"
+        "    bus: record_index\n" in content
     )
     _assert_proposal_passes_its_own_gates(out_path, emit_dir)
 
 
-def test_all_agreeing_map_collapses_to_scalar(tmp_path: Path) -> None:
-    """Every declared sub-type electing presentation_id collapses the
-    per-sub-type map to the scalar."""
+def test_all_declared_still_produces_per_sub_type_map(tmp_path: Path) -> None:
+    """Every declared sub-type still proposes the per-sub-type map — shape
+    never collapses to scalar once >= 1 sub-type is declared, even when every
+    sub-type agrees on its alternatives."""
     emit_dir = build_object_valued_actor_emit_with_presentation_id(
         tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_ALL_DECLARED
     )
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
-    assert "keys:\n  actor: presentation_id\n" in content
+    assert "keys:\n  actor:\n" in content
+    assert "keys:\n  actor: record_index\n" not in content
+    for sub_type in ("driver", "ride", "bus"):
+        assert f"    # {sub_type}: presentation_id\n    {sub_type}: record_index\n" in (
+            content
+        )
     _assert_proposal_passes_its_own_gates(out_path, emit_dir)
 
 
-def test_self_gate_degrades_bare_counter_siblings_with_comment(tmp_path: Path) -> None:
+def test_union_unsafe_siblings_propose_clean_no_degradation(tmp_path: Path) -> None:
     """A referencing edge into actor's full domain, with driver/bus declared
-    on bare (comparable) counter prefixes, degrades actor to the uniform
-    record_index scalar — the keys: line names the forcing gate."""
+    on bare (comparable) counter prefixes that a rollup claim would find
+    union-unsafe, still proposes the uniform record_index map cleanly — the
+    degradation mechanism is retired, so no `NOTE: ElectionUnionUnsafe`
+    comment appears anywhere in the proposal."""
     emit_dir = build_actor_with_referencing_booking_emit(
         tmp_path / "emit", _ACTOR_PRESENTATION_KEYS_UNCLAIMED
     )
     out_path = tmp_path / "candidate.yaml"
     cmd_init(emit_dir, out_path, "dimensional")
     content = out_path.read_text(encoding="utf-8")
-    assert "keys:\n  actor: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "ElectionUnionUnsafe" not in content
+    assert (
+        "    # driver: record_id\n"
+        "    # driver: presentation_id\n"
+        "    driver: record_index\n" in content
+    )
+    assert (
+        "    # bus: record_id\n"
+        "    # bus: presentation_id\n"
+        "    bus: record_index\n" in content
+    )
     assert "{name: id, from: record_index}" in content
     _assert_proposal_passes_its_own_gates(out_path, emit_dir)
 
@@ -1770,7 +1970,7 @@ def build_source_subtyped_membership_emit(tmp_path: Path) -> Path:
                 ),
             ],
             record_roles=None,
-            enum_domains={"actor": {"actor_type": ["consultant", "nurse"]}},
+            enum_domains={"actor": {"actor_type": enum_options("consultant", "nurse")}},
         ),
     )
     return tmp_path

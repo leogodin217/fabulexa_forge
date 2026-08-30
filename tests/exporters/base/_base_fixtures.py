@@ -19,7 +19,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 DAY_NS = 86_400 * 1_000_000_000  # one civil day, in sim-time nanoseconds
 
@@ -138,6 +143,204 @@ def build_base_test_emit(
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 5 * DAY_NS}],
         extra=extra,
+    )
+    return tmp_path
+
+
+_PATIENT_ELECTION_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "BIGINT"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__signup_date",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+]
+
+
+def build_base_render_election_emit(tmp_path: Path) -> Path:
+    """Build a `patient`-kind emit for render/date_parse election tests:
+    carries a VARCHAR `prop__signup_date` payload column (a date_parse
+    candidate) alongside the lifecycle columns a `render` election targets
+    (`created_sim_time`, `deactivated_at`).
+
+    - p001: created day 0, deactivated day 2, signup_date '2024-01-15'.
+    - p002: created day 0, never deactivated, signup_date NULL (a date_parse
+        must let NULL flow through untouched).
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__patient", _PATIENT_ELECTION_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "p001",
+            1001,
+            0,
+            False,
+            2 * DAY_NS,
+            2 * DAY_NS,
+            0,
+            "admitted",
+            "2024-01-15",
+        ],
+    )
+    conn.execute(
+        'INSERT INTO "records__patient" VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "p002", 1002, 0, True, 0, 1, "admitted", None],
+    )
+
+    for record_id, sim_time, value in (
+        ("p001", 0, "admitted"),
+        ("p002", 0, "admitted"),
+    ):
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "patient", record_id, "status", sim_time, value],
+        )
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            {
+                "name": "records__patient",
+                "category": "records",
+                "record_kind": "patient",
+                "columns": _PATIENT_ELECTION_COLUMNS,
+                "rows": 2,
+            },
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": _HISTORY_COLUMNS,
+                "rows": 2,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 5 * DAY_NS}],
+        extra={
+            "record_roles": {"patient": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
+_VALUE_ELECTION_WIDGET_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__error_rate", "DOUBLE", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__requested_offset_ns",
+        "BIGINT",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+    prop_column(
+        "prop__opened_at", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__context", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+#: `prop__requested_offset_ns` shares `created_sim_time`'s raw ns value (§
+#: render tests: `instant` renders identically to a structural instant of the
+#: same value).
+_VALUE_ELECTION_OFFSET_NS = 5 * 3600 * 1_000_000_000
+
+
+def build_base_value_election_emit(tmp_path: Path) -> Path:
+    """Build the value-rendering-election render fixture: one `widget`
+    records kind, one row, carrying one payload column per new election kind
+    (`decimal`: `prop__error_rate` DOUBLE; `instant`: `prop__requested_offset_ns`
+    BIGINT, seeded to the same raw ns value as `created_sim_time`;
+    `json_precision`: `prop__context` VARCHAR JSON) alongside an unelected
+    VARCHAR payload (`prop__opened_at`) whose cast-back-verbatim rendering a
+    render test asserts stays unaffected by a sibling column's election.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__widget", _VALUE_ELECTION_WIDGET_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "w001",
+            _VALUE_ELECTION_OFFSET_NS,
+            True,
+            _VALUE_ELECTION_OFFSET_NS,
+            0,
+            12.3456,
+            _VALUE_ELECTION_OFFSET_NS,
+            "2024-02-01",
+            '{"discount_pct": 0.125, "note": "vip"}',
+        ],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            {
+                "name": "records__widget",
+                "category": "records",
+                "record_kind": "widget",
+                "columns": _VALUE_ELECTION_WIDGET_COLUMNS,
+                "rows": 1,
+            },
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": _HISTORY_COLUMNS,
+                "rows": 0,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 5 * DAY_NS}],
+        extra={
+            "record_roles": {"widget": "dimension"},
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
     )
     return tmp_path
 
@@ -620,7 +823,7 @@ def build_base_keys_emit(tmp_path: Path) -> Path:
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
             },
-            "enum_domains": {"doctor": {"doctor_type": ["a", "b"]}},
+            "enum_domains": {"doctor": {"doctor_type": enum_options("a", "b")}},
             "presentation_keys": {
                 "patient": {
                     "key": {
@@ -851,7 +1054,7 @@ def build_mixed_edge_election_emit(
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
             },
-            "enum_domains": {"target": {"target_type": ["alpha", "beta"]}},
+            "enum_domains": {"target": {"target_type": enum_options("alpha", "beta")}},
             "presentation_keys": {
                 "target": {
                     "sub_types": {

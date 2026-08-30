@@ -265,6 +265,32 @@ def test_invalid_dimensional_config_export_error_passes_through(
             open_shaped_playback(emit, config, None, discard_notice_sink)
 
 
+def test_open_pins_session_zone_when_anchor_resolves(tmp_path: "Path") -> None:
+    """A resolved anchor pins the emit's session TimeZone before open returns."""
+    emit_dir = build_shaped_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(
+            emit.sidecar.runtime(), None, None, "Asia/Tokyo"
+        )
+        open_shaped_playback(emit, source_shape_config(), anchor, discard_notice_sink)
+        rows = emit.query("SELECT current_setting('TimeZone')", ())
+    assert rows[0][0] == "Asia/Tokyo"
+
+
+def test_open_does_not_touch_session_zone_when_anchor_is_none(
+    tmp_path: "Path",
+) -> None:
+    """With no resolved anchor, open leaves the session zone untouched."""
+    emit_dir = build_shaped_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        baseline = emit.query("SELECT current_setting('TimeZone')", ())[0][0]
+        open_shaped_playback(
+            emit, dimensional_shape_config(), None, discard_notice_sink
+        )
+        after = emit.query("SELECT current_setting('TimeZone')", ())[0][0]
+    assert after == baseline
+
+
 def test_rebase_and_incremental_blocks_not_read(tmp_path: "Path") -> None:
     emit_dir = build_shaped_test_emit(tmp_path)
     plain = dimensional_shape_config()

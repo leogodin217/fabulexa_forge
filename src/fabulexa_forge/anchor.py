@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fabulexa_forge.errors import (
@@ -24,6 +24,10 @@ from fabulexa_forge.errors import (
 if TYPE_CHECKING:
     from fabulexa_forge.config.models import RebaseConfig
     from fabulexa_forge.reader.sidecar import RuntimeAnchor
+
+
+TemporalRender = Literal["timestamp", "date", "time", "timestamptz"]
+"""The instant-rendering election vocabulary, shared by every attach point."""
 
 
 @dataclass(frozen=True)
@@ -247,27 +251,34 @@ def render_ts(event_sim_time: int, anchor: EffectiveAnchor | None) -> str | int:
     return instant_local.isoformat()
 
 
-def render_anchor_timestamp_expr(
+def render_anchor_temporal_expr(
     anchor: EffectiveAnchor | None,
     qualified_source: str,
     out_name: str,
+    render: TemporalRender,
 ) -> str:
-    """Render the SQL SELECT fragment for a wallclock TIMESTAMP derived from a
-    nanosecond sim_time column through the effective anchor.
+    """Render the SQL SELECT fragment for a wallclock value derived from a
+    nanosecond sim_time column through the effective anchor, in the elected
+    temporal type.
 
-    When `anchor` is None, returns the raw sim_time column aliased to out_name
-    (no conversion). When present, returns the pinned projection that fixes the
-    absolute origin, adds physical elapsed microseconds, and projects to the
-    local wall clock in the effective zone with DST resolved by DuckDB's bundled
-    tz database. The two interpolations are pinned (design doc § Serialization):
-    the zone is `str(anchor.timezone)` (the IANA key) and the origin literal is
-    `anchor.start_instant.isoformat()`.
+    Generalizes the single-rendering predecessor; the `timestamp` election
+    reproduces its expression byte-identically. `date` and `time` project the
+    same local wall clock; `timestamptz` renders the absolute instant.
+    Interpolations stay pinned: zone = the anchor's IANA key, origin = the
+    anchor instant's ISO form. The one renderer every wallclock mode shares.
+
+    When `anchor` is None, `render` must be the caller-side default
+    `timestamp` and the raw source column is aliased through unchanged (the
+    existing no-anchor path). Callers enforce the elected-rendering-requires-
+    anchor rule at validation; a non-default election with a None anchor is a
+    caller bug.
 
     Args:
         anchor: The resolved EffectiveAnchor, or None for the no-anchor path.
         qualified_source: The fully table-qualified BIGINT-ns source column SQL
             (e.g. `"_grain"."sim_time"` or `"_versions"."version_start"`).
         out_name: The output column name (the `AS "<out_name>"` alias).
+        render: The elected temporal rendering.
 
     Returns:
         A SQL SELECT-list expression fragment ending in `AS "<out_name>"`.
@@ -277,8 +288,38 @@ def render_anchor_timestamp_expr(
 
     zone = str(anchor.timezone)
     origin = anchor.start_instant.isoformat()
-    return (
-        f"timezone('{zone}', TIMESTAMPTZ '{origin}'"
-        f" + to_microseconds(CAST({qualified_source} AS BIGINT) // 1000))"
-        f' AS "{out_name}"'
+    instant_expr = (
+        f"TIMESTAMPTZ '{origin}'"
+        f" + to_microseconds(CAST({qualified_source} AS BIGINT) // 1000)"
     )
+    if render == "timestamptz":
+        return f'{instant_expr} AS "{out_name}"'
+
+    local_expr = f"timezone('{zone}', {instant_expr})"
+    if render == "date":
+        return f'CAST({local_expr} AS DATE) AS "{out_name}"'
+    if render == "time":
+        return f'CAST({local_expr} AS TIME) AS "{out_name}"'
+    return f'{local_expr} AS "{out_name}"'
+
+
+def anchor_to_json(anchor: "EffectiveAnchor | None") -> dict[str, str] | None:
+    """Serialize the resolved anchor to its canonical JSON-compatible form.
+
+    The one anchor-serialization authority: every JSON surface that records a
+    resolved anchor (the incremental fingerprint, the companion manifest)
+    reads through this function, so the two documents never disagree on shape.
+
+    Args:
+        anchor: The resolved anchor, or None.
+
+    Returns:
+        `{"start_instant": <ISO-8601>, "timezone": <IANA key>}`, or None when
+        no anchor resolved.
+    """
+    if anchor is None:
+        return None
+    return {
+        "start_instant": anchor.start_instant.isoformat(),
+        "timezone": str(anchor.timezone),
+    }

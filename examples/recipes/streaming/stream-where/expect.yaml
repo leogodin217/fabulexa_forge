@@ -1,0 +1,23 @@
+streams:
+  patient:
+    # p002 (Bob) fails `where: {name: Alice}` and is excluded whole — his `c`
+    # never appears, so only p001's three events survive.
+    event_count: 3
+    contains_events:
+      - seq: 1
+        op: c
+        record_id: p001
+        after.status: pending
+        after.name: Alice
+      # seq renumbers densely over the survivors: p001's first `u` is seq 2,
+      # not the seq 3 it would carry if p002 were streamed too.
+      - seq: 2
+        op: u
+        record_id: p001
+        after.status: active
+        after.name: Alice
+      - seq: 3
+        op: u
+        record_id: p001
+        after.status: discharged
+        after.name: Alice

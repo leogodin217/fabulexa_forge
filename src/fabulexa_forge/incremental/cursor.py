@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Literal
 
 from fabulexa_forge.errors import ExportRuntimeError, IncrementalCursorInvalid
+from fabulexa_forge.exporters.companion import is_companion_artifact_name
 
 _CURSOR_FILE = ".fabulexa-forge-cursor.json"
 _CURRENT_CURSOR_FORMAT_VERSION = 1
@@ -110,18 +111,25 @@ def _read_duckdb_cursor(out: Path) -> Cursor | None:
 
 
 def _list_non_hidden(out: Path) -> list[Path]:
-    """Return non-hidden, non-.tmp_* entries of `out`.
+    """Return non-hidden, non-.tmp_*, non-companion-artifact entries of `out`.
 
-    Hidden entries (names starting with '.') are excluded.
-    .tmp_* staging directories are excluded (leftover from a crash).
+    Hidden entries (names starting with '.') are excluded. .tmp_* staging
+    directories are excluded (leftover from a crash). Companion artifact
+    files (`<mode>-readme.md` / `<mode>-manifest.json`) are excluded — a
+    window-0 drip's artifact rewrite must never itself count as evidence of
+    a prior cursor.
 
     Args:
         out: The drop parent directory.
 
     Returns:
-        Sorted list of non-hidden entries.
+        Sorted list of non-hidden, non-artifact entries.
     """
-    return sorted(p for p in out.iterdir() if not p.name.startswith("."))
+    return sorted(
+        p
+        for p in out.iterdir()
+        if not p.name.startswith(".") and not is_companion_artifact_name(p.name)
+    )
 
 
 def _read_csv_cursor(out: Path, window_zero_label: str) -> Cursor | None:

@@ -7,6 +7,7 @@ sidecar-only, no DuckDB needed), mirroring test_election.py's fixture style.
 from __future__ import annotations
 
 import pytest
+from _support.sidecar_builder import enum_options
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.errors import (
@@ -55,7 +56,10 @@ def _sidecar(
         "tables": tables,
     }
     if enum_domains is not None:
-        raw["enum_domains"] = enum_domains
+        raw["enum_domains"] = {
+            kind: {prop: enum_options(*values) for prop, values in props.items()}
+            for kind, props in enum_domains.items()
+        }
     return Sidecar.from_raw(raw)
 
 

@@ -1,34 +1,42 @@
-"""Tests for the event-log render (`exporters/source/events.py`, Phase 2).
+"""Tests for the event-log render (`exporters/source/events.py`).
 
 `SourceEventSourcePlan` / `SourceEventLogPlan` are hand-constructed directly
-(no plan builder exists yet) against `build_events_test_emit` (a tracked,
+(bypassing the plan builder) against `build_events_test_emit` (a tracked,
 sub-typed `ticket` kind referencing a flat `agent` kind, plus a
 `ticket.watchers` membership table) and `build_windowed_source_test_emit`
 (the windowed visit/order/location/junction fixture, reused for the window
-test).
+test). Every hand-constructed source here leaves `SourceEventSourcePlan.render`
+at its default `()` (uniformly silent), so every `changes` entry stays raw
+codec text — the render-election dispatch at the codec seam (`ElectionKindConflict`,
+elected `changes` text, the export-time guards) is `test_value_election_events.py`'s
+charter, plan-builder-driven end to end.
 """
 
 from __future__ import annotations
 
 import json
+from datetime import date, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
 
 import duckdb
 
-from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.anchor import TemporalRender, resolve_effective_anchor
 from fabulexa_forge.config.models import KeySurface
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.exporters.populations import Population
+from fabulexa_forge.exporters.selection_spine import WhereEntry
 from fabulexa_forge.exporters.source.events import (
     SourceEventLogPlan,
     SourceEventSourcePlan,
     build_changes_object_expr,
     build_event_log_sql,
 )
-from fabulexa_forge.exporters.source.plan import SourceEdgeSurface, SourceWhereEntry
+from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
 from fabulexa_forge.reader.emit import open_emit
 
+from ._event_log_helpers import changes_of as _changes
+from ._event_log_helpers import event_log_rows as _rows
+from ._event_log_helpers import row_for as _row_for
 from ._source_fixtures import (
     build_event_log_suppressed_update_test_emit,
     build_event_tie_test_emit,
@@ -38,35 +46,9 @@ from ._source_fixtures import (
     windowed_test_windows,
 )
 
-if TYPE_CHECKING:
-    from fabulexa_forge.reader.emit import Emit
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def _rows(emit: "Emit", sql: str) -> list[dict[str, object]]:
-    """Execute sql and zip every row against the event log's fixed columns."""
-    columns = ("id", "item_type", "item_id", "event", "occurred_at", "changes")
-    return [dict(zip(columns, row)) for row in emit.query(sql, ())]
-
-
-def _changes(row: dict[str, object]) -> dict[str, object]:
-    """Parse one row's `changes` VARCHAR cell as JSON."""
-    assert isinstance(row["changes"], str)
-    return cast("dict[str, object]", json.loads(row["changes"]))
-
-
-def _row_for(
-    rows: list[dict[str, object]], item_id: object, event: str
-) -> dict[str, object]:
-    """The sole row matching (item_id, event); asserts exactly one match."""
-    matches = [r for r in rows if r["item_id"] == item_id and r["event"] == event]
-    assert len(matches) == 1, (
-        f"expected exactly one ({item_id}, {event}) row: {matches}"
-    )
-    return matches[0]
 
 
 _RECORD_ID_SURFACE: tuple[tuple[str | None, KeySurface], ...] = (
@@ -104,7 +86,7 @@ def _ticket_source(
     item_type: str = "ticket",
     rename: dict[str, str] | None = None,
     kind_labels: tuple[tuple[str, str], ...] = (),
-    where: tuple[SourceWhereEntry, ...] = (),
+    where: tuple[WhereEntry, ...] = (),
 ) -> SourceEventSourcePlan:
     """A records-source unit over `ticket`, addressing `sub_types` (default:
     both bug and feature)."""
@@ -160,9 +142,7 @@ def _visit_source() -> SourceEventSourcePlan:
     )
 
 
-def _worker_ward_source(
-    *, where: tuple[SourceWhereEntry, ...] = ()
-) -> SourceEventSourcePlan:
+def _worker_ward_source(*, where: tuple[WhereEntry, ...] = ()) -> SourceEventSourcePlan:
     """A membership-source unit over `worker.ward`
     (`build_source_junction_selection_emit`): two owners, day/night,
     `prop__region` constant east/west, one interval each — the owner
@@ -344,7 +324,7 @@ class TestWhereNarrowedRecordsSource:
         destroy both included; the excluded records' events (including
         their own destroy) are entirely absent."""
         where = (
-            SourceWhereEntry(
+            WhereEntry(
                 key="assignee_id",
                 source_column="prop__assignee_id",
                 sql_type="VARCHAR",
@@ -371,7 +351,7 @@ class TestWhereNarrowedRecordsSource:
         """`where` is orthogonal to the audited property set: a property may
         be predicated and never appear in `changes`."""
         where = (
-            SourceWhereEntry(
+            WhereEntry(
                 key="assignee_id",
                 source_column="prop__assignee_id",
                 sql_type="VARCHAR",
@@ -399,7 +379,7 @@ class TestWhereNarrowedRecordsSource:
         """`id` is dense and 1-based over the narrowed whole-tape set —
         excluded records reserve no numbers."""
         where = (
-            SourceWhereEntry(
+            WhereEntry(
                 key="assignee_id",
                 source_column="prop__assignee_id",
                 sql_type="VARCHAR",
@@ -432,7 +412,7 @@ class TestWhereNarrowedMembershipSource:
         (region west) collection is excluded wholesale — it never even
         contributes its own join-only row."""
         where = (
-            SourceWhereEntry(
+            WhereEntry(
                 key="region",
                 source_column="prop__region",
                 sql_type="VARCHAR",
@@ -1121,3 +1101,53 @@ class TestResolvedItemTypeOrdering:
         # Flipped from the natural-name case (TestTotalOrderTieFree): 'ticket'
         # < 'ticket.watchers' but 'zzz_ticket' > 'ticket.watchers'.
         assert fyi_create_idx < t002_destroy_idx
+
+
+# ---------------------------------------------------------------------------
+# `render`: the log's one instant column (`event_sim_time` -> `occurred_at`)
+# ---------------------------------------------------------------------------
+
+
+class TestEventLogRender:
+    def _log(self, render: TemporalRender = "timestamp") -> SourceEventLogPlan:
+        source = _ticket_source(("status",))
+        return SourceEventLogPlan(
+            name="versions",
+            sources=(source,),
+            item_id_type="VARCHAR",
+            keys=None,
+            render=render,
+        )
+
+    def test_default_render_is_naive_local_timestamp(self, tmp_path: Path) -> None:
+        """Absent an election, `occurred_at` renders the mode-definitional
+        default: a naive local `datetime.datetime`, not a `datetime.date`."""
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(
+                emit.sidecar, fork_path, self._log(), anchor, None
+            )
+            rows = _rows(emit, sql)
+        t001_create = _row_for(rows, "t001", "create")
+        assert type(t001_create["occurred_at"]) is datetime
+
+    def test_render_date_elects_a_date_value_on_occurred_at(
+        self, tmp_path: Path
+    ) -> None:
+        """`log.render == 'date'` renders `occurred_at` as a `datetime.date`
+        through the shared anchor renderer — the same election every mode
+        shares."""
+        emit_dir = build_events_test_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            fork_path = require_single_branch(emit.sidecar)
+            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+            assert anchor is not None
+            sql = build_event_log_sql(
+                emit.sidecar, fork_path, self._log("date"), anchor, None
+            )
+            rows = _rows(emit, sql)
+        t001_create = _row_for(rows, "t001", "create")
+        assert isinstance(t001_create["occurred_at"], date)

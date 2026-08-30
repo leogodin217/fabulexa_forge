@@ -9,9 +9,9 @@ streams:
       # NOT the leaf route_table `patient` (the default source_table policy)
       - op: c
         after.record_id: p001
-        after.prop__status: pending
+        after.status: pending
         source.table: cdc.patient
       - op: u
         after.record_id: p001
-        after.prop__status: discharged
+        after.status: discharged
         source.table: cdc.patient

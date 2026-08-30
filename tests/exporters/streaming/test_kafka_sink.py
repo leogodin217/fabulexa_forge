@@ -393,7 +393,6 @@ def _make_event(
     topic: str,
     op: str = "c",
     event_sim_time: int = 0,
-    presentation_id: str | None = None,
 ) -> Any:
     """Return a minimal StreamEvent."""
     from fabulexa_forge.exporters.streaming.types import StreamEvent
@@ -403,7 +402,6 @@ def _make_event(
         op=op,  # type: ignore[arg-type]
         kind="entity",
         record_id=record_id,
-        presentation_id=presentation_id,
         event_sim_time=event_sim_time,
         ts="2024-01-01T00:00:00+00:00",
         after={"record_id": record_id},
@@ -523,7 +521,7 @@ def test_produce_key_is_record_id_pinned(monkeypatch: pytest.MonkeyPatch) -> Non
     """Produce key = encode_pinned({"record_id": event.record_id}) UTF-8 bytes."""
     from fabulexa_forge.exporters.streaming.encoding import encode_pinned
 
-    events = [_make_event(1, "abc-123", "topic_a", presentation_id="pres-999")]
+    events = [_make_event(1, "abc-123", "topic_a")]
     outcome, _, producers = _run_write(
         events,
         ("topic_a",),
@@ -541,7 +539,7 @@ def test_produce_key_never_presentation_id(monkeypatch: pytest.MonkeyPatch) -> N
     """Produce key is record_id, never presentation_id."""
     import json
 
-    events = [_make_event(1, "r1", "topic_a", presentation_id="pres-1")]
+    events = [_make_event(1, "r1", "topic_a")]
     outcome, _, producers = _run_write(
         events,
         ("topic_a",),

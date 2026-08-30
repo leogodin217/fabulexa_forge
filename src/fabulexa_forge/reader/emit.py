@@ -6,6 +6,7 @@ read-only DuckDB open) and the Emit handle (query, close, context manager).
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, cast
@@ -14,6 +15,9 @@ if TYPE_CHECKING:
     import duckdb as _duckdb
     import pyarrow as _pyarrow
 
+    from fabulexa_forge.anchor import EffectiveAnchor
+
+from fabulexa_forge._sql import register_render_functions
 from fabulexa_forge.reader.errors import (
     EmitNotFoundError,
     RunDatabaseError,
@@ -198,6 +202,43 @@ class Emit:
         self.close()
 
 
+def compute_sidecar_sha256(emit: Emit) -> str:
+    """SHA-256 hex digest of the emit's base.json bytes.
+
+    The one sidecar-hash authority: every surface identifying an emit by its
+    sidecar's exact bytes (the incremental fingerprint, the companion
+    manifest's emit-identity block) reads through this function.
+
+    Args:
+        emit: The open emit.
+
+    Returns:
+        64-char lowercase hex digest.
+    """
+    data = (emit.emit_dir / _BASE_JSON).read_bytes()
+    return hashlib.sha256(data).hexdigest()
+
+
+def pin_session_timezone(emit: Emit, anchor: "EffectiveAnchor") -> None:
+    """Pin the materialization session's time zone to the anchor zone for
+    this invocation.
+
+    Called once by the anchor-resolving driver (the export driver in
+    cli.py; tier-2 shaped playback's open) after anchor resolution, before
+    any relation materializes. Connection-scoped: covers both reader query
+    surfaces (`query` and `query_arrow`). A pure function of the resolved
+    anchor — same anchor -> same session state -> byte-identical
+    zone-bearing text forms on any machine. Never called by a mode or a
+    writer. With no resolved anchor there is no call.
+
+    Args:
+        emit: The open emit whose materialization session is pinned.
+        anchor: The resolved effective anchor supplying the IANA zone.
+    """
+    zone = str(anchor.timezone)
+    emit._conn.execute(f"SET TimeZone = '{zone}'")
+
+
 def open_emit(emit_dir: Path) -> Emit:
     """Open a base-layer emit (run.duckdb + base.json) for reading.
 
@@ -207,7 +248,7 @@ def open_emit(emit_dir: Path) -> Emit:
     either file.
 
     Opening performs the version gate and a structural parse only — it does NOT
-    run conformance (C1–C11). A sidecar may open successfully and still be
+    run conformance (C1–C15). A sidecar may open successfully and still be
     non-conformant; call `validate` to assess conformance.
 
     Args:
@@ -236,4 +277,5 @@ def open_emit(emit_dir: Path) -> Emit:
     raw = _parse_base_json(base_json_path)
     sidecar = Sidecar.from_raw(raw)
     conn = _open_duckdb_readonly(run_duckdb_path)
+    register_render_functions(conn)
     return Emit(sidecar=sidecar, emit_dir=emit_dir, conn=conn)

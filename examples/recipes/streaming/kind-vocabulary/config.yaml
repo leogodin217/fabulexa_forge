@@ -1,0 +1,47 @@
+# Recipe: kind-vocabulary
+# ============================================================
+# `kind_labels` renames engine kind names wherever a kind name renders as a
+# *value* on the wire — the envelope `kind` field, and the member-kind cell an
+# expanded reference field contributes to a membership payload. Nothing else:
+# identity values (`record_id`, `member__<f>__id`) keep the engine's ids, the
+# topic / stream name keeps the author's `name` verbatim, and sub-type
+# discriminator values are untouched.
+#
+#   kind_labels: {queue: station, patient: person}
+#
+# A per-stream `kind_label` overrides the map for that stream's envelope kind
+# only (first match wins: `kind_label` > `kind_labels[subject_kind]` >
+# the kind name verbatim). Here the one stream declares
+# `kind_label: triage_desk`, so the config-level `queue: station` entry is
+# shadowed for this stream's envelope — its reach is the envelope slot alone,
+# and the `patient: person` entry still lands in the payload's member-kind
+# cell.
+#
+# Fixture world (recipe emit):
+#   membership__queue__waiters on owner q001 ("Triage") —
+#     p001 priority 2: joined@1d, left@2d   (closed interval -> join + leave)
+#     p002 priority 1: joined@2d, left NULL (open interval   -> join only)
+#   `patient` is a reference field: it expands on the wire to a
+#   member-kind / member-id pair, so it is the site the `patient` label reaches.
+#
+# Output (one queue__waiters.jsonl stream — topic name NOT labeled):
+#   seq 1  kind triage_desk  join  q001  after {patient_kind: person,
+#                                               patient_id: p001, priority: 2}
+#   seq 2  kind triage_desk  join  q001  after {patient_kind: person,
+#                                               patient_id: p002, priority: 1}
+#   seq 3  kind triage_desk  leave q001  after {patient_kind: person,
+#                                               patient_id: p001, priority: 2}
+#   The key and the payload's own `record_id` entry stay q001, and patient_id
+#   stays p001/p002 — labels never touch identity values.
+
+content: membership-events
+
+kind_labels:
+  queue: station
+  patient: person
+
+streams:
+  - name: queue__waiters
+    membership: {kind: queue, property: waiters}
+    fields: [priority, patient]
+    kind_label: triage_desk   # beats kind_labels[queue] ("station") — envelope only

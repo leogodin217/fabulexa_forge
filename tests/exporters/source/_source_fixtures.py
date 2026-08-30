@@ -30,7 +30,12 @@ from __future__ import annotations
 from pathlib import Path
 
 import duckdb
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from fabulexa_forge.incremental.windows import Window
 
@@ -297,8 +302,8 @@ def build_source_test_emit(tmp_path: Path, with_runtime: bool = True) -> Path:
 
     extra: dict[str, object] = {
         "enum_domains": {
-            "actor": {"actor_type": ["consultant", "nurse"]},
-            "shift": {"shift_type": ["day", "night"]},
+            "actor": {"actor_type": enum_options("consultant", "nurse")},
+            "shift": {"shift_type": enum_options("day", "night")},
         },
     }
     if with_runtime:
@@ -840,7 +845,9 @@ def build_source_keys_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
+            "enum_domains": {
+                "actor": {"actor_type": enum_options("consultant", "nurse")}
+            },
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1108,7 +1115,7 @@ def build_source_election_emit(tmp_path: Path, *, corrupt_device: bool = False) 
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 50 * _MS}],
         extra={
-            "enum_domains": {"device": {"device_type": ["day", "night"]}},
+            "enum_domains": {"device": {"device_type": enum_options("day", "night")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1277,7 +1284,7 @@ def build_corrupted_junction_member_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 30 * _MS}],
         extra={
-            "enum_domains": {"device": {"device_type": ["solo"]}},
+            "enum_domains": {"device": {"device_type": enum_options("solo")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1513,7 +1520,7 @@ def build_events_test_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"ticket": {"ticket_type": ["bug", "feature"]}},
+            "enum_domains": {"ticket": {"ticket_type": enum_options("bug", "feature")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1600,7 +1607,7 @@ def build_event_tie_test_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"ticket": {"ticket_type": ["bug", "feature"]}},
+            "enum_domains": {"ticket": {"ticket_type": enum_options("bug", "feature")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1699,7 +1706,7 @@ def build_event_log_suppressed_update_test_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"ticket": {"ticket_type": ["bug", "feature"]}},
+            "enum_domains": {"ticket": {"ticket_type": enum_options("bug", "feature")}},
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1767,7 +1774,9 @@ def build_split_actor_presentation_id_emit(
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
-            "enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}},
+            "enum_domains": {
+                "actor": {"actor_type": enum_options("consultant", "nurse")}
+            },
             "runtime": {
                 "timezone": "UTC",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
@@ -1838,6 +1847,92 @@ _WARD_COLUMNS: list[dict[str, object]] = [
 ]
 
 
+_VALUE_ELECTION_WIDGET_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__error_rate", "DOUBLE", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__requested_offset_ns",
+        "BIGINT",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+    prop_column(
+        "prop__opened_at", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__context", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+#: `prop__requested_offset_ns` is set to the same raw ns offset as
+#: `created_sim_time` (§ render tests: `instant` renders identically to a
+#: structural instant of the same value).
+_VALUE_ELECTION_WIDGET_OFFSET_NS = 5 * 3600 * _MS
+
+
+def build_value_election_source_emit(tmp_path: Path) -> Path:
+    """Build the value-rendering-election render fixture: one `widget`
+    records kind, one row, carrying one payload column per new election kind
+    (`decimal` / `instant` / `date_parse` / `json_precision`) alongside the
+    structural `created_sim_time` the `instant` election's identical-value
+    comparison needs.
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_create_ddl("records__widget", _VALUE_ELECTION_WIDGET_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "w001",
+            _VALUE_ELECTION_WIDGET_OFFSET_NS,
+            True,
+            _VALUE_ELECTION_WIDGET_OFFSET_NS,
+            0,
+            12.3456,
+            _VALUE_ELECTION_WIDGET_OFFSET_NS,
+            "2024-02-01",
+            '{"discount_pct": 0.125, "note": "vip"}',
+        ],
+    )
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__widget",
+                "records",
+                _VALUE_ELECTION_WIDGET_COLUMNS,
+                1,
+                record_kind="widget",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100 * _MS}],
+        extra={
+            "runtime": {
+                "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
 def build_source_junction_selection_emit(tmp_path: Path) -> Path:
     """Build a source-mode emit for junction owner selection: two `worker`
     owners split day/night and by `prop__region`, each with one
@@ -1888,9 +1983,198 @@ def build_source_junction_selection_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
         extra={
-            "enum_domains": {"worker": {"worker_type": ["day", "night"]}},
+            "enum_domains": {"worker": {"worker_type": enum_options("day", "night")}},
             "runtime": {
                 "timezone": "UTC",
+                "start_datetime": "2024-01-01T00:00:00+00:00",
+            },
+        },
+    )
+    return tmp_path
+
+
+_WIDGET_EVENTS_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__widget_type", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+    prop_column(
+        "prop__amount", "DOUBLE", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__payload", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__opened_at", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+    prop_column(
+        "prop__offset_ns", "BIGINT", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+_WIDGET_TAGS_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__weight", "type": "DOUBLE"},
+]
+
+WIDGET_EVENTS_OFFSET_NO_US = 5 * 3600 * 1_000_000_000
+"""`prop__offset_ns`'s creation-time raw value: an exact-second offset (5
+hours in ns, zero microseconds — the naive-TIMESTAMP pin's omitted-µs
+branch)."""
+
+WIDGET_EVENTS_OFFSET_WITH_US = WIDGET_EVENTS_OFFSET_NO_US + 500_000
+"""`prop__offset_ns`'s update-time raw value: 500 microseconds (500,000 ns)
+past the creation offset (the naive-TIMESTAMP pin's shown-µs branch). Both
+land at UTC midnight in `America/New_York` (§
+`build_value_election_events_emit`), so every elected instant rendering has
+a fixed, hand-checkable pinned text."""
+
+
+def build_value_election_events_emit(tmp_path: Path) -> Path:
+    """Build the event-log reach fixture (doc § Event-log and after-image
+    reach): one `widget` records kind, sub-typed (safe/risky) by the
+    untracked `widget_type` discriminator, carrying one tracked payload
+    column per election kind, plus a `tags` junction for the `elem__<f>`
+    reach test.
+
+    - prop__amount (DOUBLE, `decimal`): w001 created@100ms 12.3456,
+        updated@150ms 45.6789 (a real change), updated@200ms 45.6791 (a
+        second raw change rounding to the SAME decimal(6,3) text as the
+        prior value, "45.679" — the invariance fixture: an "equal-looking"
+        `u` pair over a genuine raw change).
+    - prop__payload (VARCHAR JSON, `json_precision`): w001 created@100ms
+        `{"pct": 0.125, "note": "x"}`, updated@150ms
+        `{"pct": 0.25, "note": "y"}`.
+    - prop__opened_at (VARCHAR, `date_parse` "%Y-%m-%d"): w001
+        created@100ms "2024-02-01", updated@150ms "2024-03-15".
+    - prop__offset_ns (BIGINT, `instant`): w001 created@100ms
+        `WIDGET_EVENTS_OFFSET_NO_US`, updated@150ms
+        `WIDGET_EVENTS_OFFSET_WITH_US`.
+    - w002 (widget_type=risky): created@100ms only, amount=9999.99
+        (overflows a decimal(4,2) election) and payload=`{"pct": "oops"}`
+        (a non-numeric declared leaf) — values no `safe`-scoped declared
+        table ever selects, for the export-time-guard-at-the-log-site
+        tests.
+    - membership__widget__tags (owner=widget): one still-open interval on
+        w001, joined@110ms, elem__weight=3.14159 (`decimal`, the junction
+        `elem__<f>` reach test).
+
+    Runtime anchor: UTC start, `America/New_York` zone — a fixed -05:00
+    offset across every used sim_time (no DST straddled).
+
+    Args:
+        tmp_path: Directory to write the emit artifacts into.
+
+    Returns:
+        tmp_path (the emit directory).
+    """
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+
+    conn.execute(_create_ddl("records__widget", _WIDGET_EVENTS_COLUMNS))
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(_create_ddl("membership__widget__tags", _WIDGET_TAGS_COLUMNS))
+
+    conn.execute(
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "w001",
+            100 * _MS,
+            True,
+            200 * _MS,
+            0,
+            "safe",
+            45.6791,
+            '{"pct": 0.25, "note": "y"}',
+            "2024-03-15",
+            WIDGET_EVENTS_OFFSET_WITH_US,
+        ],
+    )
+    conn.execute(
+        'INSERT INTO "records__widget" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?)',
+        [
+            "trunk",
+            "w002",
+            100 * _MS,
+            True,
+            100 * _MS,
+            1,
+            "risky",
+            9999.99,
+            '{"pct": "oops"}',
+            "2024-02-01",
+            WIDGET_EVENTS_OFFSET_NO_US,
+        ],
+    )
+
+    for property_name, sim_time, value in (
+        ("amount", 100 * _MS, "12.3456"),
+        ("payload", 100 * _MS, '{"pct": 0.125, "note": "x"}'),
+        ("opened_at", 100 * _MS, "2024-02-01"),
+        ("offset_ns", 100 * _MS, str(WIDGET_EVENTS_OFFSET_NO_US)),
+        ("amount", 150 * _MS, "45.6789"),
+        ("payload", 150 * _MS, '{"pct": 0.25, "note": "y"}'),
+        ("opened_at", 150 * _MS, "2024-03-15"),
+        ("offset_ns", 150 * _MS, str(WIDGET_EVENTS_OFFSET_WITH_US)),
+        ("amount", 200 * _MS, "45.6791"),
+    ):
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "widget", "w001", property_name, sim_time, value],
+        )
+    for property_name, value in (
+        ("amount", "9999.99"),
+        ("payload", '{"pct": "oops"}'),
+        ("opened_at", "2024-02-01"),
+        ("offset_ns", str(WIDGET_EVENTS_OFFSET_NO_US)),
+    ):
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "widget", "w002", property_name, 100 * _MS, value],
+        )
+
+    conn.execute(
+        'INSERT INTO "membership__widget__tags" VALUES (?, ?, ?, NULL, ?)',
+        ["trunk", "w001", 110 * _MS, 3.14159],
+    )
+
+    conn.close()
+
+    write_emit(
+        tmp_path,
+        tables=[
+            _table_spec(
+                "records__widget",
+                "records",
+                _WIDGET_EVENTS_COLUMNS,
+                2,
+                record_kind="widget",
+            ),
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 13),
+            _table_spec(
+                "membership__widget__tags",
+                "membership",
+                _WIDGET_TAGS_COLUMNS,
+                1,
+                record_kind="widget",
+                property_name="tags",
+            ),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 300 * _MS}],
+        extra={
+            "enum_domains": {"widget": {"widget_type": enum_options("safe", "risky")}},
+            "runtime": {
+                "timezone": "America/New_York",
                 "start_datetime": "2024-01-01T00:00:00+00:00",
             },
         },

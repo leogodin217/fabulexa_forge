@@ -226,9 +226,9 @@ output names).
   restricted extract (base `exclude`, source omission) legally drops FK
   targets. Deferred until demand appears (Principle #8).
 - **No conformance check covers the block's semantic rules.** Conformance is the
-  published C1–C14, reimplemented verbatim — forge does not invent a C15.
-  Enforcement lives in the strict accessor instead, at the moment claims are
-  about to be used ([`conformance.md`](conformance.md)).
+  published procedure, reimplemented verbatim — forge does not invent checks of
+  its own. Enforcement lives in the strict accessor instead, at the moment
+  claims are about to be used ([`conformance.md`](conformance.md)).
 - **Claims are never validated against data.** No mode probes `presentation_id`
   values; the opted-into DuckDB constraint is the sole surfacing point.
 - **Corrupter composition is verbatim-carry.** The corrupter's base-emit writer

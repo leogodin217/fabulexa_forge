@@ -4,7 +4,7 @@ and RecordRoles accessor."""
 from __future__ import annotations
 
 import pytest
-from _support.sidecar_builder import identity_column
+from _support.sidecar_builder import enum_options, identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.errors import (
@@ -101,7 +101,7 @@ def _full_raw() -> dict[str, object]:
             "patient": {"alice": "uuid-alice", "bob": "uuid-bob"},
         },
         "enum_domains": {
-            "patient": {"status": ["active", "discharged", "deceased"]},
+            "patient": {"status": enum_options("active", "discharged", "deceased")},
         },
     }
 
@@ -259,7 +259,7 @@ def test_enum_domains_non_list_options_drops_property() -> None:
     raw = _minimal_raw(
         enum_domains={
             "patient": {
-                "status": ["active", "discharged"],
+                "status": enum_options("active", "discharged"),
                 "tier": "not-a-list",
             }
         }
@@ -268,10 +268,63 @@ def test_enum_domains_non_list_options_drops_property() -> None:
     assert sidecar.enum_domains() == {"patient": {"status": ("active", "discharged")}}
 
 
-def test_enum_domains_non_string_option_dropped_from_list() -> None:
-    """Non-string entries within an options list are dropped, keeping the rest."""
+def test_enum_domains_well_formed_value_objects_parse_in_order() -> None:
+    """A well-formed value-object list parses to its value strings, in order."""
     raw = _minimal_raw(
-        enum_domains={"patient": {"status": ["active", 42, None, "discharged"]}}
+        enum_domains={"patient": {"status": enum_options("active", "discharged")}}
+    )
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.enum_domains() == {"patient": {"status": ("active", "discharged")}}
+
+
+def test_enum_domains_non_dict_entry_dropped_from_list() -> None:
+    """A non-dict entry within an options list is dropped, keeping the rest."""
+    raw = _minimal_raw(
+        enum_domains={
+            "patient": {
+                "status": [
+                    {"value": "active"},
+                    "not-a-dict",
+                    42,
+                    None,
+                    {"value": "discharged"},
+                ]
+            }
+        }
+    )
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.enum_domains() == {"patient": {"status": ("active", "discharged")}}
+
+
+def test_enum_domains_entry_missing_value_dropped_from_list() -> None:
+    """An entry missing 'value' (or with a non-string 'value') is dropped."""
+    raw = _minimal_raw(
+        enum_domains={
+            "patient": {
+                "status": [
+                    {"value": "active"},
+                    {"description": "no value key"},
+                    {"value": 42},
+                    {"value": "discharged"},
+                ]
+            }
+        }
+    )
+    sidecar = Sidecar.from_raw(raw)
+    assert sidecar.enum_domains() == {"patient": {"status": ("active", "discharged")}}
+
+
+def test_enum_domains_entry_with_description_yields_just_value() -> None:
+    """An entry carrying a 'description' still yields only its value string."""
+    raw = _minimal_raw(
+        enum_domains={
+            "patient": {
+                "status": [
+                    {"value": "active", "description": "currently admitted"},
+                    {"value": "discharged"},
+                ]
+            }
+        }
     )
     sidecar = Sidecar.from_raw(raw)
     assert sidecar.enum_domains() == {"patient": {"status": ("active", "discharged")}}
@@ -282,7 +335,7 @@ def test_enum_domains_non_dict_props_drops_kind() -> None:
     raw = _minimal_raw(
         enum_domains={
             "patient": "not-a-dict",
-            "doctor": {"specialty": ["surgery"]},
+            "doctor": {"specialty": enum_options("surgery")},
         }
     )
     sidecar = Sidecar.from_raw(raw)
@@ -947,14 +1000,14 @@ def _sidecar_with_enum_domains() -> Sidecar:
     raw = _minimal_raw(
         enum_domains={
             "actor": {
-                "actor_type": ["trip", "visit", "staff"],
-                "actor_status": ["active", "inactive"],
+                "actor_type": enum_options("trip", "visit", "staff"),
+                "actor_status": enum_options("active", "inactive"),
             },
             "entity": {
-                "entity_type": ["dimension_a", "dimension_b"],
+                "entity_type": enum_options("dimension_a", "dimension_b"),
             },
             "resource": {
-                "status": ["available", "in_use"],
+                "status": enum_options("available", "in_use"),
             },
         },
         record_roles={
@@ -1168,3 +1221,119 @@ def test_row_census_drops_malformed_counts() -> None:
     assert census.table_rows == {"records__patient": 100}
     assert sorted(census.history_series["patient"]) == ["ward"]
     assert census.sub_type_rows == {}
+
+
+# ---------------------------------------------------------------------------
+# ColumnSpec / TableSpec documentation-attribute parse floor
+# ---------------------------------------------------------------------------
+
+
+def test_column_documentation_attributes_parse_verbatim_when_well_typed() -> None:
+    """Each of the seven optional column attributes parses verbatim when
+    correctly typed."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": [
+                {
+                    "name": "x",
+                    "type": "VARCHAR",
+                    "description": "A test column.",
+                    "unit": "ns",
+                    "min": 0,
+                    "max": 100,
+                    "immutable": True,
+                    "required": True,
+                    "extra_data": True,
+                }
+            ],
+            "rows": 0,
+        }
+    ]
+    col = Sidecar.from_raw(raw).column("history", "x")
+    assert col.description == "A test column."
+    assert col.unit == "ns"
+    assert col.min == 0
+    assert col.max == 100
+    assert col.immutable is True
+    assert col.required is True
+    assert col.extra_data is True
+
+
+def test_column_documentation_attributes_absent_are_none() -> None:
+    """Absent optional column attributes parse as None."""
+    col = Sidecar.from_raw(_full_raw()).columns("history")[0]
+    assert col.description is None
+    assert col.unit is None
+    assert col.min is None
+    assert col.max is None
+    assert col.immutable is None
+    assert col.required is None
+    assert col.extra_data is None
+
+
+def test_column_description_non_string_parses_as_none() -> None:
+    """A non-string description parses as absent (None), never raises."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": [{"name": "x", "type": "VARCHAR", "description": 42}],
+            "rows": 0,
+        }
+    ]
+    col = Sidecar.from_raw(raw).column("history", "x")
+    assert col.description is None
+
+
+def test_column_min_boolean_parses_as_none() -> None:
+    """A boolean min is excluded from the numeric parse and reads as absent."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": [{"name": "x", "type": "VARCHAR", "min": True}],
+            "rows": 0,
+        }
+    ]
+    col = Sidecar.from_raw(raw).column("history", "x")
+    assert col.min is None
+
+
+def test_column_immutable_non_bool_parses_as_none() -> None:
+    """A non-bool (int) immutable parses as absent (None)."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "columns": [{"name": "x", "type": "VARCHAR", "immutable": 1}],
+            "rows": 0,
+        }
+    ]
+    col = Sidecar.from_raw(raw).column("history", "x")
+    assert col.immutable is None
+
+
+def test_table_description_parses_verbatim() -> None:
+    """tables[].description parses verbatim when present."""
+    raw = _minimal_raw()
+    raw["tables"] = [
+        {
+            "name": "history",
+            "category": "fixed",
+            "description": "The change log.",
+            "columns": [{"name": "x", "type": "VARCHAR"}],
+            "rows": 0,
+        }
+    ]
+    assert Sidecar.from_raw(raw).table("history").description == "The change log."
+
+
+def test_table_description_absent_is_none() -> None:
+    """tables[].description parses as None when absent."""
+    assert Sidecar.from_raw(_minimal_raw()).table("history").description is None

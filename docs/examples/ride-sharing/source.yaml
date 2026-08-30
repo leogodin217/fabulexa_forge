@@ -8,10 +8,10 @@
 # through the single polymorphic `events:` log.
 #
 # `name:` is author-verbatim, and that is the whole point: the bundle's `kind:`
-# values are the simulator's ontology, not a ride-hailing platform's schema. This
-# config previously named its tables `actor`, `entity`, `journey_instance`,
-# `resource` and `resource_holders` — every one of them an engine noun. The
-# mapping applied here, taken from the atlas and `sub_type_columns`:
+# values are the simulator's ontology, not a ride-hailing platform's schema. The
+# mapping applied here — to TABLE names, to the audit log's `item_type` values,
+# and to every reference/member column — taken from the atlas and
+# `sub_type_columns`:
 #
 #   actor/trip              -> trip            (the atlas: actor IS the trip)
 #   entity/rider            -> rider
@@ -33,9 +33,32 @@
 #          which pickup zone belong to a trip, so without it the app database
 #          cannot answer who took a trip. The owning decision record stays out;
 #          the binding, which is domain data, comes in. (Same judgment
-#          dimensional.yaml makes with its bridge facts.) `role_name` separates
-#          the two edges: measured 1,496 rider bindings and 1,496 pickup_zone
+#          dimensional.yaml makes with its bridge facts.) `role` separates the
+#          two edges: measured 1,496 rider bindings and 1,496 pickup_zone
 #          bindings, one of each per trip.
+#   KEYS   every exported kind elects `record_index` (the `keys:` block): each
+#          state table's `id` is a compact BIGINT, and every referencing surface
+#          — trip_lifecycle.trip_id, the junctions' member columns, the audit
+#          log's item_id — renders its target's index through the same election.
+#          The engine's actor `record_id` is a 64-hex content hash and every
+#          registry presentation key is a bare prefixless counter (rider and
+#          zone union-unsafe with each other inside entity), so the standalone
+#          `presentation_id` columns are dropped as a second integer spelling of
+#          the same identity. tick_decision is unexported and unelected; the
+#          junction owner column keeps its verbatim record id as `trip_match_id`.
+#   DOCS   every declared table carries a `descriptions:` map (keyed by SOURCE
+#          identity, pre-rename) overriding the inherited prose so the README
+#          reads in the platform's own voice, not the simulator's. The audit
+#          log has no such surface — its column docs are the mode's own — and
+#          table blurbs / declared-value glosses come from the bundle.
+#   HYGIENE (realism QA) constants and mechanism internals stay out:
+#          journey_type ('trip' on all 1,496), the bindings' pick_index (0 on
+#          all 2,992) and entity_kind ('entity' — the junction binds entity
+#          members and nothing else), the holds' priority (0 on all 1,496) and
+#          on_preempted_rule (empty — preemption never fires in this run), and
+#          driver.queue (the engine's scheduling-queue reference). driver keeps
+#          allocated / retiring — live operational state, even where this run
+#          leaves retiring False on all 6 drivers.
 #
 # `queue` is never declared — it is scheduling mechanism, and omission is source's
 # own exclusion mechanism. That also leaves membership__queue__waiters out, which
@@ -44,24 +67,23 @@
 #
 # COLUMNS: `sub_types:` narrows the ROWS a table draws but NOT its columns —
 # absent `columns:`, `rider` would still carry the zone's `zone_type` at 100% NULL
-# and `pickup_zone` would carry the rider's `loyalty` the same way. Both therefore
-# enumerate `columns:` from their own partition, prefixed by the record lifecycle
-# the source archetype wants — created_sim_time, active, deactivated_at,
-# last_mutation_sim_time, rendering as created_at, active, deactivated_at,
-# updated_at. `trip_lifecycle` enumerates too, to drop `output_roles` (engine role
-# bookkeeping with no domain meaning). The rest keep the full projection.
+# and `pickup_zone` would carry the rider's `loyalty` the same way. Every state
+# table therefore enumerates `columns:` from its own partition, prefixed by the
+# record lifecycle the source archetype wants — created_sim_time, active,
+# deactivated_at, last_mutation_sim_time, rendering as created_at, active,
+# deactivated_at, updated_at. The junctions enumerate too (see HYGIENE); a
+# junction's `columns:` must name joined_sim_time / left_sim_time to keep them,
+# and its owner column is implicit — never listed, renamed via `record_id`.
 #
 # A `temporal_class: slice_only` column is auto-omitted with a notice whatever
-# this config says — here trip.surge_tier, driver.queue, and trip_lifecycle's
-# state_entry_time / complete / bound_roles. The export's `notice:` lines are the
-# authoritative list.
+# this config says — here trip.surge_tier and trip_lifecycle's state_entry_time /
+# complete. The export's `notice:` lines are the authoritative list.
 #
 # A few columns come out largely empty, and each is faithful rather than a config
 # defect: `deactivated_at` is set for 1,494 of 1,496 trips (the 2 still in flight
-# at tape's end are the exceptions) and for no driver, rider or zone;
+# at tape's end are the exceptions) and for no driver, rider or zone, and
 # `trip_binding.left_at` is empty for all 2,992 bindings because a rider or zone
-# binding is never released; and `driver_assignment.on_preempted_rule` is empty
-# for all 1,496 holds because preemption is a mechanism this run never exercises.
+# binding is never released.
 #
 # History is opt-in and tracked-ness decides who is audited: actor (status — the
 # trip lifecycle changelog, this bundle's headline shape), journey_instance
@@ -75,36 +97,126 @@
 
 mode: source
 
+keys:
+  actor: record_index
+  entity: record_index
+  resource: record_index
+  journey_instance: record_index
+
 source:
   tables:
     - name: trip
       kind: actor
+      description: "A single ride request and its lifecycle, from the rider's request through matching to a completed or cancelled outcome."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__status]
+      descriptions:
+        record_index: "Unique numeric identifier for the trip, assigned in creation order."
+        created_sim_time: "When the rider requested the trip."
+        active: "TRUE while the trip is still open; FALSE once it finished (completed or cancelled)."
+        deactivated_at: "When the trip finished; NULL for trips still open at the end of the week."
+        last_mutation_sim_time: "When the trip row was last updated."
+        prop__status: "Trip lifecycle stage: requested, matching, en_route, on_trip, completed, or cancelled."
     - name: driver
       kind: resource
+      description: "A driver in the finite metro fleet, held by one trip at a time from match through drop-off."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
+                prop__name, prop__region, prop__capacity, prop__allocated,
+                prop__retiring]
+      descriptions:
+        record_index: "Unique numeric identifier for the driver, assigned in creation order."
+        created_sim_time: "When the driver joined the fleet."
+        active: "TRUE while the driver is on the platform; FALSE if the driver was removed."
+        deactivated_at: "When the driver was removed from the fleet; NULL while active."
+        last_mutation_sim_time: "When the driver row was last updated."
+        prop__name: "Driver's display name."
+        prop__region: "Driver's operating region."
+        prop__capacity: "Concurrent trips this driver can carry."
+        prop__allocated: "Trips currently assigned to this driver."
+        prop__retiring: "TRUE while the driver is winding down before going offline — finishing current trips, taking no new ones."
     - name: rider
       kind: entity
       sub_types: [rider]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      description: "A rider account: a lookup-join target carrying a name and loyalty tier, assigned to each trip at request time."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__loyalty]
+      descriptions:
+        record_index: "Unique numeric identifier for the rider, assigned in creation order."
+        created_sim_time: "When the rider account was created."
+        active: "TRUE while the rider account is active; FALSE if it was deactivated."
+        deactivated_at: "When the rider account was deactivated; NULL while active."
+        last_mutation_sim_time: "When the rider row was last updated."
+        prop__name: "Rider's display name."
+        prop__loyalty: "Rider's loyalty program tier: gold, silver, or bronze."
     - name: pickup_zone
       kind: entity
       sub_types: [zone]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      description: "A pickup zone: a lookup-join target carrying a name and zone type (commercial, transit, residential, campus) for each trip's origin."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__zone_type]
+      descriptions:
+        record_index: "Unique numeric identifier for the pickup zone, assigned in creation order."
+        created_sim_time: "When the zone was added to the map."
+        active: "TRUE while the zone is a live pickup location; FALSE if it was retired."
+        deactivated_at: "When the zone was retired; NULL while active."
+        last_mutation_sim_time: "When the zone row was last updated."
+        prop__name: "Pickup zone's display name."
     - name: trip_lifecycle
       kind: journey_instance
+      description: "One trip's lifecycle record: its current stage and when that lifecycle began, from request through to a completed or cancelled outcome."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
-                prop__actor, prop__journey_type, prop__current_state]
+                prop__actor, prop__current_state]
+      rename:
+        prop__actor: trip_id
+      descriptions:
+        record_index: "Unique numeric identifier for the lifecycle record, assigned in creation order (one per trip)."
+        created_sim_time: "When the trip lifecycle began — the moment the trip was requested."
+        active: "TRUE while the trip is still in progress; FALSE once its lifecycle finished."
+        deactivated_at: "When the lifecycle finished; NULL for trips still in progress at the end of the week."
+        last_mutation_sim_time: "When this row last changed — the trip's most recent stage transition."
+        prop__actor: "The trip this row belongs to; joins trip.id."
+        prop__current_state: "The stage the trip is in right now: requested, matching, en_route, on_trip, completed, or cancelled."
     - name: driver_assignment
       membership: {kind: resource, property: holders}
+      description: "One driver hold on one trip, from match through drop-off or cancellation."
+      columns: [joined_sim_time, left_sim_time, member__actor__id, elem__slots_held]
+      rename:
+        record_id: driver_id
+        member__actor__id: trip_id
+      descriptions:
+        record_id: "Driver holding this assignment; joins driver.id."
+        member__actor__id: "The trip this assignment belongs to; joins trip.id."
+        joined_sim_time: "When the driver was assigned to the trip."
+        left_sim_time: "When the driver was released at drop-off or cancellation; NULL if the assignment was still open at the end of the week."
+        elem__slots_held: "How much of the driver's capacity this trip occupies."
     - name: trip_binding
       membership: {kind: tick_decision, property: bindings}
+      description: "One rider or pickup-zone binding recorded for a trip at request time."
+      columns: [joined_sim_time, left_sim_time, elem__role_name, member__entity__id]
+      rename:
+        record_id: trip_match_id
+        elem__role_name: role
+        member__entity__id: participant_id
+      descriptions:
+        record_id: "Matching decision that produced this binding."
+        joined_sim_time: "When the rider or pickup zone was bound to the trip, at request time."
+        left_sim_time: "When the binding was released; always NULL here — a rider or zone stays bound to its trip."
+        elem__role_name: "Which side of the trip this row binds: rider or pickup_zone."
+        member__entity__id: "The bound rider or pickup zone; joins rider.id or pickup_zone.id, depending on role."
   events:
     name: audit_log
     sources:
       - kind: actor
+        item_type: trip
+        ignore: [actor_type]
       - kind: journey_instance
+        item_type: trip_lifecycle
+        ignore: [journey_type]
+        rename:
+          actor: trip_id
       - kind: resource
+        item_type: driver
+        ignore: [queue, resource_type]
 
 # rebase:
 #   base_date: 2026-01-05

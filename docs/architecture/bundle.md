@@ -130,22 +130,35 @@ this is enrichment/dimension data, and the snapshot half of a
 snapshot-plus-changelog pattern with `history`.
 
 Beyond table shapes, the sidecar carries the per-emit interpretation surface:
-branch enumeration and the `runtime` wallclock anchor, `pinned_ids` (authored
-pinned individuals), `enum_domains` (closed `category`/`status` vocabularies —
-ready-made lookup/dimension domains), per-column `history_tracked` (which
-properties have change rows in `history`), and the `record_roles` registry
-(warehouse role per kind). All normative semantics: contract § The sidecar.
+the required `surface` discriminator (always `"published"` in a conformant
+emit — the positive claim that the publishing step produced it, checked by
+C15), branch enumeration and the `runtime` wallclock anchor, `pinned_ids`
+(authored pinned individuals), `enum_domains` (closed `category`/`status`
+vocabularies — ready-made lookup/dimension domains; each option is a value
+object carrying the allowed string and an optional per-value gloss),
+per-column `history_tracked` (which properties have change rows in
+`history`), and the `record_roles` registry (warehouse role per kind). All
+normative semantics: contract § The sidecar.
 
-Two further surfaces describe the emit for a consumer choosing a target shape.
-Both are optional, and the reader exposes neither today. Per column, `min` /
-`max`, `immutable`, and `required` are declarations the producer enforces on
-every write — `immutable` is the guarantee that no post-creation write is
-permitted, which `temporal_class: constant` (a value that merely never changed in
-this run) is not — while `description` and `unit` carry what the producing
-scenario's author said the property means and is measured in. Top-level,
-`row_census` counts rows per table, per `(kind, property)` history series, and
-per sub-type: the volume evidence that decides grain. It is advisory — no
-conformance check ranges over its contents.
+Further surfaces describe the emit for a consumer choosing a target shape.
+All are optional; the reader carries the per-column declarations verbatim on
+`ColumnSpec`, resolves the documentation surfaces through
+`Sidecar.documentation()` ([`reader.md`](reader.md) § The documentation
+view), and exposes the census as `Sidecar.row_census`. Per column,
+`min` / `max`, `immutable`, and `required` are declarations the producer
+enforces on every write — `immutable` is the guarantee that no post-creation
+write is permitted, which `temporal_class: constant` (a value that merely
+never changed in this run) is not — while `description` and `unit` carry
+what the property means and is measured in (author- or engine-declared,
+forwarded verbatim; membership element-field columns carry them too).
+Table-level, `tables[].description` carries engine-owned structural prose
+for machinery-cored kinds' records tables and for membership tables, and the
+contract itself pins verbatim-embeddable descriptions for the structural
+columns (contract § Structural column descriptions). Top-level, the optional
+`scenario_description` forwards the scenario's declared narrative, and
+`row_census` counts rows per table, per `(kind, property)` history series,
+and per sub-type: the volume evidence that decides grain. It is advisory —
+no conformance check ranges over its contents.
 
 ---
 
@@ -182,7 +195,7 @@ The contract pins four guarantees a consumer may lean on:
 - **Trust class.** Pair agreement (`ref_index__<name>` and its sibling
   `prop__<name>` NULL together and resolving to the same target row) and
   resolution of `ref_index__<name>` values against the target's `record_index`
-  are producer-guaranteed **by construction and not verified by C1–C14** — the
+  are producer-guaranteed **by construction and not verified by C1–C15** — the
   same trust class as `prop__` referential integrity.
 
 A records reference is thus **one edge with two encodings**: id-space
@@ -218,9 +231,9 @@ semantic ones deliberately. This is the list of what "them" means:
 | Trunk row-identity | Rows recorded before a fork point are identical across sibling branches. |
 | Complete history | Every state row is reachable from simulated events in `history`; nothing was fabricated mid-process. |
 
-**Conformance is narrower than the guarantee set.** C1–C14 verifies structure
+**Conformance is narrower than the guarantee set.** C1–C15 verifies structure
 and a semantic subset; a defect such as a dangling records-property reference
-passes C1–C14 by design (see
+passes C1–C15 by design (see
 [`conformance.md`](conformance.md) § Boundaries). The guarantees above hold by
 construction in the emit, not because `fabulexa-forge validate` proves them. Design consequence: an exporter may *lean on* these properties
 (e.g. skip dangling-reference handling) but must not claim to have *verified*
@@ -463,6 +476,6 @@ author's either way.
 |---|---|
 | [`../../contract/base-format.md`](../../contract/base-format.md) + `.schema.json` | The normative emit shape this doc deliberately does not restate |
 | [`reader.md`](reader.md) | The one read path; typed sidecar accessors incl. `record_roles` |
-| [`conformance.md`](conformance.md) | C1–C14 and its boundaries (what validate does *not* prove) |
+| [`conformance.md`](conformance.md) | C1–C15 and its boundaries (what validate does *not* prove) |
 | [`anchor.md`](anchor.md) | Effective-anchor resolution; time rebasing |
 | [`../CLAUDE.md`](../CLAUDE.md) | Boundary, principles, vocabulary |

@@ -11,6 +11,7 @@ coherence defect a test targets.
 from __future__ import annotations
 
 import pytest
+from _support.sidecar_builder import enum_options
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.reader.errors import PresentationKeysInvalidError
@@ -218,7 +219,7 @@ def _actor_raw(extra_sub_types: dict[str, object] | None = None) -> dict[str, ob
                 "slice_stable": True,
             }
         },
-        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+        enum_domains={"actor": {"actor_type": enum_options("patient", "staff")}},
     )
 
 
@@ -294,7 +295,7 @@ def test_whole_table_claim_rollup_omitted_unique_within_is_none() -> None:
                 "slice_stable": False,
             }
         },
-        enum_domains={"asset": {"asset_type": ["a", "b"]}},
+        enum_domains={"asset": {"asset_type": enum_options("a", "b")}},
     )
     pk = Sidecar.from_raw(raw).presentation_keys()
     assert pk is not None
@@ -361,7 +362,7 @@ def test_clause_c_key_entry_on_discriminator_bearing_kind() -> None:
     raw = _raw_sidecar(
         [_records_table("actor", presentation_id=True)],
         presentation_keys={"actor": {"key": _raw_counter_key()}},
-        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+        enum_domains={"actor": {"actor_type": enum_options("patient", "staff")}},
     )
     with pytest.raises(PresentationKeysInvalidError, match="actor"):
         Sidecar.from_raw(raw).presentation_keys()
@@ -471,7 +472,7 @@ def test_clause_g_rollup_wrong_scalar() -> None:
                 "slice_stable": True,
             }
         },
-        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+        enum_domains={"actor": {"actor_type": enum_options("patient", "staff")}},
     )
     with pytest.raises(PresentationKeysInvalidError, match="actor"):
         Sidecar.from_raw(raw).presentation_keys()
@@ -494,7 +495,7 @@ def test_clause_g_rollup_wrongly_present_unique_within() -> None:
                 "slice_stable": False,
             }
         },
-        enum_domains={"asset": {"asset_type": ["a", "b"]}},
+        enum_domains={"asset": {"asset_type": enum_options("a", "b")}},
     )
     with pytest.raises(PresentationKeysInvalidError, match="asset"):
         Sidecar.from_raw(raw).presentation_keys()
@@ -618,7 +619,7 @@ def test_guard_rollup_unique_within_outside_enum() -> None:
                 "slice_stable": True,
             }
         },
-        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+        enum_domains={"actor": {"actor_type": enum_options("patient", "staff")}},
     )
     with pytest.raises(PresentationKeysInvalidError, match="rollup unique_within"):
         Sidecar.from_raw(raw).presentation_keys()
@@ -639,7 +640,7 @@ def test_guard_rollup_stability_missing_or_mistyped() -> None:
                 "slice_stable": True,
             }
         },
-        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+        enum_domains={"actor": {"actor_type": enum_options("patient", "staff")}},
     )
     with pytest.raises(
         PresentationKeysInvalidError, match="rollup branch_stable/slice_stable"
@@ -659,7 +660,7 @@ def test_guard_sub_types_not_an_object() -> None:
                 "slice_stable": True,
             }
         },
-        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+        enum_domains={"actor": {"actor_type": enum_options("patient", "staff")}},
     )
     with pytest.raises(
         PresentationKeysInvalidError, match="sub_types must be a non-empty object"
@@ -679,7 +680,7 @@ def test_guard_sub_types_empty_object() -> None:
                 "slice_stable": True,
             }
         },
-        enum_domains={"actor": {"actor_type": ["patient", "staff"]}},
+        enum_domains={"actor": {"actor_type": enum_options("patient", "staff")}},
     )
     with pytest.raises(
         PresentationKeysInvalidError, match="sub_types must be a non-empty object"

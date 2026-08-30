@@ -15,13 +15,13 @@
 #
 #   FACT     actor -> fact_trip. The actor kind IS the trip (atlas: "a single ride
 #            request and its lifecycle — the transactional fact"), so it is not a
-#            dimension. Measured 1,496 trips: 1,262 completed, 232 cancelled, and
+#            dimension. Measured 1,496 trips: 1,253 completed, 241 cancelled, and
 #            2 still in flight at tape's end (1 en_route, 1 on_trip). The record is
 #            deliberately thin — its only tracked property is `status`, and
 #            `surge_tier` is slice_only, so it is not projectable in any mode.
 #   FACT     journey_instance -> fact_trip_state, NOT a dimension. Measured: 1,496
 #            journeys (exactly one per trip — 1,496 distinct `actor` values)
-#            against 6,715 `current_state` history rows, 4.5 versions per trip.
+#            against 6,695 `current_state` history rows, 4.5 versions per trip.
 #            Its only tracked property is a state-machine position, so its value
 #            IS the timeline — and this timeline is the whole point of the bundle:
 #            the atlas says match-wait "emerges from a peaking demand stream
@@ -67,16 +67,40 @@
 #            record itself (decision_type, context) simply gets no table.
 #   DROPPED  journey_instance.output_roles — engine role bookkeeping, no domain
 #            meaning.
+#   KEYS     entity and resource elect `record_index` (the `keys:` block), so the
+#            three dims key on compact BIGINTs and every inbound FK (rider_id,
+#            zone_id, driver_id) renders the same surface. The registry's
+#            presentation keys are all bare prefixless counters (rider and zone
+#            union-unsafe with each other inside entity), a second integer
+#            spelling of the same identity — so the *_code / trip_number columns
+#            are dropped rather than elected. actor is NOT elected: the trip is a
+#            fact, not a dim, so nothing fk-renders its identity — its record_id
+#            is the one join surface reachable from every grain that carries the
+#            trip (history lookup, membership member__actor__id), and it stays
+#            the trip id everywhere, consistently.
+#   DOCS     every column carries an author `description:` override so the
+#            companion README reads in the marketplace's own voice — inherited
+#            descriptions speak the simulator's (ordinals, sim-time, changelogs)
+#            and are replaced wholesale. Table-level blurbs and declared-value
+#            glosses come from the bundle and have no override surface.
+#   HYGIENE  (realism QA) the raw `*_ns` sim-epoch twins are gone: every instant
+#            renders once, as a TIMESTAMP via the anchor, and the interval /
+#            bridge facts key on entered_at / held_from — measured zero journeys
+#            with two state changes, and zero trips with two driver holds, in the
+#            same microsecond, so the ns->µs truncation costs no key uniqueness.
 #
 # TIME: the sidecar carries a `runtime` anchor (2026-01-05T00:00:00 UTC), so no
 # `rebase:` block is needed; `derived: {timestamp: ...}` renders wallclock through
-# it and `_ns` siblings keep raw sim-time BIGINT for exact arithmetic. A records
-# grain accepts three structural instant sources — `created_sim_time`,
-# `deactivated_at` and `last_mutation_sim_time` — so fact_trip carries both the
-# moment the trip was requested and the moment it settled, and their difference is
-# end-to-end trip duration.
+# it. A records grain accepts three structural instant sources —
+# `created_sim_time`, `deactivated_at` and `last_mutation_sim_time` — so
+# fact_trip carries both the moment the trip was requested and the moment it
+# settled, and their difference is end-to-end trip duration.
 
 mode: dimensional
+
+keys:
+  entity: record_index
+  resource: record_index
 
 dimensional:
   exclude:
@@ -87,30 +111,40 @@ dimensional:
     - name: dim_rider
       role: dim
       scd: type1
+      description: "One row per rider. A lookup-join target carrying a name and loyalty tier, assigned to each trip at request time."
       source:
         grain: records
         kind: entity
         filter: {prop__entity_type: rider}
       key: [rider_id]
       columns:
-        - {name: rider_id, from: record_id}
-        - {name: rider_code, from: presentation_id}
-        - {name: rider_name, from: prop__name}
-        - {name: loyalty, from: prop__loyalty}
+        - name: rider_id
+          from: record_index
+          description: "Unique numeric identifier for the rider, assigned in creation order."
+        - name: rider_name
+          from: prop__name
+          description: "Rider's display name."
+        - name: loyalty
+          from: prop__loyalty
+          description: "Rider's loyalty program tier: gold, silver, or bronze."
 
     # --- dim: pickup zone (entity sub-type) — Type-1 reference ---
     - name: dim_zone
       role: dim
       scd: type1
+      description: "One row per pickup zone. A lookup-join target carrying a name and zone type (commercial, transit, residential, campus) for each trip's origin."
       source:
         grain: records
         kind: entity
         filter: {prop__entity_type: zone}
       key: [zone_id]
       columns:
-        - {name: zone_id, from: record_id}
-        - {name: zone_code, from: presentation_id}
-        - {name: zone_name, from: prop__name}
+        - name: zone_id
+          from: record_index
+          description: "Unique numeric identifier for the pickup zone, assigned in creation order."
+        - name: zone_name
+          from: prop__name
+          description: "Pickup zone's display name."
         # commercial / transit / residential / campus
         - {name: zone_type, from: prop__zone_type}
 
@@ -118,58 +152,79 @@ dimensional:
     - name: dim_driver
       role: dim
       scd: type1
+      description: "One row per driver in the finite metro fleet."
       source:
         grain: records
         kind: resource
       key: [driver_id]
       columns:
-        - {name: driver_id, from: record_id}
-        - {name: driver_code, from: presentation_id}
-        - {name: driver_name, from: prop__name}
-        - {name: capacity, from: prop__capacity}
-        - {name: region, from: prop__region}
+        - name: driver_id
+          from: record_index
+          description: "Unique numeric identifier for the driver, assigned in creation order."
+        - name: driver_name
+          from: prop__name
+          description: "Driver's display name."
+        - name: capacity
+          from: prop__capacity
+          description: "Concurrent trips this driver can carry."
+        - name: region
+          from: prop__region
+          description: "Driver's operating region."
 
     # --- fact: trip — grain: one ride request ---
     - name: fact_trip
       role: fact
+      description: "One row per trip. The transactional fact whose history-tracked status becomes the CDC changelog."
       source:
         grain: records
         kind: actor
         filter: {prop__actor_type: trip}
       key: [trip_id]
       columns:
-        - {name: trip_id, from: record_id}
-        - {name: trip_number, from: presentation_id}
+        - name: trip_id
+          from: record_id
+          description: "Unique identifier for the trip."
         # terminal outcome: completed / cancelled (or the in-flight state for the
         # 2 trips still open at tape's end)
-        - {name: outcome, from: prop__status}
+        - name: outcome
+          from: prop__status
+          description: "How the trip ended: completed or cancelled (the 2 trips still underway at the end of the week show their in-flight stage instead)."
         # the moment the request arrived, and the moment it settled — their
         # difference is end-to-end trip duration
-        - {name: requested_at, derived: {timestamp: {source: created_sim_time}}}
-        - {name: settled_at, derived: {timestamp: {source: last_mutation_sim_time}}}
-        - {name: requested_at_ns, from: created_sim_time}
-        - {name: settled_at_ns, from: last_mutation_sim_time}
+        - name: requested_at
+          derived: {timestamp: {source: created_sim_time}}
+          description: "When the rider requested the trip."
+        - name: settled_at
+          derived: {timestamp: {source: last_mutation_sim_time}}
+          description: "When the trip last changed — for finished trips, the moment it completed or was cancelled."
 
     # --- fact: trip state (history_interval grain) — one row per state occupancy.
     #     THE match-wait fact: time in `matching` is the emergent wait the whole
     #     bundle exists to produce. ---
     - name: fact_trip_state
       role: fact
+      description: "One row per trip lifecycle stage occupancy: requested, matching, en_route, on_trip, and the completed or cancelled outcome."
       source:
         grain: history_interval
         kind: journey_instance
         property: current_state
-      key: [trip_id, entered_ns]
+      key: [trip_id, entered_at]
       columns:
         # zero-hop self-lookup: `actor` is a type-1 property of the journey itself,
         # and it is the trip's record_id — so this joins fact_trip.trip_id
-        - {name: trip_id, lookup: {property: actor}}
-        - {name: state, from: value}
-        - {name: entered_at, derived: {timestamp: {source: sim_time}}}
+        - name: trip_id
+          lookup: {property: actor}
+          description: "The trip this row belongs to; joins fact_trip.trip_id."
+        - name: state
+          from: value
+          description: "Trip lifecycle stage: requested, matching, en_route, on_trip, completed, or cancelled."
+        - name: entered_at
+          derived: {timestamp: {source: sim_time}}
+          description: "When the trip entered this stage."
         # lead_sim_time = LEAD(sim_time): NULL on the trip's last (open) state
-        - {name: exited_at, derived: {timestamp: {source: lead_sim_time}}}
-        - {name: entered_ns, from: sim_time}
-        - {name: exited_ns, from: lead_sim_time}
+        - name: exited_at
+          derived: {timestamp: {source: lead_sim_time}}
+          description: "When the trip left this stage; NULL on the stage the trip was still in at the end of the week."
 
     # --- bridge fact: trip <-> driver — grain: one driver hold (1,496 rows) ---
     #     membership__resource__holders: owner = resource (the driver), member =
@@ -177,19 +232,29 @@ dimensional:
     #     duration is driver utilisation.
     - name: fact_trip_driver
       role: fact
+      description: "One row per driver hold on a trip, from match through drop-off or cancellation."
       source:
         grain: membership
         kind: resource
         property: holders
-      key: [trip_id, held_from_ns]
+      key: [trip_id, held_from]
       columns:
-        - {name: trip_id, from: member__actor__id}
+        - name: trip_id
+          from: member__actor__id
+          description: "The trip this row belongs to; joins fact_trip.trip_id."
         # resolved from the binding's OWNER record, which IS the resource
-        - {name: driver_id, fk: {to: dim_driver, via: reference}}
-        - {name: slots_held, from: elem__slots_held}
-        - {name: held_from, derived: {timestamp: {source: joined_sim_time}}}
-        - {name: released_at, derived: {timestamp: {source: left_sim_time}}}
-        - {name: held_from_ns, from: joined_sim_time}
+        - name: driver_id
+          fk: {to: dim_driver, via: reference}
+          description: "The driver assigned to this trip; joins dim_driver.driver_id."
+        - name: slots_held
+          from: elem__slots_held
+          description: "How much of the driver's capacity this trip occupies."
+        - name: held_from
+          derived: {timestamp: {source: joined_sim_time}}
+          description: "When the driver was assigned to the trip."
+        - name: released_at
+          derived: {timestamp: {source: left_sim_time}}
+          description: "When the driver was released at drop-off or cancellation; NULL if the trip was still underway at the end of the week."
 
     # --- bridge fact: trip <-> rider — grain: one rider binding (1,496 rows) ---
     #     membership__tick_decision__bindings narrowed to the rider role. `trip_id`
@@ -197,6 +262,7 @@ dimensional:
     #     actor; both hops are temporal_class: constant, so the lookup is exact.
     - name: fact_trip_rider
       role: fact
+      description: "One row per trip, binding the rider assigned to it at request time."
       source:
         grain: membership
         kind: tick_decision
@@ -204,9 +270,15 @@ dimensional:
         where: {elem__role_name: rider}
       key: [trip_id]
       columns:
-        - {name: trip_id, lookup: {to: journey_instance, property: actor}}
-        - {name: rider_id, fk: {to: dim_rider, via: membership, member_field: entity}}
-        - {name: assigned_at, derived: {timestamp: {source: joined_sim_time}}}
+        - name: trip_id
+          lookup: {to: journey_instance, property: actor}
+          description: "The trip this row belongs to; joins fact_trip.trip_id."
+        - name: rider_id
+          fk: {to: dim_rider, via: membership, member_field: entity}
+          description: "The rider who took this trip; joins dim_rider.rider_id."
+        - name: assigned_at
+          derived: {timestamp: {source: joined_sim_time}}
+          description: "When the rider was assigned to the trip at request time."
 
     # --- bridge fact: trip <-> pickup zone — grain: one zone binding (1,496 rows) ---
     #     Same membership table, the other role. Kept as its own table rather than
@@ -215,6 +287,7 @@ dimensional:
     #     apart — narrowing by role is exactly what `where` is for.
     - name: fact_trip_pickup_zone
       role: fact
+      description: "One row per trip, binding the pickup zone recorded for it at request time."
       source:
         grain: membership
         kind: tick_decision
@@ -222,6 +295,12 @@ dimensional:
         where: {elem__role_name: pickup_zone}
       key: [trip_id]
       columns:
-        - {name: trip_id, lookup: {to: journey_instance, property: actor}}
-        - {name: zone_id, fk: {to: dim_zone, via: membership, member_field: entity}}
-        - {name: assigned_at, derived: {timestamp: {source: joined_sim_time}}}
+        - name: trip_id
+          lookup: {to: journey_instance, property: actor}
+          description: "The trip this row belongs to; joins fact_trip.trip_id."
+        - name: zone_id
+          fk: {to: dim_zone, via: membership, member_field: entity}
+          description: "The trip's pickup zone; joins dim_zone.zone_id."
+        - name: assigned_at
+          derived: {timestamp: {source: joined_sim_time}}
+          description: "When the pickup zone was recorded for the trip at request time."

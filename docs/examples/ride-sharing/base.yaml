@@ -6,11 +6,22 @@
 # every tracked property (actor.status, journey_instance.current_state,
 # resource.allocated) carries its LATEST history value. No table
 # classification, no sub-type split, no FK joins — the faithful "current state of every record"
-# landing shape. `record_id` presents as `id`; every other column is
-# presentation-verbatim.
+# landing shape. `record_id` presents as `id`.
 #
-# The only author decision here is which kinds to drop. We exclude the two
-# simulation-MECHANISM kinds — they are engine bookkeeping, not marketplace data:
+# Two author decisions here: which kinds to drop, and what everything is
+# CALLED. The `rename` entries below relabel every table and column into the
+# marketplace's own vocabulary (the engine's `actor` / `entity` /
+# `journey_instance` / `resource` nouns and `prop__` prefixes are the
+# simulator's, not a ride-hailing platform's), and each entry's
+# `descriptions:` map (keyed by the pre-rename source identity, like
+# `columns`) replaces the inherited simulator-voice prose in the companion
+# README. Base never splits a kind, so `entity` — riders AND pickup zones in
+# one table, discriminated by `participant_type` — lands as `participant`,
+# the same word source.yaml's trip_binding uses for its entity member.
+# Table-level blurbs and declared-value glosses come from the bundle and have
+# no override surface.
+#
+# We exclude the two simulation-MECHANISM kinds — they are engine bookkeeping, not marketplace data:
 #   tick_decision — the engine's per-tick matching-decision log (decision_type,
 #                   context). An audit trail of the simulator, not the trust. It
 #                   is not even a declared type in the atlas.
@@ -52,3 +63,98 @@ mode: base
 base:
   exclude:
     kinds: [tick_decision, queue]
+
+  rename:
+    - table: records__actor
+      name: trip
+      description: "A single ride request and its lifecycle, from the rider's request through matching to a completed or cancelled outcome."
+      columns:
+        record_index: trip_key
+        presentation_id: trip_number
+        created_sim_time: created_at
+        prop__status: status
+        prop__actor_type: trip_type
+      descriptions:
+        record_id: "Unique identifier for the trip."
+        record_index: "Unique numeric key for the trip, assigned in creation order."
+        presentation_id: "Public-facing trip number."
+        created_sim_time: "When the rider requested the trip."
+        active: "TRUE while the trip is still open; FALSE once it finished (completed or cancelled)."
+        deactivated_at: "When the trip finished; NULL for trips still open at the end of the week."
+        prop__status: "Trip lifecycle stage: requested, matching, en_route, on_trip, completed, or cancelled."
+        prop__actor_type: "What kind of record this is; every row here is a trip."
+
+    - table: records__entity
+      name: participant
+      description: "A rider or pickup zone: a lookup-join target assigned to trips, discriminated by participant_type."
+      columns:
+        record_index: participant_key
+        presentation_id: participant_code
+        created_sim_time: created_at
+        prop__name: name
+        prop__loyalty: loyalty
+        prop__zone_type: zone_type
+        prop__entity_type: participant_type
+      descriptions:
+        record_id: "Unique identifier for the rider or zone."
+        record_index: "Unique numeric key for the rider or zone, assigned in creation order."
+        presentation_id: "Numeric code for the rider or zone; riders and zones number independently, so codes repeat across the two types."
+        created_sim_time: "When the rider or zone was added to the platform."
+        active: "TRUE while the rider or zone is active on the platform."
+        deactivated_at: "When the row was deactivated; NULL while active."
+        prop__name: "Display name of the rider or zone."
+        prop__loyalty: "Rider's loyalty program tier (gold, silver, or bronze); NULL on zone rows."
+        prop__zone_type: "Land-use type of a pickup zone — commercial, transit, residential, or campus; NULL on rider rows."
+        prop__entity_type: "Whether this row is a rider or a zone."
+
+    - table: records__journey_instance
+      name: trip_lifecycle
+      description: "One trip's lifecycle record: its current stage and when that lifecycle began, from request through to a completed or cancelled outcome."
+      columns:
+        record_index: trip_lifecycle_key
+        created_sim_time: created_at
+        prop__actor: trip_id
+        ref_index__actor: trip_key
+        prop__journey_type: trip_type
+        prop__current_state: current_state
+      descriptions:
+        record_id: "Unique identifier for the trip's lifecycle record."
+        record_index: "Unique numeric key for the lifecycle record, assigned in creation order (one per trip)."
+        created_sim_time: "When the trip lifecycle began — the moment the trip was requested."
+        active: "TRUE while the trip is still in progress; FALSE once its lifecycle finished."
+        deactivated_at: "When the lifecycle finished; NULL for trips still in progress at the end of the week."
+        prop__actor: "The trip this row belongs to; joins trip.id."
+        ref_index__actor: "Numeric key of the trip this row belongs to; joins trip.trip_key."
+        prop__journey_type: "What this lifecycle tracks; every row here is a trip lifecycle."
+        prop__current_state: "The stage the trip is in right now: requested, matching, en_route, on_trip, completed, or cancelled."
+
+    - table: records__resource
+      name: driver
+      description: "A driver in the finite metro fleet, held by one trip at a time from match through drop-off."
+      columns:
+        record_index: driver_key
+        presentation_id: driver_number
+        created_sim_time: created_at
+        prop__name: name
+        prop__region: region
+        prop__capacity: capacity
+        prop__allocated: allocated
+        prop__retiring: retiring
+        prop__queue: dispatch_queue_id
+        ref_index__queue: dispatch_queue_key
+        prop__resource_type: driver_type
+      descriptions:
+        record_id: "Unique identifier for the driver."
+        record_index: "Unique numeric key for the driver, assigned in creation order."
+        presentation_id: "Public-facing driver number."
+        created_sim_time: "When the driver joined the fleet."
+        active: "TRUE while the driver is on the platform; FALSE if the driver was removed."
+        deactivated_at: "When the driver was removed from the fleet; NULL while active."
+        prop__name: "Driver's display name."
+        prop__region: "Driver's operating region."
+        prop__capacity: "Concurrent trips this driver can carry."
+        prop__allocated: "Trips currently assigned to this driver."
+        prop__retiring: "TRUE while the driver is winding down before going offline — finishing current trips, taking no new ones."
+        prop__queue: "Identifier of the shared dispatch queue the driver takes requests from; the queue itself is internal and not exported."
+        ref_index__queue: "Numeric key of the driver's dispatch queue; its table is not part of this export."
+        prop__resource_type: "What kind of fleet resource this is; every row here is a driver."

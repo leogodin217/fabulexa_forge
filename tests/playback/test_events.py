@@ -13,7 +13,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pytest
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 
 from fabulexa_forge.anchor import EffectiveAnchor, render_ts
 from fabulexa_forge.errors import ExportError
@@ -85,7 +85,9 @@ _TAGS_COLS: list[dict[str, object]] = [
     {"name": "elem__tag", "type": "VARCHAR"},
 ]
 
-_ENUM_DOMAINS = {"enum_domains": {"patient": {"patient_type": ["doctor", "nurse"]}}}
+_ENUM_DOMAINS = {
+    "enum_domains": {"patient": {"patient_type": enum_options("doctor", "nurse")}}
+}
 
 
 def _make_anchor() -> EffectiveAnchor:
@@ -359,6 +361,91 @@ class TestProjection:
 
 
 # ---------------------------------------------------------------------------
+# Identity projection
+# ---------------------------------------------------------------------------
+
+_GUEST_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "presentation_id", "type": "VARCHAR"},
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__name", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+
+class TestIdentityProjection:
+    def test_identity_none_default_matches_pre_sprint_after_shape(
+        self, tmp_path: Path
+    ) -> None:
+        rows = [("trunk", "g1", "5001", 10, True, None, 10, 0, "Alice")]
+        emit_dir = build_data_emit(
+            tmp_path, records=[RecordSpec("guest", _GUEST_COLS, rows)]
+        )
+        selection = PlaybackSelection(
+            records=(RecordAtomSelection("guest", (), None, None),), memberships=()
+        )
+        with open_emit(emit_dir) as emit:
+            playback = open_playback(emit, selection, None)
+            events = list(playback.events(None, None))
+
+        assert events[0].after == {
+            "record_id": "g1",
+            "presentation_id": "5001",
+            "prop__name": "Alice",
+        }
+        assert events[0].presentation_id == "5001"
+
+    def test_identity_record_id_only_suppresses_presentation_id_in_after_map(
+        self, tmp_path: Path
+    ) -> None:
+        rows = [("trunk", "g1", "5001", 10, True, None, 10, 0, "Alice")]
+        emit_dir = build_data_emit(
+            tmp_path, records=[RecordSpec("guest", _GUEST_COLS, rows)]
+        )
+        selection = PlaybackSelection(
+            records=(RecordAtomSelection("guest", (), None, None, ("record_id",)),),
+            memberships=(),
+        )
+        with open_emit(emit_dir) as emit:
+            playback = open_playback(emit, selection, None)
+            events = list(playback.events(None, None))
+
+        assert events[0].after == {"record_id": "g1", "prop__name": "Alice"}
+        assert events[0].presentation_id == "5001"
+
+    def test_seq_invariant_under_identity_selection(self, tmp_path: Path) -> None:
+        rows = [("trunk", "g1", "5001", 10, True, None, 10, 0, "Alice")]
+        emit_dir = build_data_emit(
+            tmp_path, records=[RecordSpec("guest", _GUEST_COLS, rows)]
+        )
+        full = PlaybackSelection(
+            records=(RecordAtomSelection("guest", (), None, None),), memberships=()
+        )
+        with open_emit(emit_dir) as emit:
+            playback = open_playback(emit, full, None)
+            full_events = list(playback.events(None, None))
+
+        narrow = PlaybackSelection(
+            records=(RecordAtomSelection("guest", (), None, None, ("record_id",)),),
+            memberships=(),
+        )
+        with open_emit(emit_dir) as emit:
+            playback = open_playback(emit, narrow, None)
+            narrowed = list(playback.events(None, None))
+
+        assert [e.seq for e in narrowed] == [e.seq for e in full_events]
+        assert [(e.op, e.record_id) for e in narrowed] == [
+            (e.op, e.record_id) for e in full_events
+        ]
+
+
+# ---------------------------------------------------------------------------
 # Population restriction
 # ---------------------------------------------------------------------------
 
@@ -618,3 +705,21 @@ class TestCorruptedTapes:
             events = list(playback.events(None, None))
 
         assert events == []
+
+    def test_colliding_presentation_id_delivered_verbatim(self, tmp_path: Path) -> None:
+        rows = [
+            ("trunk", "g1", "collide", 10, True, None, 10, 0, "Alice"),
+            ("trunk", "g2", "collide", 11, True, None, 11, 1, "Bob"),
+        ]
+        emit_dir = build_data_emit(
+            tmp_path, records=[RecordSpec("guest", _GUEST_COLS, rows)]
+        )
+        selection = PlaybackSelection(
+            records=(RecordAtomSelection("guest", (), None, None),), memberships=()
+        )
+        with open_emit(emit_dir) as emit:
+            playback = open_playback(emit, selection, None)
+            events = {e.record_id: e for e in playback.events(None, None)}
+
+        assert events["g1"].after["presentation_id"] == "collide"
+        assert events["g2"].after["presentation_id"] == "collide"

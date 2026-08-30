@@ -7,7 +7,7 @@ streams:
         op: c
         kind: staff
         record_id: s001
-        after.prop__name: Nora Vega
+        after.name: Nora Vega
   physician:
     event_count: 1
     contains_events:
@@ -16,4 +16,4 @@ streams:
         op: c
         kind: staff
         record_id: s002
-        after.prop__name: Owen Reed
+        after.name: Owen Reed

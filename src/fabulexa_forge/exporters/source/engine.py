@@ -31,12 +31,18 @@ if TYPE_CHECKING:
 
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
+    from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
     from fabulexa_forge.exporters.notices import NoticeSink
+    from fabulexa_forge.exporters.query_spec import ExportReport
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge.errors import SourceAnchorRequired
+from fabulexa_forge.exporters.companion import (
+    validate_overlay_tables,
+    write_companion_artifacts,
+)
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.query_spec import (
     QuerySpec,
@@ -107,7 +113,11 @@ def _compile_table_spec(
         per window) or `'append'` for a `junction` unit (extract-on-change).
         `keys` is the unit's declared keys for a `state` table (`None` when
         `declare_keys` is off); always `None` for a `junction` table (it
-        declares no keys).
+        declares no keys). `provenance`, `author_descriptions`, and
+        `author_table_description` are copied verbatim from the plan unit
+        (stamped at plan build); `kind_values` stays empty — neither table
+        shape carries a kind-name-as-value column; `event_log` stays False —
+        only the event-log spec (`build_source_query_specs`) sets it.
     """
     if isinstance(unit, SourceStateTablePlan):
         sql = build_state_render_sql(sidecar, fork_path, unit, anchor, window)
@@ -126,6 +136,9 @@ def _compile_table_spec(
         view_name=None,
         view_sql=None,
         keys=keys,
+        provenance=unit.provenance,
+        author_descriptions=unit.author_descriptions,
+        author_table_description=unit.description,
     )
 
 
@@ -152,7 +165,13 @@ def build_source_query_specs(
     Returns:
         One spec per output table, declared order; the event log last. The
         log's `keys` is its plan unit's — `PRIMARY KEY (id)` under
-        `declare_keys`, else None.
+        `declare_keys`, else None. Every spec's `provenance` and
+        `kind_values` are copied verbatim from their plan unit; the log's
+        `author_descriptions` stays the QuerySpec default (empty) — the
+        events surface declares no `descriptions` field. The log's
+        `event_log` is True — the only construction site anywhere that sets
+        it; its `author_table_description` stays the QuerySpec default
+        (None) — no config surface exists for it.
 
     Raises:
         ValueError: `window` presence disagrees with the plan's
@@ -183,6 +202,9 @@ def build_source_query_specs(
                 view_name=None,
                 view_sql=None,
                 keys=plan.events.keys,
+                provenance=plan.events.provenance,
+                kind_values=plan.events.kind_values,
+                event_log=True,
             )
         )
     return tuple(specs)
@@ -195,18 +217,23 @@ def export_source(
     fmt: Literal["csv", "duckdb"],
     anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
-) -> dict[str, int]:
+    overlay: "ReadmeOverlay | None",
+) -> "ExportReport":
     """
     Run the source exporter and write the operational dump.
 
     Resolves the election (`resolve_election(sidecar, config.keys)`), builds
     the full-export source plan (`build_source_plan(..., windowed=False,
-    ...)`), compiles it (`build_source_query_specs(plan, None)`), and
-    dispatches to the writer selected by fmt (mirroring export_dimensional's
-    full-export path). When `config.source.declare_keys` is true and
-    `fmt == 'csv'`, emits `keys_not_declarable_csv_notice()` to notice_sink
-    once, before any data is written — CSV carries no constraint surface, so
-    the DuckDB-only declaration is dropped for this invocation.
+    ...)`), compiles it (`build_source_query_specs(plan, None)`). Immediately
+    after compiling — before any write — validates `overlay`'s `table:`
+    slots against the compiled plan's output tables when `overlay` is
+    present. Dispatches to the writer selected by fmt (mirroring
+    export_dimensional's full-export path). When `config.source.declare_keys`
+    is true and `fmt == 'csv'`, emits `keys_not_declarable_csv_notice()` to
+    notice_sink once, before any data is written — CSV carries no constraint
+    surface, so the DuckDB-only declaration is dropped for this invocation.
+    Writes the companion README + manifest after data delivery and returns
+    the report.
 
     Args:
         emit: The open emit.
@@ -220,16 +247,20 @@ def export_source(
             raises.
         notice_sink: Receiver for plan notices (slice-only-column-omitted,
             keys-not-declarable-csv).
+        overlay: The parsed README overlay, or None.
 
     Returns:
-        Mapping of every output table name -> row count written (0-row tables
-        are still emitted, never dropped).
+        The invocation's `ExportReport`: one `TableReport` per output table
+        (0-row tables are still emitted, never dropped).
 
     Raises:
         SourceAnchorRequired: anchor is None.
         ExportError: The single-branch guard or a source business rule fails
             (§ build_source_plan).
-        ExportRuntimeError: A writer fails.
+        ReadmeOverlayUnknownTable: `overlay` names a table the compiled plan
+            does not produce.
+        ExportRuntimeError: A writer fails, or the companion artifacts fail
+            to write.
         ElectedKeyDuplicate: A corrupted elected key fails the plan-time
             uniqueness guard.
         ElectionKindUnknown, ElectionMixedIdentity,
@@ -247,6 +278,10 @@ def export_source(
         emit, config, resolved_anchor, election, windowed=False, notices=notice_sink
     )
     specs = list(build_source_query_specs(plan, None))
+    if overlay is not None:
+        validate_overlay_tables(overlay, [spec.table_name for spec in specs])
     if declare_keys_active(config) and fmt == "csv":
         notice_sink(keys_not_declarable_csv_notice())
-    return write_query_specs(emit, specs, out, fmt)
+    report = write_query_specs(emit, specs, out, fmt)
+    write_companion_artifacts(emit, config, fmt, anchor, report, overlay, out, None)
+    return report

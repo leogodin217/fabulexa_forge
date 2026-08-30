@@ -46,10 +46,9 @@ from fabulexa_forge.errors import (
     ElectionUnionUnsafe,
     ExportError,
 )
+from fabulexa_forge.reader.records_columns import records_kind_from_table
 from fabulexa_forge.reader.relations import build_records_relation_sql
 from fabulexa_forge.reader.sidecar import KeySpace, union_safe
-
-_RECORDS_TABLE_PREFIX = "records__"
 
 #: The synthesized key-space identity of the built-in `record_id` surface —
 #: the contract's `record_id` class, forge-synthesized rather than
@@ -167,13 +166,6 @@ class Election:
         return all(pop.surface == "record_id" for pop in self.populations_for(kind))
 
 
-def _records_kind_from_table(table_name: str) -> str | None:
-    """The kind name for a `records__<kind>` table, or None for any other table."""
-    if not table_name.startswith(_RECORDS_TABLE_PREFIX):
-        return None
-    return table_name[len(_RECORDS_TABLE_PREFIX) :]
-
-
 def _kind_domains(sidecar: "Sidecar") -> dict[str, tuple[str, ...]]:
     """Every kind with a declared records table, mapped to its sub-type domain.
 
@@ -186,7 +178,7 @@ def _kind_domains(sidecar: "Sidecar") -> dict[str, tuple[str, ...]]:
     """
     domains: dict[str, tuple[str, ...]] = {}
     for table in sidecar.tables():
-        kind = _records_kind_from_table(table.name)
+        kind = records_kind_from_table(table.name)
         if kind is not None:
             domains[kind] = sidecar.subtype_values(kind)
     return domains

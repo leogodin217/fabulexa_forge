@@ -27,15 +27,14 @@ class StreamEvent:
     is deliberately not carried here: the cross-stream merge consumes it from the
     materialized fold rows, and once `seq` is stamped the order lives in `seq`."""
     kind: str
-    """The record kind (state-changes) or owner kind (membership-events); stable across
-    routing."""
+    """The stream's resolved envelope value (§ Kind vocabulary): the
+    stream's own `kind_label` when declared, else the record kind's
+    (state-changes) or owner kind's (membership-events) `kind_labels`
+    label, else the bare kind name verbatim. Presentation only — routing
+    (route_table, key election) always reads the base-layer kind."""
     record_id: str
     """The record's natural id (state-changes) or owner record id (membership-events);
     the event/message key."""
-    presentation_id: str | None
-    """The record's surrogate id when the kind carries one, else None (always None for
-    membership-events). Carried in the after-image only — never the message key
-    (§ Keying)."""
     event_sim_time: int
     """The event-time key: the sim_time (ns) the row state is reconstructed at."""
     ts: str | int
@@ -43,9 +42,11 @@ class StreamEvent:
     when an anchor resolves (rendered in Python from the EffectiveAnchor), else the
     raw event_sim_time (ns). See § Timestamp rendering."""
     after: dict[str, object] | None
-    """The full-row after-image (record_id, presentation_id when present, and one
-    prop__<p> per selected property), or None on a delete. Every value is codec
-    VARCHAR — a str, or null — so the JSONL render is total and byte-stable."""
+    """The published after-image, output-key-named: the elected identity
+    surface under its resolved wire name, and one entry per selected
+    property under its resolved wire name, or None on a delete. Every value
+    is codec VARCHAR — a str, or null — so the JSONL render is total and
+    byte-stable."""
     topic: str
     """The declaring stream's name — author-verbatim (Layer B is retired; a
     stream's declared name is the topic). The file sink writes <topic>.jsonl;
@@ -57,10 +58,11 @@ class StreamEvent:
     <owner_kind>__<property> for a membership stream. Reported as Debezium
     source.table under table_identity='source_table'."""
     key_column: str
-    """The message-key entry's column name: the elected surface's contract
-    column name for the event's population ('record_id' when no election
-    applies — the default rendering). For membership-events, the owner's
-    elected surface."""
+    """The message-key entry's resolved output key: the elected surface's
+    resolved wire name for the event's population — its contract column name
+    ('record_id' when no election applies — the default rendering), or its
+    `rename` target when the stream renames it. For membership-events, the
+    owner's elected surface."""
     key_value: str
     """The codec-rendered elected key value (record_id verbatim; record_index
     digit-form; presentation_id codec rendering). Equals record_id under the

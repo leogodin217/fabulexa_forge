@@ -7,24 +7,47 @@
 #
 #   content: state-changes  — `history` replayed as an ordered c/u/d CDC stream.
 #
-# Domain-named topics — one declared stream per kind, named directly:
-#   nhs.patient (actor), nhs.diary (diary), nhs.pathway_episode
+# VOCABULARY (parity with source.yaml): the stream speaks the same domain the
+# app database does — same names, same identity surfaces — so a consumer can
+# join the feed against the source export without ever seeing an engine noun.
+#   - `kind_labels` is source.yaml's own map, verbatim (actor -> patient,
+#     resource -> consultant, journey_instance -> pathway_episode,
+#     diary -> appointment_book): every envelope `kind` is a domain word.
+#   - `keys:` mirrors source.yaml's elections for the streamed kinds: patient
+#     events key on the PAT_ hospital number (`patient.id` in the app
+#     database), everything else on the same compact record_index its state
+#     table presents. Payload references render their target's surface, so
+#     pathway_episode's patient_id carries PAT_ ids too.
+#   - Per-stream `rename` keeps payload keys in step with the renamed
+#     state-table columns (actor -> patient_id, journey_type -> pathway_type —
+#     source.yaml's own renames on pathway_episode).
+#
+# Domain-named topics — one declared stream per kind:
+#   nhs.patient (actor), nhs.appointment_book (diary), nhs.pathway_episode
 #   (journey_instance), nhs.consultant (resource). `actor`'s only sub-type
 #   discriminator value is the degenerate `actor_type = "default"`, so its
-#   stream omits `sub_types` (the full — single-value — domain) rather than
-#   naming the topic after the discriminator.
+#   stream omits `sub_types` (the full — single-value — domain).
 #
-# Topic set: nhs.patient, nhs.diary, nhs.pathway_episode, nhs.consultant — four
-# channel strips.
+# Topic set: nhs.patient, nhs.appointment_book, nhs.pathway_episode,
+# nhs.consultant — four channel strips.
 #
-# Streamable surface (only history-tracked kinds carry a state-changes stream):
-#   patient (actor)            — clinical-pathway flags over time.
-#   diary                      — next_opening drift.
+# Streamable surface (only history-tracked kinds carry a state-changes stream;
+# event counts measured from this emit's run):
+#   patient (actor)            — clinical-pathway flags over time (55,876 events).
+#   appointment_book (diary)   — next_opening drift (9,378 events).
 #   pathway_episode (journey_instance)
 #                              — current_state -> c/u/d; the busiest strip
-#                                (~219k events).
-#   consultant (resource)      — `allocated` over time (~25k events,
-#                                concentrated — one record changes ~9.7k times).
+#                                (218,827 events).
+#   consultant (resource)      — `allocated` over time (25,166 events over 30
+#                                consultants). `ignore: [queue]` keeps the
+#                                engine's scheduling-queue reference out of the
+#                                change scope, exactly as source.yaml's
+#                                audit_log ignores it — capacity stays audited.
+#
+# One deliberate divergence from source.yaml: streaming auto-includes a kind's
+# `presentation_id` on every after-image (mode contract, not a knob), so
+# consultant events carry the CON_ counter source.yaml drops as a second
+# spelling of the identity.
 #
 # Deliberately excluded:
 #   entity, queue, tick_decision — no history-tracked property, so no state-changes.
@@ -38,16 +61,35 @@
 
 content: state-changes
 
+# source.yaml's kind_labels, verbatim — the envelope `kind` values.
+kind_labels:
+  actor: patient
+  resource: consultant
+  journey_instance: pathway_episode
+  diary: appointment_book
+
+# source.yaml's elections for the streamed kinds — stream identities join the
+# app database's ids.
+keys:
+  actor: presentation_id
+  resource: record_index
+  diary: record_index
+  journey_instance: record_index
+
 streams:
   - name: nhs.patient
     kind: actor
     properties: [status, hai_status, admission_count, cancer_referred, fft_outcome, surgical_referred, fft_invited]
-  - name: nhs.diary
+  - name: nhs.appointment_book
     kind: diary
     properties: [next_opening]
   - name: nhs.pathway_episode
     kind: journey_instance
-    properties: [current_state]
+    properties: [current_state, journey_type, actor]
+    rename:
+      actor: patient_id
+      journey_type: pathway_type
   - name: nhs.consultant
     kind: resource
     properties: [allocated]
+    ignore: [queue]

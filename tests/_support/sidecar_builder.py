@@ -22,6 +22,7 @@ from fabulexa_forge.reader.sidecar import ColumnSpec
 
 if TYPE_CHECKING:
     from pathlib import Path
+    from typing import Literal
 
     from fabulexa_forge.reader import TemporalClass
 
@@ -45,6 +46,13 @@ def prop_column(
     history_tracked: bool,
     temporal_class: "TemporalClass",
     references: str | None = None,
+    description: str | None = None,
+    unit: str | None = None,
+    min: float | int | None = None,
+    max: float | int | None = None,
+    immutable: "Literal[True] | None" = None,
+    required: "Literal[True] | None" = None,
+    extra_data: "Literal[True] | None" = None,
 ) -> dict[str, object]:
     """Build one value-carrying sidecar column.
 
@@ -59,7 +67,10 @@ def prop_column(
     requires history_tracked True, 'slice_only' requires history_tracked False.
     A negative variant that breaks the pairing, the enum, or an implication
     mutates the returned dict; a defect is never expressible through the
-    constructor.
+    constructor. The seven optional documentation attributes are emitted into
+    the column dict iff not None; the three flags are typed Literal[True] —
+    the schema never renders them false, and this constructor builds only
+    conformant columns (negative variants mutate the returned dict, as today).
 
     Args:
         name: Column name, including its prop__ prefix.
@@ -68,6 +79,16 @@ def prop_column(
         temporal_class: The column's point-in-time contract.
         references: The record kind this column's value equality-joins against,
             when the column is a foreign-key projection. Omitted when None.
+        description: The property's business meaning. Omitted when None.
+        unit: The property's unit of measure. Omitted when None.
+        min: The property's inclusive numeric floor. Omitted when None.
+        max: The property's inclusive numeric ceiling. Omitted when None.
+        immutable: True iff the schema declares the property immutable.
+            Omitted when None.
+        required: True iff the schema declares the property required.
+            Omitted when None.
+        extra_data: True iff the schema declares the property extra_data.
+            Omitted when None.
 
     Returns:
         A column dict suitable for a table's `columns` list.
@@ -92,6 +113,20 @@ def prop_column(
         column["references"] = references
     column["history_tracked"] = history_tracked
     column["temporal_class"] = temporal_class
+    if description is not None:
+        column["description"] = description
+    if unit is not None:
+        column["unit"] = unit
+    if min is not None:
+        column["min"] = min
+    if max is not None:
+        column["max"] = max
+    if immutable is not None:
+        column["immutable"] = immutable
+    if required is not None:
+        column["required"] = required
+    if extra_data is not None:
+        column["extra_data"] = extra_data
     return column
 
 
@@ -124,6 +159,25 @@ def identity_column(name: str, duckdb_type: str) -> dict[str, object]:
             "records_column_role"
         )
     return {"name": name, "type": duckdb_type}
+
+
+def enum_options(*values: str) -> list[dict[str, object]]:
+    """Build one enum_domains option list from its allowed value strings.
+
+    The sole constructor for an `enum_domains` option array across every
+    fixture builder — the contract shapes each option as a value object
+    (`{"value": ...}`, optional `description`), and this helper is the one
+    place the test tree knows that shape. A fixture needing a per-value gloss
+    appends `"description"` to the returned entries; a shape-defective
+    negative fixture mutates the result.
+
+    Args:
+        values: The allowed option strings, in declaration order.
+
+    Returns:
+        The option list for one `enum_domains[<kind>][<property>]` entry.
+    """
+    return [{"value": value} for value in values]
 
 
 def _column_spec_from_raw(raw: dict[str, object]) -> ColumnSpec:
@@ -209,6 +263,7 @@ def write_emit(
     branches: list[dict[str, object]] | None = None,
     extra: dict[str, object] | None = None,
     base_format_version: int | None = None,
+    surface: str | None = "published",
     schema_valid: bool = True,
     records_shape_valid: bool = True,
 ) -> None:
@@ -232,6 +287,12 @@ def write_emit(
             UNSUPPORTED_VERSION_SENTINEL, composed with schema_valid=False:
             the vendored schema pins the version, so any override is
             schema-invalid by construction.
+        surface: The surface discriminator to stamp. Defaults to the one
+            value the contract admits for a published emit. None omits the
+            field; any other override writes that value — both exist for the
+            surface-negative fixtures alone and are schema-invalid by
+            construction (the vendored schema requires the field and pins its
+            value), so they compose with schema_valid=False.
         schema_valid: When True (the default), validate the result against the
             vendored contract/base-format.schema.json before writing, so a
             fixture that has not learned a new required field fails at
@@ -263,6 +324,8 @@ def write_emit(
         "branches": branches if branches is not None else _DEFAULT_BRANCHES,
         "tables": tables,
     }
+    if surface is not None:
+        sidecar["surface"] = surface
     if extra:
         sidecar.update(extra)
 

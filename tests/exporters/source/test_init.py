@@ -20,11 +20,11 @@ Covers:
 - A name collision (underscore-bearing identifiers) comments out the later
   proposal with a collision note; the emitted config still parses and plans
   clean.
-- A registry-declared population -> the `keys:` proposal, self-gated through
-  `check_edge_union_safety` (every proposed table is single-population, so
-  the identity-mixing gate never applies; a partial declaration proposes
-  each population's own election independently, no degradation; full
-  agreement collapses to the scalar).
+- The `keys:` proposal: uniform `record_index` active for every population,
+  with `record_id` always and `presentation_id` (only where registry-declared)
+  offered as commented alternatives -- shape (scalar vs. per-sub-type map)
+  follows whether >= 1 sub-type is declared, never the active values, and
+  the retired degradation mechanism never emits `NOTE: ElectionUnionUnsafe`.
 - Non-exempt `slice_only` columns are never proposed; one notice each.
 - An emit predating `history_tracked` -> `SourceHistoryTrackedRequired`; an
   incoherent `presentation_keys` block -> `PresentationKeysInvalidError`.
@@ -41,10 +41,15 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
-from exporters.source._source_fixtures import build_source_test_emit
+from exporters.source._source_fixtures import _HISTORY_COLUMNS, build_source_test_emit
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.loader import load_export_config
 from fabulexa_forge.errors import SourceHistoryTrackedRequired
@@ -271,7 +276,11 @@ def _build_subtyped_owner_membership_emit(tmp_path: Path) -> Path:
             ),
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}}},
+        extra={
+            "enum_domains": {
+                "actor": {"actor_type": enum_options("consultant", "nurse")}
+            }
+        },
     )
     return emit_dir
 
@@ -501,7 +510,11 @@ def _build_subtyped_junction_collision_emit(tmp_path: Path) -> Path:
             ),
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"actor": {"actor_type": ["consultant", "nurse"]}}},
+        extra={
+            "enum_domains": {
+                "actor": {"actor_type": enum_options("consultant", "nurse")}
+            }
+        },
     )
     return emit_dir
 
@@ -529,7 +542,7 @@ def test_subtyped_junction_name_collision_comments_out_proposal(
 
 
 # ---------------------------------------------------------------------------
-# `keys:` proposal — registry-declared population, self-gated
+# `keys:` proposal — uniform record_index active, resolvability alternatives
 # ---------------------------------------------------------------------------
 
 
@@ -569,7 +582,7 @@ def _build_subtyped_actor_emit(
 ) -> Path:
     """A sub-typed `actor` kind, with an optional `presentation_keys` block."""
     extra: dict[str, object] = {
-        "enum_domains": {"actor": {"actor_type": sub_types}},
+        "enum_domains": {"actor": {"actor_type": enum_options(*sub_types)}},
     }
     if presentation_keys is not None:
         extra["presentation_keys"] = presentation_keys
@@ -602,10 +615,10 @@ _ACTOR_PARTIAL_KEYS: dict[str, object] = {
 
 
 def test_registry_partial_declaration_proposes_per_subtype_dict(tmp_path: Path) -> None:
-    """`driver`/`bus` declared and `ride` undeclared: since each sub-type gets
-    its own single-population table, there is no mixed-identity table to
-    protect against -- the proposal elects each population independently
-    (no degradation) as a per-sub-type dict."""
+    """`driver`/`bus` declared and `ride` undeclared: the uniform
+    `record_index` active election still proposes a per-sub-type dict (shape
+    follows the alternatives, not the active values); only driver/bus offer
+    the `presentation_id` alternative."""
     emit_dir = _build_subtyped_actor_emit(
         tmp_path, ["driver", "bus", "ride"], _ACTOR_PARTIAL_KEYS
     )
@@ -613,11 +626,22 @@ def test_registry_partial_declaration_proposes_per_subtype_dict(tmp_path: Path) 
     assert (
         "keys:\n"
         "  actor:\n"
-        "    driver: presentation_id\n"
-        "    bus: presentation_id\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # driver: record_id\n"
+        "    # driver: presentation_id\n"
+        "    driver: record_index\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # bus: record_id\n"
+        "    # bus: presentation_id\n"
+        "    bus: record_index\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # ride: record_id\n"
         "    ride: record_index\n" in content
     )
-    assert "NOTE" not in content
+    assert "# ride: presentation_id" not in content
     _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
 
 
@@ -702,22 +726,30 @@ def _build_subtyped_actor_with_referencing_order_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
-            "enum_domains": {"actor": {"actor_type": ["driver", "bus"]}},
+            "enum_domains": {"actor": {"actor_type": enum_options("driver", "bus")}},
             "presentation_keys": _ACTOR_BARE_COUNTER_KEYS,
         },
     )
     return emit_dir
 
 
-def test_referencing_column_degrades_union_unsafe_subtype(tmp_path: Path) -> None:
+def test_referencing_column_proposes_clean_no_degradation(tmp_path: Path) -> None:
     """`order.prop__actor_id` references the sub-typed `actor` kind: driver
-    and bus both electing pairwise-unsafe bare counters degrades the kind to
-    uniform `record_index` via the edge gate -- `check_edge_union_safety`,
-    not `check_identity_election` (no table combines driver and bus; each
-    gets its own single-population stub)."""
+    and bus both declaring pairwise-unsafe bare counters proposes the uniform
+    `record_index` map cleanly -- the degradation mechanism is retired, so no
+    `NOTE: ElectionUnionUnsafe` comment appears anywhere in the proposal."""
     emit_dir = _build_subtyped_actor_with_referencing_order_emit(tmp_path)
     content = _generate(emit_dir)
-    assert "keys:\n  actor: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "ElectionUnionUnsafe" not in content
+    assert (
+        "keys:\n"
+        "  actor:\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # driver: record_id\n"
+        "    # driver: presentation_id\n"
+        "    driver: record_index\n" in content
+    )
     _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
 
 
@@ -744,15 +776,20 @@ _ACTOR_FULL_KEYS: dict[str, object] = {
 }
 
 
-def test_registry_full_declaration_collapses_to_presentation_id_scalar(
+def test_registry_full_declaration_still_proposes_per_subtype_map(
     tmp_path: Path,
 ) -> None:
-    """Every declared sub-type electing `presentation_id`, pairwise
-    union-safe, collapses the `keys:` proposal to the scalar -- independent
-    of the `tables:` layout, which still splits one stub per sub-type."""
+    """Every declared sub-type still proposes the per-sub-type map -- shape
+    never collapses to scalar once >= 1 sub-type is declared, independent of
+    the `tables:` layout, which still splits one stub per sub-type."""
     emit_dir = _build_subtyped_actor_emit(tmp_path, ["driver", "bus"], _ACTOR_FULL_KEYS)
     content = _generate(emit_dir)
-    assert "keys:\n  actor: presentation_id\n" in content
+    assert "keys:\n  actor:\n" in content
+    assert "keys:\n  actor: record_index\n" not in content
+    for sub_type in ("driver", "bus"):
+        assert f"    # {sub_type}: presentation_id\n    {sub_type}: record_index\n" in (
+            content
+        )
     assert (
         "    - name: actor_driver\n      kind: actor\n      sub_types: [driver]\n"
         in content
@@ -765,12 +802,156 @@ def test_registry_full_declaration_collapses_to_presentation_id_scalar(
 
 def test_undeclared_registry_proposes_record_index(tmp_path: Path) -> None:
     """No `presentation_keys` block at all -> every kind proposes the
-    `record_index` scalar."""
+    `record_index` scalar, with only the record_id alternative commented."""
     emit_dir = _flat_records_emit(
         tmp_path, "widget", _UNTRACKED_FLAT_COLUMNS, _UNTRACKED_FLAT_ROW
     )
     content = _generate(emit_dir)
-    assert "keys:\n  widget: record_index\n" in content
+    assert "  # widget: record_id\n  widget: record_index\n" in content
+    assert "# widget: presentation_id" not in content
+
+
+# ---------------------------------------------------------------------------
+# `init` documentation annotations (documentation-channel Phase 6)
+# ---------------------------------------------------------------------------
+
+#: A sub-typed, tracked `vehicle` kind (car/truck) that owns a
+#: `passengers` membership table -- documented table descriptions on both,
+#: a partially-glossed sub-type domain (car glossed, truck not).
+_DOCUMENTED_VEHICLE_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__vehicle_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+    prop_column(
+        "prop__status", "VARCHAR", history_tracked=True, temporal_class="tracked"
+    ),
+]
+
+_DOCUMENTED_PASSENGERS_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__seat", "type": "VARCHAR"},
+]
+
+
+def _build_documented_source_emit(
+    tmp_path: Path, *, scenario_description: str | None
+) -> Path:
+    """A documented, sub-typed `vehicle` owner with a `passengers` junction."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    conn = duckdb.connect(str(emit_dir / "run.duckdb"))
+    conn.execute(_create_ddl("records__vehicle", _DOCUMENTED_VEHICLE_COLUMNS))
+    conn.execute(
+        _create_ddl("membership__vehicle__passengers", _DOCUMENTED_PASSENGERS_COLUMNS)
+    )
+    conn.execute(_create_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__vehicle" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "veh1", 10, True, 10, 0, "car", "idle"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__vehicle__passengers" VALUES (?, ?, ?, NULL, ?)',
+        ["trunk", "veh1", 10, "1A"],
+    )
+    # Creation-seed history row (contract § history) for the tracked property.
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "vehicle", "veh1", "status", 10, "idle"],
+    )
+    conn.close()
+    car_option, truck_option = enum_options("car", "truck")
+    car_option["description"] = "A passenger car."
+    vehicle_table = _table_spec(
+        "records__vehicle",
+        "records",
+        _DOCUMENTED_VEHICLE_COLUMNS,
+        1,
+        record_kind="vehicle",
+    )
+    vehicle_table["description"] = "Vehicles operating in the fleet."
+    passengers_table = _table_spec(
+        "membership__vehicle__passengers",
+        "membership",
+        _DOCUMENTED_PASSENGERS_COLUMNS,
+        1,
+        record_kind="vehicle",
+        property_name="passengers",
+    )
+    passengers_table["description"] = "Passengers riding each vehicle."
+    extra: dict[str, object] = {
+        "enum_domains": {"vehicle": {"vehicle_type": [car_option, truck_option]}}
+    }
+    if scenario_description is not None:
+        extra["scenario_description"] = scenario_description
+    write_emit(
+        emit_dir,
+        tables=[
+            vehicle_table,
+            passengers_table,
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra=extra,
+    )
+    return emit_dir
+
+
+def test_scenario_comment_present_when_declared(tmp_path: Path) -> None:
+    """A declared `scenario_description` renders as a `# Scenario:` block."""
+    emit_dir = _build_documented_source_emit(
+        tmp_path, scenario_description="A city fleet simulation."
+    )
+    content = _generate(emit_dir)
+    assert "# Scenario:\n#   A city fleet simulation.\n" in content
+
+
+def test_scenario_comment_absent_when_not_declared(tmp_path: Path) -> None:
+    """No `scenario_description` -> no `# Scenario:` block anywhere."""
+    emit_dir = _build_documented_source_emit(tmp_path, scenario_description=None)
+    content = _generate(emit_dir)
+    assert "# Scenario:" not in content
+
+
+def test_table_description_annotates_state_and_junction_stubs(tmp_path: Path) -> None:
+    """Each state/junction stub carries its source table's description --
+    once per declared sub-type, plus once more on the trailing commented
+    combine-alternative."""
+    emit_dir = _build_documented_source_emit(tmp_path, scenario_description=None)
+    content = _generate(emit_dir)
+    assert content.count("    # Vehicles operating in the fleet.") == 3
+    assert content.count("    # Passengers riding each vehicle.") == 3
+
+
+def test_sub_type_gloss_on_state_and_junction_stubs(tmp_path: Path) -> None:
+    """A glossed sub-type value's `sub_types:` line carries the gloss; an
+    unglossed sub-type value's line carries none."""
+    emit_dir = _build_documented_source_emit(tmp_path, scenario_description=None)
+    content = _generate(emit_dir)
+    assert "sub_types: [car]  # A passenger car.\n" in content
+    assert "sub_types: [truck]\n" in content
+    assert "sub_types: [truck]  #" not in content
+
+
+def test_documented_proposal_plans_clean(tmp_path: Path) -> None:
+    """The annotated candidate config still loads and plans clean."""
+    emit_dir = _build_documented_source_emit(
+        tmp_path, scenario_description="A city fleet simulation."
+    )
+    content = _generate(emit_dir)
+    _assert_round_trip_plans_clean(emit_dir, content, tmp_path)
 
 
 # ---------------------------------------------------------------------------

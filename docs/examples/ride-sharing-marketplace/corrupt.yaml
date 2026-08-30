@@ -1,0 +1,68 @@
+# CorruptConfig — ride-sharing marketplace bundle, light realism pass
+# ============================================================
+# `fabulexa-forge corrupt docs/examples/ride-sharing-marketplace/bundle --config docs/examples/ride-sharing-marketplace/corrupt.yaml --out <corrupt_dir>`
+#
+# Purpose (realism QA, step 4): the clean emit's zero-mess signature — no NULL
+# outside SCD-2 open intervals, no duplicate rows, no lost events — is itself
+# the strongest synthetic-data tell. This config injects a small, labeled dose
+# of realistic defects at rates low enough that the market analyses (wait time,
+# idle supply, churn) still work. The output is a structurally-conformant base
+# emit; compose it with any export config:
+#
+#   fabulexa-forge corrupt docs/examples/ride-sharing-marketplace/bundle --config docs/examples/ride-sharing-marketplace/corrupt.yaml --out /tmp/mp-corrupt
+#   fabulexa-forge export /tmp/mp-corrupt docs/examples/ride-sharing-marketplace/dimensional.yaml /tmp/mp-messy.duckdb --fmt duckdb
+#
+# `defects.json` in the output dir is the deterministic ground truth naming
+# every injected defect.
+#
+# The dose (rates sized against this emit's populations):
+#   - missing device/payment data, MNAR: ~5% of riders have no captured user
+#     agent, and new-tier riders are 4x likelier to have no payment card on
+#     file (~2%) — the not-yet-onboarded cohort.
+#   - double-recorded matches: 12 of the 4,963 pairing records duplicated
+#     verbatim — the dispatch retry that wrote twice.
+#   - a telemetry outage: ~250 journey state-change events dropped inside two
+#     one-hour windows of this 30-day run — location pings lost; lifecycles
+#     jump states there.
+
+seed: 13
+
+operations:
+  - kind: null_cells
+    name: missing_app_user_agent
+    target:
+      table: records__actor
+      where: { prop__actor_type: rider }
+      columns: [prop__app_user_agent]
+    amount: { rate: 0.05 }
+
+  - kind: null_cells
+    name: mnar_missing_payment_card_new_riders
+    target:
+      table: records__actor
+      where: { prop__actor_type: rider }
+      columns: [prop__payment_card]
+    amount: { rate: 0.02 }
+    placement:
+      kind: correlated
+      column: prop__loyalty_band
+      value: new
+      weight: 4.0
+
+  - kind: duplicate_rows
+    name: double_recorded_matches
+    target:
+      table: records__pairing
+    amount: { count: 12 }
+
+  - kind: drop_events
+    name: telemetry_outage
+    target:
+      table: history
+      where: { kind: journey_instance, property: current_state }
+    amount: { count: 250 }
+    placement:
+      kind: clustered_temporal
+      column: sim_time
+      clusters: 2
+      width: 3600000000000   # 1h half-width: two ~2-hour outage windows

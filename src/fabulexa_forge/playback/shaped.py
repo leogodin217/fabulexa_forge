@@ -61,7 +61,7 @@ from fabulexa_forge.exporters.source.engine import (
 from fabulexa_forge.exporters.source.plan import SourceStateTablePlan, build_source_plan
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.playback.errors import PlaybackError
-from fabulexa_forge.reader.emit import Emit
+from fabulexa_forge.reader.emit import Emit, pin_session_timezone
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -437,6 +437,7 @@ def _compile_state_specs(
 def _open_dimensional(
     config: "DimensionalConfig",
     sidecar: "Sidecar",
+    anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
     election: "Election",
 ) -> tuple[ShapedTableDecl, ...]:
@@ -452,6 +453,8 @@ def _open_dimensional(
     Args:
         config: The dimensional-mode section.
         sidecar: The open emit's sidecar.
+        anchor: The resolved effective anchor, or None — threaded to
+            TemporalRenderRequiresAnchor.
         notice_sink: Receiver for plan notices.
         election: The resolved election (`resolve_election(sidecar,
             config.keys)`, resolved once by `open_shaped_playback`).
@@ -467,7 +470,13 @@ def _open_dimensional(
     decls: list[ShapedTableDecl] = []
     for table_decl in config.tables:
         validate_table(
-            table_decl, config, sidecar, None, notice_sink, election=election
+            table_decl,
+            config,
+            sidecar,
+            None,
+            notice_sink,
+            anchor=anchor,
+            election=election,
         )
         decls.append(
             ShapedTableDecl(
@@ -676,6 +685,12 @@ def open_shaped_playback(
 ) -> ShapedPlayback:
     """Bind a shaped head to an open emit and a declared target shape.
 
+    When an anchor resolves, pins the emit's materialization session to the
+    anchor zone (`pin_session_timezone`) before any relation materializes —
+    the same session-zone pin the export driver applies — so every
+    zone-bearing value this head's window()/state() compiles serializes in
+    the anchor zone regardless of the host machine's zone.
+
     Runs the mode's full config validation at open (sidecar-only, no data
     reads) — a shape whose plan projects or value-reads a slice_only column
     is refused here by the mode's own always-on rules (the export-wide
@@ -722,6 +737,9 @@ def open_shaped_playback(
     if config.mode == "source" and anchor is None:
         raise PlaybackError(_SOURCE_ANCHOR_REQUIRED_MSG)
 
+    if anchor is not None:
+        pin_session_timezone(emit, anchor)
+
     require_single_branch(emit.sidecar)
 
     election = resolve_election(emit.sidecar, config.keys)
@@ -731,7 +749,7 @@ def open_shaped_playback(
     else:
         assert config.dimensional is not None
         table_decls = _open_dimensional(
-            config.dimensional, emit.sidecar, notice_sink, election
+            config.dimensional, emit.sidecar, anchor, notice_sink, election
         )
 
     return ShapedPlayback(emit, config, anchor, notice_sink, table_decls, election)

@@ -1,0 +1,14 @@
+# Identical to table-column-rename's expectation — deliberately. The
+# description overrides are documentation-inert: they render only in the
+# companion README/manifest, and no dataset byte depends on them.
+tables:
+  customer:
+    columns: [customer_id, full_name, signed_up_at]
+    row_count: 2
+    contains_rows:
+      - customer_id: p001
+        full_name: Alice
+        signed_up_at: 86400000000000     # created at 1*DAY
+      - customer_id: p002
+        full_name: Bob
+        signed_up_at: 172800000000000    # created at 2*DAY

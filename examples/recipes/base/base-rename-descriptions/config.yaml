@@ -1,0 +1,38 @@
+# Recipe: base-rename-descriptions
+# ============================================================
+# The author description overrides in the base idiom: `description:` and
+# `descriptions:` are fields on the `rename` entry — base has no
+# declared-table grammar, so the rename entry is the mode's one
+# table-addressing surface, and documentation rides it like `name` /
+# `columns` do. `table` is SIDECAR identity (`records__<kind>`); the
+# `descriptions:` map is keyed like `columns` (base column names, e.g.
+# `prop__name`), never derived output names.
+#
+# A description-only entry is legal: `description` counts toward the
+# entry's at-least-one-field rule, so an entry may re-describe a table
+# without renaming anything (the `records__patient` entry below).
+#
+# Where the effect lands: the companion artifacts written beside the
+# dataset. The DATASET IS BYTE-IDENTICAL with or without every
+# `description` below (documentation inertness) — this recipe's
+# expect.yaml is identical to base-rename-table's.
+#
+# Output: identical to base-rename-table — every table as in
+# base-current-state, with `queue` renamed to `triage_desk`.
+
+mode: base
+
+base:
+  rename:
+    - table: records__queue
+      name: triage_desk
+      # Table-level override: replaces the forwarded source-table
+      # (`tables[].description`) prose in the README/manifest.
+      description: "The triage desk queue, at its current composition."
+      # Column overrides, keyed by base column identity.
+      descriptions:
+        prop__name: "The desk's display name on the ward board."
+    # Description-only entry — legal; re-describes the table, renames
+    # nothing.
+    - table: records__patient
+      description: "One row per patient, at their latest recorded state."

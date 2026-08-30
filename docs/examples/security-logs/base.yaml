@@ -1,0 +1,206 @@
+# ExportConfig — security-logs bundle, base mode (flat current-state dump)
+# ============================================================
+# `fabulexa-forge export docs/examples/security-logs/bundle docs/examples/security-logs/base.yaml <out> --fmt duckdb`
+#
+# Base mode reconstructs one flat table per records kind at the tape's end:
+# every tracked property carries its LATEST history value. No sub-type split,
+# no FK joins, no row filtering — the faithful landing shape.
+#
+# THIS IS THE GROUND-TRUTH DATASET. The dimensional and source exports are
+# SIEM-realistic on purpose — they hide every column that labels the attack
+# (host.role='external', breadth, session_type='approach_*', the binding role
+# names). Base mode hides nothing: host carries role / breadth /
+# auth_reliability / stale_service / failed_attempts, session carries
+# session_type and current_state. This is the instructor's answer key beside
+# the students' logs — hand it out accordingly.
+#
+# Author decisions:
+#
+#   RENAME   engine-ontology names to the domain's, tables AND columns:
+#              actor            -> host
+#              entity           -> asset
+#              journey_instance -> session
+#              tick_decision    -> security_event
+#            `entity` stays ONE table (base mode never splits a kind) but is
+#            renamed `asset` — the SIEM's polymorphic inventory of servers,
+#            accounts, and firewall rules, told apart by `asset_type`; the
+#            per-sub-type split into servers / accounts / firewall_rules is
+#            the source and dimensional configs' job. NOT `server`: the
+#            atlas partitions entity into server / account / fw_rule, so a
+#            server-only name would mislabel two thirds of the rows.
+#            Columns: the engine prefixes and key names go too — prop__ is
+#            stripped, created_sim_time -> created_at, each table's opaque
+#            id -> <table>_id, each compact self key -> <table>_key, and the
+#            reference pairs follow their targets (session.host_id/host_key,
+#            security_event.session_id/session_key). journey_type ->
+#            session_type; the sub-type discriminators -> host_type /
+#            asset_type.
+#   EXCLUDE  nothing. All four kinds are domain data; the bundle declares no
+#            queue / resource mechanism kinds.
+#   RENDER   nothing. No prop__ column holds a date string or a raw
+#            sim-instant (the pending_* / port / octet BIGINTs are ports and
+#            address parts, not times); the lifecycle instants render as
+#            wallclock TIMESTAMP through the sidecar anchor by default.
+#   DESCRIBE the structural columns (keys, ids, lifecycle) in learner voice —
+#            the inherited contract prose speaks engine vocabulary. Domain
+#            prop__ descriptions come from the bundle and are kept. Table
+#            descriptions, declared-value glosses, and the Emit Identity
+#            footer have no config override surface; the engine terms that
+#            survive in the readme live only there.
+#
+# Columns dropped, but not by us: a non-exempt `temporal_class: slice_only`
+# column is ALWAYS auto-omitted with a notice, in every mode — here
+# session's state_entry_time / complete. Watch the export's `notice:` lines.
+#
+# Timestamps: no `rebase:` block — the anchor is the sidecar runtime
+# (2026-01-05T08:00:00 UTC).
+
+mode: base
+
+base:
+  rename:
+    - table: records__actor
+      name: host
+      description: >-
+        One connection-originating machine — internal workstation, kiosk, or
+        service box, or one of the four external approach hosts.
+      columns:
+        record_index: host_key
+        record_id: host_id
+        created_sim_time: created_at
+        prop__name: hostname
+        prop__role: role
+        prop__home_service: home_service
+        prop__stale_service: stale_service
+        prop__breadth: breadth
+        prop__auth_reliability: auth_reliability
+        prop__zone: zone
+        prop__subnet: subnet
+        prop__subnet_octet: subnet_octet
+        prop__failed_attempts: failed_attempts
+        prop__pending_dst_zone: pending_dst_zone
+        prop__pending_dst_port: pending_dst_port
+        prop__actor_type: host_type
+        prop__last_octet: last_octet
+        prop__ip_address: ip_address
+      descriptions:
+        record_index: >-
+          Compact integer key for this host; join target of session.host_key.
+        record_id: Opaque unique id of this host; join target of
+          session.host_id.
+        created_sim_time: Time the row was created.
+        active: FALSE if the row was soft-deleted from inventory.
+        deactivated_at: Time the row was retired from inventory; NULL while
+          active.
+        prop__actor_type: Row category; always 'host' in this table.
+
+    - table: records__entity
+      name: asset
+      description: >-
+        One item of the SIEM's polymorphic inventory — a server, an account,
+        or a firewall rule, told apart by asset_type.
+      columns:
+        record_index: asset_key
+        record_id: asset_id
+        created_sim_time: created_at
+        prop__hostname: hostname
+        prop__zone: zone
+        prop__port: port
+        prop__service: service
+        prop__account_name: account_name
+        prop__account_type: account_type
+        prop__owner_host: owner_hostname
+        prop__rule_name: rule_name
+        prop__src_zone: src_zone
+        prop__dst_zone: dst_zone
+        prop__dst_port: dst_port
+        prop__action: action
+        prop__entity_type: asset_type
+        prop__ip_address: ip_address
+        prop__owner_first: owner_first
+        prop__owner_last: owner_last
+      descriptions:
+        record_index: >-
+          Compact integer key for this asset (server, account, or firewall
+          rule).
+        record_id: Opaque unique id of this asset.
+        created_sim_time: Time the row was created.
+        active: FALSE if the row was soft-deleted from inventory.
+        deactivated_at: Time the row was retired from inventory; NULL while
+          active.
+        prop__entity_type: >-
+          Row category — server, account, or fw_rule; says which of this
+          table's sparse columns apply to the row.
+
+    - table: records__journey_instance
+      name: session
+      description: >-
+        One session a host runs, from open to close — the correlation row
+        every security_event in it shares by session_id.
+      columns:
+        record_index: session_key
+        record_id: session_id
+        created_sim_time: created_at
+        prop__actor: host_id
+        ref_index__actor: host_key
+        prop__journey_type: session_type
+        prop__current_state: current_state
+      descriptions:
+        record_index: >-
+          Compact integer key for this session; join target of
+          security_event.session_key.
+        record_id: >-
+          Correlation id shared by every event in this session; join target
+          of security_event.session_id.
+        created_sim_time: Time the row was created (the session's start).
+        active: FALSE if the row was soft-deleted.
+        deactivated_at: Time the row was retired; NULL while active.
+        prop__actor: Id of the host that ran this session; join to
+          host.host_id.
+        ref_index__actor: >-
+          Compact integer key of the host that ran this session; join to
+          host.host_key.
+        prop__journey_type: >-
+          Behavior profile this session ran — role cadence for internal
+          hosts; approach_* marks the intrusion sequences. Ground truth the
+          other exports deliberately hide.
+        prop__current_state: >-
+          State the session last reached — the ground-truth narration
+          (probing, staging, moving, ...) no real log records.
+
+    - table: records__tick_decision
+      name: security_event
+      description: >-
+        One event the collector logged for a session — a connection attempt,
+        firewall evaluation, authentication attempt or rejection, or session
+        opening.
+      columns:
+        record_index: event_key
+        record_id: event_id
+        created_sim_time: created_at
+        prop__journey_instance: session_id
+        ref_index__journey_instance: session_key
+        prop__decision_type: event_type
+        prop__context: context
+      descriptions:
+        record_index: Compact integer key for this event.
+        record_id: Opaque unique id of this event; one row per logged event.
+        created_sim_time: Time the event was logged.
+        active: FALSE if the row was soft-deleted; log rows never are.
+        deactivated_at: Time the row was retired; always NULL — log rows are
+          immutable.
+        prop__journey_instance: >-
+          Correlation id shared by every event in one session; join to
+          session.session_id.
+        ref_index__journey_instance: >-
+          Compact integer key of this event's session; join to
+          session.session_key.
+        prop__decision_type: >-
+          Event category, in the collector's raw vocabulary:
+          destination_chosen (a connection attempt), firewall_evaluated (an
+          allow/deny firewall decision), account_presented (an authentication
+          attempt), auth_rejected (a failed authentication), session_opened
+          (a session established).
+        prop__context: >-
+          Raw JSON detail; carries bytes_transferred on session_opened
+          events, '{}' otherwise.

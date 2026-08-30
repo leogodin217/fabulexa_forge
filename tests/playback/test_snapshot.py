@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from _support.sidecar_builder import identity_column, prop_column
+from _support.sidecar_builder import enum_options, identity_column, prop_column
 
 from fabulexa_forge.anchor import render_ts
 from fabulexa_forge.playback import (
@@ -106,6 +106,38 @@ class TestRecordStateColumns:
 
         assert "presentation_id" in table.column_names
         assert table.column("presentation_id").to_pylist() == ["5001"]
+
+    def test_presentation_id_absent_when_identity_suppresses_it(
+        self, tmp_path: Path
+    ) -> None:
+        cols = [
+            identity_column("fork_path", "VARCHAR"),
+            identity_column("record_id", "VARCHAR"),
+            {"name": "presentation_id", "type": "BIGINT"},
+            {"name": "created_sim_time", "type": "BIGINT"},
+            {"name": "active", "type": "BOOLEAN"},
+            {"name": "deactivated_at", "type": "BIGINT"},
+            {"name": "last_mutation_sim_time", "type": "BIGINT"},
+            identity_column("record_index", "BIGINT"),
+            prop_column(
+                "prop__name",
+                "VARCHAR",
+                history_tracked=False,
+                temporal_class="constant",
+            ),
+        ]
+        rows = [("trunk", "g1", 5001, 10, True, None, 10, 0, "Alice")]
+        emit_dir = build_data_emit(tmp_path, records=[RecordSpec("guest", cols, rows)])
+        selection = PlaybackSelection(
+            records=(RecordAtomSelection("guest", (), None, None, ("record_id",)),),
+            memberships=(),
+        )
+        with open_emit(emit_dir) as emit:
+            playback = open_playback(emit, selection, None)
+            table = playback.snapshot(10).record_state("guest")
+
+        assert "presentation_id" not in table.column_names
+        assert "record_id" in table.column_names
 
 
 class TestMembershipStateColumns:
@@ -238,7 +270,9 @@ class TestStampSemantics:
             tmp_path,
             records=[RecordSpec("drifted_patient", cols, rows)],
             extra={
-                "enum_domains": {"drifted_patient": {"drifted_patient_type": ["a"]}}
+                "enum_domains": {
+                    "drifted_patient": {"drifted_patient_type": enum_options("a")}
+                }
             },
         )
         selection = PlaybackSelection(

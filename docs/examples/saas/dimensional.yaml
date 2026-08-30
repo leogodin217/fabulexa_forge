@@ -25,6 +25,11 @@
 #            (also 1,399 rows) — same event, written twice by the engine.
 #            dim_company's SCD-2 already carries it; a second copy would be
 #            redundant, not additional fidelity.
+#   DROPPED  entity.prop__attach_weight from dim_account. It is a pure
+#            simulation arrival-sampling knob (how strongly the account
+#            pulls newly-arriving seats), not a business attribute a SaaS
+#            warehouse would carry; exporting it would leak simulation
+#            mechanics into the star.
 #   KEPT     journey_instance's user_lifecycle slice, but NOT as a
 #            dimension. Its current_state toggles active<->using at 105
 #            versions/user on average (up to 434) — confirmed via
@@ -46,40 +51,73 @@
 #            dwell.
 #   POLYMORPHIC actor is the target of TWO independent references in this
 #            domain: journey_instance.prop__actor can land on either
-#            actor.company or actor.user depending on journey_type, and
+#            actor.company or actor.user depending on lifecycle_type, and
 #            both sub-types are genuinely disjoint in their real columns
 #            (see `sub_type_columns`). Split into dim_company / dim_user
 #            (never conformed into one dim_actor), and fact_lifecycle_interval
 #            carries the reference as a resolved-per-row NULLABLE pair
-#            (company_fk / user_fk) rather than a single ambiguous column —
+#            (company_id / user_id) rather than a single ambiguous column —
 #            exactly one of the pair is populated per row, discriminated by
-#            journey_type.
-#   OPAQUE   tick_decision.prop__context is a genuine, well-formed value
-#            (declared `tuple[tuple[str, scalar], ...]`, repr-encoded per
-#            the base-format contract's round-trip convention) — confirmed
-#            via consult(composite) NOT to be engine noise. But this
-#            package's config grammar has no derived-column mode that
-#            parses a repr'd string, so it is carried through opaque as
-#            `context` (VARCHAR) on fact_usage_event rather than fabricated
-#            into a numeric column the grammar cannot actually produce.
-#            Key names inside it (e.g. `volume`) are this scenario's own
-#            authoring, not a base-format vocabulary — do not assume they
-#            generalize to other emits.
+#            lifecycle_type.
+#   RENAMED  fact_lifecycle_interval's engine-facing column names to the
+#            domain's: journey_id -> lifecycle_id, journey_type ->
+#            lifecycle_type (matching the source export's vocabulary),
+#            company_fk/user_fk -> company_id/user_id (named for the key
+#            columns they point at).
+#   ELECTED  tick_decision.prop__context is a genuine, well-formed JSON
+#            payload — confirmed via consult(composite) NOT to be engine
+#            noise. It stays a single `context` column on fact_usage_event
+#            (not fabricated into numeric columns), but its `volume` leaf
+#            carries raw float64 noise (16 fraction digits), so
+#            `derived: {json_precision: ...}` rounds it in place to 2dp;
+#            every other payload byte is preserved verbatim. Key names
+#            inside it (e.g. `volume`) are this scenario's own authoring,
+#            not a base-format vocabulary — do not assume they generalize.
+#   ELECTED  entity.prop__engagement_score (a 1-100 score) carries the same
+#            float64 noise, so dim_account elects `derived: decimal` [5, 2] —
+#            the same DECIMAL(5,2) the source config's state table elects for
+#            this kind (per-kind agreement). dim_account is `scd: type2` and
+#            the score is tracked, so the rendering is evaluated per version
+#            off the versioned reconstruction's value (see
+#            architecture/dimensional.md § SCD-2 wide reconstruction).
+#            Versions stay boundary-faithful: adjacent versions whose rounded
+#            values collide (e.g. 4.800000000000001 and 4.804 both render
+#            4.80) remain separate rows — the election changes presentation
+#            only, never version structure.
 #   RENAMED  actor.company -> dim_company, entity.company_hub -> dim_account,
 #            entity.sku -> dim_sku, actor.user -> dim_user, tick_decision ->
 #            fact_usage_event: output names are the domain's, never the
 #            engine ontology's.
 #   SPLIT    dim_user -> dim_user (Type-1 identity: name/email/account FK)
-#            + dim_user_status (SCD-2 satellite: status only). The SCD-2
-#            builder implements exactly three column modes on a `scd: type2`
-#            table — `from`, `null`, `derived: scd_window` — so an `fk`
-#            column (dim_user's account_id) cannot live on the same table as
-#            the tracked `status` column today. This is a real engine
+#            + dim_user_status (SCD-2 satellite: status only). A `scd: type2`
+#            table refuses `fk` — a cross-row read the type2 build does not
+#            define — so dim_user's account_id cannot live on the same table
+#            as the tracked `status` column. This is a real engine
 #            constraint, not a style choice; the split is the standard
-#            mini-dimension/satellite pattern, not a fidelity loss. The same
-#            constraint drops `created_at` from dim_company/dim_account
-#            (their `valid_from` already carries the wallclock version
-#            start).
+#            mini-dimension/satellite pattern, not a fidelity loss.
+#   ELECTED  dim_company and dim_account carry `created_at`, a `derived:
+#            timestamp` off the structural `created_sim_time`. A structural
+#            column is untracked, so its rendering reads per record from the
+#            records relation. The value is per-record: identical
+#            on every version row, unlike `valid_from`, which moves with each
+#            version. The two answer different questions — when the record was
+#            born vs. when this version began.
+#   ELECTED  dim_company and dim_user_status's valid_from/valid_to elect a
+#            date-grained `scd_window` (`{bound, as: date}`) instead of the
+#            default TIMESTAMP window. Both track coarse CRM/seat-lifecycle
+#            milestones (onboarding -> active -> churned; provisioned ->
+#            active -> using -> offboarded) — status-change dates a
+#            warehouse reports on, not intraday-sensitive moments.
+#            dim_account's own valid_from/valid_to stay the default
+#            TIMESTAMP: its versions mix a daily engagement-score batch
+#            recompute with genuine same-day pricing changes (544 collision
+#            days measured), so collapsing to date grain would blend a
+#            cosmetic update with a real billing change.
+#   DESCRIBED per-column `description:` overrides rewrite the inherited
+#            engine-voice prose (surrogate-identity, simulation-time,
+#            journey-stage wording) into the learner-facing domain voice the
+#            readme should carry, and fill columns the base layer left
+#            undescribed (valid_from/valid_to, FKs).
 
 mode: dimensional
 
@@ -91,6 +129,7 @@ dimensional:
   tables:
     # --- dim_company: CRM/sales-stage account (actor.company) ---
     - name: dim_company
+      description: One row per subscribing company, the account holder whose lifecycle runs from onboarding through renewal reviews to churn.
       role: dim
       scd: type2  # status is history-tracked: onboarding -> active -> churned
       source:
@@ -101,19 +140,29 @@ dimensional:
       columns:
         - name: company_id
           from: presentation_id
+          description: Unique company identifier (CMP-#####).
         - name: status
           from: prop__status
+          description: "Lifecycle status: onboarding / active / churned."
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: When the company signed up.
         - name: valid_from
           derived:
-            scd_window: valid_from
+            scd_window: {bound: valid_from, as: date}
+          description: Date this version of the row took effect.
         - name: valid_to
           derived:
-            scd_window: valid_to
+            scd_window: {bound: valid_to, as: date}
+          description: Date this version was superseded; NULL on the current version.
 
     # --- dim_account: billing/workspace tenant (entity.company_hub) ---
     - name: dim_account
+      description: One row per account, the commercial record of a company's plan, pricing, churn status, and engagement score.
       role: dim
-      scd: type2  # attach_weight / churn_flag / engagement_score are tracked
+      scd: type2  # seat_price / churn_flag / engagement_score are tracked
       source:
         grain: records
         kind: entity
@@ -122,29 +171,38 @@ dimensional:
       columns:
         - name: account_id
           from: presentation_id
+          description: Unique account identifier (ACC-#####).
         - name: name
           from: prop__name
+          description: Account display name.
         - name: domain
           from: prop__domain
         - name: plan
           from: prop__plan
         - name: seat_price
           from: prop__seat_price
-        - name: attach_weight
-          from: prop__attach_weight
         - name: churn_flag
           from: prop__churn_flag
         - name: engagement_score
-          from: prop__engagement_score
+          derived:
+            decimal: {from: prop__engagement_score, as: [5, 2]}
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: When the account was created.
         - name: valid_from
           derived:
             scd_window: valid_from
+          description: Instant this version of the row took effect.
         - name: valid_to
           derived:
             scd_window: valid_to
+          description: Instant this version was superseded; NULL on the current version.
 
     # --- dim_sku: product/feature catalog (entity.sku) ---
     - name: dim_sku
+      description: One row per product line in the catalogue, the feature a usage session is attributed to.
       role: dim
       scd: type1  # 3 rows, no tracked properties
       source:
@@ -155,17 +213,21 @@ dimensional:
       columns:
         - name: sku_id
           from: presentation_id
+          description: Unique SKU identifier (SKU-###).
         - name: name
           from: prop__name
+          description: SKU display name (Core, Analytics, API).
         - name: popularity
           from: prop__popularity
         - name: created_at
           derived:
             timestamp:
               source: created_sim_time
+          description: When the SKU was added to the catalogue.
 
     # --- dim_user: individual product user, Type-1 identity (actor.user) ---
     - name: dim_user
+      description: One row per seat holder, an individual working inside a subscribing company's account.
       role: dim
       scd: type1  # identity + FK; the tracked status lives on dim_user_status
       source:
@@ -176,11 +238,13 @@ dimensional:
       columns:
         - name: user_id
           from: presentation_id
+          description: Unique user identifier (USR-######).
         - name: account_id
           fk:
             to: dim_account
             via: reference
             path: [prop__company]
+          description: dim_account.account_id of the account this user's seat belongs to.
         - name: first_name
           from: prop__first_name
         - name: last_name
@@ -197,9 +261,11 @@ dimensional:
           derived:
             timestamp:
               source: created_sim_time
+          description: When the user's seat was created.
 
     # --- dim_user_status: SCD-2 satellite, user lifecycle status only ---
     - name: dim_user_status
+      description: One row per seat's status interval, tracking a user's lifecycle from provisioned through active/using to offboarded.
       role: dim
       scd: type2  # provisioned -> active -> using -> offboarded
       source:
@@ -210,18 +276,23 @@ dimensional:
       columns:
         - name: user_id
           from: presentation_id
+          description: Unique user identifier (USR-######).
         - name: status
           from: prop__status
+          description: "Seat lifecycle status: provisioned / active / using / offboarded."
         - name: valid_from
           derived:
-            scd_window: valid_from
+            scd_window: {bound: valid_from, as: date}
+          description: Date this version of the row took effect.
         - name: valid_to
           derived:
-            scd_window: valid_to
+            scd_window: {bound: valid_to, as: date}
+          description: Date this version was superseded; NULL on the current version.
 
     # --- fact_usage_event: one row per product usage event (tick_decision) ---
     - name: fact_usage_event
       role: fact
+      description: One row per product usage session, attributing the volume a seat holder ran to the SKU it was recorded against.
       source:
         grain: records
         kind: tick_decision
@@ -229,15 +300,18 @@ dimensional:
       columns:
         - name: usage_event_id
           from: record_index
+          description: Sequential event id (0-based), ascending in event order.
         - name: occurred_at
           derived:
             timestamp:
               source: created_sim_time
+          description: When the usage session occurred.
         - name: user_id
           fk:
             to: dim_user
             via: reference
             path: [prop__journey_instance, prop__actor]
+          description: dim_user.user_id of the user who ran the session.
         - name: sku_id
           fk:
             to: dim_sku
@@ -245,40 +319,53 @@ dimensional:
             property: bindings
             member_field: entity
             where: {elem__role_name: sku}
+          description: dim_sku.sku_id of the product line the session was recorded against.
         - name: context
-          from: prop__context
+          derived:
+            json_precision:
+              from: prop__context
+              leaves: {volume: 2}
+          description: JSON detail of the usage session (e.g. volume).
 
     # --- fact_lifecycle_interval: state-occupancy timeline (journey_instance) ---
     - name: fact_lifecycle_interval
+      description: One row per state interval occupied by a company or user lifecycle.
       role: fact
       source:
         grain: history_interval
         kind: journey_instance
         property: current_state
-      key: [journey_id, started_at]
+      key: [lifecycle_id, started_at]
       columns:
-        - name: journey_id
+        - name: lifecycle_id
           from: record_id
-        - name: journey_type
+          description: Id of the lifecycle this interval belongs to; rows sharing an id form one company or user lifecycle timeline.
+        - name: lifecycle_type
           lookup:
             property: journey_type
-        - name: company_fk
+          description: "Which lifecycle this is: company_lifecycle or user_lifecycle."
+        - name: company_id
           fk:
             to: dim_company
             via: reference
             path: [prop__actor]
-        - name: user_fk
+          description: dim_company.company_id for company_lifecycle rows; NULL on user_lifecycle rows.
+        - name: user_id
           fk:
             to: dim_user
             via: reference
             path: [prop__actor]
+          description: dim_user.user_id for user_lifecycle rows; NULL on company_lifecycle rows.
         - name: state
           from: value
+          description: "Lifecycle state occupied during this interval: onboarding / active / churned for companies, provisioned / active / using / offboarded for users."
         - name: started_at
           derived:
             timestamp:
               source: sim_time
+          description: When the lifecycle entered this state.
         - name: ended_at
           derived:
             timestamp:
               source: lead_sim_time
+          description: When the lifecycle left this state; NULL if it was still in this state at the end of the extract.

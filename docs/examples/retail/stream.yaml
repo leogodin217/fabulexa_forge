@@ -1,49 +1,78 @@
-# StreamConfig — retail bundle, mixer smoke test (<kind>_type sub-type routing)
+# StreamConfig — retail (TechMart) bundle, mixer smoke test
 # ============================================================
 # Drives `fabulexa-forge mixer` / `fabulexa-forge stream` over the retail emit at
 # docs/examples/retail/bundle/.
 #
-# Sub-typing is driven by the `<kind>_type` discriminator domain in enum_domains,
-# NOT by record_roles. A kind whose `<kind>_type` domain is non-empty is sub-typed:
-# its routing leaf (`route_table`, the Layer-A attribute) is the discriminator value
-# — one leaf per declared sub-type, not the bare kind. A kind with no `<kind>_type`
-# domain is not sub-typed: its route_table is the kind itself.
+# VOCABULARY (parity with source.yaml): topics, envelope kinds, payload keys and
+# identity surfaces all speak the app database's schema — the same mapping
+# source.yaml applies (actor/customer -> customer, entity/product -> product,
+# entity/infrastructure -> storefront, journey_instance -> shopping_session):
+#   - Sub-typing follows the `<kind>_type` discriminator domain in enum_domains:
+#     actor_type = [customer, ops] and entity_type = [product, infrastructure]
+#     are sub-typed; journey_instance has no domain and is not.
+#   - actor and entity are SPLIT kinds, so one `kind_labels` entry per kind
+#     could not name both halves — each stream declares its own `kind_label`,
+#     mirroring source.yaml's per-source `item_type` (the same reasoning).
+#   - `keys:` is source.yaml's block verbatim: customer events key on the CUST_
+#     business id and product/storefront on SKU_/INFRA_ (each table's `id` in
+#     the app database); shopping_session keeps record_id — journey_instance
+#     carries no registry claim, exactly as in source.
+#   - PARTITIONS: each sub-typed stream projects only its own
+#     `sub_type_columns` — the previous revision projected `status` (the
+#     storefront's) on product events and category/price_cents (the product's)
+#     on storefront events, all-NULL payload entries on every row.
+#   - `ignore:` mirrors audit_log hygiene: the generator's naming machinery
+#     (identity_naming_style, designator) stays out of product's change scope,
+#     and the storefront's reserved-range primary_ip / domain out of its own —
+#     the same columns source.yaml ignores on those audit sources.
 #
-# Retail discriminator domains (enum_domains) -> the route_table leaves each kind emits:
-#   actor:  actor_type = [customer]                 -> sub-typed -> `customer`
-#   entity: entity_type = [product, infrastructure] -> sub-typed -> `product`, `infrastructure`
-#   journey_instance: (no journey_instance_type)    -> not sub-typed -> `journey_instance`
+# actor/ops (the single ops agent) has no stream of its own — untracked apart
+# from genesis rows. Its storefront_ops JOURNEY does ride retail.shopping_session
+# (customer_id OPS_001, session_type storefront_ops): the app database's
+# shopping_session table carries the same row, source.yaml's documented known
+# anomaly, and the stream faithfully matches it. Filter session_type in both
+# or neither.
 #
-# Each declared stream names its own topic; the topic set is FOUR topics:
-#   retail.customer         (actor; its single declared sub-type)
-#   retail.product          (entity sub-type)
-#   retail.infrastructure   (entity sub-type)
-#   retail.journey_instance (not sub-typed)
-#
-# NOTE — entity gets two declared streams, one per sub-type, because
-# `entity_type` has domain [product, infrastructure]; sub-typing follows that
-# discriminator domain regardless of entity's bare-string warehouse role in
-# record_roles. To stream only one entity sub-type, declare a single stream
-# scoped to it via `sub_types: [product]` (see the subtype-select recipe).
+# Topic set — FOUR topics:
+#   retail.customer          (actor/customer)  — total_purchases over time
+#   retail.product           (entity/product)  — catalogue creates (no tracked
+#                                                product prop changes post-create)
+#   retail.storefront        (entity/infrastructure) — status / error_rate,
+#                                                the ops health strip
+#   retail.shopping_session  (journey_instance) — funnel state c/u/d, busiest
 #
 # Anchor resolves from the sidecar runtime (start 2022-03-01, UTC). Bootstrap is
 # supplied at the CLI (`--bootstrap-servers localhost:9092`).
 
 content: state-changes
 
+# source.yaml's elections, verbatim — stream identities join the app database.
+keys:
+  actor: presentation_id
+  entity: presentation_id
+
 streams:
-  - name: retail.customer      # actor_type=[customer] -> sub-typed -> route_table = `customer`
+  - name: retail.customer
     kind: actor
-    sub_types: [customer]      # explicit sub-type selection (the only declared value)
+    sub_types: [customer]
     properties: [tier, segment, total_purchases]
-  - name: retail.product       # entity_type=[product,infrastructure] -> one stream per sub-type
+    kind_label: customer
+  - name: retail.product
     kind: entity
     sub_types: [product]
-    properties: [category, price_cents, status]
-  - name: retail.infrastructure
+    properties: [product_name, category, price_cents]
+    kind_label: product
+    ignore: [identity_naming_style, designator]
+  - name: retail.storefront
     kind: entity
     sub_types: [infrastructure]
-    properties: [category, price_cents, status]
-  - name: retail.journey_instance  # no <kind>_type domain -> not sub-typed
+    properties: [status, error_rate]
+    kind_label: storefront
+    ignore: [primary_ip, domain]
+  - name: retail.shopping_session
     kind: journey_instance
-    properties: [current_state]
+    properties: [current_state, actor, journey_type]
+    rename:
+      actor: customer_id
+      journey_type: session_type
+    kind_label: shopping_session

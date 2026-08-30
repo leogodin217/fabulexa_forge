@@ -16,17 +16,33 @@ from zoneinfo import ZoneInfo
 
 import duckdb
 import pytest
-from _support.sidecar_builder import identity_column
+from _support.notices import discard_notice_sink
+from _support.sidecar_builder import enum_options, identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import KindStream, MembershipStream, StreamConfig
-from fabulexa_forge.derivations.membership_events import resolve_membership_columns
-from fabulexa_forge.derivations.row_state_events import resolve_stream_columns
-from fabulexa_forge.errors import ExportError
+from fabulexa_forge.errors import (
+    ElectionPresentationUndeclared,
+    ExportError,
+    RenderKeyResolves,
+    StreamChangeScopeUnresolvable,
+    StreamIdentityMissingElected,
+    StreamIdentityUnavailable,
+    StreamPropertyNotAddressable,
+    StreamRenameUnresolvable,
+)
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
     iter_stream_events,
+    resolve_identity_projection,
+    resolve_stream_key_populations,
+)
+from fabulexa_forge.exporters.streaming.presentation import (
+    IdentityProjection,
+    resolve_membership_output_columns,
+    resolve_stream_output_columns,
 )
 from fabulexa_forge.reader.emit import open_emit
 from fabulexa_forge.reader.errors import TemporalClassUnavailableError
@@ -84,6 +100,24 @@ _HISTORY_COLS: list[dict[str, object]] = [
     {"name": "sim_time", "type": "BIGINT"},
     {"name": "value", "type": "VARCHAR"},
 ]
+
+#: A flat-kind whole-column presentation_keys claim for kind 'item' — the
+#: registry `resolve_identity_projection`'s widened presentation_id gate
+#: consults when a stream publishes presentation_id.
+_ITEM_PRESENTATION_KEYS: dict[str, object] = {
+    "item": {
+        "key": {
+            "unique_within": "emit",
+            "branch_stable": False,
+            "slice_stable": False,
+            "key_space": {"class": "counter", "prefix": "I_", "width": 3},
+        }
+    }
+}
+
+#: The default identity projection every non-election-focused resolver call
+#: in this file uses: the byte-identical 'record_id' surface, published once.
+_RECORD_ID_IDENTITY = IdentityProjection(elected="record_id", published=("record_id",))
 
 
 # ---------------------------------------------------------------------------
@@ -160,6 +194,9 @@ def _build_single_kind_emit(
         ],
         branches=branches,
         extra=extra,
+        # The vendored schema pins branches to exactly one entry; the
+        # multi-branch guard fixture is schema-invalid by construction.
+        schema_valid=n_branches == 1,
     )
     return tmp_path
 
@@ -287,7 +324,9 @@ class TestSeq:
         )
         config = _single_kind_config("item", ["status"])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         seqs = [e.seq for e in events]
         assert seqs[0] == 1
@@ -307,7 +346,9 @@ class TestSeq:
             [_kind_stream("alpha", "alpha", []), _kind_stream("beta", "beta", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 2
         seqs = [e.seq for e in events]
@@ -337,7 +378,9 @@ class TestStreamNameInterleave:
             [_kind_stream("alpha", "alpha", []), _kind_stream("beta", "beta", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert [e.topic for e in events] == ["beta", "alpha"]
 
@@ -362,7 +405,9 @@ class TestStreamNameInterleave:
             ]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         # stream-name order (a_feed < z_feed) wins, even though kind-alphabetical
         # order (alpha < zeta) would put the other event first.
@@ -383,7 +428,9 @@ class TestStreamNameInterleave:
             [_kind_stream("alpha", "alpha", []), _kind_stream("beta", "beta", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert [e.seq for e in events] == [1, 2]
 
@@ -410,7 +457,9 @@ class TestOverlappingStreamMultiplicity:
             ]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 2
         assert {e.topic for e in events} == {"all_items", "status_items"}
@@ -449,7 +498,9 @@ class TestPayloadIndependentEventSet:
             ]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         by_stream = {
             name: sorted(
@@ -473,7 +524,9 @@ class TestPayloadIndependentEventSet:
         )
         config = _single_kind_config("item", [])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         ops = {e.op for e in events}
         assert ops == {"c", "u", "d"}
@@ -519,14 +572,18 @@ class TestPayloadIndependentEventSet:
             record_rows=[("trunk", "r1", 10, True, None, 20, 0, "car", "a0", "b0")],
             history_rows=[("trunk", "actor", "r1", "b", 20, "b1")],
             record_cols=cols,
-            extra={"enum_domains": {"actor": {"actor_type": ["car", "truck"]}}},
+            extra={
+                "enum_domains": {"actor": {"actor_type": enum_options("car", "truck")}}
+            },
         )
         # Stream selects only 'a' (never 'b') but scopes sub_types=['car'].
         config = _state_changes_config(
             [_kind_stream("cars", "actor", ["a"], sub_types=["car"])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         ops = [e.op for e in events]
         # The 'b' history change still produces a 'u' event even though 'b' is
@@ -534,8 +591,8 @@ class TestPayloadIndependentEventSet:
         assert ops == ["c", "u"]
         update = events[1]
         assert update.after is not None
-        assert "prop__b" not in update.after
-        assert "prop__a" in update.after
+        assert "b" not in update.after
+        assert "a" in update.after
 
 
 # ---------------------------------------------------------------------------
@@ -589,21 +646,27 @@ class TestCombinedStreamNulls:
             ],
             history_rows=[],
             record_cols=self._COLS_VEHICLE,
-            extra={"enum_domains": {"vehicle": {"vehicle_type": ["car", "truck"]}}},
+            extra={
+                "enum_domains": {
+                    "vehicle": {"vehicle_type": enum_options("car", "truck")}
+                }
+            },
         )
         config = _state_changes_config(
             [_kind_stream("vehicles", "vehicle", ["car_feature", "truck_feature"])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         by_record = {e.record_id: e.after for e in events}
         assert by_record["c1"] is not None
-        assert by_record["c1"]["prop__car_feature"] == "sedan"
-        assert by_record["c1"]["prop__truck_feature"] is None
+        assert by_record["c1"]["car_feature"] == "sedan"
+        assert by_record["c1"]["truck_feature"] is None
         assert by_record["t1"] is not None
-        assert by_record["t1"]["prop__car_feature"] is None
-        assert by_record["t1"]["prop__truck_feature"] == "flatbed"
+        assert by_record["t1"]["car_feature"] is None
+        assert by_record["t1"]["truck_feature"] == "flatbed"
         # One column list — both events carry the same after-image key set.
         assert set(by_record["c1"].keys()) == set(by_record["t1"].keys())
 
@@ -614,7 +677,8 @@ class TestCombinedStreamNulls:
 
 
 class TestRecordIdentity:
-    """record_id and presentation_id are set correctly on events."""
+    """record_id is set correctly on events; a minted presentation_id column
+    never auto-publishes to the after-image (no election addresses it)."""
 
     def test_record_id_is_set_on_every_op(self, tmp_path: Path) -> None:
         """record_id is populated on c, u, and d events."""
@@ -626,17 +690,21 @@ class TestRecordIdentity:
         )
         config = _single_kind_config("item", ["status"])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         ops = {e.op for e in events}
         assert ops == {"c", "u", "d"}
         for e in events:
             assert e.record_id == "r1"
 
-    def test_presentation_id_populated_when_kind_carries_surrogate(
+    def test_presentation_id_absent_from_after_image_under_default_election(
         self, tmp_path: Path
     ) -> None:
-        """presentation_id is set when the kind has a presentation_id column."""
+        """A kind's own presentation_id column never surfaces in the
+        after-image under the default (record_id) election, even when the
+        kind mints one — the retired auto-published surrogate."""
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
@@ -646,28 +714,15 @@ class TestRecordIdentity:
         )
         config = _single_kind_config("item", [])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         creates = [e for e in events if e.op == "c"]
         assert len(creates) == 1
-        assert creates[0].presentation_id == "1001"
-
-    def test_presentation_id_none_when_kind_has_no_surrogate(
-        self, tmp_path: Path
-    ) -> None:
-        """presentation_id is None when the kind has no presentation_id column."""
-        emit_dir = _build_single_kind_emit(
-            tmp_path,
-            "item",
-            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
-            history_rows=[],
-        )
-        config = _single_kind_config("item", [])
-        with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
-
-        for e in events:
-            assert e.presentation_id is None
+        assert creates[0].after == {"record_id": "r1"}
+        assert creates[0].key_column == "record_id"
+        assert creates[0].key_value == "r1"
 
 
 # ---------------------------------------------------------------------------
@@ -688,7 +743,9 @@ class TestAfterImage:
         )
         config = _single_kind_config("item", [])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         deletes = [e for e in events if e.op == "d"]
         assert len(deletes) == 1
@@ -705,13 +762,15 @@ class TestAfterImage:
         )
         config = _single_kind_config("item", ["label"])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         creates = [e for e in events if e.op == "c"]
         assert len(creates) == 1
         assert creates[0].after is not None
         assert creates[0].after["record_id"] == "r1"
-        assert creates[0].after["prop__label"] == "x"
+        assert creates[0].after["label"] == "x"
 
 
 # ---------------------------------------------------------------------------
@@ -734,7 +793,9 @@ class TestTimestampRendering:
         )
         config = _single_kind_config("item", [])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         creates = [e for e in events if e.op == "c"]
         assert len(creates) == 1
@@ -764,7 +825,11 @@ class TestTimestampRendering:
         )
         config = _single_kind_config("item", [])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, anchor))
+            events = list(
+                iter_stream_events(
+                    emit, config, anchor, notice_sink=discard_notice_sink
+                )
+            )
 
         creates = [e for e in events if e.op == "c"]
         assert len(creates) == 1
@@ -800,7 +865,11 @@ class TestTimestampRendering:
         )
         config = _single_kind_config("item", [])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, anchor))
+            events = list(
+                iter_stream_events(
+                    emit, config, anchor, notice_sink=discard_notice_sink
+                )
+            )
 
         creates = [e for e in events if e.op == "c"]
         assert len(creates) == 1
@@ -831,7 +900,9 @@ class TestLayerAOnlyRouting:
         )
         config = _state_changes_config([_kind_stream("items_feed", "item", [])])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         assert events[0].topic == "items_feed"
@@ -853,7 +924,9 @@ class TestLayerAOnlyRouting:
             [_membership_stream("wait_events", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         assert events[0].topic == "wait_events"
@@ -882,7 +955,11 @@ class TestStreamKindResolvable:
                 ExportError,
                 match="stream 'ghosts': kind 'ghost' has no records__ghost table",
             ):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
     def test_bad_kind_fails_even_when_other_streams_valid(self, tmp_path: Path) -> None:
         """Validation fails on the bad stream even if other streams would succeed."""
@@ -897,7 +974,11 @@ class TestStreamKindResolvable:
         )
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="stream 'ghosts': .*records__ghost"):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
 
 class TestStreamPropertyResolvable:
@@ -920,7 +1001,11 @@ class TestStreamPropertyResolvable:
                     " has no prop__nonexistent column"
                 ),
             ):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
 
 class TestStreamSubTypesRequireSubtyping:
@@ -942,7 +1027,11 @@ class TestStreamSubTypesRequireSubtyping:
                 ExportError,
                 match="stream 'items': kind 'item' is not sub-typed",
             ):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
 
 class TestStreamSubTypesDeclared:
@@ -956,7 +1045,11 @@ class TestStreamSubTypesDeclared:
             record_rows=[("trunk", "r1", 10, True, None, 10, 0, "alpha")],
             history_rows=[],
             record_cols=_RECORD_COLS_DISCRIMINATOR,
-            extra={"enum_domains": {"widget": {"widget_type": ["alpha", "beta"]}}},
+            extra={
+                "enum_domains": {
+                    "widget": {"widget_type": enum_options("alpha", "beta")}
+                }
+            },
         )
         config = _state_changes_config(
             [_kind_stream("widgets", "widget", ["widget_type"], sub_types=["gamma"])]
@@ -966,7 +1059,47 @@ class TestStreamSubTypesDeclared:
                 ExportError,
                 match="stream 'widgets': sub_type 'gamma' is not declared",
             ):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
+
+
+class TestStreamNamingWrapEndToEnd:
+    """StreamRenameUnresolvable is wrapped with the stream-name prefix when
+    it surfaces through iter_stream_events, not just via a direct call to
+    the unwrapped resolver."""
+
+    def test_rename_key_unresolvable_prefixes_stream_name(self, tmp_path: Path) -> None:
+        """A rename key naming no selected property raises with the
+        stream-name-prefixed message, not the resolver's bare message."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        config = _state_changes_config(
+            [
+                KindStream(
+                    name="items",
+                    kind="item",
+                    properties=["status"],
+                    rename={"bogus": "renamed"},
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                StreamRenameUnresolvable,
+                match="stream 'items': rename key 'bogus' names no selected property",
+            ):
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
 
 class TestSingleBranch:
@@ -984,7 +1117,11 @@ class TestSingleBranch:
         config = _single_kind_config("item", [])
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="single-branch emit"):
-                list(iter_stream_events(emit, config, None))
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
 
 class TestEagerValidation:
@@ -1002,7 +1139,7 @@ class TestEagerValidation:
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="records__ghost"):
                 # No list() — error must come from the call itself
-                iter_stream_events(emit, config, None)
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
     def test_unknown_property_raises_before_next(self, tmp_path: Path) -> None:
         """ExportError for unknown property is raised at call time, not at next()."""
@@ -1015,7 +1152,7 @@ class TestEagerValidation:
         config = _state_changes_config([_kind_stream("items", "item", ["nonexistent"])])
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="nonexistent"):
-                iter_stream_events(emit, config, None)
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
     def test_multi_branch_raises_before_next(self, tmp_path: Path) -> None:
         """ExportError for multi-branch is raised at call time, not at next()."""
@@ -1029,7 +1166,7 @@ class TestEagerValidation:
         config = _single_kind_config("item", [])
         with open_emit(emit_dir) as emit:
             with pytest.raises(ExportError, match="single-branch emit"):
-                iter_stream_events(emit, config, None)
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -1114,7 +1251,7 @@ class TestStreamPropertySliceOnly:
                 ),
             ):
                 # No list() — error must come from the call itself
-                iter_stream_events(emit, config, None)
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
     def test_tracked_and_constant_properties_unaffected(self, tmp_path: Path) -> None:
         """A tracked property selected alongside the slice_only column stays
@@ -1128,7 +1265,9 @@ class TestStreamPropertySliceOnly:
         )
         config = _state_changes_config([_kind_stream("items", "item", ["status"])])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
         assert len(events) == 1
 
     def test_exempt_discriminator_streams_normally(self, tmp_path: Path) -> None:
@@ -1140,16 +1279,22 @@ class TestStreamPropertySliceOnly:
             record_rows=[("trunk", "r1", 10, True, None, 10, 0, "alpha")],
             history_rows=[],
             record_cols=_RECORD_COLS_DISCRIMINATOR,
-            extra={"enum_domains": {"widget": {"widget_type": ["alpha", "beta"]}}},
+            extra={
+                "enum_domains": {
+                    "widget": {"widget_type": enum_options("alpha", "beta")}
+                }
+            },
         )
         config = _state_changes_config(
             [_kind_stream("widgets", "widget", ["widget_type"], sub_types=["alpha"])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
         assert len(events) == 1
         assert events[0].after is not None
-        assert events[0].after["prop__widget_type"] == "alpha"
+        assert events[0].after["widget_type"] == "alpha"
 
     def test_missing_temporal_pair_raises_unavailable(self, tmp_path: Path) -> None:
         """A selected property with history_tracked declared but no paired
@@ -1164,7 +1309,7 @@ class TestStreamPropertySliceOnly:
         config = _state_changes_config([_kind_stream("items", "item", ["ghost"])])
         with open_emit(emit_dir) as emit:
             with pytest.raises(TemporalClassUnavailableError):
-                iter_stream_events(emit, config, None)
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
     def test_membership_events_content_unaffected(self, tmp_path: Path) -> None:
         """membership-events content never reads a records column's class."""
@@ -1179,7 +1324,9 @@ class TestStreamPropertySliceOnly:
             [_membership_stream("team_events", "item", "team", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
         assert len(events) == 1
 
 
@@ -1218,12 +1365,15 @@ _RECORD_COLS_INTERLEAVED: list[dict[str, object]] = [
 
 
 class TestFoldColOrder:
-    """Engine fold-row column list equals ROW_STATE_EVENT_COLUMNS + resolve[1:]."""
+    """Engine after-image key order equals resolve_stream_output_columns's
+    output-key order."""
 
     def test_fold_col_names_equal_row_state_plus_resolve_tail(
         self, tmp_path: Path
     ) -> None:
-        """For an interleaved kind, fold columns = ROW_STATE_EVENT_COLUMNS + resolve[1:]."""
+        """For an interleaved kind, after-image keys equal
+        resolve_stream_output_columns's output keys (identity_key='record_id',
+        no election in play)."""
         emit_dir = _build_single_kind_emit(
             tmp_path,
             "item",
@@ -1235,16 +1385,22 @@ class TestFoldColOrder:
             [_kind_stream("items", "item", ["status", "label", "rank"])]
         )
         with open_emit(emit_dir) as emit:
-            resolved = resolve_stream_columns(
-                emit.sidecar, "item", frozenset({"status", "label", "rank"})
+            resolved = resolve_stream_output_columns(
+                emit.sidecar,
+                "item",
+                ["status", "label", "rank"],
+                None,
+                _RECORD_ID_IDENTITY,
             )
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         creates = [e for e in events if e.op == "c"]
         assert len(creates) == 1
         after = creates[0].after
         assert after is not None
-        assert list(after.keys()) == resolved
+        assert list(after.keys()) == [entry.output_key for entry in resolved]
 
     def test_valid_iter_stream_events_same_events_as_before(
         self, tmp_path: Path
@@ -1261,7 +1417,9 @@ class TestFoldColOrder:
         )
         config = _single_kind_config("item", ["status"])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 2
         assert [e.op for e in events] == ["c", "u"]
@@ -1328,6 +1486,7 @@ def _build_single_membership_emit(
     mem_cols: list[dict[str, object]],
     mem_rows: list[tuple[Any, ...]],
     extra_kinds: tuple[str, ...] = (),
+    extra: dict[str, object] | None = None,
 ) -> Path:
     """Build a minimal emit with one membership table.
 
@@ -1355,6 +1514,7 @@ def _build_single_membership_emit(
         tmp_path,
         tables=tables,
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra=extra,
     )
     return tmp_path
 
@@ -1431,7 +1591,9 @@ class TestMembershipCrossTableMerge:
             ]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 2
         assert [e.seq for e in events] == [1, 2]
@@ -1456,7 +1618,9 @@ class TestMembershipCrossTableMerge:
             ]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 3
         assert [e.seq for e in events] == [1, 2, 3]
@@ -1475,7 +1639,9 @@ class TestMembershipCrossTableMerge:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 2
         assert [e.op for e in events] == ["join", "leave"]
@@ -1495,10 +1661,96 @@ class TestMembershipCrossTableMerge:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         assert events[0].op == "join"
+
+
+# ---------------------------------------------------------------------------
+# Membership stream owner sub_types validation
+# ---------------------------------------------------------------------------
+
+
+class TestMembershipStreamSubTypesRequireSubtyping:
+    """A membership stream's owner `sub_types` on a non-sub-typed owner kind
+    raises ExportError, naming the stream."""
+
+    def test_sub_types_on_non_subtyped_owner_kind_raises(self, tmp_path: Path) -> None:
+        """The owner kind carries no `<kind>_type` discriminator domain."""
+        emit_dir = _build_single_membership_emit(
+            tmp_path,
+            "queue",
+            "waiters",
+            _MEMBERSHIP_BASIC_COLS,
+            [("trunk", "r1", 10, None)],
+        )
+        config = _membership_events_config(
+            [
+                MembershipStream(
+                    name="waiters_feed",
+                    membership={"kind": "queue", "property": "waiters"},
+                    fields=[],
+                    sub_types=["vip"],
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                ExportError,
+                match=("stream 'waiters_feed': owner kind 'queue' is not sub-typed"),
+            ):
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
+
+
+class TestMembershipStreamSubTypesDeclared:
+    """A membership stream's owner `sub_types` value outside the owner
+    kind's declared discriminator domain raises ExportError, naming the
+    stream."""
+
+    def test_undeclared_owner_sub_type_value_raises(self, tmp_path: Path) -> None:
+        """The declared value is not in the owner kind's enum_domains entry."""
+        emit_dir = _build_single_membership_emit(
+            tmp_path,
+            "queue",
+            "waiters",
+            _MEMBERSHIP_BASIC_COLS,
+            [("trunk", "r1", 10, None)],
+            extra={
+                "enum_domains": {
+                    "queue": {"queue_type": enum_options("priority", "standard")}
+                }
+            },
+        )
+        config = _membership_events_config(
+            [
+                MembershipStream(
+                    name="waiters_feed",
+                    membership={"kind": "queue", "property": "waiters"},
+                    fields=[],
+                    sub_types=["vip"],
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                ExportError,
+                match=(
+                    "stream 'waiters_feed': sub_type 'vip' is not declared"
+                    " for owner kind 'queue'"
+                ),
+            ):
+                list(
+                    iter_stream_events(
+                        emit, config, None, notice_sink=discard_notice_sink
+                    )
+                )
 
 
 # ---------------------------------------------------------------------------
@@ -1522,7 +1774,9 @@ class TestMembershipStreamEventFields:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert {e.op for e in events} == {"join", "leave"}
 
@@ -1539,7 +1793,9 @@ class TestMembershipStreamEventFields:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         assert events[0].kind == "queue"
@@ -1559,28 +1815,12 @@ class TestMembershipStreamEventFields:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         assert events[0].record_id == "myrecord"
-
-    def test_membership_event_presentation_id_is_none(self, tmp_path: Path) -> None:
-        """presentation_id is always None for membership-events."""
-        emit_dir = _build_single_membership_emit(
-            tmp_path,
-            "queue",
-            "waiters",
-            _MEMBERSHIP_BASIC_COLS,
-            [("trunk", "r1", 10, 50)],
-        )
-        config = _membership_events_config(
-            [_membership_stream("waiters_feed", "queue", "waiters", [])]
-        )
-        with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
-
-        for e in events:
-            assert e.presentation_id is None
 
     def test_membership_event_after_nonnull_on_join_and_leave(
         self, tmp_path: Path
@@ -1597,7 +1837,9 @@ class TestMembershipStreamEventFields:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 2
         for e in events:
@@ -1610,7 +1852,8 @@ class TestMembershipStreamEventFields:
 
 
 class TestMembershipAfterImage:
-    """after keys and order match resolve_membership_columns; values str-or-None."""
+    """after keys and order match resolve_membership_output_columns; values
+    str-or-None."""
 
     def test_after_keys_match_resolve_membership_columns_no_fields(
         self, tmp_path: Path
@@ -1627,18 +1870,27 @@ class TestMembershipAfterImage:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            resolved = resolve_membership_columns(emit.sidecar, "queue", "waiters", [])
-            events = list(iter_stream_events(emit, config, None))
+            resolved = resolve_membership_output_columns(
+                emit.sidecar,
+                config.streams[0].membership,
+                [],
+                None,
+                _RECORD_ID_IDENTITY,
+            )
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         after = events[0].after
         assert after is not None
-        assert list(after.keys()) == list(resolved)
+        assert list(after.keys()) == [entry.output_key for entry in resolved]
 
     def test_after_keys_match_resolve_membership_columns_scalar_field(
         self, tmp_path: Path
     ) -> None:
-        """With a scalar field, after keys match resolve_membership_columns order."""
+        """With a scalar field, after keys match resolve_membership_output_columns
+        order."""
         emit_dir = _build_single_membership_emit(
             tmp_path,
             "queue",
@@ -1650,22 +1902,29 @@ class TestMembershipAfterImage:
             [_membership_stream("waiters_feed", "queue", "waiters", ["priority"])]
         )
         with open_emit(emit_dir) as emit:
-            resolved = resolve_membership_columns(
-                emit.sidecar, "queue", "waiters", ["priority"]
+            resolved = resolve_membership_output_columns(
+                emit.sidecar,
+                config.streams[0].membership,
+                ["priority"],
+                None,
+                _RECORD_ID_IDENTITY,
             )
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         after = events[0].after
         assert after is not None
-        assert list(after.keys()) == list(resolved)
-        assert list(after.keys()) == ["record_id", "elem__priority"]
-        assert after["elem__priority"] == "high"
+        assert list(after.keys()) == [entry.output_key for entry in resolved]
+        assert list(after.keys()) == ["record_id", "priority"]
+        assert after["priority"] == "high"
 
     def test_after_keys_match_resolve_membership_columns_ref_field(
         self, tmp_path: Path
     ) -> None:
-        """With a reference field, after keys match resolve_membership_columns order."""
+        """With a reference field, after keys match resolve_membership_output_columns
+        order."""
         emit_dir = _build_single_membership_emit(
             tmp_path,
             "queue",
@@ -1678,22 +1937,28 @@ class TestMembershipAfterImage:
             [_membership_stream("waiters_feed", "queue", "waiters", ["owner"])]
         )
         with open_emit(emit_dir) as emit:
-            resolved = resolve_membership_columns(
-                emit.sidecar, "queue", "waiters", ["owner"]
+            resolved = resolve_membership_output_columns(
+                emit.sidecar,
+                config.streams[0].membership,
+                ["owner"],
+                None,
+                _RECORD_ID_IDENTITY,
             )
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         after = events[0].after
         assert after is not None
-        assert list(after.keys()) == list(resolved)
+        assert list(after.keys()) == [entry.output_key for entry in resolved]
         assert list(after.keys()) == [
             "record_id",
-            "member__owner__kind",
-            "member__owner__id",
+            "owner_kind",
+            "owner_id",
         ]
-        assert after["member__owner__kind"] == "person"
-        assert after["member__owner__id"] == "p1"
+        assert after["owner_kind"] == "person"
+        assert after["owner_id"] == "p1"
 
     def test_after_values_are_str_or_none(self, tmp_path: Path) -> None:
         """All after-image values are str or None (never int, bool, etc.)."""
@@ -1708,7 +1973,9 @@ class TestMembershipAfterImage:
             [_membership_stream("waiters_feed", "queue", "waiters", ["priority"])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         after = events[0].after
@@ -1738,7 +2005,9 @@ class TestMembershipTsRebase:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 1
         assert events[0].ts == 42_000_000_000
@@ -1758,7 +2027,11 @@ class TestMembershipTsRebase:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, anchor))
+            events = list(
+                iter_stream_events(
+                    emit, config, anchor, notice_sink=discard_notice_sink
+                )
+            )
 
         assert len(events) == 1
         ts = events[0].ts
@@ -1799,7 +2072,9 @@ class TestMembershipStreamNameTiebreak:
             ]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 2
         assert [e.topic for e in events] == ["a_feed", "z_feed"]
@@ -1821,7 +2096,9 @@ class TestMembershipStreamNameTiebreak:
             [_membership_stream("waiters_feed", "queue", "waiters", [])]
         )
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 2
         assert events[0].record_id == "a_first"
@@ -1859,7 +2136,9 @@ class TestBuildTopicSet:
         config = _single_kind_config("item", [])
         assert build_topic_set(config) == ("item",)
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
         assert events == []
 
     def test_membership_topic_set_equals_declared_names(self) -> None:
@@ -1901,7 +2180,7 @@ class TestMembershipResolvable:
                 match="stream 'waiters_feed': membership 'queue.waiters'"
                 " has no membership__queue__waiters table",
             ):
-                iter_stream_events(emit, config, None)
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
 
 class TestMembershipFieldResolvable:
@@ -1927,7 +2206,7 @@ class TestMembershipFieldResolvable:
                 match="stream 'waiters_feed': field 'nonexistent'"
                 " has no elem__/member__ column",
             ):
-                iter_stream_events(emit, config, None)
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -1951,7 +2230,9 @@ class TestStateChangesRegression:
         )
         config = _single_kind_config("item", ["status"])
         with open_emit(emit_dir) as emit:
-            events = list(iter_stream_events(emit, config, None))
+            events = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
 
         assert len(events) == 2
         assert events[0].op == "c"
@@ -1964,3 +2245,296 @@ class TestStateChangesRegression:
         assert events[0].after["record_id"] == "r1"
         assert isinstance(events[0].ts, int)
         assert isinstance(events[1].ts, int)
+
+
+# ---------------------------------------------------------------------------
+# resolve_stream_key_populations / resolve_identity_projection (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+class TestResolveStreamKeyPopulations:
+    """The population set a stream's identity draws from: {None} for a flat
+    kind, the declared domain (or a `sub_types` narrowing) otherwise."""
+
+    def test_flat_kind_is_singleton_none(self, tmp_path: Path) -> None:
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        with open_emit(emit_dir) as emit:
+            populations = resolve_stream_key_populations(emit.sidecar, "item", None)
+        assert populations == frozenset({None})
+
+
+class TestResolveIdentityProjection:
+    """Direct unit tests over `resolve_identity_projection`: publication
+    order, the missing-elected gate, the unavailable-surrogate gate, and the
+    widened presentation_id-declared gate."""
+
+    def test_absent_identity_publishes_elected_alone(self, tmp_path: Path) -> None:
+        """declared=None publishes exactly the elected surface."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, None)
+            projection = resolve_identity_projection(
+                emit.sidecar, "items", "item", None, election, frozenset({None})
+            )
+        assert projection.elected == "record_id"
+        assert projection.published == ("record_id",)
+
+    def test_declared_omitting_elected_raises_stream_identity_missing_elected(
+        self, tmp_path: Path
+    ) -> None:
+        """A declared identity list that omits the (default record_id)
+        elected surface raises, naming the stream and the elected surface."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 1001, 10, True, None, 10, 0, "Alice")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_WITH_PID,
+            extra={"presentation_keys": _ITEM_PRESENTATION_KEYS},
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, None)
+            with pytest.raises(
+                StreamIdentityMissingElected,
+                match=(
+                    "stream 'items': identity omits the elected surface"
+                    " 'record_id'; a topic must publish its own key"
+                ),
+            ):
+                resolve_identity_projection(
+                    emit.sidecar,
+                    "items",
+                    "item",
+                    ["presentation_id"],
+                    election,
+                    frozenset({None}),
+                )
+
+    def test_publication_order_is_sidecar_order_regardless_of_declaration_order(
+        self, tmp_path: Path
+    ) -> None:
+        """`[record_index, presentation_id]` and its reverse both publish
+        (presentation_id, record_index) — sidecar column order, declaration
+        order discarded."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 1001, 10, True, None, 10, 0, "Alice")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_WITH_PID,
+            extra={"presentation_keys": _ITEM_PRESENTATION_KEYS},
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, {"item": "presentation_id"})
+            forward = resolve_identity_projection(
+                emit.sidecar,
+                "items",
+                "item",
+                ["record_index", "presentation_id"],
+                election,
+                frozenset({None}),
+            )
+            reverse = resolve_identity_projection(
+                emit.sidecar,
+                "items",
+                "item",
+                ["presentation_id", "record_index"],
+                election,
+                frozenset({None}),
+            )
+        assert forward.published == ("presentation_id", "record_index")
+        assert reverse.published == ("presentation_id", "record_index")
+
+    def test_presentation_id_on_kind_with_no_surrogate_raises_unavailable(
+        self, tmp_path: Path
+    ) -> None:
+        """Publishing presentation_id on a kind that mints no surrogate
+        raises StreamIdentityUnavailable, naming the stream and the kind."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, None)
+            with pytest.raises(
+                StreamIdentityUnavailable,
+                match="stream 'items': the kind 'item' mints no presentation_id",
+            ):
+                resolve_identity_projection(
+                    emit.sidecar,
+                    "items",
+                    "item",
+                    ["record_id", "presentation_id"],
+                    election,
+                    frozenset({None}),
+                )
+
+    def test_published_non_elected_presentation_id_undeclared_raises(
+        self, tmp_path: Path
+    ) -> None:
+        """The widened publication gate: presentation_id published (but not
+        elected) on a registry-undeclared population raises
+        ElectionPresentationUndeclared — the default record_id election alone
+        would need no registry at all, but publishing presentation_id
+        requires the claim regardless of election."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 1001, 10, True, None, 10, 0, "Alice")],
+            history_rows=[],
+            record_cols=_RECORD_COLS_WITH_PID,
+        )
+        with open_emit(emit_dir) as emit:
+            election = resolve_election(emit.sidecar, None)
+            with pytest.raises(ElectionPresentationUndeclared):
+                resolve_identity_projection(
+                    emit.sidecar,
+                    "items",
+                    "item",
+                    ["record_id", "presentation_id"],
+                    election,
+                    frozenset({None}),
+                )
+
+
+# ---------------------------------------------------------------------------
+# StreamPropertyNotAddressable (end-to-end)
+# ---------------------------------------------------------------------------
+
+
+class TestStreamPropertyNotAddressable:
+    """An identity surface named in `properties` is refused before any fold
+    runs — identity is projected through `identity`, never `properties`."""
+
+    def test_identity_surface_in_properties_raises(self, tmp_path: Path) -> None:
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        config = _single_kind_config("item", ["record_index"])
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                StreamPropertyNotAddressable,
+                match=(
+                    "stream 'item': 'record_index' is an identity surface —"
+                    " declare it in identity, not properties"
+                ),
+            ):
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+
+    def test_producer_payload_property_named_record_index_unaddressable(
+        self, tmp_path: Path
+    ) -> None:
+        """A producer payload property that merely shares an identity
+        surface's bare name (`prop__record_index`) is unaddressable too, full
+        stop — the rule claims the bare name outright, not only the
+        sidecar's own identity columns."""
+        cols: list[dict[str, object]] = [
+            identity_column("fork_path", "VARCHAR"),
+            identity_column("record_id", "VARCHAR"),
+            {"name": "created_sim_time", "type": "BIGINT"},
+            {"name": "active", "type": "BOOLEAN"},
+            {"name": "deactivated_at", "type": "BIGINT"},
+            {"name": "last_mutation_sim_time", "type": "BIGINT"},
+            identity_column("record_index", "BIGINT"),
+            {
+                "name": "prop__record_index",
+                "type": "VARCHAR",
+                "history_tracked": False,
+                "temporal_class": "constant",
+            },
+        ]
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "z")],
+            history_rows=[],
+            record_cols=cols,
+        )
+        config = _single_kind_config("item", ["record_index"])
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(StreamPropertyNotAddressable):
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+
+
+# ---------------------------------------------------------------------------
+# Identity surfaces stay outside only/ignore/render (representative cases)
+# ---------------------------------------------------------------------------
+
+
+class TestIdentitySurfacesOutsideChangeScopeAndRender:
+    """Identity surfaces stay outside `only` / `ignore` / `where` / `render`
+    — the existing refusal identities apply unchanged, one representative
+    case each (design doc § Surfaces closed to identity surfaces)."""
+
+    def test_identity_surface_in_only_raises_change_scope_unresolvable(
+        self, tmp_path: Path
+    ) -> None:
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        config = _state_changes_config(
+            [
+                KindStream(
+                    name="items",
+                    kind="item",
+                    properties=["status"],
+                    only=["record_index"],
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                StreamChangeScopeUnresolvable,
+                match=(
+                    "stream 'items': only entry 'record_index' has no"
+                    " prop__record_index column on kind 'item'"
+                ),
+            ):
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+
+    def test_identity_surface_in_render_raises_render_key_resolves(
+        self, tmp_path: Path
+    ) -> None:
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        config = _state_changes_config(
+            [
+                KindStream(
+                    name="items",
+                    kind="item",
+                    properties=["status"],
+                    render={"presentation_id": {"decimal": [6, 3]}},
+                )
+            ]
+        )
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(
+                RenderKeyResolves,
+                match=(
+                    "stream 'items': render key 'presentation_id' does not"
+                    " name a declared property"
+                ),
+            ):
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)

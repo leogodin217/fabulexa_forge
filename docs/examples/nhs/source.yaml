@@ -40,11 +40,36 @@
 #     vocabulary column names (journey_type -> pathway_type, decision_type ->
 #     event_type, diary_type -> book_type, pick_index -> position).
 #   - The junctions drop their constant kind columns (entity_kind='entity' on
-#     all 23,505 bindings, actor_kind='actor' on all 12,414 allocations — one
+#     all 23,708 bindings, actor_kind='actor' on all 12,615 allocations — one
 #     simulator word, zero information; role_name / the table's own meaning
 #     already disambiguates) via `columns:`, and rename the surviving member id.
 #   - Per-source `rename:` keeps the `changes` payload keys in step with the
 #     renamed state-table columns.
+#   - prop__entity_code renames per table to the domain code it is (ward_code,
+#     theatre_code, test_code, opcs4_code, medication_code, consultant_code) —
+#     "entity_code" as a column name on six reference tables was the naming
+#     gate's remaining issue, one engine noun surviving the table renames.
+#
+# DESCRIPTIONS (desc-override round): per-table `descriptions:` maps (keyed by
+# SOURCE identity, like `rename`) replace the engine-voiced inherited prose —
+# identity minting, sim-time lifecycle, queue/journey mechanics — with
+# learner-voice descriptions. Two surfaces have NO override and still speak
+# engine: table-level blurbs (sidecar-inherited: consultant, pathway_episode,
+# clinical_event, and the audit_log item_type value glosses that quote them),
+# and the audit_log's own columns (the `events:` declaration takes no
+# `descriptions:` map — they render undescribed; the README preamble carries
+# the log's replay story).
+#
+# KEYS (realism QA): the `keys:` block elects each population's presented id.
+#   actor -> presentation_id: the PAT_-prefixed hospital number IS the trust's
+#   patient identifier, so `patient.id` carries it and every patient reference
+#   (pathway_episode.patient_id, booking.patient_id, the allocation junction's
+#   member, audit item_id) renders it. Every other kind -> record_index: compact
+#   BIGINT ids, with each catalogue table keeping its NATURAL code (W001,
+#   OPCS-4, C0001) as an attribute beside the surrogate. The registry's CON_/
+#   WARD_/DIAG_-prefixed presentation counters are dropped from the projections
+#   as a third spelling of the same identity; the engine's 64-hex actor
+#   record_id appears nowhere.
 #
 # `booking` keeps its sidecar name — it is a genuine NHS term (an e-RS booking),
 # not engine vocabulary that happens to read well.
@@ -68,7 +93,7 @@
 # is source's own exclusion mechanism, so a kind is exported only through its own
 # `tables[]` / `events.sources[]` entry.
 #
-#   RESTORED tick_decision -> clinical_event (115,289 rows). An earlier revision
+#   RESTORED tick_decision -> clinical_event (116,450 rows). An earlier revision
 #            omitted it as "engine bookkeeping" from the kind name alone;
 #            `record_roles` declares it a fact kind and its decision_type values
 #            ARE the clinical event stream (ed_arrival, triage, admission,
@@ -86,14 +111,14 @@
 #            surgery_procedure / surgery_theatre), pick-indexed where a
 #            decision binds several (up to three medications). The only place
 #            the base layer records the event -> catalogue linkage; its
-#            left_at is empty for all 23,505 rows because a binding is never
+#            left_at is empty for all 23,708 rows because a binding is never
 #            released once made.
 #   GRAIN    patient keeps the person, not the episode (QA F9). The actor
 #            kind carries per-episode state and pre-assigned routing flags
 #            as single scalars on the patient row, and a one-row-per-patient
 #            table asked to hold per-episode facts asserts contradictions:
 #            procedure_code on all 15,060 patients while
-#            surgical_indicated='no' on 13,290; 1,575 recorded FFT outcomes
+#            surgical_indicated='no' on 13,290; 1,545 recorded FFT outcomes
 #            under fft_invited='no'; an admission_disposition on every
 #            patient while only 1,951 were ever admitted. `columns:`
 #            therefore narrows patient to identity, demographics and the
@@ -110,15 +135,14 @@
 #            is governed elsewhere — and it is a generator input besides.
 #            The appointment_book scheduler columns are KEPT, decided the
 #            other way: per-clinic booking rules (horizon, discipline,
-#            on_overflow, an expected no_show_rate for overbooking
-#            planning) are exactly what a scheduling system stores on a
-#            clinic template, and in a config-shaped operational table
-#            "planning parameter" is the honest reading. The dimensional
-#            star deleted them because a consumer would report the
-#            parameter as a measurement; that argument does not transfer
-#            here. slot_interval stays too — its values are raw sim-time
-#            ns (an engine scale, ~17h/~58h), faithful bundle content, so
-#            nobody should read them as clinic slot lengths.
+#            lead/window bounds) are exactly what a scheduling system
+#            stores on a clinic template, and in a config-shaped
+#            operational table "planning parameter" is the honest reading.
+#            The dimensional star deleted them because a consumer would
+#            report the parameter as a measurement; that argument does not
+#            transfer here. slot_interval stays too — its values are raw
+#            sim-time ns (an engine scale, ~17h/~58h), faithful bundle
+#            content, so nobody should read them as clinic slot lengths.
 #
 # COLUMNS: `sub_types:` narrows the ROWS a table draws but NOT its columns —
 # absent `columns:`, each catalogue table would still carry the whole entity
@@ -132,22 +156,33 @@
 # note), which enumerate.
 #
 # A `temporal_class: slice_only` column is auto-omitted with a notice whatever
-# this config says — here booking.attended_at, pathway_episode's state_entry_time
-# / complete / bound_roles / output_roles, and consultant.queue. The export's
-# `notice:` lines are the authoritative list.
+# this config says — here booking.attended_at and pathway_episode's
+# state_entry_time / complete. The export's `notice:` lines are the
+# authoritative list. (consultant.queue is an ordinary tracked reference into
+# the engine's queue kind; it is excluded by consultant's `columns:` list and
+# the audit source's `ignore:`, not by the slice_only policy.)
 #
 # Several columns come out largely empty, and each is faithful rather than a
 # config defect — worth knowing so they are not mistaken for the sub-type leakage
 # the split above fixes:
 #   - `deactivated_at` is set only where something retires. Measured: 87 of 15,060
-#     patients and 46,045 of 47,184 pathway episodes, and no consultant, catalogue
+#     patients and 46,463 of 47,612 pathway episodes, and no consultant, catalogue
 #     item or appointment book at all.
-#   - `min_lead` and `window` are empty for all 15 appointment books, and
-#     `no_show_rate` is carried only by the 5 outpatient clinics. All three
-#     columns are declared for every diary sub-type; this run simply never assigns
-#     them. That is value-absent, not structurally inapplicable.
-#   - `consultant_allocation.on_preempted_rule` is empty for all 12,414
-#     allocations: preemption is a mechanism this run never exercises.
+#   - `min_lead` and `window` are empty for all 15 appointment books. Both
+#     columns are declared for every diary sub-type; this run simply never
+#     assigns them. That is value-absent, not structurally inapplicable.
+#   - `consultant_allocation` DROPS `on_preempted_rule` from its `columns:`:
+#     an engine rule id, empty for all 12,615 allocations (preemption is a
+#     mechanism this run never exercises) — no information, engine vocabulary.
+#   - `booking.rebooked_from` / `rebooked_to` are empty on all 9,363 bookings:
+#     no booking is rebooked in this run.
+#
+#   ELECTED  booking.requested_at / opening_at hold sim-instants as raw ns
+#            BIGINTs (the sidecar declares them temporal_class: constant with
+#            no instant marker). The `instant` render election declares what
+#            the value IS and renders both through the anchor as wallclock
+#            TIMESTAMP — matching the dimensional config's
+#            `derived: {timestamp: ...}` on the same properties.
 #
 # Source is the first mode that REQUIRES a resolved wallclock anchor (the log's
 # `occurred_at` is a real TIMESTAMP). No rebase block is given, so the anchor
@@ -155,6 +190,15 @@
 # clock. Uncomment `rebase:` to override origin/zone.
 
 mode: source
+
+keys:
+  actor: presentation_id
+  resource: record_index
+  entity: record_index
+  diary: record_index
+  journey_instance: record_index
+  tick_decision: record_index
+  booking: record_index
 
 source:
   kind_labels:
@@ -166,70 +210,274 @@ source:
   tables:
     - name: patient
       kind: actor
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      description: "One row per patient, current state."
+      # presentation_id is not listed: under the actor presentation election it
+      # IS the id column (absorption).
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__forename, prop__surname, prop__full_name, prop__birth_date,
                 prop__gender_code, prop__ethnic_category, prop__imd_decile,
                 prop__gp_practice_code, prop__primary_condition, prop__comorbidity_count,
                 prop__frailty_band]
+      # prop__birth_date is a plain upstream-minted date string (verified
+      # %Y-%m-%d, 15,060/15,060, no exceptions) — declared, not sniffed.
+      render:
+        prop__birth_date: {date_parse: "%Y-%m-%d"}
+      # Learner-voice overrides for the columns whose inherited descriptions
+      # speak engine (identity minting, sim-time lifecycle, queue mechanics).
+      descriptions:
+        presentation_id: "Hospital number identifying the patient
+          (PAT-prefixed)."
+        created_sim_time: "When the patient was first registered."
+        active: "Whether the patient record is still open; FALSE once it has
+          been closed."
+        deactivated_at: "When the patient record was closed; NULL while it is
+          open."
+        last_mutation_sim_time: "When the patient record last changed."
+        prop__comorbidity_count: "Count of significant comorbid conditions,
+          banded 0 to 4-plus; a heavier burden raises clinical priority and
+          readmission risk."
     - name: consultant
       kind: resource
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      description: "One row per consultant, current state."
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__capacity, prop__allocated, prop__retiring, prop__entity_code,
                 prop__main_specialty, prop__grade]
+      rename:
+        prop__entity_code: consultant_code
+      descriptions:
+        record_index: "Surrogate key for this consultant."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          soft-deleted."
+        deactivated_at: "When this row was soft-deleted; NULL while it is
+          live."
+        last_mutation_sim_time: "When this row last changed."
+        prop__capacity: "Maximum number of patients this consultant can carry
+          at once (job-plan capacity)."
+        prop__allocated: "Number of patients currently under this
+          consultant's care."
+        prop__retiring: "Whether this consultant is winding down: taking no
+          new patients while the current caseload resolves."
+        prop__main_specialty: "NHS main specialty code this consultant works
+          under."
     - name: pathway_episode
       kind: journey_instance
+      description: "One row per care episode — A&E attendance, inpatient
+        spell, outpatient referral, diagnostics, cancer pathway, surgical
+        pathway, post-discharge follow-up, or FFT survey — current state."
       rename:
         prop__actor: patient_id
         prop__journey_type: pathway_type
+      descriptions:
+        record_index: "Surrogate key for this care episode."
+        created_sim_time: "When the episode was opened."
+        active: "Whether the episode row is still live; FALSE once the
+          episode has been closed out."
+        deactivated_at: "When the episode was closed out; NULL while it is
+          open."
+        last_mutation_sim_time: "When the episode row last changed."
+        prop__actor: "The patient this episode belongs to; joins patient.id."
+        prop__journey_type: "Which care pathway this episode runs: A&E
+          attendance, inpatient spell, outpatient referral, diagnostics,
+          cancer, surgical, post-discharge follow-up, or FFT survey."
+        prop__current_state: "The pathway state the episode currently
+          occupies (see the declared values below)."
     - name: booking
       kind: booking
+      description: "One row per e-RS appointment booking, current state."
       rename:
         prop__subject: patient_id
         prop__diary: appointment_book_id
+      # The ELECTED note above: both are sim-instant payload BIGINTs.
+      render:
+        prop__requested_at: {instant: timestamp}
+        prop__opening_at: {instant: timestamp}
+      descriptions:
+        record_index: "Surrogate key for this booking."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          soft-deleted."
+        deactivated_at: "When this row was soft-deleted; NULL while it is
+          live."
+        last_mutation_sim_time: "When this row last changed."
+        prop__subject: "The patient the appointment was booked for; joins
+          patient.id."
+        prop__diary: "The appointment book the slot was drawn from; joins
+          appointment_book.id."
+        prop__requested_at: "When the booking was requested."
+        prop__opening_at: "When the booked appointment slot opens."
+        prop__rebooked_from: "The cancelled booking this one replaces, where
+          a withdrawn slot was rebooked."
+        prop__rebooked_to: "The booking that superseded this one after its
+          slot was withdrawn; empty on every row in this dataset."
     - name: appointment_book
       kind: diary
+      description: "One row per appointment book — outpatient clinic,
+        two-week-wait cancer clinic, or elective operating list — current
+        state."
       rename:
         prop__diary_type: book_type
+      # next_opening is a tracked payload BIGINT holding a sim-instant (the
+      # book's next bookable slot) — same election as booking's instants.
+      # slot_interval is a DURATION at engine scale, not an instant: it
+      # stays raw deliberately (see the PARAM note above).
+      render:
+        prop__next_opening: {instant: timestamp}
+      descriptions:
+        record_index: "Surrogate key for this appointment book."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          soft-deleted."
+        deactivated_at: "When this row was soft-deleted; NULL while it is
+          live."
+        last_mutation_sim_time: "When this row last changed."
+        prop__slot_interval: "Gap between consecutive appointment slots on
+          this book's template, in working-time nanoseconds."
+        prop__horizon: "How far ahead of today this book releases bookable
+          slots, in working-time nanoseconds."
+        prop__min_lead: "Minimum notice required between making a booking and
+          the slot itself, in working-time nanoseconds; unset for every book
+          in this dataset."
+        prop__window: "Named working-hours calendar this book schedules
+          within; unset for a book that runs around the clock."
+        prop__booking_discipline: "How the book chooses which slot to give a
+          new request."
+        prop__next_opening: "The next appointment slot this book will hand
+          out."
+        prop__retiring: "Whether this book is winding down: no new bookings
+          while existing ones resolve."
+        prop__main_specialty: "Specialty this appointment book serves."
+        prop__diary_type: "Which kind of appointment book this is: outpatient
+          clinic, two-week-wait cancer clinic, or elective operating list."
 
     # --- the reference catalogue, one table per sub-type ---
     - name: ward
       kind: entity
+      description: "One row per hospital ward."
       sub_types: [ward]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__ward_type,
                 prop__total_beds, prop__cost_per_bed_day, prop__site_code]
+      rename:
+        prop__entity_code: ward_code
+      descriptions:
+        record_index: "Surrogate key for this ward."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          soft-deleted."
+        deactivated_at: "When this row was soft-deleted; NULL while it is
+          live."
+        last_mutation_sim_time: "When this row last changed."
+        prop__entity_code: "NHS ward code from the trust's estate catalogue."
+        prop__name: "Ward name."
     - name: theatre
       kind: entity
+      description: "One row per operating theatre."
       sub_types: [theatre]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__theatre_specialty,
                 prop__sessions_per_day]
+      rename:
+        prop__entity_code: theatre_code
+      descriptions:
+        record_index: "Surrogate key for this operating theatre."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          soft-deleted."
+        deactivated_at: "When this row was soft-deleted; NULL while it is
+          live."
+        last_mutation_sim_time: "When this row last changed."
+        prop__entity_code: "Theatre code from the trust's estate catalogue."
+        prop__name: "Theatre name."
     - name: diagnostic_test
       kind: entity
+      description: "One row per diagnostic test type in the trust's
+        diagnostics catalogue."
       sub_types: [diagnostic]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__test_type,
                 prop__turnaround_days, prop__cost]
+      rename:
+        prop__entity_code: test_code
+      descriptions:
+        record_index: "Surrogate key for this diagnostic test type."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          soft-deleted."
+        deactivated_at: "When this row was soft-deleted; NULL while it is
+          live."
+        last_mutation_sim_time: "When this row last changed."
+        prop__entity_code: "Test code from the trust's diagnostics
+          catalogue."
+        prop__name: "Test name."
     - name: procedure
       kind: entity
+      description: "One row per surgical procedure in the OPCS-4 catalogue."
       sub_types: [procedure]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__specialty_group,
                 prop__hrg_code, prop__tariff, prop__complexity]
+      rename:
+        prop__entity_code: opcs4_code
+      descriptions:
+        record_index: "Surrogate key for this surgical procedure."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          soft-deleted."
+        deactivated_at: "When this row was soft-deleted; NULL while it is
+          live."
+        last_mutation_sim_time: "When this row last changed."
+        prop__entity_code: "OPCS-4 code identifying this procedure."
+        prop__name: "Procedure name."
     - name: medication
       kind: entity
+      description: "One row per medication in the trust's formulary."
       sub_types: [medication]
-      columns: [presentation_id, created_sim_time, active, deactivated_at, last_mutation_sim_time,
+      columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__entity_code, prop__name, prop__main_specialty, prop__specialty_group,
                 prop__drug_class]
+      rename:
+        prop__entity_code: medication_code
+      descriptions:
+        record_index: "Surrogate key for this medication."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          soft-deleted."
+        deactivated_at: "When this row was soft-deleted; NULL while it is
+          live."
+        last_mutation_sim_time: "When this row last changed."
+        prop__entity_code: "Medication code from the trust's formulary."
+        prop__name: "Medication name."
 
     - name: clinical_event
       kind: tick_decision
+      description: "One row per clinical milestone recorded across the
+        trust's care pathways: ed_arrival, triage, admission,
+        surgery_performed, and the rest of the event stream."
       rename:
         prop__journey_instance: pathway_episode_id
         prop__decision_type: event_type
+      descriptions:
+        record_index: "Surrogate key for this clinical event."
+        created_sim_time: "When the event occurred."
+        active: "Whether this row is still live; clinical events are never
+          removed."
+        deactivated_at: "When this row was removed; NULL for every clinical
+          event."
+        last_mutation_sim_time: "When this row last changed; events are
+          written once and never updated."
+        prop__journey_instance: "The care episode this event belongs to;
+          joins pathway_episode.id."
+        prop__decision_type: "Which clinical milestone this event records
+          (ed_arrival, triage, admission, surgery_performed, ...)."
+        prop__context: "Extra event details as JSON text, where the event
+          type records any."
     - name: clinical_event_binding
       membership: {kind: tick_decision, property: bindings}
+      description: "One row per catalogue item — ward, theatre, diagnostic
+        test, procedure, or medication — linked to a clinical event under
+        its binding role (dx_test, admitted_meds, spell_ward,
+        surgery_procedure, surgery_theatre)."
       columns: [joined_sim_time, left_sim_time, elem__role_name,
                 member__entity__id, elem__pick_index]
       rename:
@@ -238,18 +486,55 @@ source:
         elem__pick_index: position
         joined_sim_time: bound_at
         left_sim_time: released_at
+      descriptions:
+        record_id: "The clinical event this link belongs to; joins
+          clinical_event.id."
+        joined_sim_time: "When the ward, test, procedure, theatre, or
+          medication was linked to the event."
+        left_sim_time: "When the link was released; never set in this dataset
+          — links are permanent."
+        elem__role_name: "What the linked item was used as: dx_test,
+          admitted_meds, spell_ward, surgery_procedure, or surgery_theatre."
+        member__entity__id: "The catalogue item the event acted on: a ward,
+          theatre, diagnostic test, procedure, or medication id."
+        elem__pick_index: "Order of this item within a multi-item link (0 =
+          first); a medication event can carry up to three."
     - name: consultant_allocation
       membership: {kind: resource, property: holders}
+      description: "One row per interval a patient was allocated to a
+        consultant's caseload."
+      # on_preempted_rule is DROPPED here — an engine rule id, empty on all
+      # rows (see the header note).
       columns: [joined_sim_time, left_sim_time, member__actor__id,
-                elem__priority, elem__on_preempted_rule, elem__slots_held]
+                elem__priority, elem__slots_held]
       rename:
         record_id: consultant_id
         member__actor__id: patient_id
+      descriptions:
+        record_id: "The consultant the patient was allocated to; joins
+          consultant.id."
+        joined_sim_time: "When the patient was allocated to the consultant."
+        left_sim_time: "When the allocation ended; NULL while the patient is
+          still under the consultant's care."
+        member__actor__id: "The patient allocated to the consultant; joins
+          patient.id."
+        elem__priority: "Clinical priority the patient carried for this
+          allocation; a heavier comorbidity burden ranks higher."
+        elem__slots_held: "How many of the consultant's slots this patient
+          occupies."
   events:
     name: audit_log
     sources:
       - kind: actor
+        # the sub-type discriminator is constant ('default') and pure engine
+        ignore: [actor_type]
       - kind: resource
+        # quality_rating: the PARAM governance argument applies to the audit
+        # payload exactly as to the state table; resource_type is the constant
+        # discriminator; queue is the engine's scheduling-queue reference
+        ignore: [quality_rating, resource_type, queue]
+        rename:
+          entity_code: consultant_code
       - kind: journey_instance
         rename:
           actor: patient_id

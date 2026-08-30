@@ -161,6 +161,17 @@ restrict the config until that holds — `fk` paths traverse only immutable hops
 constant, dim `filter` predicates read only constant discriminators. Invariant 4 then
 holds for every emitted **value**, with one carve-out.
 
+**Election-aware window-key membership.** A column whose declared source is
+the window's raw-ns column counts as a window key only if its rendering is
+also window-monotone. `date` / `timestamptz` elections (and the unelected
+default) remain monotone in the window's raw-ns source and satisfy the rule
+exactly as `timestamp` does today; a `time`-elected column is excluded from
+the window-key set — time-of-day is not monotone in the window — so an
+append-mode `ordinal.order_by` naming a `time`-elected column is refused
+([`temporal-elections.md`](temporal-elections.md) § Per-mode attach points,
+[`dimensional.md`](dimensional.md) § Derived columns for the amendment this
+rule composes with).
+
 **The type-1 snapshot row-membership carve-out.** A type-1 snapshot's row set is the
 end-of-run population, so a record first created in window 50 appears in window 0's
 snapshot. Filtering rows to "born by `end_k`" is unsound from the slice alone:
@@ -237,7 +248,14 @@ field.
 | `csv` | `out/.fabulexa-forge-cursor.json` — keys are exactly the `Cursor` field names | Window staged in `out/.tmp_<label>`, atomically renamed to `out/<label>`, then the cursor is written. A crash between rename and cursor write re-derives the same window and overwrites the identical drop — idempotent |
 
 The **fingerprint** is a SHA-256 over a canonical JSON document (UTF-8, sorted keys,
-compact separators, no NaN/Infinity) of: the parsed `ExportConfig` (model dump), the
+compact separators, no NaN/Infinity) of: the parsed `ExportConfig` (model dump, the
+documentation-presentation surfaces excluded — `readme_overlay` and the three
+per-column description-override surfaces
+([`documentation-channel.md`](documentation-channel.md) § The author description
+override) — the fingerprint guards data-seam consistency, and those fields provably
+never affect data, so improving documentation mid-drip must not halt a drip; the
+manifest's embedded config keeps the fields —
+[`companion-artifacts.md`](companion-artifacts.md) § The manifest), the
 resolved anchor (`start_instant` ISO + IANA key, or null), the SHA-256 of `base.json`'s
 bytes, the sole branch's `fork_path`, the `fmt`, and the package version. `--next`
 recomputes it and refuses on mismatch (`IncrementalFingerprintMismatch`): changed
@@ -251,7 +269,11 @@ A cursor that is unreadable, structurally invalid, or **lost** is
   views — the only legitimate empty state, a rolled-back window 0). Any non-empty
   catalog missing `_export_meta` is lost.
 - **CSV** — fresh when `out` is absent or holds no non-hidden entries (dot-entries —
-  the cursor file, `.tmp_*` staging — never count). Non-hidden entries with no cursor
+  the cursor file, `.tmp_*` staging — never count, and neither do companion artifact
+  filenames, `is_companion_artifact_name`: otherwise the window-0 artifacts would make
+  every later `--next` read as a lost cursor, and a directory holding only stale
+  artifacts could not classify as fresh; the DuckDB boundary is catalog-based and
+  unaffected by sibling files). Non-hidden entries with no cursor
   file are lost, with one exception: exactly one non-hidden entry, a directory named
   the **derived window-0 label** (drop renamed, first-ever cursor write lost),
   restarts at window 0 and overwrites that drop. Because the allowed drop must match
@@ -261,6 +283,12 @@ A cursor that is unreadable, structurally invalid, or **lost** is
 There is no reset verb: all state lives in the output target, so deleting the warehouse
 file or output directory is the reset. A leftover `.tmp_*` staging directory is
 discarded at the next staging.
+
+Each emitting invocation — `--next` window, range, or empty window — rewrites the
+companion README + manifest whole-state after the window's data and cursor are
+committed; a drained invocation writes nothing, artifacts included. Placement,
+writing rules, and the accepted last-window staleness wart are owned by
+[`companion-artifacts.md`](companion-artifacts.md).
 
 ### Window labels and output layout
 
@@ -372,7 +400,7 @@ because constancy is otherwise unverifiable (the same stance as `LookupColumnSaf
 | `IncrementalElapsedUnsupported` | Any `derived: elapsed` column (its counterpart row may postdate the window) |
 | `IncrementalFkMembershipUnsupported` | Any `fk` with `via: membership` (a binding is interval data — the bound member may join after the window) |
 | `IncrementalFkMutableHop` | An `fk via: reference` path with a hop column not `history_tracked: false` (a mutable hop would stamp a re-pointed key into a past window); the terminal `record_id` is identity, always constant |
-| `IncrementalOrdinalOrderBy` | On an append-mode table, an `ordinal.order_by` that does not resolve to the table's raw-ns window key (a rendered-µs ordering would let same-microsecond ties straddle a boundary). Snapshot-class tables are exempt — their inputs are gated constant |
+| `IncrementalOrdinalOrderBy` | On an append-mode table, an `ordinal.order_by` that does not resolve to the table's raw-ns window key **under a window-monotone rendering** (a rendered-µs ordering would let same-microsecond ties straddle a boundary; a `time` election is never window-monotone regardless of source — the election-aware window-key rule, § Window membership per table class). Snapshot-class tables are exempt — their inputs are gated constant |
 | `IncrementalSliceColumnMutable` | A slice-read column — any column of a `scd: type1` dim, every *static* column of a `scd: type2` dim — reading a mutable source: a structural column the reader's structural-temporal surface marks mutable ([`reader.md`](reader.md) § The structural-temporal surface — `active`, `deactivated_at`, `last_mutation_sim_time`), or a `history_tracked: true` property. Records-grain facts are exempt: keyed on `last_mutation_sim_time`, their content is final at landing |
 | `IncrementalFilterColumnMutable` | A dim `filter` discriminator that is not `history_tracked: false` (a mutable discriminator makes window-k membership derive from a future reclassification, outside the carve-out) |
 | `IncrementalScd2IdentityKey` | A `scd: type2` `key` with no non-`scd_window` column (the view's partition identity) |
@@ -449,6 +477,8 @@ usage error on stderr, exit 1, before the emit opens).
 | [`source.md`](source.md) | The other mode the driver wraps — per-render window membership: the windowed state snapshot, the appended event log, junction extract-on-change |
 | [`playback.md`](playback.md) | The seam that promotes this driver's per-table-class window-membership rules to its tier-2 `window` contract |
 | [`anchor.md`](anchor.md) | The single `EffectiveAnchor` calendar windows resolve through |
+| [`temporal-elections.md`](temporal-elections.md) | The election vocabulary the append-mode window-key rule is election-aware over |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability and its per-write-regime window gating |
+| [`companion-artifacts.md`](companion-artifacts.md) | The README + manifest pair each emitting invocation rewrites whole-state; the census and fingerprint exclusions it motivates |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface the driver reads through |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored contract carrying the relied-on `last_mutation_sim_time` / `slice_at` guarantees |

@@ -1,7 +1,7 @@
 """CLI entry point for fabulexa_forge.
 
 Provides the `fabulexa-forge` command with the `validate`, `export`, `init`,
-`stream`, `mixer`, and `corrupt` verbs.
+`stream`, `mixer`, `corrupt`, and `compare` verbs.
 
 Usage:
     fabulexa-forge validate <emit_dir>
@@ -14,11 +14,18 @@ Usage:
         [--speed <n>] [--play|--paused] [--tick <s>]
         [--host <h>] [--port <p>]
     fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>
+    fabulexa-forge compare <expected> <actual> [--tables NAME [NAME ...]]
+        [--max-row-diffs <n>] [--format text|json]
+    fabulexa-forge datasets list [--format text|json]
+    fabulexa-forge datasets get <name> [--dir <dir>] [--force]
 
 Exit codes:
     0  — success
     1  — error (usage, reader, config, or export failure)
     3  — drained (--next found no more windows to emit)
+
+`compare` is a self-contained verdict surface with its own exit-code
+contract (0 equal · 1 not equal · 2 input error) — see `_cmd_compare`.
 """
 
 from __future__ import annotations
@@ -31,17 +38,32 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.datasets import (
+    DatasetError,
+    get_dataset,
+    load_manifest,
+    render_dataset_listing,
+)
 from fabulexa_forge.errors import ExporterError
-from fabulexa_forge.reader import open_emit, validate
+from fabulexa_forge.reader import open_emit, pin_session_timezone, validate
 from fabulexa_forge.reader.errors import ReaderError
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+    from typing import BinaryIO
+
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.corrupters.state import CorruptReport
+    from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
     from fabulexa_forge.exporters.notices import NoticeSink
+    from fabulexa_forge.exporters.query_spec import ExportReport
     from fabulexa_forge.reader.conformance import CheckResult
     from fabulexa_forge.reader.emit import Emit
+
+_DATASETS_GET_TIMEOUT_SECONDS: Final = 30.0
+"""Network timeout for `datasets get`'s urllib transport — CLI presentation,
+not an author-configured value."""
 
 
 def _print_check_result(result: "CheckResult") -> None:
@@ -60,7 +82,7 @@ def _print_check_result(result: "CheckResult") -> None:
 
 
 def _run_validate(emit_dir_str: str) -> int:
-    """Open an emit and run conformance checks C1–C11, printing each result.
+    """Open an emit and run conformance checks C1–C15, printing each result.
 
     Args:
         emit_dir_str: Path string to the emit directory.
@@ -101,32 +123,64 @@ def _cmd_validate(args: list[str]) -> int:
 
     parser = argparse.ArgumentParser(
         prog="fabulexa-forge validate",
-        description="Run C1-C14 conformance checks against an emit.",
+        description="Run C1-C15 conformance checks against an emit.",
     )
     parser.add_argument("emit_dir", type=Path)
     parsed = parser.parse_args(args)
     return _run_validate(str(parsed.emit_dir))
 
 
-def _print_window_counts(window_label: str, counts: dict[str, int]) -> None:
-    """Print per-table row counts prefixed by the window label.
+def _print_windowed_report(
+    window_label: str, report: "ExportReport", row_counts: "Mapping[str, int]"
+) -> None:
+    """Print each table's row count written for one window, prefixed by its label.
+
+    Windowed `TableReport` entries carry no row count (an `ExportReport`
+    report-assembly rule for windowed invocations, preserved in the
+    manifest); `row_counts` -- keyed by the same author-facing output names
+    as `report.tables` -- carries the real counts for stdout.
 
     Args:
         window_label: The window's display label.
-        counts: Mapping of table name to row count.
+        report: The window's per-table report.
+        row_counts: Author-facing output name -> real written row count.
     """
-    for table_name, row_count in counts.items():
-        print(f"  [{window_label}] {table_name}: {row_count} rows")
+    for table in report.tables:
+        print(f"  [{window_label}] {table.name}: {row_counts[table.name]} rows")
 
 
-def _print_full_counts(counts: dict[str, int]) -> None:
+def _print_full_counts(report: "ExportReport") -> None:
     """Print per-table row counts for a full (non-windowed) export.
 
     Args:
-        counts: Mapping of table name to row count.
+        report: The invocation's per-table report.
     """
-    for table_name, row_count in counts.items():
-        print(f"  {table_name}: {row_count} rows")
+    for table in report.tables:
+        print(f"  {table.name}: {table.row_count} rows")
+
+
+def _resolve_readme_overlay(
+    config: "ExportConfig", config_path: Path
+) -> "ReadmeOverlay | None":
+    """Load `config.readme_overlay`, resolved against the config file's directory.
+
+    Args:
+        config: The validated export config.
+        config_path: The export-config YAML path, as given on the command line.
+
+    Returns:
+        The parsed overlay, or None when `config.readme_overlay` is absent.
+
+    Raises:
+        ReadmeOverlayInvalid: The resolved overlay file is missing, unreadable,
+            not UTF-8, or violates the slot grammar.
+    """
+    if config.readme_overlay is None:
+        return None
+    from fabulexa_forge.exporters.companion import load_readme_overlay
+
+    overlay_path = config_path.parent / config.readme_overlay
+    return load_readme_overlay(overlay_path)
 
 
 def _dispatch_export(
@@ -139,12 +193,16 @@ def _dispatch_export(
     range_from: str | None,
     range_to: str | None,
     notice_sink: "NoticeSink",
+    overlay: "ReadmeOverlay | None",
 ) -> int:
     """Run the full, next-window, or explicit-range export for any mode.
 
     The `--next` / `--from`/`--to` leaves call the incremental driver, which
     dispatches on `config.mode` internally (dimensional vs. source vs. base
-    engine compile). The full-export leaf dispatches here on `config.mode`.
+    engine compile), threading `overlay` and printing per-table row counts
+    from the returned outcome. The full-export leaf dispatches here on
+    `config.mode`, threading `overlay` to the matching engine and printing
+    counts from its returned report.
 
     Args:
         emit: The open emit.
@@ -156,21 +214,26 @@ def _dispatch_export(
         range_from: Inclusive start for an explicit range (--from), or None.
         range_to: Exclusive end for an explicit range (--to), or None.
         notice_sink: Receiver for plan notices.
+        overlay: The parsed README overlay, or None.
 
     Returns:
-        0 on a written window/range/full export (per-table counts printed,
-        prefixed by the window label when windowed); 3 when --next finds the
-        run drained.
+        0 on a written window/range/full export (per-table row counts
+        printed either way, a windowed export's lines prefixed by the
+        window label); 3 when --next finds the run drained.
     """
     if next_window:
         from fabulexa_forge.incremental.driver import export_incremental_next
 
-        outcome = export_incremental_next(emit, config, out, fmt, anchor, notice_sink)
+        outcome = export_incremental_next(
+            emit, config, out, fmt, anchor, notice_sink, overlay
+        )
         if outcome.status == "drained":
             print("drained: no more windows to emit")
             return 3
         assert outcome.window is not None
-        _print_window_counts(outcome.window.label, outcome.row_counts)
+        assert outcome.report is not None
+        assert outcome.row_counts is not None
+        _print_windowed_report(outcome.window.label, outcome.report, outcome.row_counts)
         return 0
 
     if range_from is not None and range_to is not None:
@@ -178,25 +241,29 @@ def _dispatch_export(
         from fabulexa_forge.incremental.windows import parse_range
 
         window = parse_range(range_from, range_to, anchor)
-        range_counts = export_window(
-            emit, config, out, fmt, anchor, window, None, notice_sink
+        windowed_export = export_window(
+            emit, config, out, fmt, anchor, window, None, notice_sink, overlay
         )
-        _print_window_counts(window.label, range_counts)
+        _print_windowed_report(
+            window.label, windowed_export.report, windowed_export.row_counts
+        )
         return 0
 
     if config.mode == "source":
         from fabulexa_forge.exporters.source.engine import export_source
 
-        full_counts = export_source(emit, config, out, fmt, anchor, notice_sink)
+        report = export_source(emit, config, out, fmt, anchor, notice_sink, overlay)
     elif config.mode == "base":
         from fabulexa_forge.exporters.base.engine import export_base
 
-        full_counts = export_base(emit, config, out, fmt, anchor, notice_sink)
+        report = export_base(emit, config, out, fmt, anchor, notice_sink, overlay)
     else:
         from fabulexa_forge.exporters.dimensional.engine import export_dimensional
 
-        full_counts = export_dimensional(emit, config, out, fmt, anchor, notice_sink)
-    _print_full_counts(full_counts)
+        report = export_dimensional(
+            emit, config, out, fmt, anchor, notice_sink, overlay
+        )
+    _print_full_counts(report)
     return 0
 
 
@@ -232,9 +299,10 @@ def cmd_export(
         range_to: Exclusive end for an explicit range (--to), or None.
 
     Returns:
-        0 on a written window/range/full export (per-table counts printed,
-        prefixed by the window label when windowed); 3 when --next finds the
-        run drained; 1 on any handled error.
+        0 on a written window/range/full export (per-table row counts
+        printed for a full export, per-table names for a windowed export,
+        prefixed by the window label); 3 when --next finds the run drained;
+        1 on any handled error.
     """
     from fabulexa_forge.exporters.notices import render_notice_stderr
 
@@ -264,12 +332,15 @@ def cmd_export(
 
     try:
         config = load_export_config(config_path)
+        overlay = _resolve_readme_overlay(config, config_path)
 
         with open_emit(emit_dir) as emit:
             sidecar_runtime = emit.sidecar.runtime()
             anchor = resolve_effective_anchor(
                 sidecar_runtime, config.rebase, cli_base_date, cli_timezone
             )
+            if anchor is not None:
+                pin_session_timezone(emit, anchor)
             fmt_lit = cast(Literal["csv", "duckdb"], fmt)
 
             exit_code = _dispatch_export(
@@ -282,6 +353,7 @@ def cmd_export(
                 range_from,
                 range_to,
                 render_notice_stderr,
+                overlay,
             )
 
     except (ReaderError, ExporterError) as exc:
@@ -440,6 +512,7 @@ def cmd_stream(
     from typing import Literal, cast
 
     from fabulexa_forge.config.loader import load_stream_config
+    from fabulexa_forge.exporters.notices import render_notice_stderr
     from fabulexa_forge.exporters.streaming.driver import stream_export
     from fabulexa_forge.exporters.streaming.pacer import resolve_clock
 
@@ -533,6 +606,7 @@ def cmd_stream(
                 sink_lit,
                 out,
                 anchor,
+                render_notice_stderr,
                 clock=clock,
                 bootstrap_servers=bootstrap_servers,
             )
@@ -675,6 +749,7 @@ def cmd_mixer(
 
     from fabulexa_forge.config.loader import load_stream_config
     from fabulexa_forge.errors import ExportError
+    from fabulexa_forge.exporters.notices import render_notice_stderr
     from fabulexa_forge.exporters.streaming.driver import build_kafka_render_value
     from fabulexa_forge.exporters.streaming.engine import build_topic_set
     from fabulexa_forge.exporters.streaming.kafka_sink import resolve_bootstrap_servers
@@ -775,7 +850,12 @@ def cmd_mixer(
             launch_transport = Transport(playing=cli_playing, speed=cli_speed)
 
             buffers, control, frontier = seed_mixer_run(
-                emit, config, anchor, emit.sidecar, launch_transport
+                emit,
+                config,
+                anchor,
+                emit.sidecar,
+                launch_transport,
+                render_notice_stderr,
             )
 
         from fabulexa_forge.exporters.streaming.mixer.run_state import MixerRunState
@@ -1026,6 +1106,213 @@ def _cmd_corrupt(args: list[str]) -> int:
     return cmd_corrupt(parsed.emit_dir, parsed.config_path, parsed.out_dir)
 
 
+def cmd_compare(
+    expected: Path,
+    actual: Path,
+    tables: list[str] | None,
+    max_row_diffs: int,
+    fmt: str,
+) -> int:
+    """`fabulexa-forge compare` — verdict + discrepancy report on two datasets.
+
+    Runs `compare_datasets` and prints the rendered report to stdout. Its
+    exit-code contract is its own (0/1/2), distinct from every other verb's
+    0/1/3 — the compare surface's own boolean-verdict design.
+
+    Args:
+        expected: Path to the authoritative DuckDB render.
+        actual: Path to a DuckDB file or a CSV directory claiming equivalence.
+        tables: `--tables` selection, or None for the full expected-side universe.
+        max_row_diffs: Per-table, per-direction listing cap.
+        fmt: 'text' or 'json'.
+
+    Returns:
+        0 when the two sides compare equal; 1 when they differ (report still
+        printed); 2 on a CompareInputError (message on stderr, no report).
+    """
+    from fabulexa_forge.compare import (
+        CompareInputError,
+        compare_datasets,
+        render_comparison_json,
+        render_comparison_text,
+    )
+
+    try:
+        result = compare_datasets(
+            expected, actual, tables=tables, max_row_diffs=max_row_diffs
+        )
+    except CompareInputError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
+    if fmt == "json":
+        print(render_comparison_json(result))
+    else:
+        print(render_comparison_text(result))
+    return 0 if result.equal else 1
+
+
+def _cmd_compare(args: list[str]) -> int:
+    """Dispatch the compare subcommand.
+
+    Args:
+        args: Remaining arguments after the 'compare' verb.
+
+    Returns:
+        Exit code.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="fabulexa-forge compare",
+        description="Compare two materialized datasets for exact equality.",
+    )
+    parser.add_argument("expected", type=Path)
+    parser.add_argument("actual", type=Path)
+    parser.add_argument("--tables", nargs="+", default=None)
+    parser.add_argument("--max-row-diffs", dest="max_row_diffs", type=int, default=10)
+    parser.add_argument("--format", choices=("text", "json"), default="text")
+
+    parsed = parser.parse_args(args)
+
+    return cmd_compare(
+        parsed.expected,
+        parsed.actual,
+        parsed.tables,
+        parsed.max_row_diffs,
+        parsed.format,
+    )
+
+
+def _urllib_transport(url: str) -> "BinaryIO":
+    """Open a URL over HTTPS for `datasets get`, with a network timeout.
+
+    The stdlib urllib opener; a monkeypatchable module-level seam so tests
+    never touch the network.
+
+    Args:
+        url: The dataset entry's URL (https, per DatasetEntry validation).
+
+    Returns:
+        A readable, context-managed binary stream.
+    """
+    import urllib.request
+
+    return cast(
+        "BinaryIO", urllib.request.urlopen(url, timeout=_DATASETS_GET_TIMEOUT_SECONDS)
+    )
+
+
+def _print_download_progress(received: int, size_bytes: int) -> None:
+    """Print download progress to stderr.
+
+    Args:
+        received: Bytes received so far.
+        size_bytes: The entry's expected total size.
+    """
+    print(f"  downloaded {received}/{size_bytes} bytes", file=sys.stderr)
+
+
+def cmd_datasets_list(fmt: str) -> int:
+    """`fabulexa-forge datasets list` — render the published dataset catalog.
+
+    Performs no network I/O: loads the manifest and renders the listing
+    straight to stdout.
+
+    Args:
+        fmt: 'text' or 'json' (argparse enforces the choice).
+
+    Returns:
+        0.
+    """
+    manifest = load_manifest()
+    print(render_dataset_listing(manifest, fmt))
+    return 0
+
+
+def cmd_datasets_get(name: str, target_dir: Path | None, force: bool) -> int:
+    """`fabulexa-forge datasets get <name>` — download, verify, and extract a
+    published dataset pack.
+
+    Args:
+        name: Dataset name to fetch; must match a manifest entry.
+        target_dir: `--dir` value, or None for `./<name>`.
+        force: `--force` value.
+
+    Returns:
+        0 on success (the entry's example commands printed to stdout,
+        progress on stderr); 1 on a DatasetError (its message to stderr).
+    """
+    manifest = load_manifest()
+    try:
+        result = get_dataset(
+            manifest,
+            name,
+            target_dir,
+            force,
+            _urllib_transport,
+            _print_download_progress,
+        )
+    except DatasetError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 1
+
+    for command in result.commands:
+        print(command)
+    return 0
+
+
+def _cmd_datasets(args: list[str]) -> int:
+    """Handle the `datasets` verb: sub-verbs `list` and `get`.
+
+    Follows the existing Verb registry shape: one entry in VERBS; the
+    sub-verb split is parsed inside this handler via argparse subparsers
+    (prog="fabulexa-forge datasets", so --help/-h satisfy the parametrized
+    help tests). A missing or unknown sub-verb is an argparse usage error —
+    usage text to stderr, exit 2. Payload (listing, next-step commands) to
+    stdout; progress and diagnostics to stderr.
+
+    `list [--format {text,json}]`: load_manifest → render_dataset_listing →
+    stdout. No network I/O, ever. `--format` is a required-choice flag whose
+    absence means text — argparse surface, not config (CLI presentation
+    mirrors the existing `compare --format` flag).
+
+    `get <name> [--dir DIR] [--force]`: load_manifest → get_dataset with the
+    stdlib urllib transport (network timeout applied — value is CLI
+    presentation) and a stderr progress callback → print the GetResult
+    commands to stdout. DatasetError → its message to stderr, exit 1.
+
+    Args:
+        args: Remaining arguments after the 'datasets' verb.
+
+    Returns:
+        Exit code.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="fabulexa-forge datasets",
+        description="List or fetch published example dataset packs.",
+    )
+    subparsers = parser.add_subparsers(dest="subverb", required=True)
+
+    list_parser = subparsers.add_parser("list", help="List published datasets.")
+    list_parser.add_argument("--format", choices=("text", "json"), default="text")
+
+    get_parser = subparsers.add_parser(
+        "get", help="Download, verify, and extract a dataset pack."
+    )
+    get_parser.add_argument("name")
+    get_parser.add_argument("--dir", dest="target_dir", type=Path, default=None)
+    get_parser.add_argument("--force", action="store_true", default=False)
+
+    parsed = parser.parse_args(args)
+
+    if parsed.subverb == "list":
+        return cmd_datasets_list(parsed.format)
+    return cmd_datasets_get(parsed.name, parsed.target_dir, parsed.force)
+
+
 @dataclass(frozen=True)
 class Verb:
     """A dispatchable fabulexa-forge verb.
@@ -1043,7 +1330,7 @@ class Verb:
 
 
 VERBS: Final[tuple[Verb, ...]] = (
-    Verb("validate", "Run C1-C14 conformance checks against an emit.", _cmd_validate),
+    Verb("validate", "Run C1-C15 conformance checks against an emit.", _cmd_validate),
     Verb("export", "Run an export config against an emit.", _cmd_export),
     Verb(
         "init",
@@ -1057,6 +1344,16 @@ VERBS: Final[tuple[Verb, ...]] = (
         _cmd_mixer,
     ),
     Verb("corrupt", "Apply a corrupter config to an emit.", _cmd_corrupt),
+    Verb(
+        "compare",
+        "Compare two materialized datasets for exact equality.",
+        _cmd_compare,
+    ),
+    Verb(
+        "datasets",
+        "List or fetch published example dataset packs.",
+        _cmd_datasets,
+    ),
 )
 """The verb registry. The sole source of the verb list -- never a literal."""
 

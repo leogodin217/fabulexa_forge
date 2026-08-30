@@ -20,6 +20,7 @@ _CONTRACT = Path(__file__).resolve().parent.parent / "contract"
 
 _MINIMAL_SIDECAR = {
     "base_format_version": SUPPORTED_BASE_FORMAT_VERSION,
+    "surface": "published",
     "branches": [{"fork_path": "trunk", "parent": None, "slice_at": 0}],
     "tables": [
         {

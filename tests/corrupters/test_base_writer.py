@@ -3,15 +3,18 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
-from _support.sidecar_builder import identity_column, write_emit
+from _support.sidecar_builder import enum_options, identity_column, write_emit
 
 from fabulexa_forge.corrupters.base_writer import write_base_emit
 from fabulexa_forge.corrupters.state import CorruptState, WorkingTable
 from fabulexa_forge.errors import ExportRuntimeError
+from fabulexa_forge.reader import conformance
+from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import column_spec, table_spec, working_table
 
@@ -43,7 +46,7 @@ def _source_sidecar(tmp_path: Path) -> dict[str, object]:
                 "start_datetime": "2024-01-01T00:00:00+00:00",
             },
             "pinned_ids": {"actor": {"alice": "a001"}},
-            "enum_domains": {"actor": {"status": ["active", "discharged"]}},
+            "enum_domains": {"actor": {"status": enum_options("active", "discharged")}},
             "record_roles": {"actor": "fact"},
         },
     )
@@ -341,6 +344,397 @@ def test_all_temporal_class_values_round_trip(tmp_path: Path) -> None:
     assert columns_by_name["prop__ssn"]["temporal_class"] == "constant"
     assert columns_by_name["prop__name"]["temporal_class"] == "tracked"
     assert columns_by_name["prop__status"]["temporal_class"] == "slice_only"
+
+
+def test_documented_attributes_round_trip_verbatim(tmp_path: Path) -> None:
+    """Each of the seven optional column attributes -- description, unit,
+    min, max, immutable, required, extra_data -- forwards verbatim on an
+    untouched column; a column carrying none of them stays absent, never
+    emitted as `null`. `tables[].description` forwards the same way."""
+    spec = table_spec(
+        "records__actor",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
+            column_spec(
+                "prop__age",
+                "BIGINT",
+                history_tracked=False,
+                temporal_class="slice_only",
+                description="The actor's age in years.",
+                unit="years",
+                min=0,
+                max=130,
+                immutable=True,
+                required=True,
+                extra_data=True,
+            ),
+            column_spec("prop__note", "VARCHAR"),
+        ),
+        record_kind="actor",
+        description="Actors participating in the scenario.",
+    )
+    wt = working_table(
+        spec,
+        [
+            {
+                "fork_path": "trunk",
+                "record_id": "a001",
+                "record_index": 0,
+                "prop__age": 42,
+                "prop__note": "n/a",
+            }
+        ],
+    )
+    state = CorruptState(tables={"records__actor": wt})
+    source_sidecar = _source_sidecar(tmp_path)
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    table = sidecar["tables"][0]
+    assert table["description"] == "Actors participating in the scenario."
+    columns_by_name = {c["name"]: c for c in table["columns"]}
+    age = columns_by_name["prop__age"]
+    assert age["description"] == "The actor's age in years."
+    assert age["unit"] == "years"
+    assert age["min"] == 0
+    assert age["max"] == 130
+    assert age["immutable"] is True
+    assert age["required"] is True
+    assert age["extra_data"] is True
+    note = columns_by_name["prop__note"]
+    for attribute in (
+        "description",
+        "unit",
+        "min",
+        "max",
+        "immutable",
+        "required",
+        "extra_data",
+    ):
+        assert attribute not in note
+
+
+def test_table_description_absent_stays_absent(tmp_path: Path) -> None:
+    """A table whose spec carries no description writes no `description`
+    key -- never `null`."""
+    state = _one_table_state()
+    source_sidecar = _source_sidecar(tmp_path)
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    assert "description" not in sidecar["tables"][0]
+
+
+def test_table_description_forwards_per_surviving_table(tmp_path: Path) -> None:
+    """`tables[].description` forwards independently per table -- one
+    surviving table's description present, the other's absent."""
+    state = _two_table_state()
+    described_wt = state.tables["records__actor"]
+    described_spec = replace(
+        described_wt.spec, description="Actors participating in the scenario."
+    )
+    state.tables["records__actor"] = WorkingTable(
+        spec=described_spec, data=described_wt.data
+    )
+    source_sidecar = _source_sidecar(tmp_path)
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    tables_by_name = {t["name"]: t for t in sidecar["tables"]}
+    assert (
+        tables_by_name["records__actor"]["description"]
+        == "Actors participating in the scenario."
+    )
+    assert "description" not in tables_by_name["records__doctor"]
+
+
+def test_renamed_column_carries_documentation_attributes_under_new_name(
+    tmp_path: Path,
+) -> None:
+    """A `schema_drift`-renamed column carries its description/unit under its
+    new name -- joined by post-drift name, never re-looked-up by the old
+    one."""
+    evolved_spec = table_spec(
+        "records__actor",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
+            column_spec(
+                "prop__full_name",
+                "VARCHAR",
+                description="The actor's full legal name.",
+            ),
+        ),
+        record_kind="actor",
+    )
+    wt = working_table(
+        evolved_spec,
+        [
+            {
+                "fork_path": "trunk",
+                "record_id": "a001",
+                "record_index": 0,
+                "prop__full_name": "Alice",
+            }
+        ],
+    )
+    state = CorruptState(tables={"records__actor": wt})
+    source_sidecar = _source_sidecar(tmp_path)
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    columns_by_name = {c["name"]: c for c in sidecar["tables"][0]["columns"]}
+    assert "prop__name" not in columns_by_name  # renamed-away, absent
+    assert (
+        columns_by_name["prop__full_name"]["description"]
+        == "The actor's full legal name."
+    )
+
+
+def test_retyped_column_keeps_description_and_unit(tmp_path: Path) -> None:
+    """A retyped column keeps its description/unit -- meaning outlives the
+    type, and the type reported is the written catalog's post-retype type."""
+    spec = table_spec(
+        "records__actor",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
+            column_spec(
+                "prop__balance",
+                "VARCHAR",  # post-retype type -- schema_drift already folded
+                # the retype into the working spec before write_base_emit runs
+                description="The actor's running balance.",
+                unit="USD",
+            ),
+        ),
+        record_kind="actor",
+    )
+    wt = working_table(
+        spec,
+        [
+            {
+                "fork_path": "trunk",
+                "record_id": "a001",
+                "record_index": 0,
+                "prop__balance": "12.50",
+            }
+        ],
+    )
+    state = CorruptState(tables={"records__actor": wt})
+    source_sidecar = _source_sidecar(tmp_path)
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    balance = next(
+        c for c in sidecar["tables"][0]["columns"] if c["name"] == "prop__balance"
+    )
+    assert balance["type"] == "VARCHAR"
+    assert balance["description"] == "The actor's running balance."
+    assert balance["unit"] == "USD"
+
+
+def test_structural_columns_carry_no_documentation_attributes(tmp_path: Path) -> None:
+    """Structural columns (record_id, record_index, ...) gain none of the
+    seven documentation attributes -- their sidecar entries carry no
+    documentation by contract."""
+    state = _one_table_state()
+    source_sidecar = _source_sidecar(tmp_path)
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    columns_by_name = {c["name"]: c for c in sidecar["tables"][0]["columns"]}
+    for column_name in ("fork_path", "record_id", "record_index"):
+        for attribute in (
+            "description",
+            "unit",
+            "min",
+            "max",
+            "immutable",
+            "required",
+            "extra_data",
+        ):
+            assert attribute not in columns_by_name[column_name]
+
+
+def test_attributes_never_re_looked_up_from_source_sidecar(tmp_path: Path) -> None:
+    """A description carried by the *source* sidecar's raw table entry never
+    leaks onto the output -- `_build_table_entry` reads only
+    `WorkingTable.spec`, joined by post-drift name."""
+    src_dir = tmp_path / "_source"
+    src_dir.mkdir()
+    write_emit(
+        src_dir,
+        tables=[
+            {
+                "name": "records__actor",
+                "category": "records",
+                "record_kind": "actor",
+                "columns": [
+                    identity_column("fork_path", "VARCHAR"),
+                    identity_column("record_id", "VARCHAR"),
+                    {"name": "created_sim_time", "type": "BIGINT"},
+                    {"name": "active", "type": "BOOLEAN"},
+                    {"name": "deactivated_at", "type": "BIGINT"},
+                    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+                    identity_column("record_index", "BIGINT"),
+                    {
+                        "name": "prop__full_name",
+                        "type": "VARCHAR",
+                        "description": "SOURCE-ONLY -- must never appear in output",
+                    },
+                ],
+                "rows": 0,
+            }
+        ],
+    )
+    source_sidecar = json.loads((src_dir / "base.json").read_text(encoding="utf-8"))
+
+    spec = table_spec(
+        "records__actor",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("record_index", "BIGINT"),
+            column_spec("prop__full_name", "VARCHAR"),  # no description on the
+            # *working* spec -- the source sidecar's description must not
+            # leak through
+        ),
+        record_kind="actor",
+    )
+    wt = working_table(
+        spec,
+        [{"fork_path": "trunk", "record_id": "a001", "record_index": 0}],
+    )
+    state = CorruptState(tables={"records__actor": wt})
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    columns_by_name = {c["name"]: c for c in sidecar["tables"][0]["columns"]}
+    assert "description" not in columns_by_name["prop__full_name"]
+
+
+def test_documented_fixture_output_passes_structural_conformance(
+    tmp_path: Path,
+) -> None:
+    """A documented records table -- full structural prefix, prop__ columns
+    carrying description/unit -- rebuilt after a rename + drop + retype (the
+    way `schema_drift` folds one via `_apply_drift_to_spec`) still passes
+    structural conformance (C1-C5, C8) once reopened."""
+    pre_spec = table_spec(
+        "records__actor",
+        "records",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("created_sim_time", "BIGINT"),
+            column_spec("active", "BOOLEAN"),
+            column_spec("deactivated_at", "BIGINT"),
+            column_spec("last_mutation_sim_time", "BIGINT"),
+            column_spec("record_index", "BIGINT"),
+            column_spec(
+                "prop__status",
+                "VARCHAR",
+                history_tracked=False,
+                temporal_class="slice_only",
+                description="The actor's lifecycle status.",
+            ),
+            column_spec(
+                "prop__note",
+                "VARCHAR",
+                history_tracked=False,
+                temporal_class="slice_only",
+                description="A free-text annotation.",
+            ),
+            column_spec(
+                "prop__balance",
+                "DOUBLE",
+                history_tracked=False,
+                temporal_class="slice_only",
+                description="The actor's running balance.",
+                unit="USD",
+            ),
+        ),
+        record_kind="actor",
+        description="Actors participating in the scenario.",
+    )
+    evolved_columns = tuple(
+        replace(col, name="prop__account_status")
+        if col.name == "prop__status"
+        else replace(col, type="VARCHAR")
+        if col.name == "prop__balance"
+        else col
+        for col in pre_spec.columns
+        if col.name != "prop__note"
+    )
+    evolved_spec = replace(pre_spec, columns=evolved_columns)
+    wt = working_table(
+        evolved_spec,
+        [
+            {
+                "fork_path": "trunk",
+                "record_id": "a001",
+                "created_sim_time": 0,
+                "active": True,
+                "last_mutation_sim_time": 0,
+                "record_index": 0,
+                "prop__account_status": "active",
+                "prop__balance": "12.5",
+            }
+        ],
+    )
+    history_spec = table_spec(
+        "history",
+        "fixed",
+        (
+            column_spec("fork_path", "VARCHAR"),
+            column_spec("kind", "VARCHAR"),
+            column_spec("record_id", "VARCHAR"),
+            column_spec("property", "VARCHAR"),
+            column_spec("sim_time", "BIGINT"),
+            column_spec("value", "VARCHAR"),
+        ),
+    )
+    history_wt = working_table(history_spec, [])
+    state = CorruptState(tables={"records__actor": wt, "history": history_wt})
+    source_sidecar = _source_sidecar(tmp_path)
+    out_dir = tmp_path / "out"
+    write_base_emit(state, source_sidecar, out_dir)
+
+    with open_emit(out_dir) as emit:
+        result = conformance.validate(emit)
+    structural = {"C1", "C2", "C3", "C4", "C5", "C8"}
+    for check in result.results:
+        if check.check in structural:
+            assert check.passed, f"{check.check} failed: {check.messages}"
+
+    sidecar = json.loads((out_dir / "base.json").read_text(encoding="utf-8"))
+    columns_by_name = {c["name"]: c for c in sidecar["tables"][0]["columns"]}
+    assert "prop__note" not in columns_by_name
+    assert (
+        columns_by_name["prop__account_status"]["description"]
+        == "The actor's lifecycle status."
+    )
+    assert (
+        columns_by_name["prop__balance"]["description"]
+        == "The actor's running balance."
+    )
+    assert columns_by_name["prop__balance"]["unit"] == "USD"
+    assert columns_by_name["prop__balance"]["type"] == "VARCHAR"
 
 
 def test_fixed_category_table_entry_omits_record_kind_and_property(

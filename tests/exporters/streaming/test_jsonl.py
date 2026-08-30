@@ -29,7 +29,6 @@ def _make_event(
     op: Literal["c", "u", "d"] = "c",
     kind: str = "item",
     record_id: str = "r1",
-    presentation_id: str | None = None,
     event_sim_time: int = 1000,
     ts: str | int = "2026-01-01T00:00:00+00:00",
     after: dict[str, object] | None = None,
@@ -44,13 +43,12 @@ def _make_event(
     map under election.
     """
     if after is None and op != "d":
-        after = {"record_id": record_id, "prop__status": "active"}
+        after = {"record_id": record_id, "status": "active"}
     return StreamEvent(
         seq=seq,
         op=op,
         kind=kind,
         record_id=record_id,
-        presentation_id=presentation_id,
         event_sim_time=event_sim_time,
         ts=ts,
         after=after,
@@ -76,9 +74,8 @@ class TestRenderJsonlObject:
         assert list(obj.keys()) == ["seq", "op", "ts", "kind", "key", "after"]
 
     def test_key_is_record_id_dict(self) -> None:
-        """key is {"record_id": ...} under the default (no-election) surface,
-        even when presentation_id is set (never the message key)."""
-        event = _make_event(record_id="r42", presentation_id="pid-99")
+        """key is {"record_id": ...} under the default (no-election) surface."""
+        event = _make_event(record_id="r42")
         obj = render_jsonl_object(event)
         assert obj["key"] == {"record_id": "r42"}
 
@@ -100,16 +97,28 @@ class TestRenderJsonlObject:
         obj = render_jsonl_object(event)
         assert len(obj["key"]) == 1
 
+    def test_published_non_elected_surface_rides_after_never_key(self) -> None:
+        """A published non-elected surface (presentation_id, here) rides the
+        after-image alongside the elected record_id, but the key map still
+        carries the elected surface alone."""
+        after = {"record_id": "r1", "presentation_id": "P_003", "status": "active"}
+        event = _make_event(
+            record_id="r1", key_column="record_id", key_value="r1", after=after
+        )
+        obj = render_jsonl_object(event)
+        assert obj["key"] == {"record_id": "r1"}
+        assert obj["after"] == after
+
     def test_after_is_row_map_on_create(self) -> None:
         """after carries the full row map on a 'c' event."""
-        after = {"record_id": "r1", "prop__name": "Alice"}
+        after = {"record_id": "r1", "name": "Alice"}
         event = _make_event(op="c", after=after)
         obj = render_jsonl_object(event)
         assert obj["after"] == after
 
     def test_after_is_row_map_on_update(self) -> None:
         """after carries the full row map on a 'u' event."""
-        after = {"record_id": "r1", "prop__name": "Bob"}
+        after = {"record_id": "r1", "name": "Bob"}
         event = _make_event(op="u", after=after)
         obj = render_jsonl_object(event)
         assert obj["after"] == after
@@ -174,7 +183,7 @@ class TestWriteJsonlStreamStdout:
         self, capsys: pytest.CaptureFixture[str]
     ) -> None:
         """Non-ASCII characters pass through as UTF-8, not \\uXXXX escapes."""
-        after = {"record_id": "r1", "prop__name": "Ångström"}
+        after = {"record_id": "r1", "name": "Ångström"}
         event = _make_event(after=after)
         write_jsonl_stream([event], "stdout", None)
         captured = capsys.readouterr()

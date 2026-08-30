@@ -1,0 +1,64 @@
+# Recipe: derived-elapsed-interval
+# ============================================================
+# Demonstrates the temporal-rendering election on the elapsed derived
+# column: elect INTERVAL in place of the default unit-divided DOUBLE, for
+# the SAME cross-row delta.
+#
+# The elapsed derived column measures a time delta computed ACROSS two
+# correlated rows — the duration between one event and a counterpart event
+# on the same entity. By default it renders that delta as a `unit`-divided
+# DOUBLE (minutes | seconds | hours). Electing `as: interval` instead
+# renders it as a typed µs-precision INTERVAL from the SAME nanosecond
+# delta — exactly one of `unit` / `as` is required, never both.
+#
+# Here each output row is a discharge event (source.value filters the
+# history_point grain to status = discharged). The elapsed column reaches
+# back to that patient's admission (status = pending) and measures the gap,
+# once as hours and once as an INTERVAL — both from the same delta.
+#
+# Fixture world (recipe emit):
+#   history — p001: pending@1*DAY, active@2*DAY, discharged@3*DAY
+#             p002: pending@2*DAY (never discharged)
+#
+# Output:
+#   fact_length_of_stay — 1 row (only p001 was discharged)
+#     stay_hours    = (3*DAY - 1*DAY) / 1 hour = 48
+#     stay_interval = the same 2-day delta as INTERVAL '48:00:00'
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: fact_length_of_stay
+      role: fact
+      source:
+        grain: history_point
+        kind: patient
+        property: status
+        value: discharged      # one output row per discharge event
+      key: [patient_id]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: discharged_at
+          from: sim_time
+        # Default rendering: unit-divided DOUBLE.
+        - name: stay_hours
+          derived:
+            elapsed:
+              correlate_on: record_id        # same patient
+              other_where:
+                value: pending               # the admission event
+              start_source: sim_time         # admission sim_time
+              end_source: sim_time           # discharge sim_time (this row)
+              unit: hours
+        # Elected rendering: INTERVAL — the same ns delta, typed.
+        - name: stay_interval
+          derived:
+            elapsed:
+              correlate_on: record_id
+              other_where:
+                value: pending
+              start_source: sim_time
+              end_source: sim_time
+              as: interval

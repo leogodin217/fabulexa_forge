@@ -372,7 +372,9 @@ def test_corrupted_key_fails_before_any_writer_runs(tmp_path: Path) -> None:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         with pytest.raises(ElectedKeyDuplicate):
-            export_source(emit, config, out_path, "duckdb", anchor, discard_notice_sink)
+            export_source(
+                emit, config, out_path, "duckdb", anchor, discard_notice_sink, None
+            )
     assert not out_path.exists()
 
 

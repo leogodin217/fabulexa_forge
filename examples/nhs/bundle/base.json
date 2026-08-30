@@ -1,0 +1,2447 @@
+{
+  "base_format_version": 9,
+  "branches": [
+    {
+      "fork_path": "trunk",
+      "parent": null,
+      "slice_at": 94608000000000000
+    }
+  ],
+  "enum_domains": {
+    "actor": {
+      "actor_type": [
+        {
+          "description": "A patient of the trust \u2014 carries demographics (deprivation decile, ethnicity), clinical attributes (primary condition, frailty, comorbidities) and pathway flags that steer them through the care pathways.",
+          "value": "default"
+        }
+      ],
+      "admission_disposition": [
+        {
+          "value": "home"
+        },
+        {
+          "value": "admit"
+        }
+      ],
+      "comorbidity_count": [
+        {
+          "value": "0"
+        },
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        },
+        {
+          "value": "4_plus"
+        }
+      ],
+      "diagnostic_required": [
+        {
+          "value": "req"
+        },
+        {
+          "value": "not_req"
+        }
+      ],
+      "diagnostic_test_type": [
+        {
+          "value": "xray"
+        },
+        {
+          "value": "ct"
+        },
+        {
+          "value": "mri"
+        },
+        {
+          "value": "bloods"
+        },
+        {
+          "value": "ecg"
+        },
+        {
+          "value": "ultrasound"
+        }
+      ],
+      "ethnic_category": [
+        {
+          "value": "A"
+        },
+        {
+          "value": "B"
+        },
+        {
+          "value": "C"
+        },
+        {
+          "value": "D"
+        },
+        {
+          "value": "H"
+        },
+        {
+          "value": "J"
+        },
+        {
+          "value": "K"
+        },
+        {
+          "value": "L"
+        },
+        {
+          "value": "M"
+        },
+        {
+          "value": "N"
+        },
+        {
+          "value": "P"
+        },
+        {
+          "value": "S"
+        },
+        {
+          "value": "Z"
+        }
+      ],
+      "frailty_band": [
+        {
+          "value": "fit"
+        },
+        {
+          "value": "mild"
+        },
+        {
+          "value": "moderate"
+        },
+        {
+          "value": "severe"
+        }
+      ],
+      "gender_code": [
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        }
+      ],
+      "gp_practice_code": [
+        {
+          "value": "G82001"
+        },
+        {
+          "value": "G82014"
+        },
+        {
+          "value": "G82027"
+        },
+        {
+          "value": "G82035"
+        },
+        {
+          "value": "G82048"
+        },
+        {
+          "value": "G82056"
+        },
+        {
+          "value": "G82072"
+        },
+        {
+          "value": "G82089"
+        }
+      ],
+      "hai_status": [
+        {
+          "value": "clear"
+        },
+        {
+          "value": "colonized"
+        }
+      ],
+      "imd_decile": [
+        {
+          "value": "1"
+        },
+        {
+          "value": "2"
+        },
+        {
+          "value": "3"
+        },
+        {
+          "value": "4"
+        },
+        {
+          "value": "5"
+        },
+        {
+          "value": "6"
+        },
+        {
+          "value": "7"
+        },
+        {
+          "value": "8"
+        },
+        {
+          "value": "9"
+        },
+        {
+          "value": "10"
+        }
+      ],
+      "outpatient_diagnostic_required": [
+        {
+          "value": "req"
+        },
+        {
+          "value": "not_req"
+        }
+      ],
+      "pathway_type": [
+        {
+          "value": "emergency"
+        },
+        {
+          "value": "elective"
+        },
+        {
+          "value": "cancer"
+        },
+        {
+          "value": "surgical"
+        }
+      ],
+      "primary_condition": [
+        {
+          "value": "cardiac"
+        },
+        {
+          "value": "respiratory"
+        },
+        {
+          "value": "ortho"
+        },
+        {
+          "value": "neuro"
+        },
+        {
+          "value": "GI"
+        },
+        {
+          "value": "infectious"
+        },
+        {
+          "value": "obstetric"
+        }
+      ],
+      "procedure_code": [
+        {
+          "value": "cholecystectomy"
+        },
+        {
+          "value": "hip_replacement"
+        },
+        {
+          "value": "appendectomy"
+        },
+        {
+          "value": "colonoscopy"
+        },
+        {
+          "value": "cardiac_cath"
+        }
+      ],
+      "readmission_risk": [
+        {
+          "value": "yes"
+        },
+        {
+          "value": "no"
+        }
+      ],
+      "surgical_indicated": [
+        {
+          "value": "yes"
+        },
+        {
+          "value": "no"
+        }
+      ],
+      "suspicious_finding": [
+        {
+          "value": "yes"
+        },
+        {
+          "value": "no"
+        }
+      ]
+    },
+    "booking": {
+      "status": [
+        {
+          "description": "The booking holds a live reserved opening, pending attend.",
+          "value": "confirmed"
+        },
+        {
+          "description": "The subject attended the confirmed opening (terminal).",
+          "value": "attended"
+        },
+        {
+          "description": "The subject drew a no-show at the confirmed opening; the slot is wasted, not returned (terminal).",
+          "value": "no_show"
+        },
+        {
+          "description": "The booking was released before attend by an explicit cancel (terminal).",
+          "value": "cancelled"
+        },
+        {
+          "description": "The booking was released before attend because the subject's patience expired (terminal).",
+          "value": "reneged"
+        },
+        {
+          "description": "The booking's opening was cut by a diary cancel_rebook resolution and rebooked to a successor (terminal).",
+          "value": "supply_cancelled"
+        },
+        {
+          "description": "The booking's opening was cut by a diary forfeit resolution with no successor (terminal).",
+          "value": "supply_forfeited"
+        }
+      ]
+    },
+    "diary": {
+      "booking_discipline": [
+        {
+          "description": "Assigns the earliest eligible opening \u2014 an eligible free-list entry when one exists, else the diary's cursor.",
+          "value": "earliest_opening"
+        }
+      ],
+      "diary_type": [
+        {
+          "description": "A per-specialty outpatient clinic appointment book. The wait for a routine slot emerges from how fast referrals arrive against a fixed supply of openings.",
+          "value": "outpatient_clinic"
+        },
+        {
+          "description": "A per-specialty two-week-wait cancer clinic book for urgent suspected-cancer referrals; the 2WW wait is the booking lead-time.",
+          "value": "cancer_clinic"
+        },
+        {
+          "description": "A per-specialty elective operating-list book; the wait for surgery emerges from scarce theatre-list openings.",
+          "value": "operating_list"
+        }
+      ]
+    },
+    "entity": {
+      "entity_type": [
+        {
+          "description": "An inpatient ward with a bed count and a ward type (general, assessment, ICU/HDU, step-down) that stratifies safety-incident risk.",
+          "value": "ward"
+        },
+        {
+          "description": "An operating theatre, with a specialty and a number of operating sessions per day.",
+          "value": "theatre"
+        },
+        {
+          "description": "A diagnostic test type (X-ray, CT, MRI, bloods, ECG, ultrasound and others) with a typical turnaround and cost.",
+          "value": "diagnostic"
+        },
+        {
+          "description": "A surgical procedure in the catalogue, coded by OPCS-4 with an HRG case-mix bucket, national tariff and complexity band.",
+          "value": "procedure"
+        },
+        {
+          "description": "A medication in the formulary, grouped by drug class and specialty.",
+          "value": "medication"
+        }
+      ]
+    },
+    "journey_instance": {
+      "current_state": [
+        {
+          "description": "Newly arrived patient awaiting routing to a care pathway.",
+          "value": "routing"
+        },
+        {
+          "description": "Routed to the emergency (A&E) pathway.",
+          "value": "routed_emergency"
+        },
+        {
+          "description": "Routed to the elective outpatient pathway.",
+          "value": "routed_elective"
+        },
+        {
+          "description": "Routed to the suspected-cancer pathway.",
+          "value": "routed_cancer"
+        },
+        {
+          "description": "Routed to the elective surgical pathway.",
+          "value": "routed_surgical"
+        },
+        {
+          "description": "Arrived in A&E, waiting for an emergency doctor to triage them.",
+          "value": "arrived"
+        },
+        {
+          "description": "Triaged in A&E; awaiting clinical assessment.",
+          "value": "triaged"
+        },
+        {
+          "description": "Assessed by the emergency team; awaiting a diagnosis and any diagnostic tests.",
+          "value": "assessed"
+        },
+        {
+          "description": "Diagnosed in A&E; a decision is made to discharge home or admit.",
+          "value": "diagnosed"
+        },
+        {
+          "description": "Discharged home from A&E.",
+          "value": "discharged_home"
+        },
+        {
+          "description": "Admitted from A&E to an inpatient bed.",
+          "value": "admitted"
+        },
+        {
+          "description": "Admitted patient being booked in and matched to a specialty consultant, waiting if the specialty is full.",
+          "value": "admission_triage"
+        },
+        {
+          "description": "Allocated to an inpatient ward.",
+          "value": "ward_assignment"
+        },
+        {
+          "description": "Receiving specialty inpatient care; length of stay varies by condition, with a daily risk of a safety incident and a frailty-driven risk of death.",
+          "value": "specialty_care"
+        },
+        {
+          "description": "Escalated to intensive care for the sickest patients.",
+          "value": "icu_care"
+        },
+        {
+          "description": "Declared medically fit for discharge; either discharged or held for a delayed transfer of care.",
+          "value": "medically_fit"
+        },
+        {
+          "description": "Medically fit but waiting for community or social care to be arranged (a delayed transfer of care); the wait lengthens with deprivation.",
+          "value": "dtoc_assessment"
+        },
+        {
+          "description": "Discharged from the inpatient ward.",
+          "value": "inpatient_discharged"
+        },
+        {
+          "description": "Died in hospital during the inpatient stay.",
+          "value": "deceased"
+        },
+        {
+          "description": "Referred by a GP to an outpatient clinic.",
+          "value": "referred"
+        },
+        {
+          "description": "On the waiting list for a clinic appointment, with a daily risk of deteriorating while waiting.",
+          "value": "awaiting_clinic_slot"
+        },
+        {
+          "description": "Attended the outpatient appointment.",
+          "value": "attended"
+        },
+        {
+          "description": "Did not attend (DNA) the booked appointment, wasting the slot.",
+          "value": "dna"
+        },
+        {
+          "description": "Outpatient episode complete after attending.",
+          "value": "attended_done"
+        },
+        {
+          "description": "Outpatient episode closed after a missed appointment.",
+          "value": "dna_done"
+        },
+        {
+          "description": "Diagnostic test being scheduled.",
+          "value": "scheduling"
+        },
+        {
+          "description": "Test scheduling deferred into a backlog before being ordered.",
+          "value": "scheduling_deferred"
+        },
+        {
+          "description": "Test ordered; awaiting the test to be performed (turnaround varies by modality).",
+          "value": "requested"
+        },
+        {
+          "description": "Test performed; awaiting the report.",
+          "value": "performed"
+        },
+        {
+          "description": "Test reported; result being communicated.",
+          "value": "reported"
+        },
+        {
+          "description": "Diagnostic result communicated to the requesting team.",
+          "value": "result_communicated"
+        },
+        {
+          "description": "Urgent cancer referral being processed.",
+          "value": "referral_intake"
+        },
+        {
+          "description": "Cancer referral held in a backlog before proceeding.",
+          "value": "referral_deferred"
+        },
+        {
+          "description": "Two-week-wait referral made; awaiting a first specialist appointment.",
+          "value": "two_week_referral"
+        },
+        {
+          "description": "Waiting for the first two-week-wait clinic appointment.",
+          "value": "awaiting_first_appt"
+        },
+        {
+          "description": "Seen by the specialist for the first time.",
+          "value": "first_seen"
+        },
+        {
+          "description": "Cancer diagnosis confirmed.",
+          "value": "diagnosis_confirmed"
+        },
+        {
+          "description": "Treatment decision made (decision-to-treat).",
+          "value": "treatment_decision"
+        },
+        {
+          "description": "Cancer treatment started.",
+          "value": "treatment_started"
+        },
+        {
+          "description": "Pre-operative assessment; the procedure is planned and the patient is listed for surgery.",
+          "value": "pre_op_assessment"
+        },
+        {
+          "description": "On the elective waiting list for an operating-list slot.",
+          "value": "awaiting_surgeon"
+        },
+        {
+          "description": "Day of surgery; a specialty surgeon is taken for the operation.",
+          "value": "surgery_day"
+        },
+        {
+          "description": "Operation performed in theatre.",
+          "value": "surgery_performed"
+        },
+        {
+          "description": "Recovering after the operation.",
+          "value": "recovery"
+        },
+        {
+          "description": "Post-operative review; the surgical episode is complete.",
+          "value": "post_op_review"
+        },
+        {
+          "description": "Recently discharged and recovering at home; an FFT invitation is sent.",
+          "value": "at_home"
+        },
+        {
+          "description": "Follow-up check; the patient either recovers or is readmitted, with risk rising by comorbidity burden.",
+          "value": "readmission_check"
+        },
+        {
+          "description": "Being readmitted as an emergency, starting a new inpatient spell.",
+          "value": "readmitting"
+        },
+        {
+          "description": "Recovered after discharge; the episode is closed.",
+          "value": "recovered"
+        },
+        {
+          "description": "Readmission recorded; a fresh inpatient spell is underway.",
+          "value": "readmitted_recorded"
+        },
+        {
+          "description": "Invited to complete the Friends and Family Test after discharge.",
+          "value": "invited"
+        },
+        {
+          "description": "Responded to the survey with a satisfaction score.",
+          "value": "responded"
+        },
+        {
+          "description": "Did not respond to the survey.",
+          "value": "no_response"
+        }
+      ],
+      "journey_type": [
+        {
+          "description": "Front-door triage that routes each new arrival to the right pathway \u2014 emergency, elective outpatient, cancer or surgical \u2014 by pathway type.",
+          "value": "patient_intake"
+        },
+        {
+          "description": "An A&E (emergency department) attendance: arrival, triage, assessment, diagnosis, then either discharge home or admission to a ward.",
+          "value": "ed_attendance"
+        },
+        {
+          "description": "An inpatient hospital stay from admission through ward care (and possible ICU escalation or death) to medically-fit, any delayed transfer of care, and discharge.",
+          "value": "inpatient_spell"
+        },
+        {
+          "description": "An elective outpatient referral: wait for a clinic appointment, then either attend or do-not-attend (DNA).",
+          "value": "outpatient_pathway"
+        },
+        {
+          "description": "A diagnostic test order running alongside an A&E or outpatient episode: scheduling, the test being performed, reported, and the result communicated.",
+          "value": "diagnostic_request"
+        },
+        {
+          "description": "A suspected-cancer pathway on the two-week-wait standard: referral, first appointment, diagnosis, treatment decision and start of treatment, tracked against the 62-day target.",
+          "value": "cancer_pathway"
+        },
+        {
+          "description": "An elective surgical pathway: pre-operative assessment, wait for an operating-list slot, the operation itself, and recovery to post-op review.",
+          "value": "surgical_pathway"
+        },
+        {
+          "description": "Follow-up after an inpatient discharge: a check at home that either resolves to recovery or to an emergency readmission.",
+          "value": "post_discharge_followup"
+        },
+        {
+          "description": "The Friends and Family Test \u2014 every discharged patient is invited to rate their care; they either respond with a score or do not respond.",
+          "value": "fft_survey"
+        }
+      ]
+    },
+    "queue": {
+      "discipline": [
+        {
+          "description": "Waiters promoted in arrival order.",
+          "value": "fifo"
+        },
+        {
+          "description": "Waiters promoted by highest declared priority, ties by earliest enqueue.",
+          "value": "priority"
+        },
+        {
+          "description": "A newly-arriving higher-priority actor displaces a lower-priority holder; 1-server queues only.",
+          "value": "preempt"
+        }
+      ],
+      "on_full": [
+        {
+          "description": "The seize waits in the queue for a slot to free.",
+          "value": "queue"
+        },
+        {
+          "description": "The seize is rejected immediately and routed to its on_rejected handler.",
+          "value": "reject"
+        },
+        {
+          "description": "The seize resamples a delay and is retried.",
+          "value": "retry"
+        },
+        {
+          "description": "The seize is routed to its on_reroute handler.",
+          "value": "reroute"
+        }
+      ]
+    },
+    "resource": {
+      "resource_type": [
+        {
+          "description": "A senior doctor with finite capacity, deliberately split by pathway: ward admissions gate themselves below full capacity to hold slots back for clinic and theatre work, so an inpatient side that plateaus short of the declared capacity is the specialty running full. Consultants of the same specialty share one priority queue, and a saturated specialty queues its patients by clinical priority.",
+          "value": "consultant"
+        }
+      ]
+    },
+    "tick_decision": {
+      "decision_type": [
+        {
+          "value": "intake"
+        },
+        {
+          "value": "ed_arrival"
+        },
+        {
+          "value": "triage"
+        },
+        {
+          "value": "ed_assessment"
+        },
+        {
+          "value": "ed_diagnosis"
+        },
+        {
+          "value": "admission"
+        },
+        {
+          "value": "ward_assignment"
+        },
+        {
+          "value": "specialty_care_start"
+        },
+        {
+          "value": "medication_administered"
+        },
+        {
+          "value": "safety_incident"
+        },
+        {
+          "value": "icu_care"
+        },
+        {
+          "value": "medically_fit"
+        },
+        {
+          "value": "dtoc_assessment"
+        },
+        {
+          "value": "referral_created"
+        },
+        {
+          "value": "waiting_list_deterioration"
+        },
+        {
+          "value": "appointment_attended"
+        },
+        {
+          "value": "appointment_dna"
+        },
+        {
+          "value": "diagnostic_ordered"
+        },
+        {
+          "value": "diagnostic_performed"
+        },
+        {
+          "value": "diagnostic_result_communicated"
+        },
+        {
+          "value": "cancer_referral"
+        },
+        {
+          "value": "cancer_first_seen"
+        },
+        {
+          "value": "cancer_diagnosis_confirmed"
+        },
+        {
+          "value": "cancer_treatment_decision"
+        },
+        {
+          "value": "pre_op_assessment"
+        },
+        {
+          "value": "surgeon_assigned"
+        },
+        {
+          "value": "surgery_performed"
+        },
+        {
+          "value": "recovery_started"
+        },
+        {
+          "value": "post_discharge_check"
+        },
+        {
+          "value": "fft_invited"
+        }
+      ]
+    }
+  },
+  "pinned_ids": {
+    "diary": {
+      "cc_cardiac": "5",
+      "cc_general": "8",
+      "cc_gi": "7",
+      "cc_ortho": "9",
+      "cc_respiratory": "6",
+      "ol_cardiac": "10",
+      "ol_general": "13",
+      "ol_gi": "12",
+      "ol_ortho": "14",
+      "ol_respiratory": "11",
+      "opd_cardiac": "0",
+      "opd_general": "3",
+      "opd_gi": "2",
+      "opd_ortho": "4",
+      "opd_respiratory": "1"
+    },
+    "entity": {
+      "diag_bloods": "13",
+      "diag_colonoscopy": "18",
+      "diag_ct": "11",
+      "diag_dexa": "19",
+      "diag_ecg": "14",
+      "diag_echocardiogram": "16",
+      "diag_endoscopy": "17",
+      "diag_mri": "12",
+      "diag_pet": "21",
+      "diag_spirometry": "20",
+      "diag_ultrasound": "15",
+      "diag_xray": "10",
+      "med_amiodarone": "52",
+      "med_cefuroxime": "60",
+      "med_codeine": "59",
+      "med_enoxaparin": "53",
+      "med_levetiracetam": "61",
+      "med_metformin": "57",
+      "med_omeprazole": "56",
+      "med_prednisolone": "55",
+      "med_ramipril": "58",
+      "med_salbutamol": "54",
+      "proc_aaa_repair": "48",
+      "proc_appendectomy": "24",
+      "proc_bronchoscopy": "46",
+      "proc_cabg": "30",
+      "proc_caesarean_section": "35",
+      "proc_cardiac_cath": "26",
+      "proc_carpal_tunnel_release": "39",
+      "proc_cataract_extraction": "29",
+      "proc_cholecystectomy": "22",
+      "proc_colonoscopy": "25",
+      "proc_colorectal_resection": "42",
+      "proc_coronary_angioplasty": "31",
+      "proc_femoral_hernia_repair": "51",
+      "proc_gastroscopy": "43",
+      "proc_hemicolectomy": "50",
+      "proc_hip_fracture_fixation": "44",
+      "proc_hip_replacement": "23",
+      "proc_hysterectomy": "34",
+      "proc_inguinal_hernia_repair": "28",
+      "proc_knee_replacement": "27",
+      "proc_lung_resection": "45",
+      "proc_mastectomy": "41",
+      "proc_pacemaker_insertion": "32",
+      "proc_shoulder_arthroscopy": "38",
+      "proc_skin_lesion_excision": "49",
+      "proc_spinal_decompression": "37",
+      "proc_thyroidectomy": "40",
+      "proc_tonsillectomy": "33",
+      "proc_tura_prostate": "36",
+      "proc_varicose_vein_surgery": "47",
+      "theatre_1": "62",
+      "theatre_2": "63",
+      "theatre_cardiac": "65",
+      "theatre_day": "64",
+      "theatre_obstetric": "66",
+      "ward_a_cardiac": "0",
+      "ward_b_respiratory": "1",
+      "ward_c_general": "2",
+      "ward_d_surgical": "3",
+      "ward_e_cardiac_gen": "4",
+      "ward_f_resp_hdu": "5",
+      "ward_g_gi": "6",
+      "ward_h_gi_assess": "7",
+      "ward_i_ortho_step": "8",
+      "ward_j_general_step": "9"
+    },
+    "resource": {
+      "c_ae_01": "25",
+      "c_ae_02": "26",
+      "c_ae_03": "27",
+      "c_ae_04": "28",
+      "c_ae_05": "29",
+      "c_cardio_01": "0",
+      "c_cardio_02": "1",
+      "c_cardio_03": "2",
+      "c_cardio_04": "3",
+      "c_cardio_05": "4",
+      "c_general_01": "15",
+      "c_general_02": "16",
+      "c_general_03": "17",
+      "c_general_04": "18",
+      "c_general_05": "19",
+      "c_gi_01": "10",
+      "c_gi_02": "11",
+      "c_gi_03": "12",
+      "c_gi_04": "13",
+      "c_gi_05": "14",
+      "c_ortho_01": "20",
+      "c_ortho_02": "21",
+      "c_ortho_03": "22",
+      "c_ortho_04": "23",
+      "c_ortho_05": "24",
+      "c_resp_01": "5",
+      "c_resp_02": "6",
+      "c_resp_03": "7",
+      "c_resp_04": "8",
+      "c_resp_05": "9"
+    }
+  },
+  "presentation_keys": {
+    "actor": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "default": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "PAT_",
+            "width": 7
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    },
+    "entity": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "diagnostic": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "DIAG_",
+            "width": 3
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "medication": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "MED_",
+            "width": 3
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "procedure": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "PROC_",
+            "width": 3
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "theatre": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "THTR_",
+            "width": 3
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        },
+        "ward": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "WARD_",
+            "width": 3
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    },
+    "resource": {
+      "branch_stable": false,
+      "slice_stable": false,
+      "sub_types": {
+        "consultant": {
+          "branch_stable": false,
+          "key_space": {
+            "class": "counter",
+            "prefix": "CON_",
+            "width": 3
+          },
+          "slice_stable": false,
+          "unique_within": "emit"
+        }
+      },
+      "unique_within": "emit"
+    }
+  },
+  "record_roles": {
+    "actor": {
+      "default": "dimension"
+    },
+    "booking": "fact",
+    "diary": "dimension",
+    "entity": "dimension",
+    "journey_instance": "dimension",
+    "queue": "dimension",
+    "resource": "dimension",
+    "tick_decision": "fact"
+  },
+  "row_census": {
+    "trunk": {
+      "history_series": {
+        "actor": {
+          "admission_count": {
+            "records": 15060,
+            "rows": 17857
+          },
+          "birth_date": {
+            "records": 15060,
+            "rows": 15060
+          },
+          "cancer_referred": {
+            "records": 15060,
+            "rows": 17331
+          },
+          "fft_invited": {
+            "records": 15060,
+            "rows": 15319
+          },
+          "fft_outcome": {
+            "records": 15060,
+            "rows": 17145
+          },
+          "forename": {
+            "records": 15060,
+            "rows": 15060
+          },
+          "full_name": {
+            "records": 15060,
+            "rows": 15060
+          },
+          "hai_status": {
+            "records": 15060,
+            "rows": 19374
+          },
+          "status": {
+            "records": 15060,
+            "rows": 44937
+          },
+          "surgical_referred": {
+            "records": 15060,
+            "rows": 16924
+          },
+          "surname": {
+            "records": 15060,
+            "rows": 15060
+          }
+        },
+        "booking": {
+          "status": {
+            "records": 9363,
+            "rows": 16174
+          }
+        },
+        "diary": {
+          "next_opening": {
+            "records": 15,
+            "rows": 9378
+          }
+        },
+        "entity": {
+          "name": {
+            "records": 67,
+            "rows": 67
+          }
+        },
+        "journey_instance": {
+          "current_state": {
+            "records": 47612,
+            "rows": 172364
+          }
+        },
+        "resource": {
+          "allocated": {
+            "records": 30,
+            "rows": 25166
+          },
+          "capacity": {
+            "records": 30,
+            "rows": 30
+          },
+          "queue": {
+            "records": 30,
+            "rows": 30
+          }
+        }
+      },
+      "sub_type_rows": {
+        "actor": {
+          "default": 15060
+        },
+        "diary": {
+          "cancer_clinic": 5,
+          "operating_list": 5,
+          "outpatient_clinic": 5
+        },
+        "entity": {
+          "diagnostic": 12,
+          "medication": 10,
+          "procedure": 30,
+          "theatre": 5,
+          "ward": 10
+        },
+        "resource": {
+          "consultant": 30
+        }
+      },
+      "table_rows": {
+        "history": 432336,
+        "membership__journey_instance__bound_roles": 37585,
+        "membership__journey_instance__output_roles": 1445,
+        "membership__resource__holders": 12615,
+        "membership__tick_decision__bindings": 23708,
+        "records__actor": 15060,
+        "records__booking": 9363,
+        "records__diary": 15,
+        "records__entity": 67,
+        "records__journey_instance": 47612,
+        "records__queue": 6,
+        "records__resource": 30,
+        "records__tick_decision": 116450
+      }
+    }
+  },
+  "runtime": {
+    "start_datetime": "2023-01-01T00:00:00+00:00",
+    "timezone": "UTC"
+  },
+  "scenario_description": "An acute NHS hospital trust: emergency and elective patients flow from a single arrivals stream through A&E, inpatient wards, outpatient clinics, diagnostics, cancer and surgical pathways, then post-discharge follow-up \u2014 competing for consultants, beds, theatres and clinic slots under seasonal demand pressure.",
+  "sub_type_columns": {
+    "actor": {
+      "default": [
+        "presentation_id",
+        "prop__gender_code",
+        "prop__imd_decile",
+        "prop__primary_condition",
+        "prop__pathway_type",
+        "prop__admission_disposition",
+        "prop__status",
+        "prop__admission_count",
+        "prop__ethnic_category",
+        "prop__comorbidity_count",
+        "prop__frailty_band",
+        "prop__gp_practice_code",
+        "prop__age",
+        "prop__surgical_referred",
+        "prop__cancer_referred",
+        "prop__diagnostic_required",
+        "prop__outpatient_diagnostic_required",
+        "prop__diagnostic_test_type",
+        "prop__suspicious_finding",
+        "prop__surgical_indicated",
+        "prop__procedure_code",
+        "prop__readmission_risk",
+        "prop__fft_outcome",
+        "prop__fft_invited",
+        "prop__hai_status",
+        "prop__forename",
+        "prop__surname",
+        "prop__full_name",
+        "prop__birth_date"
+      ]
+    },
+    "diary": {
+      "cancer_clinic": [
+        "prop__slot_interval",
+        "prop__horizon",
+        "prop__min_lead",
+        "prop__booking_discipline",
+        "prop__window",
+        "prop__next_opening",
+        "prop__retiring",
+        "prop__main_specialty"
+      ],
+      "operating_list": [
+        "prop__slot_interval",
+        "prop__horizon",
+        "prop__min_lead",
+        "prop__booking_discipline",
+        "prop__window",
+        "prop__next_opening",
+        "prop__retiring",
+        "prop__main_specialty"
+      ],
+      "outpatient_clinic": [
+        "prop__slot_interval",
+        "prop__horizon",
+        "prop__min_lead",
+        "prop__booking_discipline",
+        "prop__window",
+        "prop__next_opening",
+        "prop__retiring",
+        "prop__main_specialty"
+      ]
+    },
+    "entity": {
+      "diagnostic": [
+        "presentation_id",
+        "prop__entity_code",
+        "prop__main_specialty",
+        "prop__test_type",
+        "prop__turnaround_days",
+        "prop__cost",
+        "prop__name"
+      ],
+      "medication": [
+        "presentation_id",
+        "prop__entity_code",
+        "prop__main_specialty",
+        "prop__specialty_group",
+        "prop__drug_class",
+        "prop__name"
+      ],
+      "procedure": [
+        "presentation_id",
+        "prop__entity_code",
+        "prop__main_specialty",
+        "prop__hrg_code",
+        "prop__tariff",
+        "prop__complexity",
+        "prop__specialty_group",
+        "prop__name"
+      ],
+      "theatre": [
+        "presentation_id",
+        "prop__entity_code",
+        "prop__main_specialty",
+        "prop__theatre_specialty",
+        "prop__sessions_per_day",
+        "prop__name"
+      ],
+      "ward": [
+        "presentation_id",
+        "prop__entity_code",
+        "prop__main_specialty",
+        "prop__ward_type",
+        "prop__total_beds",
+        "prop__cost_per_bed_day",
+        "prop__site_code",
+        "prop__name"
+      ]
+    },
+    "resource": {
+      "consultant": [
+        "presentation_id",
+        "prop__capacity",
+        "prop__allocated",
+        "prop__retiring",
+        "prop__queue",
+        "ref_index__queue",
+        "prop__entity_code",
+        "prop__main_specialty",
+        "prop__grade",
+        "prop__quality_rating"
+      ]
+    }
+  },
+  "surface": "published",
+  "tables": [
+    {
+      "category": "fixed",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "kind",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "property",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "value",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "history",
+      "rows": 432336
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "NHS administrative sex code (1 male, 2 female); recorded demographic, not read by any routing rule.",
+          "history_tracked": false,
+          "name": "prop__gender_code",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Index of Multiple Deprivation decile (1 most deprived, 10 least); keys both the outpatient DNA rate and the FFT non-response weight, so deprivation drives missed appointments and survey non-response.",
+          "history_tracked": false,
+          "name": "prop__imd_decile",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Presenting condition cohort; drives the specialty-consultant match, the age distribution, the specialty-care dwell band, and the HAI-transmission cohort grouping.",
+          "history_tracked": false,
+          "name": "prop__primary_condition",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Care route the patient takes (emergency, elective, cancer, or surgical); patient_intake reads it to fan arrivals into the matching journey.",
+          "history_tracked": false,
+          "name": "prop__pathway_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Pre-rolled arrival outcome (home or admit) that routes the ED encounter to discharge or inpatient admission, and marks an admitted patient as eligible for HAI contact.",
+          "history_tracked": false,
+          "name": "prop__admission_disposition",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Patient's current care-status label, mutated at each major transition (e.g. in_ed, admitted, discharged, deceased) so the SCD-2 history traces their journey through the trust.",
+          "history_tracked": true,
+          "name": "prop__status",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Running count of inpatient admissions for this patient, incremented on each readmission so repeat-admission patients are distinguishable from single-spell patients.",
+          "history_tracked": true,
+          "name": "prop__admission_count",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "NHS ethnic category code (A-Z scheme); recorded demographic for health-inequality reporting, not read by any routing rule.",
+          "history_tracked": false,
+          "name": "prop__ethnic_category",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Count of significant comorbid conditions banded 0 to 4-plus; sets consultant-queue seize priority and weights both the readmission-outcome split and the re-entry probability.",
+          "history_tracked": false,
+          "name": "prop__comorbidity_count",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Frailty category (fit, mild, moderate, severe); gates ICU eligibility alongside emergency status and weights the mortality draw in specialty care.",
+          "history_tracked": false,
+          "name": "prop__frailty_band",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Referring GP practice code drawn from a weighted pool of local practices; recorded demographic, not read by any routing rule.",
+          "history_tracked": false,
+          "name": "prop__gp_practice_code",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Age at first presentation, drawn from a distribution conditioned on primary_condition; recorded only, with the projection deriving birth_date from it.",
+          "history_tracked": false,
+          "name": "prop__age",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether this patient has ever been referred for surgery; flips to true when the surgical_pathway journey reaches surgery_performed.",
+          "history_tracked": true,
+          "name": "prop__surgical_referred",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BOOLEAN"
+        },
+        {
+          "description": "Whether this patient has ever been referred onto the cancer pathway; flips to true when the cancer_pathway journey reaches first_seen.",
+          "history_tracked": true,
+          "name": "prop__cancer_referred",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BOOLEAN"
+        },
+        {
+          "description": "Pre-rolled gate (req/not_req, ~30% req) controlling whether the ED assessment triggers a diagnostic_request journey.",
+          "history_tracked": false,
+          "name": "prop__diagnostic_required",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Pre-rolled gate (req/not_req, ~50% req) controlling whether the outpatient referral triggers a diagnostic_request journey.",
+          "history_tracked": false,
+          "name": "prop__outpatient_diagnostic_required",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Pre-rolled test modality for this patient's diagnostic request; bands which perform/report delay distribution applies and which catalogue test entity is selected.",
+          "history_tracked": false,
+          "name": "prop__diagnostic_test_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Pre-rolled gate (yes/no, ~15% yes) that triggers the cancer_pathway journey when an outpatient referral turns up a suspicious finding.",
+          "history_tracked": false,
+          "name": "prop__suspicious_finding",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Pre-rolled surgical-candidacy flag (yes/no, ~12% yes), recorded for downstream analytics; pathway_type, not this flag, routes patients into surgical_pathway.",
+          "history_tracked": false,
+          "name": "prop__surgical_indicated",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Pre-rolled OPCS-4-style procedure code identifying this patient's surgery; recorded for downstream analytics, not read by the uniform procedure-selection rule.",
+          "history_tracked": false,
+          "name": "prop__procedure_code",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Pre-rolled eligibility flag (yes/no, ~10% yes) gating whether this patient may re-enter inpatient_spell via readmission_check; the readmission outcome itself is driven by comorbidity_count.",
+          "history_tracked": false,
+          "name": "prop__readmission_risk",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Friends and Family Test result, mutated by the fft_survey journey to a satisfaction score (very_poor to very_good) or no_response.",
+          "history_tracked": true,
+          "name": "prop__fft_outcome",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Guard flag tracking whether this patient has already received an FFT invitation, preventing a readmitted patient from starting a second fft_survey instance.",
+          "history_tracked": true,
+          "name": "prop__fft_invited",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Healthcare-associated infection colonization status; a small pre-rolled fraction arrive already colonized as contagion seeds, and the hai_transmission rule spreads colonization to clear admitted patients in the same condition cohort.",
+          "history_tracked": true,
+          "name": "prop__hai_status",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__actor_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Patient's given name.",
+          "history_tracked": true,
+          "name": "prop__forename",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Patient's family name.",
+          "history_tracked": true,
+          "name": "prop__surname",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Patient's full display name (forename followed by surname).",
+          "history_tracked": true,
+          "name": "prop__full_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Patient's date of birth, consistent with the recorded age.",
+          "history_tracked": true,
+          "name": "prop__birth_date",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__actor",
+      "record_kind": "actor",
+      "rows": 15060
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor this booking was made for.",
+          "history_tracked": false,
+          "name": "prop__subject",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__subject",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the diary this booking's opening was assigned from.",
+          "history_tracked": false,
+          "name": "prop__diary",
+          "references": "diary",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__diary",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Simulation time this booking was requested.",
+          "history_tracked": false,
+          "name": "prop__requested_at",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Simulation time of the assigned appointment opening.",
+          "history_tracked": false,
+          "name": "prop__opening_at",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Simulation time the subject attended the opening, when attendance was resolved.",
+          "history_tracked": false,
+          "name": "prop__attended_at",
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "This booking's resolution status.",
+          "history_tracked": true,
+          "name": "prop__status",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the cancelled booking this one supersedes, when this booking is a supply-cut rebook successor.",
+          "history_tracked": false,
+          "name": "prop__rebooked_from",
+          "references": "booking",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__rebooked_from",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to this booking's successor \u2014 a rebooked booking or, on exhaustion, a minted waiter \u2014 when this booking's opening was cut by a diary resolution.",
+          "history_tracked": false,
+          "name": "prop__rebooked_to",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One reservation trace against a diary opening: request and attend instants, and its resolution status.",
+      "name": "records__booking",
+      "record_kind": "booking",
+      "rows": 9363
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Working-time nanoseconds between consecutive appointment openings.",
+          "history_tracked": false,
+          "name": "prop__slot_interval",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT",
+          "unit": "nanoseconds"
+        },
+        {
+          "description": "Working-time nanoseconds ahead of now the booking cursor may advance.",
+          "history_tracked": false,
+          "name": "prop__horizon",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT",
+          "unit": "nanoseconds"
+        },
+        {
+          "description": "Minimum working-time nanoseconds required between booking and opening.",
+          "history_tracked": false,
+          "name": "prop__min_lead",
+          "temporal_class": "constant",
+          "type": "BIGINT",
+          "unit": "nanoseconds"
+        },
+        {
+          "description": "Allocation strategy governing which opening a request is assigned.",
+          "history_tracked": false,
+          "name": "prop__booking_discipline",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Named activity window governing this diary's working-time arithmetic; unset for a 24/7 diary.",
+          "history_tracked": false,
+          "name": "prop__window",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The booking-out cursor: the next opening this diary will assign absent a free-list reuse.",
+          "history_tracked": true,
+          "name": "prop__next_opening",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether this diary is in its retire wind-down: no longer accepting new bookings while existing confirmed bookings resolve.",
+          "history_tracked": false,
+          "name": "prop__retiring",
+          "temporal_class": "constant",
+          "type": "BOOLEAN"
+        },
+        {
+          "description": "Specialty this diary serves; the join key that matches the diary to a referred patient's primary_condition.",
+          "history_tracked": false,
+          "name": "prop__main_specialty",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "name": "prop__diary_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One schedulable resource pool's future-opening state: the booking-out cursor, returned openings awaiting reuse, and supply modulation history.",
+      "name": "records__diary",
+      "record_kind": "diary",
+      "rows": 15
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Catalogue identifier code for this entity, in the code system appropriate to its kind \u2014 NHS ward/site codes, OPCS-4 for procedures, BNF for medications, and so on.",
+          "history_tracked": false,
+          "name": "prop__entity_code",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Specialty this catalogue entry belongs to, per the trust's specialty coding; the join key medication selection matches to a patient's primary_condition, left blank for entries \u2014 such as cross-specialty diagnostics \u2014 that apply to every specialty.",
+          "history_tracked": false,
+          "name": "prop__main_specialty",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Ward classification (general, assessment, icu_hdu, step_down) read by the safety-incident and mortality rules; icu_hdu carries the elevated per-day hazard, the others share the specialty_care rate.",
+          "history_tracked": false,
+          "name": "prop__ward_type",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Number of physical beds on this ward, as recorded in the trust's estate catalogue.",
+          "history_tracked": false,
+          "name": "prop__total_beds",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Daily cost per occupied bed on this ward, recorded for downstream cost-per-stay analytics.",
+          "history_tracked": false,
+          "name": "prop__cost_per_bed_day",
+          "temporal_class": "constant",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "NHS site code identifying which of the trust's physical sites this ward is located at.",
+          "history_tracked": false,
+          "name": "prop__site_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Surgical specialty this theatre is fitted out for; recorded catalogue attribute, not read by the uniform theatre-selection rule.",
+          "history_tracked": false,
+          "name": "prop__theatre_specialty",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Number of operating sessions this theatre runs per day; recorded capacity attribute.",
+          "history_tracked": false,
+          "name": "prop__sessions_per_day",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Test modality (mri/ct/xray/blood/ecg/ultrasound); the join key that matches a patient's pre-rolled diagnostic_test_type to a catalogue test.",
+          "history_tracked": false,
+          "name": "prop__test_type",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Nominal turnaround time in days for this test, as published in the diagnostics catalogue; the simulated perform/report delay is drawn separately from a distribution banded on test type.",
+          "history_tracked": false,
+          "name": "prop__turnaround_days",
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Cost of performing this test, as published in the diagnostics catalogue, for downstream cost analytics.",
+          "history_tracked": false,
+          "name": "prop__cost",
+          "temporal_class": "constant",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "Healthcare Resource Group code bucketing this procedure for case-mix and tariff purposes.",
+          "history_tracked": false,
+          "name": "prop__hrg_code",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "National tariff price for this procedure's HRG bucket; the case-mix revenue a consumer attributes to the surgery.",
+          "history_tracked": false,
+          "name": "prop__tariff",
+          "temporal_class": "constant",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "Complexity band (minor, intermediate, major) of this procedure; recorded catalogue attribute.",
+          "history_tracked": false,
+          "name": "prop__complexity",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Broader clinical grouping for this catalogue entry, distinct from main_specialty, for specialty-level roll-ups.",
+          "history_tracked": false,
+          "name": "prop__specialty_group",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Therapeutic drug class this medication belongs to; recorded catalogue attribute.",
+          "history_tracked": false,
+          "name": "prop__drug_class",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__entity_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Ward's display name.",
+          "history_tracked": true,
+          "name": "prop__name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__entity",
+      "record_kind": "entity",
+      "rows": 67
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor walking this journey.",
+          "history_tracked": false,
+          "name": "prop__actor",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__actor",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the journey type this instance is an execution of.",
+          "history_tracked": false,
+          "name": "prop__journey_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Name of the state the journey instance currently occupies.",
+          "history_tracked": true,
+          "name": "prop__current_state",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time the journey instance entered its current state.",
+          "history_tracked": false,
+          "name": "prop__state_entry_time",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether the journey instance has reached a terminal state.",
+          "history_tracked": false,
+          "name": "prop__complete",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BOOLEAN"
+        }
+      ],
+      "description": "One actor's traversal of one journey: current state, entry time, completion flag, and every role binding acquired along the way.",
+      "name": "records__journey_instance",
+      "record_kind": "journey_instance",
+      "rows": 47612
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding acquired by a select action during this journey instance's traversal.",
+      "name": "membership__journey_instance__bound_roles",
+      "property": "bound_roles",
+      "record_kind": "journey_instance",
+      "rows": 37585
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding produced by an output_only select action during this journey instance's traversal.",
+      "name": "membership__journey_instance__output_roles",
+      "property": "output_roles",
+      "record_kind": "journey_instance",
+      "rows": 1445
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Waiter promotion order for this queue.",
+          "history_tracked": false,
+          "name": "prop__discipline",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Policy applied when every server this queue governs is full and no promotion is possible.",
+          "history_tracked": false,
+          "name": "prop__on_full",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "history_tracked": false,
+          "name": "prop__main_specialty",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "The wait-and-promotion record governing one server or a partitioned group of servers: promotion discipline, full-pool policy, and the current waiters.",
+      "name": "records__queue",
+      "record_kind": "queue",
+      "rows": 6
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "presentation_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Total number of slots in this pool.",
+          "history_tracked": true,
+          "min": 0,
+          "name": "prop__capacity",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Number of slots currently held across every holder in this pool.",
+          "history_tracked": true,
+          "name": "prop__allocated",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether this pool is in its retire wind-down: no longer accepting new seizes while existing holders drain.",
+          "history_tracked": false,
+          "name": "prop__retiring",
+          "temporal_class": "constant",
+          "type": "BOOLEAN"
+        },
+        {
+          "description": "Reference to the queue record governing this pool's waiters, stamped once construction derives the run's queues.",
+          "history_tracked": true,
+          "name": "prop__queue",
+          "references": "queue",
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__queue",
+          "type": "BIGINT"
+        },
+        {
+          "description": "NHS consultant identifier code as recorded in the trust's staff catalogue.",
+          "history_tracked": false,
+          "name": "prop__entity_code",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "NHS main specialty code this consultant belongs to; the join key the patient's primary_condition value_map resolves to when seizing a consultant.",
+          "history_tracked": false,
+          "name": "prop__main_specialty",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Seniority grade of the consultant; recorded staffing attribute, not read by any rule.",
+          "history_tracked": false,
+          "name": "prop__grade",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "0-1 outcome-quality proxy for this consultant; recorded attribute, not read by any rule this phase.",
+          "history_tracked": false,
+          "name": "prop__quality_rating",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "DOUBLE"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "name": "prop__resource_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "A resource pool actors seize slots from: capacity, current allocation, current holders, and the governing queue.",
+      "name": "records__resource",
+      "record_kind": "resource",
+      "rows": 30
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the holding actor.",
+          "name": "member__actor__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the holding actor.",
+          "name": "member__actor__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "This holder's priority, carried forward from promotion.",
+          "name": "elem__priority",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Rule id to schedule if this holder is displaced by a higher-priority preemption; None except on a 1-server preempt queue.",
+          "name": "elem__on_preempted_rule",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Number of slots this holder currently occupies.",
+          "name": "elem__slots_held",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every actor currently holding one or more slots in this pool.",
+      "name": "membership__resource__holders",
+      "property": "holders",
+      "record_kind": "resource",
+      "rows": 12615
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the journey instance this decision belongs to.",
+          "history_tracked": false,
+          "name": "prop__journey_instance",
+          "references": "journey_instance",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__journey_instance",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Author-declared discriminator identifying which decision this record represents.",
+          "history_tracked": false,
+          "name": "prop__decision_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Decision-specific key-value payload recorded at fire time, rendered as JSON object text.",
+          "extra_data": true,
+          "history_tracked": false,
+          "name": "prop__context",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "description": "One event-shaped record of a decision firing (select, recall, seize, book, match, create, or record) \u2014 archival, immortal, never rewritten.",
+      "name": "records__tick_decision",
+      "record_kind": "tick_decision",
+      "rows": 116450
+    },
+    {
+      "category": "membership",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "joined_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "left_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the role this binding fills.",
+          "name": "elem__role_name",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__kind",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Reference to the record bound to this role.",
+          "name": "member__entity__id",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Zero-based index of this pick within the select's admitted set, in selection order.",
+          "name": "elem__pick_index",
+          "type": "BIGINT"
+        }
+      ],
+      "description": "Membership table of every role binding this decision recorded, including any author-declared per-binding context fields.",
+      "name": "membership__tick_decision__bindings",
+      "property": "bindings",
+      "record_kind": "tick_decision",
+      "rows": 23708
+    }
+  ]
+}

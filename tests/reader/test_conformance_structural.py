@@ -878,10 +878,13 @@ class TestC8:
                 }
             ],
         }
+        # The vendored schema pins branches to exactly one entry, so the
+        # multi-branch defect is schema-level as well as C8-level.
         dest = _write_emit(
             tmp_path / "c8_multi_branch",
             sidecar,
             {"history": list(_HISTORY_COLUMNS)},
+            schema_valid=False,
         )
         with open_emit(dest) as emit:
             result = run_check(emit, "C8")
@@ -921,8 +924,8 @@ class TestValidate:
             report = validate(emit)
         assert isinstance(report, ConformanceReport)
 
-    def test_results_in_c1_to_c14_order(self, base_fixtures: dict[str, Path]) -> None:
-        """validate returns results in C1..C14 order."""
+    def test_results_in_c1_to_c15_order(self, base_fixtures: dict[str, Path]) -> None:
+        """validate returns results in C1..C15 order."""
         with open_emit(base_fixtures["spanning"]) as emit:
             report = validate(emit)
         check_ids = [r.check for r in report.results]
@@ -941,6 +944,7 @@ class TestValidate:
             "C12",
             "C13",
             "C14",
+            "C15",
         ]
 
     def test_c4_wrong_history_type_fails_c4_not_c2(
@@ -977,6 +981,61 @@ class TestValidate:
         c5 = next(r for r in report.results if r.check == "C5")
         assert c2.passed is False
         assert c5.passed is True
+
+
+# ---------------------------------------------------------------------------
+# C15: surface consistency
+# ---------------------------------------------------------------------------
+
+
+class TestC15Surface:
+    """C15: the sidecar's surface discriminator and projection absence."""
+
+    def test_published_surface_passes(self, tmp_path: Path) -> None:
+        """A sidecar stamped surface 'published' with no projection block passes."""
+        dest = _write_emit(tmp_path / "ok", _minimal_sidecar())
+        with open_emit(dest) as emit:
+            result = run_check(emit, "C15")
+        assert result.passed is True
+        assert result.skips == ()
+
+    def test_wrong_surface_fails(self, tmp_path: Path) -> None:
+        """A surface other than 'published' is a C15 failure naming the value."""
+        sidecar = _minimal_sidecar()
+        sidecar["surface"] = "projection"
+        dest = _write_emit(tmp_path / "wrong", sidecar, schema_valid=False)
+        with open_emit(dest) as emit:
+            result = run_check(emit, "C15")
+        assert result.passed is False
+        assert any("projection" in m for m in result.messages)
+
+    def test_absent_surface_fails(self, tmp_path: Path) -> None:
+        """An absent surface field is a C15 failure, flagged as absent."""
+        dest_dir = tmp_path / "absent"
+        dest_dir.mkdir()
+        sidecar = _minimal_sidecar()
+        _write_sidecar(
+            dest_dir,
+            tables=sidecar["tables"],  # type: ignore[arg-type]
+            branches=sidecar.get("branches"),  # type: ignore[arg-type]
+            surface=None,
+            schema_valid=False,
+        )
+        duckdb.connect(str(dest_dir / "run.duckdb")).close()
+        with open_emit(dest_dir) as emit:
+            result = run_check(emit, "C15")
+        assert result.passed is False
+        assert any("absent" in m for m in result.messages)
+
+    def test_projection_block_fails(self, tmp_path: Path) -> None:
+        """A published-surfaced sidecar carrying a projection block fails C15."""
+        sidecar = _minimal_sidecar()
+        sidecar["projection"] = {"kind": "branch"}
+        dest = _write_emit(tmp_path / "proj", sidecar)
+        with open_emit(dest) as emit:
+            result = run_check(emit, "C15")
+        assert result.passed is False
+        assert any("projection" in m for m in result.messages)
 
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,289 @@
+# ExportConfig — security-logs bundle, dimensional mode (SIEM star schema)
+# ============================================================
+# `fabulexa-forge export docs/examples/security-logs/bundle docs/examples/security-logs/dimensional.yaml <out> --fmt duckdb`
+#
+# A 90-day SIEM corpus: 117 internal + 4 external hosts run session journeys
+# against 42 servers behind a 9-rule firewall; the attack signal is a shift in
+# per-host reach and denies, never a label. The star is ONE unified event fact
+# (the normalized SIEM index shape — one event stream, type-dependent sparse
+# columns) over four inventory dims. Curation decisions:
+#
+#   UNIFIED  tick_decision (440,107 rows) -> fact_security_event, all five
+#            decision types in one table. A SIEM stores exactly this: one
+#            normalized index with an event_type and sparse per-type fields.
+#            Verified each decision carries AT MOST ONE bindings row (max 1
+#            per decision across all types), so the three membership FKs
+#            below can sit inline on the fact with no fan-out.
+#   MAPPED   decision_type -> event_type via value_map, engine vocabulary to
+#            log vocabulary (destination_chosen -> connection_attempt, ...;
+#            "attempt", not "open" — the firewall evaluates AFTER the
+#            destination is chosen, so some of these rows get denied).
+#            All five source values are mapped; no NULLs.
+#   SPARSE   by design (the SIEM shape, not a modeling defect):
+#            dst_server_id lands only on connection_attempt rows (the dest_*
+#            binding lives on destination_chosen decisions — verified),
+#            rule_id only on firewall_decision rows, account_id only on
+#            auth_attempt rows, details only on session_established rows.
+#            A firewall_decision row with rule_id NULL is the default-deny
+#            posture (8,833 of 112,339 evaluations carry no matched_rule
+#            binding — the 8,271 session "blocked" outcomes plus 562 external
+#            probes on shut routes); allow vs deny is dim_firewall_rule.action.
+#            auth_failure rows carry NO account_id — the reject decision has
+#            no binding (faithful, not a defect). The account resolves via
+#            the correlation id: join the auth_failure row to its session's
+#            auth_attempt on session_id — the outcome-event-joined-to-request
+#            pattern. Benign sessions present exactly one account; 33
+#            sessions present several (all approach_* intrusion sequences —
+#            credential stuffing; verified all 535 of their failures resolve
+#            uniquely to the nearest preceding auth_attempt by occurred_at).
+#   COALESCED the four destination roles (dest_habitual 95,852 / dest_stale
+#            10,235 / dest_explore 5,144 / probe_target 1,108) into ONE
+#            dst_server_id, and account (111,231) + victim_account (546) into
+#            ONE account_id. The role names are generator ground truth — a
+#            firewall log shows WHERE a host connected, never whether the
+#            simulator considered it habitual; an auth log shows the account
+#            presented, never that it was stolen. Safe: at most one binding
+#            per decision, so each where-list selects at most one row.
+#   SIEM-REALISTIC (the dataset's premise: the attack signal is behavioral).
+#            Dropped from every output: actor role (its 'external' value flat
+#            labels the four attackers), home_service / stale_service /
+#            breadth / auth_reliability / failed_attempts / pending_dst_zone /
+#            pending_dst_port / last_octet / subnet_octet (generator internals
+#            no real device logs); journey_instance.journey_type (its
+#            approach_* values label the intrusion journeys); the bindings'
+#            elem__role_name (see COALESCED). Ground truth lives in the base
+#            export, not here.
+#   NO DIM   journey_instance: session_id on the fact is the correlation id
+#            (111,412 sessions; the two-hop FK to the host resolves through
+#            it), but its state timeline (current_state, 758,812 rows) is the
+#            engine's narration — resolve_rule / probing / staging — which no
+#            SIEM records. Deliberately not exported here.
+#   DROPPED  tick_decision.prop__context except as the raw `details` string
+#            (SIEM-native name for the log-line detail field): verified it is
+#            '{}' on every row except session_opened, where it carries
+#            {"bytes_transferred": <float>}. No JSON-extraction derivation
+#            exists, so it ships as the raw JSON payload column.
+#   SPLIT    entity -> dim_server / dim_account / dim_firewall_rule per the
+#            sidecar's sub_type_columns partition (disjoint column sets).
+#   SCD-2    dim_server: prop__port is history-tracked and genuinely changes
+#            mid-run — the mail_maintenance window (mail01..03 move 25 ->
+#            9999 -> 25 around day 60; 174 history rows / 168 records). The
+#            fact's occurred_at supports the point-in-time join:
+#              JOIN dim_server s ON s.server_id = f.dst_server_id
+#                AND f.occurred_at >= s.valid_from
+#                AND (s.valid_to IS NULL OR f.occurred_at < s.valid_to)
+#   TYPE-1   dim_host / dim_account / dim_firewall_rule: remaining projected
+#            attributes are constant in this run (host breadth IS tracked but
+#            is dropped as ground truth, see above).
+#   KEPT     all 121 hosts in dim_host, externals included. Their zone/subnet
+#            say 'external' — network position any log shows — but no column
+#            marks them hostile. Excluding them would dangle every FK their
+#            events carry (Principle #4).
+#
+# KEYS: actor / entity elect record_index — compact BIGINT surrogates, the
+# natural key (name / hostname / account_name / rule_name) kept as an
+# attribute beside each. The sidecar registers no presentation_keys, so
+# record_index is the only non-hash surface. tick_decision /
+# journey_instance are NOT elected: event_id / session_id are verbatim
+# record ids (digit strings) — correlation tokens, not dim joins.
+#
+# Timestamps: no `rebase:` block — the anchor is the sidecar runtime
+# (2026-01-05T08:00:00 UTC). occurred_at is a wallclock TIMESTAMP.
+
+mode: dimensional
+
+keys:
+  actor: record_index
+  entity: record_index
+
+dimensional:
+  tables:
+    # --- dim: host — every connection source, internal and external ---
+    - name: dim_host
+      role: dim
+      scd: type1
+      description: >-
+        One machine that originates connections, internal or external.
+      source:
+        grain: records
+        kind: actor
+      key: [host_id]
+      columns:
+        - name: host_id
+          from: record_index
+          description: >-
+            Surrogate key for the host; join target of
+            fact_security_event.src_host_id.
+        - {name: hostname, from: prop__name}
+        - {name: ip_address, from: prop__ip_address}
+        - {name: zone, from: prop__zone}
+        - {name: subnet, from: prop__subnet}
+
+    # --- dim: server — the 42-server service estate; SCD-2 for the
+    #     mail_maintenance port window (see header) ---
+    - name: dim_server
+      role: dim
+      scd: type2
+      description: >-
+        One version of one destination in the service estate a host can
+        connect to.
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: server}
+      key: [server_id, valid_from]
+      columns:
+        - name: server_id
+          from: record_index
+          description: >-
+            Surrogate key for the server; join target of
+            fact_security_event.dst_server_id.
+        - {name: hostname, from: prop__hostname}
+        - {name: ip_address, from: prop__ip_address}
+        - {name: zone, from: prop__zone}
+        - {name: port, from: prop__port}
+        - {name: service, from: prop__service}
+        - name: valid_from
+          derived: {scd_window: valid_from}
+          description: Time this version of the server row became current.
+        - name: valid_to
+          derived: {scd_window: valid_to}
+          description: >-
+            Time this version stopped being current; NULL on the current
+            version.
+
+    # --- dim: account — the credential principals the auth log reports on ---
+    - name: dim_account
+      role: dim
+      scd: type1
+      description: >-
+        One credential principal an authentication event reports on.
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: account}
+      key: [account_id]
+      columns:
+        - name: account_id
+          from: record_index
+          description: >-
+            Surrogate key for the account; join target of
+            fact_security_event.account_id.
+        - {name: account_name, from: prop__account_name}
+        - {name: account_type, from: prop__account_type}
+        - {name: owner_hostname, from: prop__owner_host}
+        - {name: owner_first, from: prop__owner_first}
+        - {name: owner_last, from: prop__owner_last}
+
+    # --- dim: firewall rule — the authored ruleset; action carries the
+    #     allow/deny disposition a firewall_decision row resolves to ---
+    - name: dim_firewall_rule
+      role: dim
+      scd: type1
+      description: >-
+        One entry in the authored firewall ruleset, matching a route to a
+        disposition.
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: fw_rule}
+      key: [rule_id]
+      columns:
+        - name: rule_id
+          from: record_index
+          description: >-
+            Surrogate key for the firewall rule; join target of
+            fact_security_event.rule_id.
+        - {name: rule_name, from: prop__rule_name}
+        - {name: src_zone, from: prop__src_zone}
+        - {name: dst_zone, from: prop__dst_zone}
+        - {name: dst_port, from: prop__dst_port}
+        - {name: action, from: prop__action}
+
+    # --- fact: the unified SIEM event stream (all 440,107 decisions) ---
+    - name: fact_security_event
+      role: fact
+      description: >-
+        One security event in the unified SIEM stream — a connection
+        attempt, firewall decision, authentication attempt or rejection, or
+        session establishment.
+      source:
+        grain: records
+        kind: tick_decision
+      key: [event_id]
+      columns:
+        - name: event_id
+          from: record_id
+          description: Unique id of this event; one row per logged event.
+        - name: occurred_at
+          derived: {timestamp: {source: created_sim_time}}
+          description: Time the event was logged.
+        - name: event_type
+          derived:
+            value_map:
+              from: prop__decision_type
+              map:
+                destination_chosen: connection_attempt
+                firewall_evaluated: firewall_decision
+                account_presented: auth_attempt
+                auth_rejected: auth_failure
+                session_opened: session_established
+          description: >-
+            Event category; one of connection_attempt, firewall_decision,
+            auth_attempt, auth_failure, session_established.
+        # correlation id: all events of one session/probe sequence share it
+        - name: session_id
+          from: prop__journey_instance
+          description: Correlation id shared by every event in one session.
+        # the source host: two-hop reference pathfind
+        # (tick_decision -> journey_instance -> actor)
+        - name: src_host_id
+          fk: {to: dim_host, via: reference}
+          description: >-
+            Host that originated the event; join to dim_host.host_id.
+            Populated on every event.
+        # destination: the four dest roles coalesced (see COALESCED);
+        # populated on connection_attempt rows
+        - name: dst_server_id
+          fk:
+            to: dim_server
+            via: membership
+            property: bindings
+            where: {elem__role_name: [dest_habitual, dest_stale, dest_explore, probe_target]}
+            member_field: entity
+          description: >-
+            Server the connection was aimed at; join to dim_server.server_id.
+            Populated only on connection_attempt events, NULL on the rest.
+        # matched rule; NULL on a firewall_decision row = default-deny blocked
+        - name: rule_id
+          fk:
+            to: dim_firewall_rule
+            via: membership
+            property: bindings
+            where: {elem__role_name: matched_rule}
+            member_field: entity
+          description: >-
+            Firewall rule that matched; join to dim_firewall_rule.rule_id.
+            Populated only on firewall_decision events; NULL there means no
+            rule matched and the default-deny posture blocked the connection.
+        # the account presented; owned + stolen coalesced (see COALESCED);
+        # populated on auth_attempt rows
+        - name: account_id
+          fk:
+            to: dim_account
+            via: membership
+            property: bindings
+            where: {elem__role_name: [account, victim_account]}
+            member_field: entity
+          description: >-
+            Account presented for authentication; join to
+            dim_account.account_id. Populated only on auth_attempt events;
+            auth_failure events carry NULL — recover the account by joining
+            back to the session's auth_attempt rows on session_id.
+        # raw log-line detail: '{}' except session_established rows, which
+        # carry {"bytes_transferred": <float>}
+        - name: details
+          from: prop__context
+          description: >-
+            Raw JSON detail; carries bytes_transferred on session_established
+            events, '{}' otherwise.

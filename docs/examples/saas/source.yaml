@@ -21,15 +21,18 @@
 #            `companies`) and entity.company_hub (billing/workspace tenant,
 #            `accounts`) carry no structural reference to each other. Kept
 #            as two separate tables — no join fabricated between them.
-#   POLYMORPHIC lifecycle_instances.actor_id (from journey_instance's
+#   POLYMORPHIC lifecycle_instances.owner_id (from journey_instance's
 #            `prop__actor`) resolves per-row to whichever population the
 #            referenced actor record belongs to (source.md § Identity and
 #            key election: "reference columns render the target
 #            population's elected surface per row") — companies.id
 #            (CMP-#####) for a company_lifecycle row, users.id (USR-######)
-#            for a user_lifecycle row. `journey_type` is the discriminator
+#            for a user_lifecycle row. `lifecycle_type` is the discriminator
 #            telling you which table it lands on; this is a faithful,
-#            un-invented polymorphic FK, not a defect.
+#            un-invented polymorphic FK, not a defect. `owner_id` /
+#            `lifecycle_type` is the same owner+type shape the `versions`
+#            log already uses (item_type / item_id), so one polymorphic
+#            idiom runs through the whole schema.
 #   SUB-TYPE naming: `sub_types:` narrows a table's ROWS, not its columns —
 #            each split table below names its own real columns explicitly
 #            (from `sub_type_columns`) so the other sub-type's columns
@@ -43,12 +46,26 @@
 #            the active<->using toggle, at true per-event grain.
 #   DROPPED  tick_decision's `active` / `deactivated_at` / `updated_at` —
 #            a usage event is created once and never deactivated; those
-#            columns would be constant/uninformative for every row.
-#   OPAQUE   usage_events.context stays a raw VARCHAR (as in
-#            dimensional.yaml) — the config grammar has no mode to parse
-#            the repr'd-tuple value; see dimensional.yaml's header for the
-#            full rationale (consult(composite)-confirmed: real data, not
-#            engine noise, but not parseable by this package today).
+#            columns would be constant/uninformative for every row. Same
+#            reason for `decision_type` (constant 'usage_event' — the table
+#            name already says it) and for the bindings junction's
+#            `elem__role_name` ('sku'), `member__entity__kind` ('entity' —
+#            raw engine vocabulary) and `elem__pick_index` (0): the junction
+#            binds SKUs and nothing else, so a discriminator carries no
+#            information. Also dropped: the junction's `left_sim_time` — a
+#            SKU binding is recorded once and never leaves, so the column
+#            is always NULL — and entity.prop__attach_weight from
+#            `accounts` — a pure simulation arrival-sampling knob (how
+#            strongly the account pulls newly-arriving seats), not a
+#            business attribute an app database would carry.
+#   CONTEXT  usage_events.context arrives from the base layer as JSON
+#            ({"volume": ...}) and passes straight through.
+#   DESCRIBED per-table `descriptions:` maps (keyed by SOURCE identity, the
+#            same vocabulary as `rename`) rewrite the inherited engine-voice
+#            prose (surrogate-identity, simulation-time, journey-stage
+#            wording) into the plain app-database voice the readme should
+#            carry. The `versions` log has no `descriptions:` config surface —
+#            its table and column docs are forge-pinned instead.
 
 mode: source
 
@@ -64,6 +81,14 @@ source:
       kind: actor
       sub_types: [company]
       columns: [prop__status, created_sim_time, active, deactivated_at, last_mutation_sim_time]
+      description: One row per subscribing company, the account holder whose lifecycle runs from onboarding through renewal reviews to churn.
+      descriptions:
+        presentation_id: Unique company identifier (CMP-#####).
+        prop__status: "Lifecycle status: onboarding / active / churned."
+        created_sim_time: When the company signed up.
+        active: "Soft-delete flag: FALSE once the row has been deleted."
+        deactivated_at: When the row was soft-deleted; NULL while live.
+        last_mutation_sim_time: "When the row was last written: created, updated, or deleted."
 
     - name: users
       kind: actor
@@ -85,6 +110,15 @@ source:
         ]
       rename:
         prop__company: account_id
+      description: One row per seat holder, an individual working inside a subscribing company's account.
+      descriptions:
+        presentation_id: Unique user identifier (USR-######).
+        prop__status: "Seat lifecycle status: provisioned / active / using / offboarded."
+        prop__company: accounts.id of the account this user's seat belongs to.
+        created_sim_time: When the user's seat was created.
+        active: "Soft-delete flag: FALSE once the row has been deleted (unrelated to `status`)."
+        deactivated_at: When the row was soft-deleted; NULL while live.
+        last_mutation_sim_time: "When the row was last written: created, updated, or deleted."
 
     - name: accounts
       kind: entity
@@ -93,7 +127,6 @@ source:
         [
           prop__plan,
           prop__seat_price,
-          prop__attach_weight,
           prop__churn_flag,
           prop__engagement_score,
           prop__name,
@@ -103,33 +136,79 @@ source:
           deactivated_at,
           last_mutation_sim_time,
         ]
+      # engagement_score is a 1-100 score carrying raw float64 noise (15
+      # fraction digits) in records AND history. DECIMAL(5,2) out; the
+      # elected form also reaches this kind's `versions` audit entries.
+      render:
+        prop__engagement_score: {decimal: [5, 2]}
+      description: One row per account, the commercial record of a company's plan, pricing, churn status, and engagement score.
+      descriptions:
+        presentation_id: Unique account identifier (ACC-#####).
+        prop__name: Account display name.
+        created_sim_time: When the account was created.
+        active: "Soft-delete flag: FALSE once the row has been deleted."
+        deactivated_at: When the row was soft-deleted; NULL while live.
+        last_mutation_sim_time: "When the row was last written: created, updated, or deleted."
 
     - name: skus
       kind: entity
       sub_types: [sku]
       columns: [prop__popularity, prop__name, created_sim_time, active, deactivated_at, last_mutation_sim_time]
+      description: One row per product line in the catalogue, the feature a usage session is attributed to.
+      descriptions:
+        presentation_id: Unique SKU identifier (SKU-###).
+        prop__name: SKU display name (Core, Analytics, API).
+        created_sim_time: When the SKU was added to the catalogue.
+        active: "Soft-delete flag: FALSE once the row has been deleted."
+        deactivated_at: When the row was soft-deleted; NULL while live.
+        last_mutation_sim_time: "When the row was last written: created, updated, or deleted."
 
     - name: lifecycle_instances
       kind: journey_instance
       columns: [prop__actor, prop__journey_type, prop__current_state, created_sim_time, active, deactivated_at, last_mutation_sim_time]
       rename:
-        prop__actor: actor_id
-        prop__journey_type: journey_type
+        prop__actor: owner_id
+        prop__journey_type: lifecycle_type
         prop__current_state: current_state
+      description: One row per company or user lifecycle traversal — the account's onboarding-to-churn run, or a seat's provisioned-to-offboarded run.
+      descriptions:
+        record_index: Sequential lifecycle id (0-based), ascending in creation order.
+        prop__actor: The account (companies.id) or user (users.id) this lifecycle belongs to; `lifecycle_type` says which.
+        prop__journey_type: "Which lifecycle this is: company_lifecycle or user_lifecycle."
+        prop__current_state: "State the lifecycle currently occupies. Company lifecycles: onboarding / active / churned (`active` = live subscription). User lifecycles: provisioned / active / using / offboarded (`active` = idle seat between sessions)."
+        created_sim_time: When the lifecycle started.
+        active: "Soft-delete flag: FALSE once the row has been deleted (unrelated to `current_state`)."
+        deactivated_at: When the row was soft-deleted; NULL while live.
+        last_mutation_sim_time: "When the row was last written: created, updated, or deleted."
 
     - name: usage_events
       kind: tick_decision
-      columns: [prop__journey_instance, prop__decision_type, prop__context, created_sim_time]
+      columns: [prop__journey_instance, prop__context, created_sim_time]
       rename:
-        prop__journey_instance: journey_instance_id
-        prop__decision_type: decision_type
+        prop__journey_instance: lifecycle_instance_id
         prop__context: context
+      # context.volume carries raw float64 noise (16 fraction digits, e.g.
+      # 65.38160578755163). Rounded in place to 2dp; other bytes verbatim.
+      render:
+        prop__context: {json_precision: {volume: 2}}
+      description: One row per product usage session a seat holder ran, recorded against the lifecycle it occurred under.
+      descriptions:
+        record_index: Sequential event id (0-based), ascending in event order.
+        prop__journey_instance: lifecycle_instances.id of the user lifecycle this session was recorded under.
+        prop__context: JSON detail of the usage session (e.g. volume).
+        created_sim_time: When the usage session occurred.
 
     - name: usage_event_skus
       membership: {kind: tick_decision, property: bindings}
+      columns: [member__entity__id, joined_sim_time]
       rename:
         record_id: usage_event_id
         member__entity__id: sku_id
+      description: One row per SKU a usage event was recorded against, binding the usage session to the product line it exercised.
+      descriptions:
+        record_id: usage_events.id this link belongs to.
+        member__entity__id: The SKU (skus.id) exercised by this usage event.
+        joined_sim_time: When the SKU was recorded against the usage event.
 
   events:
     name: versions

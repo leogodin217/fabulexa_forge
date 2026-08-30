@@ -1,0 +1,68 @@
+# CorruptConfig — retail (TechMart) bundle, light realism pass
+# ============================================================
+# `fabulexa-forge corrupt docs/examples/retail/bundle --config docs/examples/retail/corrupt.yaml --out <corrupt_dir>`
+#
+# Purpose (realism QA, step 4): the clean emit is TOO clean — the only NULLs
+# anywhere are SCD-2 open-interval ends, ids are dense, and no event is ever
+# lost or double-fired. Real retail data is not like that. This config injects
+# a small, labeled dose of the defects a real site accumulates, at rates low
+# enough that every analysis in the export configs still works. The output is
+# a structurally-conformant base emit; compose it with any export config:
+#
+#   fabulexa-forge corrupt docs/examples/retail/bundle --config docs/examples/retail/corrupt.yaml --out /tmp/retail-corrupt
+#   fabulexa-forge export /tmp/retail-corrupt docs/examples/retail/dimensional.yaml /tmp/retail-messy.duckdb --fmt duckdb
+#
+# `defects.json` in the output dir is the deterministic ground truth naming
+# every injected defect — hand it to students as the answer key, or withhold
+# it as the exercise.
+#
+# The dose (rates sized against this emit's populations):
+#   - missing contact data, MNAR: budget-segment shoppers are 4x likelier to
+#     have no phone on file (~4% of customers), and ~2% of street
+#     addresses are blank uniformly.
+#   - double-fired clickstream events: ~0.2% of funnel decisions
+#     duplicated verbatim — the classic double-submit.
+#   - a tracking outage: ~300 session state-change events dropped inside two
+#     one-day windows, so sessionization sees gaps there.
+
+seed: 11
+
+operations:
+  - kind: null_cells
+    name: mnar_missing_phone_budget_segment
+    target:
+      table: records__actor
+      where: { prop__actor_type: customer }
+      columns: [prop__phone]
+    amount: { rate: 0.04 }
+    placement:
+      kind: correlated
+      column: prop__segment
+      value: budget
+      weight: 4.0
+
+  - kind: null_cells
+    name: missing_street_address
+    target:
+      table: records__actor
+      where: { prop__actor_type: customer }
+      columns: [prop__street_address]
+    amount: { rate: 0.02 }
+
+  - kind: duplicate_rows
+    name: double_submitted_actions
+    target:
+      table: records__tick_decision
+    amount: { rate: 0.002 }
+
+  - kind: drop_events
+    name: session_tracking_outage
+    target:
+      table: history
+      where: { kind: journey_instance, property: current_state }
+    amount: { count: 300 }
+    placement:
+      kind: clustered_temporal
+      column: sim_time
+      clusters: 2
+      width: 43200000000000   # 12h half-width: two ~1-day outage windows

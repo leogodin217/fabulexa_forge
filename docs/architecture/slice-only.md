@@ -7,7 +7,10 @@ unknowable, and the contract states a consumer MUST NOT present it as an as-of-T
 value. This doc owns the export-wide posture that enforces that clause: **no
 exporter output value, row membership, linkage, or ordering derives from a
 `slice_only` column's value**, with one mechanical carve-out for the sub-typed
-discriminator. Enforcement is surface-appropriate — author-named reads are
+discriminator. The carve-out runs **permissive**: it grants the one value-read
+exception (classification reads of `prop__<K>_type`), never adds a
+restriction — and sub-typed discriminators are `temporal_class: constant`, so
+the policy population never contains them in the first place. Enforcement is surface-appropriate — author-named reads are
 refused at validation, auto-projected surfaces omit with a
 [notice](notices.md) — and is not author-configurable: the policy is
 contract-mandated, so there is no opt-out knob, no new YAML field.
@@ -89,8 +92,8 @@ own the rule detail:
 | Mode | Enforcement | Rules (owning doc) |
 |---|---|---|
 | dimensional | Refuse every config-referenced value-read; `lookup` regated to `constant`; `init` skips proposals with a notice | `SliceOnlyColumnRefused`, `LookupColumnSafety` — [`dimensional.md`](dimensional.md) |
-| source | Omit from every auto-projected surface (the state render's classified projection, the event log's audited set), one notice per unit × column; a declaration entry (`columns` / `rename` / `only` / `ignore`) naming a non-exempt column errors | `SourceSliceOnlyRead` — [`source.md`](source.md) |
-| base | Omit every non-exempt `slice_only` `prop__` column from the flat table, one `slice-only-column-omitted` notice per kind × column; the sub-typed-discriminator carve-out honored; a `rename` naming an omitted column errors | `BaseRenameSliceOnly` — [`base.md`](base.md) |
+| source | Omit from every auto-projected surface (the state render's classified projection, the event log's audited set), one notice per unit × column; a declaration entry (`columns` / `rename` / `only` / `ignore`, or a `render` election key — [`value-rendering-elections.md`](value-rendering-elections.md)) naming a non-exempt column errors. A row-selection `where` key is refused by the mode's stricter constant-class gate, which admits only `temporal_class: constant` and so covers `slice_only` and `tracked` alike | `SourceSliceOnlyRead`, `SourceWhereNotConstant` — [`source.md`](source.md) |
+| base | Omit every non-exempt `slice_only` `prop__` column from the flat table, one `slice-only-column-omitted` notice per kind × column; the sub-typed-discriminator carve-out honored; a `rename` — or a `render` election key ([`value-rendering-elections.md`](value-rendering-elections.md)) — naming an omitted column errors | `BaseRenameSliceOnly` — [`base.md`](base.md) |
 | streaming | Refuse-only: the after-image is wholly author-named, so a stream's `properties` entry naming a non-exempt `slice_only` property is refused in the eager pass; no notices. Event membership is unaffected by class: `slice_only` implies `history_tracked: false`, so such a column has no change points to fire | `StreamPropertySliceOnly` — [`streaming.md`](streaming.md) |
 | incremental | No rules of its own: refusal is always-on before any window gate runs | [`incremental.md`](incremental.md) |
 
@@ -151,9 +154,10 @@ property set and key their row sets on tracked-property change instants only.
 
 - The derivations layer is class-agnostic: no fold consults `temporal_class`
   (see [`derivations.md`](derivations.md) § Boundaries).
-- Source's declared-table resolution is outside the policy: declaration
-  resolution and the render choice never consult a `slice_only` column — the
-  policy touches projections and audited sets, never layout.
+- Source's declared-table **layout** is outside the policy: which tables exist
+  and which render each takes never consult a `slice_only` column — the policy
+  touches projections, audited sets, and row membership, never layout. A source
+  row-selection key is inside it, as any filter key is, and is refused.
 - Structural lifecycle columns (`updated_at` sourcing, `last_mutation_sim_time`)
   carry no class and are outside the population; their presentation is owned
   elsewhere. `last_mutation_sim_time` is a reserved output column name under the

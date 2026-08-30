@@ -12,44 +12,373 @@
 #
 #   EXCLUDE  queue — an internal wait-queue mechanism record (scheduler
 #            state, no clinical row grain).
-#   RESTORED tick_decision -> clinical_event (115,289 rows). An earlier
+#   RESTORED tick_decision -> clinical_event (116,450 rows). An earlier
 #            revision excluded it as "the engine's per-tick rule-firing log"
 #            from the kind name alone; `record_roles` declares it a fact kind
 #            and its decision_type values ARE the clinical event stream
 #            (ed_arrival, triage, admission, surgery_performed, ...).
-#   RENAME   engine-ontology kind names to the domain's:
-#              actor            -> patient
-#              resource         -> consultant
-#              journey_instance -> pathway_episode
-#              tick_decision    -> clinical_event
-#            `booking` and `diary` keep their names — both are genuine NHS
-#            terms (e-RS booking, clinic diary). `entity` keeps its name too:
-#            it is a genuinely polymorphic catalogue (wards / theatres /
-#            diagnostics / procedures / medications behind `entity_type`), and
-#            base mode is one-table-per-kind — the per-sub-type split into
-#            domain tables is the dimensional config's job.
+#   RENAME   fully domainized (realism QA, desc-override round): tables AND
+#            columns carry the domain names source.yaml's mapping established.
+#            Base cannot split a kind, so the polymorphic catalogue stays one
+#            table — named catalogue_item, the same noun the source config's
+#            junction uses for its member id:
+#              actor            -> patient           (self key patient_key)
+#              resource         -> consultant        (self key consultant_key)
+#              journey_instance -> pathway_episode   (self key episode_key)
+#              tick_decision    -> clinical_event    (self key event_key)
+#              diary            -> appointment_book  (self key appointment_book_key)
+#              entity           -> catalogue_item    (self key catalogue_item_key)
+#            `booking` keeps its name — a genuine NHS term (e-RS booking).
+#            Every prop__ prefix is stripped; created_sim_time renders as
+#            created_at; reference columns take <target>_id / <target>_key
+#            names (booking.subject -> patient_id, clinical_event's episode
+#            reference -> episode_id/episode_key); presentation counters take
+#            their domain identities (patient.hospital_number PAT-prefixed,
+#            consultant.staff_number CON-prefixed, catalogue_item.item_number);
+#            the sub-type discriminators take domain names (item_type,
+#            book_type, patient_type, staff_group).
+#   DESCRIBE per-column `descriptions` overrides replace the engine-voiced
+#            inherited prose (identity minting, sim-time lifecycle, queue and
+#            journey mechanics) with learner-voice descriptions. Table-level
+#            blurbs are sidecar-inherited and have no override surface, so
+#            clinical_event / pathway_episode / consultant table headers still
+#            speak engine — a known leak.
+#   KEYS     queue -> record_index. consultant.queue references the excluded
+#            queue kind; electing record_index for the target kind drops the
+#            raw id-space value column from the consultant projection. The
+#            always-on queue_key edge column cannot be dropped in base mode —
+#            it stays, described as an internal scheduler reference.
 #
-# Note this drops KINDS only. Columns are dropped too, but not by us: a
-# non-exempt `temporal_class: slice_only` column is ALWAYS auto-omitted with a
-# notice, in every mode, no matter what this config says. In this bundle that
-# silently removes booking.attended_at, journey_instance.state_entry_time /
-# complete / bound_roles / output_roles, and resource.queue. Watch the export's
-# `notice:` lines for the authoritative list.
+# Note this drops KINDS only (plus the one election-dropped reference value
+# column above). Columns are dropped too, but not by us: a non-exempt
+# `temporal_class: slice_only` column is ALWAYS auto-omitted with a notice, in
+# every mode, no matter what this config says. In this bundle that silently
+# removes booking.attended_at and journey_instance.state_entry_time /
+# complete. Watch the export's `notice:` lines for the authoritative list.
 #
 # Timestamps: no `rebase:` block here, so the effective anchor is whatever the
 # sidecar carries. This bundle HAS a `runtime` anchor (2023-01-01T00:00 UTC), so
 # the framework LIFECYCLE columns (`created_sim_time`, `deactivated_at`) land as
-# wallclock TIMESTAMP. Domain `prop__` columns are never anchored — the
-# sim-time-valued ones (booking.requested_at / opening_at) stay raw BIGINT ns.
-# Add a `rebase:` block (see source.yaml) only to override that origin/zone.
+# wallclock TIMESTAMP. A domain `prop__` column is anchored only when a render
+# election declares it an instant (see below); undeclared ones pass through
+# verbatim. Add a `rebase:` block (see source.yaml) only to override origin/zone.
+#
+#   ELECTED  patient.birth_date is a plain upstream-minted date string
+#            (verified %Y-%m-%d, 15,060/15,060, no exceptions) — declared via
+#            `date_parse` and reinterpreted as a real DATE.
+#   ELECTED  booking.requested_at / opening_at hold sim-instants as raw ns
+#            BIGINTs (temporal_class: constant, no instant marker in the
+#            sidecar). The `instant` election declares what the value IS and
+#            renders both as wallclock TIMESTAMP through the anchor —
+#            matching the dimensional config's `derived: {timestamp: ...}`.
 
 mode: base
+
+keys:
+  # Drops consultant's raw queue-reference value column (the KEYS note).
+  queue: record_index
 
 base:
   exclude:
     kinds: [queue]
   rename:
-    - {table: records__actor, name: patient}
-    - {table: records__resource, name: consultant}
-    - {table: records__journey_instance, name: pathway_episode}
-    - {table: records__tick_decision, name: clinical_event}
+    - table: records__actor
+      name: patient
+      description: "One row per patient, latest tracked state as of the tape's
+        end."
+      columns:
+        record_index: patient_key
+        presentation_id: hospital_number
+        created_sim_time: created_at
+        prop__gender_code: gender_code
+        prop__imd_decile: imd_decile
+        prop__primary_condition: primary_condition
+        prop__pathway_type: pathway_type
+        prop__admission_disposition: admission_disposition
+        prop__status: status
+        prop__admission_count: admission_count
+        prop__ethnic_category: ethnic_category
+        prop__comorbidity_count: comorbidity_count
+        prop__frailty_band: frailty_band
+        prop__gp_practice_code: gp_practice_code
+        prop__age: age
+        prop__surgical_referred: surgical_referred
+        prop__cancer_referred: cancer_referred
+        prop__diagnostic_required: diagnostic_required
+        prop__outpatient_diagnostic_required: outpatient_diagnostic_required
+        prop__diagnostic_test_type: diagnostic_test_type
+        prop__suspicious_finding: suspicious_finding
+        prop__surgical_indicated: surgical_indicated
+        prop__procedure_code: procedure_code
+        prop__readmission_risk: readmission_risk
+        prop__fft_outcome: fft_outcome
+        prop__fft_invited: fft_invited
+        prop__hai_status: hai_status
+        prop__actor_type: patient_type
+        prop__forename: forename
+        prop__surname: surname
+        prop__full_name: full_name
+        prop__birth_date: birth_date
+      descriptions:
+        record_id: "Internal unique identifier for this patient record."
+        record_index: "Compact numeric key for this patient; matches the
+          patient_key columns on the other tables."
+        presentation_id: "Hospital number identifying the patient
+          (PAT-prefixed)."
+        created_sim_time: "When the patient was first registered."
+        active: "Whether the patient record is still open; FALSE once it has
+          been closed."
+        deactivated_at: "When the patient record was closed; NULL while it is
+          open."
+        prop__pathway_type: "Care route the patient takes: emergency,
+          elective, cancer, or surgical."
+        prop__status: "The patient's current care status (e.g. in_ed,
+          admitted, discharged, deceased)."
+        prop__comorbidity_count: "Count of significant comorbid conditions,
+          banded 0 to 4-plus; a heavier burden raises clinical priority and
+          readmission risk."
+        prop__surgical_referred: "Whether this patient has ever been referred
+          for surgery."
+        prop__cancer_referred: "Whether this patient has ever been referred
+          onto the cancer pathway."
+        prop__diagnostic_required: "Whether the A&E assessment orders a
+          diagnostic test for this patient."
+        prop__outpatient_diagnostic_required: "Whether the outpatient
+          referral orders a diagnostic test for this patient."
+        prop__suspicious_finding: "Whether an outpatient review found a
+          suspicious finding that triggers an urgent cancer referral."
+        prop__fft_outcome: "Friends and Family Test result: a satisfaction
+          rating (very_poor to very_good) or no_response."
+        prop__actor_type: "Patient record category; a single category
+          ('default') in this dataset."
+    - table: records__resource
+      name: consultant
+      description: "One row per consultant, latest tracked state (capacity,
+        caseload, specialty) as of the tape's end."
+      columns:
+        record_index: consultant_key
+        presentation_id: staff_number
+        created_sim_time: created_at
+        prop__capacity: capacity
+        prop__allocated: allocated
+        prop__retiring: retiring
+        prop__entity_code: consultant_code
+        prop__main_specialty: main_specialty
+        prop__grade: grade
+        prop__quality_rating: quality_rating
+        prop__resource_type: staff_group
+      descriptions:
+        record_id: "Internal unique identifier for this consultant record."
+        record_index: "Compact numeric key for this consultant; matches the
+          consultant_key columns on the other tables."
+        presentation_id: "Staff number identifying the consultant
+          (CON-prefixed)."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          removed."
+        deactivated_at: "When this row was removed; NULL while it is live."
+        prop__capacity: "Maximum number of patients this consultant can carry
+          at once (job-plan capacity)."
+        prop__allocated: "Number of patients currently under this
+          consultant's care."
+        prop__retiring: "Whether this consultant is winding down: taking no
+          new patients while the current caseload resolves."
+        prop__entity_code: "NHS consultant identifier code as recorded in the
+          trust's staff catalogue."
+        prop__main_specialty: "NHS main specialty code this consultant works
+          under."
+        prop__resource_type: "Staff group of this record; every row in this
+          dataset is a consultant."
+        ref_index__queue: "Internal scheduler reference carried from the
+          source system; the table it points at is not part of this export."
+    - table: records__journey_instance
+      name: pathway_episode
+      description: "One row per care episode — the pathway a patient runs
+        through (A&E, inpatient, outpatient, diagnostics, cancer, surgical, or
+        post-discharge follow-up, or FFT survey), latest state as of the
+        tape's end."
+      columns:
+        record_index: episode_key
+        created_sim_time: created_at
+        prop__actor: patient_id
+        ref_index__actor: patient_key
+        prop__journey_type: pathway_type
+        prop__current_state: current_state
+      descriptions:
+        record_id: "Unique identifier for this care episode."
+        record_index: "Compact numeric key for this episode; matches the
+          episode_key columns on the other tables."
+        created_sim_time: "When the episode was opened."
+        active: "Whether the episode row is still live; FALSE once the
+          episode has been closed out."
+        deactivated_at: "When the episode was closed out; NULL while it is
+          open."
+        prop__actor: "The patient this episode belongs to; matches
+          patient.id."
+        ref_index__actor: "Numeric join key to patient.patient_key."
+        prop__journey_type: "Which care pathway this episode runs: A&E
+          attendance, inpatient spell, outpatient referral, diagnostics,
+          cancer, surgical, post-discharge follow-up, or FFT survey."
+        prop__current_state: "The pathway state the episode currently
+          occupies (see the declared values below)."
+    - table: records__tick_decision
+      name: clinical_event
+      description: "One row per clinical milestone recorded across every
+        pathway (ed_arrival, triage, admission, surgery_performed, ...), the
+        full event stream as of the tape's end."
+      columns:
+        record_index: event_key
+        created_sim_time: created_at
+        prop__journey_instance: episode_id
+        ref_index__journey_instance: episode_key
+        prop__decision_type: event_type
+        prop__context: context
+      descriptions:
+        record_id: "Unique identifier for this clinical event."
+        record_index: "Compact numeric key for this event."
+        created_sim_time: "When the event occurred."
+        active: "Whether this row is still live; clinical events are never
+          removed."
+        deactivated_at: "When this row was removed; NULL for every clinical
+          event."
+        prop__journey_instance: "The care episode this event belongs to;
+          matches pathway_episode.id."
+        ref_index__journey_instance: "Numeric join key to
+          pathway_episode.episode_key."
+        prop__decision_type: "Which clinical milestone this event records
+          (ed_arrival, triage, admission, surgery_performed, ...)."
+        prop__context: "Extra event details as JSON text, where the event
+          type records any."
+    - table: records__booking
+      description: "One row per e-RS appointment booking, latest state as of
+        the tape's end."
+      columns:
+        record_index: booking_key
+        created_sim_time: created_at
+        prop__subject: patient_id
+        ref_index__subject: patient_key
+        prop__diary: appointment_book_id
+        ref_index__diary: appointment_book_key
+        prop__requested_at: requested_at
+        prop__opening_at: opening_at
+        prop__status: status
+        prop__rebooked_from: rebooked_from
+        prop__rebooked_to: rebooked_to
+      descriptions:
+        record_id: "Unique identifier for this booking."
+        record_index: "Compact numeric key for this booking."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          removed."
+        deactivated_at: "When this row was removed; NULL while it is live."
+        prop__subject: "The patient the appointment was booked for; matches
+          patient.id."
+        ref_index__subject: "Numeric join key to patient.patient_key."
+        prop__diary: "The appointment book the slot was drawn from; matches
+          appointment_book.id."
+        ref_index__diary: "Numeric join key to
+          appointment_book.appointment_book_key."
+        prop__requested_at: "When the booking was requested."
+        prop__opening_at: "When the booked appointment slot opens."
+        prop__rebooked_from: "The cancelled booking this one replaces, where
+          a withdrawn slot was rebooked."
+        prop__rebooked_to: "The booking that superseded this one after its
+          slot was withdrawn; empty on every row in this dataset."
+    - table: records__diary
+      name: appointment_book
+      description: "One row per appointment book — outpatient clinic,
+        two-week-wait cancer clinic, or elective operating list — latest
+        state as of the tape's end."
+      columns:
+        record_index: appointment_book_key
+        created_sim_time: created_at
+        prop__slot_interval: slot_interval
+        prop__horizon: horizon
+        prop__min_lead: min_lead
+        prop__booking_discipline: booking_discipline
+        prop__window: window
+        prop__next_opening: next_opening
+        prop__retiring: retiring
+        prop__main_specialty: main_specialty
+        prop__diary_type: book_type
+      descriptions:
+        record_id: "Unique identifier for this appointment book."
+        record_index: "Compact numeric key for this book; matches the
+          appointment_book_key columns on the other tables."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          removed."
+        deactivated_at: "When this row was removed; NULL while it is live."
+        prop__slot_interval: "Gap between consecutive appointment slots on
+          this book's template, in working-time nanoseconds."
+        prop__horizon: "How far ahead of today this book releases bookable
+          slots, in working-time nanoseconds."
+        prop__min_lead: "Minimum notice required between making a booking and
+          the slot itself, in working-time nanoseconds; unset for every book
+          in this dataset."
+        prop__booking_discipline: "How the book chooses which slot to give a
+          new request."
+        prop__window: "Named working-hours calendar this book schedules
+          within; unset for a book that runs around the clock."
+        prop__next_opening: "The next appointment slot this book will hand
+          out."
+        prop__retiring: "Whether this book is winding down: no new bookings
+          while existing ones resolve."
+        prop__main_specialty: "Specialty this appointment book serves."
+        prop__diary_type: "Which kind of appointment book this is: outpatient
+          clinic, two-week-wait cancer clinic, or elective operating list."
+    - table: records__entity
+      name: catalogue_item
+      description: "One row per reference catalogue item — ward, theatre,
+        diagnostic test, procedure, or medication — latest state as of the
+        tape's end."
+      columns:
+        record_index: catalogue_item_key
+        presentation_id: item_number
+        created_sim_time: created_at
+        prop__entity_code: item_code
+        prop__main_specialty: main_specialty
+        prop__ward_type: ward_type
+        prop__total_beds: total_beds
+        prop__cost_per_bed_day: cost_per_bed_day
+        prop__site_code: site_code
+        prop__theatre_specialty: theatre_specialty
+        prop__sessions_per_day: sessions_per_day
+        prop__test_type: test_type
+        prop__turnaround_days: turnaround_days
+        prop__cost: cost
+        prop__hrg_code: hrg_code
+        prop__tariff: tariff
+        prop__complexity: complexity
+        prop__specialty_group: specialty_group
+        prop__drug_class: drug_class
+        prop__entity_type: item_type
+        prop__name: name
+      descriptions:
+        record_id: "Unique identifier for this catalogue item."
+        record_index: "Compact numeric key for this item; matches the
+          catalogue_item_key columns on the other tables."
+        presentation_id: "Catalogue reference number for this item; the
+          prefix varies by item type."
+        created_sim_time: "When this row was created."
+        active: "Whether this row is still live; FALSE once it has been
+          removed."
+        deactivated_at: "When this row was removed; NULL while it is live."
+        prop__entity_code: "The item's code in its own coding system — NHS
+          ward and site codes, OPCS-4 for procedures, BNF-style codes for
+          medications."
+        prop__entity_type: "Which catalogue this item belongs to: ward,
+          theatre, diagnostic test, procedure, or medication. Columns that
+          apply only to other item types are NULL on a given row."
+        prop__name: "The item's display name."
+  render:
+    - table: records__actor
+      render:
+        prop__birth_date: {date_parse: "%Y-%m-%d"}
+    - table: records__booking
+      render:
+        prop__requested_at: {instant: timestamp}
+        prop__opening_at: {instant: timestamp}
+    - table: records__diary
+      render:
+        prop__next_opening: {instant: timestamp}

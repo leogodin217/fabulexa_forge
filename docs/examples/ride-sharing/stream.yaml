@@ -5,23 +5,51 @@
 # than one per-topic dial to lag / mute during the money demo.
 #
 #   content: state-changes  — `history` replayed as an ordered c/u/d CDC stream.
-#   declared streams — two streams, named directly:
-#       trip              — actor is sub-typed (actor_type=[trip]); its single declared
-#                           sub-type names the stream `trip`, NOT `actor`. Sub-typing
-#                           follows the `<kind>_type` discriminator domain in
-#                           enum_domains, not record_roles.
-#       journey_instance  — no `<kind>_type` domain -> not sub-typed -> named for the kind.
+#
+# VOCABULARY (parity with source.yaml): the same mapping the app database
+# applies — actor/trip -> trip (the atlas: actor IS the trip),
+# journey_instance -> trip_lifecycle:
+#   - Per-stream `kind_label` mirrors source.yaml's per-source `item_type`
+#     (trip / trip_lifecycle) — no engine kind reaches the envelope.
+#   - `keys:` mirrors source.yaml's record_index elections for the streamed
+#     kinds: event keys are the same compact BIGINTs each state table presents
+#     as `id` (the engine's actor record_id is a 64-hex content hash no app
+#     database would key on), and trip_lifecycle's payload `trip_id` renders
+#     the trip's index — source.yaml's own `prop__actor -> trip_id` rename.
+#
+# Declared streams:
+#   trip            — actor is sub-typed (actor_type=[trip]); its single declared
+#                     sub-type names the stream `trip`, NOT `actor`. Sub-typing
+#                     follows the `<kind>_type` discriminator domain in
+#                     enum_domains, not record_roles. status over time.
+#   trip_lifecycle  — no `<kind>_type` domain -> not sub-typed; named for
+#                     source.yaml's table. current_state c/u/d, with trip_id
+#                     on every payload.
+#
+# rider / pickup_zone / driver (entity sub-types, resource) are state-only or
+# not part of this two-strip smoke test; the marketplace example is the full
+# streaming showcase.
 #
 # Anchor resolves from the sidecar runtime (start 2026-01-05, UTC); no rebase needed.
 # Bootstrap is supplied at the CLI (`--bootstrap-servers localhost:9092`).
 
 content: state-changes
 
+# source.yaml's elections for the streamed kinds — stream identities join the
+# app database's ids.
+keys:
+  actor: record_index
+  journey_instance: record_index
+
 streams:
   - name: trip
     kind: actor
     sub_types: [trip]
     properties: [status]
-  - name: journey_instance
+    kind_label: trip
+  - name: trip_lifecycle
     kind: journey_instance
-    properties: [current_state]
+    properties: [current_state, actor]
+    rename:
+      actor: trip_id
+    kind_label: trip_lifecycle

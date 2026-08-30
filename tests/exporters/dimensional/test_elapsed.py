@@ -8,15 +8,19 @@ Covers:
   (e) unit=seconds → 2700.0
   (f) fractional quotient → DOUBLE, not integer-truncated (1.5 minutes)
   (g) counterpart later than grain row → negative elapsed, no abs()
+  (h) as: interval — a µs-precision INTERVAL equal to the numeric rendering
+      at µs, sign-preserving (temporal-elections sprint Phase 4)
 """
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
 
 import duckdb
 import pytest
 from _support.sidecar_builder import identity_column
+from pydantic import ValidationError
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
@@ -77,6 +81,22 @@ def _make_col(unit: str = "minutes") -> ColumnDecl:
                 start_source="last_mutation_sim_time",
                 end_source="last_mutation_sim_time",
                 unit=unit,  # type: ignore[arg-type]
+            )
+        ),
+    )
+
+
+def _make_col_interval() -> ColumnDecl:
+    """Build a wait_interval ColumnDecl with elapsed spec, `as: interval`."""
+    return ColumnDecl(
+        name="wait_interval",
+        derived=DerivedSpec(
+            elapsed=ElapsedSpec(
+                correlate_on="prop__journey_instance",
+                other_where={"prop__decision_type": "ed_arrival"},
+                start_source="last_mutation_sim_time",
+                end_source="last_mutation_sim_time",
+                **{"as": "interval"},
             )
         ),
     )
@@ -340,6 +360,67 @@ def test_elapsed_negative_delta_is_not_abs(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# (h) as: interval — µs-precision INTERVAL, equal to the numeric rendering
+#     at µs, sign-preserving
+# ---------------------------------------------------------------------------
+
+
+def test_elapsed_as_interval_happy_path(tmp_path: Path) -> None:
+    """as: interval renders an INTERVAL equal to the 45-minute numeric delta."""
+    rows = [
+        ("trunk", "r1", "j1", "ed_arrival", 0),
+        ("trunk", "r2", "j1", "ed_assessment", 2_700_000_000_000),
+    ]
+    db_path = _build_db(tmp_path, rows)
+    col = _make_col_interval()
+    sidecar = _make_sidecar()
+    result = _run_elapsed_sql(db_path, col, sidecar)
+    assert len(result) == 1
+    assert result[0][0] == timedelta(minutes=45)
+
+
+def test_elapsed_as_interval_equal_to_numeric_rendering_at_microseconds(
+    tmp_path: Path,
+) -> None:
+    """The fractional 1.5-minute case (90e9 ns) renders an INTERVAL equal to
+    the numeric rendering at µs — 90 seconds exactly, not truncated."""
+    rows = [
+        ("trunk", "r1", "j1", "ed_arrival", 0),
+        ("trunk", "r2", "j1", "ed_assessment", 90_000_000_000),
+    ]
+    db_path = _build_db(tmp_path, rows)
+    col = _make_col_interval()
+    sidecar = _make_sidecar()
+    result = _run_elapsed_sql(db_path, col, sidecar)
+    assert len(result) == 1
+    assert result[0][0] == timedelta(microseconds=90_000_000)
+
+
+def test_elapsed_as_interval_negative_delta_sign_preserved(tmp_path: Path) -> None:
+    """Counterpart later than the grain row → a negative INTERVAL, sign
+    preserved — no abs()."""
+    rows = [
+        ("trunk", "r1", "j1", "ed_arrival", 2_700_000_000_000),
+        ("trunk", "r2", "j1", "ed_assessment", 0),
+    ]
+    db_path = _build_db(tmp_path, rows)
+    col = _make_col_interval()
+    sidecar = _make_sidecar()
+    result = _run_elapsed_sql(db_path, col, sidecar)
+    assert len(result) == 1
+    assert result[0][0] == timedelta(minutes=-45)
+
+
+def test_build_elapsed_expr_as_interval_uses_to_microseconds() -> None:
+    """as: interval renders via to_microseconds, not a unit divisor."""
+    col = _make_col_interval()
+    sidecar = _make_sidecar()
+    expr, _ = build_elapsed_expr(col, _TABLE, sidecar)
+    assert "to_microseconds" in expr
+    assert '"wait_interval"' in expr
+
+
+# ---------------------------------------------------------------------------
 # SQL shape tests (no DB needed)
 # ---------------------------------------------------------------------------
 
@@ -466,18 +547,18 @@ def test_elapsed_absent_end_source_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_elapsed_spec_all_fields_required_missing_unit() -> None:
-    """ElapsedSpec missing unit raises ValidationError at parse time."""
-    from pydantic import ValidationError
-
-    with pytest.raises(ValidationError):
+def test_elapsed_spec_neither_unit_nor_as_raises() -> None:
+    """ElapsedSpec with neither `unit` nor `as` set raises ValidationError at
+    parse time — missing rendering is still an error (exactly_one_rendering),
+    even though `unit` alone is no longer unconditionally required."""
+    with pytest.raises(ValidationError, match="exactly one"):
         ElapsedSpec(
             correlate_on="prop__journey_instance",
             other_where={"prop__decision_type": "ed_arrival"},
             start_source="last_mutation_sim_time",
             end_source="last_mutation_sim_time",
-            # unit missing
-        )  # type: ignore[call-arg]
+            # neither unit nor as set
+        )
 
 
 def test_derived_spec_elapsed_exactly_one_validates() -> None:

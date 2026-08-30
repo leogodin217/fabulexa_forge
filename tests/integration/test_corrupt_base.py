@@ -60,9 +60,20 @@ def _export_base_row_counts(emit_dir: Path, out_dir: Path) -> dict[str, int]:
     config = ExportConfig(mode="base")
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        return export_base(
-            emit, config, out_dir, "csv", anchor, notice_sink=discard_notice_sink
+        report = export_base(
+            emit,
+            config,
+            out_dir,
+            "csv",
+            anchor,
+            notice_sink=discard_notice_sink,
+            overlay=None,
         )
+        return {
+            table.name: table.row_count
+            for table in report.tables
+            if table.row_count is not None
+        }
 
 
 def test_corrupt_then_base_export_surfaces_declared_defect(tmp_path: Path) -> None:

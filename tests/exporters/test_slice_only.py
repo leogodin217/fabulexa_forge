@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import pytest
-from _support.sidecar_builder import identity_column
+from _support.sidecar_builder import enum_options, identity_column
 
 from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.exporters.slice_only import (
@@ -52,7 +52,10 @@ def _sidecar(
         ],
     }
     if enum_domains is not None:
-        raw["enum_domains"] = enum_domains
+        raw["enum_domains"] = {
+            kind: {prop: enum_options(*values) for prop, values in props.items()}
+            for kind, props in enum_domains.items()
+        }
     return Sidecar.from_raw(raw)
 
 

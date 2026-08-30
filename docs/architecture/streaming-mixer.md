@@ -167,8 +167,8 @@ its backlog with no bound logic.
    only while it is below the ceiling (i.e. while backlog exists); at the ceiling, excess
    rate is inert.
 3. **Only arrival is perturbed.** Released `StreamEvent`s are identical in `seq`, `op`,
-   `kind`, `record_id`, `presentation_id`, `event_sim_time`, `ts`, `after`, `topic`, and
-   `route_table` to the seeded events. Within a topic, release order is `seq` order;
+   `kind`, `record_id`, `event_sim_time`, `ts`, `after`, `topic`, `route_table`,
+   `key_column`, and `key_value` to the seeded events. Within a topic, release order is `seq` order;
    across topics it may differ — the intended out-of-order arrival. No value, no
    `event_sim_time`, and no `seq` is ever rewritten.
 4. **Determinism is relative to the injected clock and observed control.** `advance` is a

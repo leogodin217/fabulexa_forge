@@ -130,6 +130,27 @@ def _append_ts_siblings(
     return table
 
 
+def _drop_unpublished_presentation_id(
+    table: "pyarrow.Table", identity: tuple[str, ...]
+) -> "pyarrow.Table":
+    """Drop presentation_id from the state-at fold's relation when the
+    resolved identity does not publish it.
+
+    A no-op when the kind mints no presentation_id (the column is already
+    absent from the fold's output).
+
+    Args:
+        table: The state-at fold's materialized table.
+        identity: The resolved selection's published identity surfaces.
+
+    Returns:
+        table, with presentation_id dropped when unpublished.
+    """
+    if "presentation_id" in identity or "presentation_id" not in table.column_names:
+        return table
+    return table.drop_columns(["presentation_id"])
+
+
 def _build_record_state_table(
     emit: "Emit",
     fork_path: str,
@@ -158,6 +179,7 @@ def _build_record_state_table(
         sidecar, fork_path, kind, frozenset(resolved_record.properties), horizon_ns
     )
     table = emit.query_arrow(sql, ())
+    table = _drop_unpublished_presentation_id(table, resolved_record.identity)
 
     is_subtyped = bool(sidecar.subtype_values(kind))
     discriminator_index = spine_discriminator_index(
@@ -244,15 +266,15 @@ class PlaybackSnapshot:
 
         Columns: STATE_AT_COLUMNS (record_id; created_sim_time; active;
         deactivated_at), the fold's own presentation_id column when the kind
-        carries one, a sub_type stamp (the spine
-        discriminator verbatim, undeclared values included; NULL when the
-        kind is not sub-typed, the cell is NULL, or the discriminator
-        column is undeclared), one prop__<p> per
-        selected property, and — when the head's anchor resolves — a
-        <name>_ts sibling per raw-ns lifecycle column. Typed at zero rows.
-        Column order is contract (§ Snapshot): the fold's canonical
-        relation verbatim — properties in sidecar declaration order — then
-        sub_type, then the _ts siblings in raw-column order.
+        carries one and the resolved selection publishes it, a sub_type
+        stamp (the spine discriminator verbatim, undeclared values
+        included; NULL when the kind is not sub-typed, the cell is NULL, or
+        the discriminator column is undeclared), one prop__<p> per selected
+        property, and — when the head's anchor resolves — a <name>_ts
+        sibling per raw-ns lifecycle column. Typed at zero rows. Column
+        order is contract (§ Snapshot): the fold's canonical relation
+        verbatim — properties in sidecar declaration order — then sub_type,
+        then the _ts siblings in raw-column order.
 
         Args:
             kind: A kind named by the head's selection.

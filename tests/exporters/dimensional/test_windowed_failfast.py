@@ -473,6 +473,65 @@ def test_ordinal_timestamp_derived_window_key_passes() -> None:
     check_incremental_ordinal_order_by(ordinal_col, tbl, is_append_table=True)
 
 
+def test_ordinal_timestamp_time_elected_window_key_excluded() -> None:
+    """A time-elected derived: timestamp sibling is excluded from the
+    window-key set — election-aware IncrementalOrdinalOrderBy — even though
+    its source is last_mutation_sim_time."""
+    ts_col = _derived_col(
+        "updated_time",
+        DerivedSpec(
+            timestamp=TimestampSpec(source="last_mutation_sim_time", **{"as": "time"})
+        ),
+    )
+    ordinal_col = _derived_col(
+        "row_num",
+        DerivedSpec(ordinal=OrdinalSpec(partition_by="id", order_by="updated_time")),
+    )
+    id_col = _from_col("id", "record_id")
+    tbl = _make_table(
+        "fact_append",
+        grain="records",
+        kind="entity",
+        role="fact",
+        scd=None,
+        columns=[id_col, ts_col, ordinal_col],
+        key=["id"],
+    )
+    with pytest.raises(
+        ExportError,
+        match="table 'fact_append' column 'row_num':"
+        " ordinal order_by must resolve to the table's window-key time"
+        " under incremental export",
+    ):
+        check_incremental_ordinal_order_by(ordinal_col, tbl, is_append_table=True)
+
+
+def test_ordinal_timestamp_date_elected_window_key_passes() -> None:
+    """A date-elected derived: timestamp sibling remains a valid window-key
+    ordinal target — election-aware exclusion applies only to `time`."""
+    ts_col = _derived_col(
+        "updated_date",
+        DerivedSpec(
+            timestamp=TimestampSpec(source="last_mutation_sim_time", **{"as": "date"})
+        ),
+    )
+    ordinal_col = _derived_col(
+        "row_num",
+        DerivedSpec(ordinal=OrdinalSpec(partition_by="id", order_by="updated_date")),
+    )
+    id_col = _from_col("id", "record_id")
+    tbl = _make_table(
+        "fact_append",
+        grain="records",
+        kind="entity",
+        role="fact",
+        scd=None,
+        columns=[id_col, ts_col, ordinal_col],
+        key=["id"],
+    )
+    check_incremental_ordinal_order_by(ordinal_col, tbl, is_append_table=True)
+
+
 def test_ordinal_snapshot_table_exempt() -> None:
     """type-1 dim (snapshot class) ordinal is exempt — is_append_table=False."""
     ordinal_col = _derived_col(

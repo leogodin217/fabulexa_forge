@@ -9,6 +9,7 @@ tables:
         deactivated_at,
         prop__status,
         prop__name,
+        prop__dob,
         prop__doctor_id,
         doctor_id_key,
         prop__primary_staff_id,
@@ -25,6 +26,7 @@ tables:
         deactivated_at: null
         prop__status: discharged
         prop__name: Alice
+        prop__dob: "1990-05-14"
   doctor:
     columns: [doctor_key, id, created_sim_time, active, deactivated_at, prop__name]
     row_count: 1
@@ -56,3 +58,25 @@ tables:
     contains_rows:
       - id: q001
         prop__name: Triage
+  team:
+    columns:
+      [
+        team_key,
+        id,
+        created_sim_time,
+        active,
+        deactivated_at,
+        prop__name,
+        prop__team_type,
+        prop__status,
+        prop__shift,
+      ]
+    row_count: 2
+    contains_rows:
+      # Both tracked properties reconstruct at the tape's end independently:
+      # t001's status ends 'active' (2*DAY) and its shift ends 'night'
+      # (3*DAY) — each takes its own latest history value.
+      - id: t001
+        prop__team_type: surgical
+        prop__status: active
+        prop__shift: night

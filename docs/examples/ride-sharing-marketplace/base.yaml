@@ -1,27 +1,36 @@
 # ExportConfig — ride-sharing marketplace, base mode (flat current-state dump)
 # ============================================================
-# `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/base.yaml`
+# `fabulexa-forge export docs/examples/ride-sharing-marketplace/bundle docs/examples/ride-sharing-marketplace/base.yaml <out>`
 #
 # Base mode reconstructs one flat table per records kind at the tape's end:
 # every tracked property (actor.status, actor.zone, entity.demand_pressure,
 # journey_instance.current_state, ...) carries its LATEST history value. No
 # table classification, no sub-type split, no FK joins — the faithful "current state of
-# every record" landing shape. Each table is the lifecycle prefix (`record_id`
-# presented as `id`, then `created_sim_time`, `active`, `deactivated_at`), then
-# `presentation_id` where the kind carries one, then one presentation-verbatim
-# `prop__<p>` per surviving property. Base emits no surrogate/bookkeeping
-# columns: `fork_path`, `record_index`, `ref_index__*` and
-# `last_mutation_sim_time` are not in the output, so a reference joins on the
-# `prop__` value (e.g. actor.prop__zone -> entity.id), never on an index.
+# every record" landing shape. Each table is the kind's integer key
+# (`record_index`, default `<kind>_key`), the lifecycle prefix (`record_id`
+# presented as `id`, then `created_sim_time`, `active`, `deactivated_at`),
+# then `presentation_id` where the kind carries one, one column per surviving
+# property, and an integer `<p>_key` edge key beside each reference property.
+# A reference joins either on the property value (e.g. users.zone_id ->
+# zone.id) or on the integer edge key (users.zone_key -> zone.zone_key).
+# (`users` is plural because DuckDB reserves the name `user` in its own
+# catalog — a quoted CREATE TABLE "user" collides.)
 #
 # This marketplace is the CLEAN example: it declares NO simulation-mechanism
 # kinds — no tick_decision rule-firing log, no internal queue. Every kind is
-# domain data:
-#   actor  — riders + drivers, merged on one table (actor_type discriminator)
-#   entity — zone_market records (the spatial grain + surge pressure signals)
-#   journey_instance — the trip / driver-session lifecycles
-#   pairing — the rider<->driver match records (the two-sided-market centerpiece)
-# So there is no KIND to drop. Base takes a bare `mode: base` — no `exclude:`.
+# domain data, so no KIND is dropped (no `exclude:`) — but the simulator's
+# NAMES are not a marketplace's, so `rename:` carries the same mapping the
+# source config uses (see source.yaml):
+#   actor            -> users     (riders + drivers merged, user_type discriminator)
+#   entity           -> zone      (the spatial grain + surge pressure signals)
+#   journey_instance -> user_session  (the trip / driver-shift lifecycles)
+#   pairing          -> match     (the rider<->driver match, requester -> rider_id,
+#                                  counterpart -> driver_id — verified: every match
+#                                  pairs a rider requester with a driver counterpart)
+# Column renames strip the `prop__` prefix throughout, land references on the
+# <target>_id convention, and render the lifecycle instant as created_at.
+# Per-column `descriptions:` (keyed by the SAME pre-rename identities as
+# `columns:`) replace the engine-voiced inherited prose with domain sentences.
 #
 # Dropping no kind is not the same as dropping no column. A non-exempt
 # `temporal_class: slice_only` column is ALWAYS auto-omitted with a
@@ -42,5 +51,221 @@
 # override that origin instant or timezone; an emit with NO sidecar anchor and no
 # `rebase:` is the case where lifecycle columns stay raw BIGINT ns — see
 # docs/examples/parent-child/base.yaml for that contrast.
+#
+# ELECTED: actor.prop__date_of_birth is a plain upstream-minted date string
+# (clean `%Y-%m-%d`, both riders and drivers) — declared via `date_parse` and
+# reinterpreted as a real DATE.
 
 mode: base
+
+base:
+  rename:
+    - table: records__actor
+      name: users
+      description: >-
+        A user of the marketplace — rider or driver — carrying their current
+        status, zone, and loyalty tier alongside their account details.
+      columns:
+        record_index: user_key
+        presentation_id: user_code
+        created_sim_time: created_at
+        prop__status: status
+        prop__propensity: propensity
+        prop__zone: zone_id
+        prop__dest_zone: dest_zone_id
+        prop__ride_count: ride_count
+        prop__loyalty_band: loyalty_band
+        prop__age: age
+        prop__strategy: strategy
+        prop__base_zone: base_zone_id
+        prop__session_rides: session_rides
+        prop__actor_type: user_type
+        prop__account_id: account_id
+        prop__first_name: first_name
+        prop__last_name: last_name
+        prop__email: email
+        prop__home_place_city: home_place_city
+        prop__home_place_subdivision: home_place_subdivision
+        prop__home_place_postal_code: home_place_postal_code
+        prop__home_place_area_code: home_place_area_code
+        prop__phone: phone
+        prop__date_of_birth: date_of_birth
+        prop__home_street: home_street
+        prop__home_state: home_state
+        prop__payment_card: payment_card
+        prop__app_user_agent: app_user_agent
+        prop__driver_id: driver_id
+        prop__full_name: full_name
+        prop__vehicle_make: vehicle_make
+        prop__vehicle_model: vehicle_model
+        prop__vehicle_year: vehicle_year
+        prop__vehicle_color: vehicle_color
+        prop__license_plate: license_plate
+      descriptions:
+        record_index: >-
+          Unique integer key of the user (rider or driver); the user_key /
+          rider_key / driver_key columns on other tables join to this.
+        record_id: >-
+          Unique identifier of the user; the user_id / rider_id / driver_id
+          reference columns on other tables hold this value.
+        presentation_id: >-
+          The user's public account number. Riders and drivers are numbered
+          separately, so a rider and a driver can share a value — join on
+          user_key or id instead.
+        created_sim_time: When the user signed up (riders) or first logged on (drivers).
+        active: >-
+          FALSE if the account has been deactivated; drivers are deactivated
+          when they log off for good, riders never are.
+        deactivated_at: When the account was deactivated; NULL while active.
+        prop__status: >-
+          Where the user currently is — trip stages for riders (requesting
+          through completed, no_show, abandoned, declined), shift stages for
+          drivers (available, driving, offline).
+        prop__propensity: >-
+          How often this rider tends to ride: heavy, regular, or occasional.
+          NULL for drivers.
+        prop__zone: >-
+          The zone the user is in — a rider's pickup zone, a driver's current
+          position; holds the zone's id.
+        ref_index__zone: Integer key of the user's current zone; joins zone.zone_key.
+        prop__dest_zone: >-
+          The zone where the rider's trips usually end; holds the zone's id.
+          NULL for drivers.
+        ref_index__dest_zone: >-
+          Integer key of the rider's usual destination zone; joins
+          zone.zone_key. NULL for drivers.
+        prop__ride_count: Lifetime number of completed rides. NULL for drivers.
+        prop__loyalty_band: >-
+          The user's loyalty tier — new, silver, or gold; climbs with
+          completed rides and drops after a no-show, decline, or abandoned
+          request.
+        prop__age: The user's age in years when they joined.
+        prop__strategy: >-
+          The driver's working style: surge_chaser, fixed_zone, or casual.
+          NULL for riders.
+        prop__base_zone: >-
+          The driver's home zone — where they log on and return when idle;
+          holds the zone's id. NULL for riders.
+        ref_index__base_zone: >-
+          Integer key of the driver's home zone; joins zone.zone_key. NULL
+          for riders.
+        prop__session_rides: >-
+          Number of rides the driver has completed in their current shift.
+          NULL for riders.
+        prop__actor_type: "Which side of the market this user is on: rider or driver."
+        prop__phone: The user's phone number.
+        prop__home_place_city: City of the rider's home address. NULL for drivers.
+        prop__home_place_subdivision: >-
+          Two-letter state code of the rider's home address (duplicate of
+          home_state). NULL for drivers.
+        prop__home_place_postal_code: Postal code of the rider's home address. NULL for drivers.
+        prop__home_place_area_code: >-
+          Phone area code of the rider's home address. NULL for drivers.
+    - table: records__entity
+      name: zone
+      description: >-
+        A city zone — the spatial grain of the market — carrying its current
+        demand and supply pressure.
+      columns:
+        record_index: zone_key
+        presentation_id: zone_code
+        created_sim_time: created_at
+        prop__name: name
+        prop__dest_weight: dest_weight
+        prop__demand_pressure: demand_pressure
+        prop__supply_pressure: supply_pressure
+        prop__entity_type: zone_type
+        prop__place_city: place_city
+        prop__place_subdivision: place_subdivision
+        prop__place_postal_code: place_postal_code
+        prop__place_area_code: place_area_code
+      descriptions:
+        record_index: >-
+          Unique integer key of the zone; the zone_key / dest_zone_key /
+          base_zone_key columns on other tables join to this.
+        record_id: >-
+          Unique identifier of the zone; the zone_id / dest_zone_id /
+          base_zone_id reference columns on other tables hold this value.
+        presentation_id: The zone's public code.
+        created_sim_time: When the zone was set up.
+        active: FALSE if the zone has been retired; every zone here is active.
+        deactivated_at: When the zone was retired; NULL while active.
+        prop__name: "The zone's display name: Downtown, Midtown, or Riverside."
+        prop__dest_weight: >-
+          Relative share of trips that end in this zone; high-weight zones
+          pull drivers toward them.
+        prop__demand_pressure: >-
+          How many riders in this zone are currently looking for a ride;
+          against supply_pressure it gives the zone's surge level.
+        prop__supply_pressure: >-
+          How many drivers in this zone are currently free to take a ride —
+          the denominator of the zone's surge level.
+        prop__entity_type: Zone category; always zone_market in this dataset.
+        prop__place_city: City the zone covers.
+        prop__place_subdivision: Two-letter state code of the zone's city.
+        prop__place_postal_code: Postal code of the zone.
+        prop__place_area_code: Phone area code of the zone.
+    - table: records__journey_instance
+      name: user_session
+      description: >-
+        One rider's trip request or one driver's shift — the app session a
+        user is currently in, from open to close.
+      columns:
+        record_index: session_key
+        created_sim_time: created_at
+        prop__actor: user_id
+        ref_index__actor: user_key
+        prop__journey_type: session_type
+        prop__current_state: current_state
+      descriptions:
+        record_index: Unique integer key of the session.
+        record_id: Unique identifier of the session.
+        created_sim_time: >-
+          When the session started — a rider opening a trip request, or a
+          driver logging on.
+        active: FALSE once the session has ended.
+        deactivated_at: When the session ended; NULL while still open.
+        prop__actor: The rider or driver this session belongs to; holds the user's id.
+        ref_index__actor: Integer key of the session's user; joins users.user_key.
+        prop__journey_type: >-
+          Which side's session this is — rider_journey (a rider's trip
+          through the app) or driver_journey (a driver's shift).
+        prop__current_state: >-
+          The state the session is in right now (e.g. waiting, on_trip, or
+          lapsed for riders; available, driving, or offline for drivers).
+    - table: records__pairing
+      name: match
+      description: >-
+        A rider paired with a driver for one trip, held from the moment
+        they're matched to when the trip finishes or falls through.
+      columns:
+        record_index: match_key
+        created_sim_time: created_at
+        prop__requester: rider_id
+        ref_index__requester: rider_key
+        prop__counterpart: driver_id
+        ref_index__counterpart: driver_key
+        prop__match_type: match_type
+      descriptions:
+        record_index: Unique integer key of the match.
+        record_id: Unique identifier of the match.
+        created_sim_time: When the rider and driver were matched.
+        active: TRUE while the match is held; FALSE once released.
+        deactivated_at: >-
+          When the match was released — the trip finished or fell through;
+          NULL while held.
+        prop__requester: >-
+          The rider who requested the trip; holds the rider's id in the user
+          table.
+        ref_index__requester: Integer key of the matched rider; joins users.user_key.
+        prop__counterpart: >-
+          The driver dispatched to serve the trip; holds the driver's id in
+          the user table.
+        ref_index__counterpart: Integer key of the matched driver; joins users.user_key.
+        prop__match_type: >-
+          What kind of match this is; every match in this dataset is a
+          ride_match — one rider dispatched to one driver for one trip.
+  render:
+    - table: records__actor
+      render:
+        prop__date_of_birth: {date_parse: "%Y-%m-%d"}

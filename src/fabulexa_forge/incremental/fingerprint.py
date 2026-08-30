@@ -11,27 +11,30 @@ import hashlib
 import json
 from typing import TYPE_CHECKING, Any, Literal
 
+from fabulexa_forge.anchor import anchor_to_json
+
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
 
-
-def _anchor_to_json(anchor: "EffectiveAnchor | None") -> Any:
-    """Serialize the anchor to a canonical JSON-compatible value.
-
-    Args:
-        anchor: Resolved anchor, or None.
-
-    Returns:
-        A dict with "start_instant" (ISO string) and "timezone" (IANA key),
-        or None when the anchor is absent.
-    """
-    if anchor is None:
-        return None
-    return {
-        "start_instant": anchor.start_instant.isoformat(),
-        "timezone": str(anchor.timezone),
-    }
+#: Config surfaces excluded from the canonical dump — presentation-only or
+#: (the column- and table-level description overrides) authored prose that
+#: re-voices but never reshapes an export. Changing any of these mid-drip
+#: must not raise a fingerprint mismatch. Nested dict form per Pydantic's
+#: `model_dump(exclude=)`.
+_FINGERPRINT_EXCLUDE: "dict[str, Any]" = {
+    "readme_overlay": True,
+    "dimensional": {
+        "tables": {
+            "__all__": {
+                "description": True,
+                "columns": {"__all__": {"description"}},
+            }
+        }
+    },
+    "source": {"tables": {"__all__": {"descriptions", "description"}}},
+    "base": {"rename": {"__all__": {"descriptions", "description"}}},
+}
 
 
 def compute_fingerprint(
@@ -45,11 +48,14 @@ def compute_fingerprint(
     """SHA-256 hex over the canonical JSON of every drip-identity input.
 
     Canonical JSON: UTF-8 bytes, keys sorted, compact (',', ':') separators,
-    no NaN/Infinity — over the parsed config (model dump), the resolved
-    anchor (start_instant ISO + IANA key, or null), the base.json digest,
-    the sole branch's fork_path, the fmt, and the package version. Any
-    change to any input yields a new fingerprint, halting --next rather
-    than splicing inconsistent windows.
+    no NaN/Infinity — over the parsed config (model dump, `readme_overlay`
+    and every column- and table-level description-override surface excluded
+    — presentation-only fields an author may add, change, or remove mid-drip
+    without it counting as a drip-identity change), the resolved anchor
+    (start_instant ISO + IANA key, or null), the base.json digest, the sole
+    branch's fork_path, the fmt, and the package version. Any change to any
+    other input yields a new fingerprint, halting --next rather than
+    splicing inconsistent windows.
 
     Args:
         config: The parsed export config.
@@ -63,8 +69,8 @@ def compute_fingerprint(
         64-char lowercase hex digest.
     """
     document: dict[str, Any] = {
-        "anchor": _anchor_to_json(anchor),
-        "config": config.model_dump(mode="json"),
+        "anchor": anchor_to_json(anchor),
+        "config": config.model_dump(mode="json", exclude=_FINGERPRINT_EXCLUDE),
         "fmt": fmt,
         "fork_path": fork_path,
         "package_version": package_version,

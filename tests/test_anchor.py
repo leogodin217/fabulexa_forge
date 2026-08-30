@@ -5,9 +5,15 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import duckdb
 import pytest
 
-from fabulexa_forge.anchor import resolve_effective_anchor
+from fabulexa_forge.anchor import (
+    EffectiveAnchor,
+    TemporalRender,
+    render_anchor_temporal_expr,
+    resolve_effective_anchor,
+)
 from fabulexa_forge.config.models import RebaseConfig
 from fabulexa_forge.errors import (
     RebaseDateNotNaive,
@@ -50,6 +56,22 @@ def _rebase(
             if v is not None
         }
     )
+
+
+def _strip_alias(expr: str, out_name: str) -> str:
+    """Drop the trailing `AS "<out_name>"` from a rendered SQL fragment."""
+    return expr.removesuffix(f' AS "{out_name}"')
+
+
+def _rendered(
+    anchor: EffectiveAnchor | None,
+    sim_time_ns: int,
+    render: TemporalRender,
+    out_name: str = "v",
+) -> str:
+    """Render one election over a bare ns-literal source, alias stripped."""
+    expr = render_anchor_temporal_expr(anchor, str(sim_time_ns), out_name, render)
+    return _strip_alias(expr, out_name)
 
 
 # ---------------------------------------------------------------------------
@@ -264,3 +286,129 @@ def test_rebase_invalid_runtime_anchor_naive() -> None:
     naive_runtime = RuntimeAnchor(timezone="UTC", start_datetime="2020-03-01T00:00:00")
     with pytest.raises(RebaseInvalidRuntimeAnchor):
         resolve_effective_anchor(naive_runtime, None, None, None)
+
+
+# ---------------------------------------------------------------------------
+# render_anchor_temporal_expr: election family
+# ---------------------------------------------------------------------------
+
+
+def test_timestamp_election_byte_identical_to_predecessor() -> None:
+    """`timestamp` election reproduces the pre-sprint expression verbatim."""
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2020-03-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    qualified_source = '"_grain"."sim_time"'
+    expr = render_anchor_temporal_expr(
+        anchor, qualified_source, "created_at", "timestamp"
+    )
+    zone = str(anchor.timezone)
+    origin = anchor.start_instant.isoformat()
+    expected = (
+        f"timezone('{zone}', TIMESTAMPTZ '{origin}'"
+        f" + to_microseconds(CAST({qualified_source} AS BIGINT) // 1000))"
+        f' AS "created_at"'
+    )
+    assert expr == expected
+
+
+def test_elections_materialize_to_the_expected_duckdb_types() -> None:
+    """Each election's SELECT fragment executes to the named DuckDB type."""
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2020-03-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    con = duckdb.connect()
+    expected_types: dict[TemporalRender, str] = {
+        "timestamp": "TIMESTAMP",
+        "date": "DATE",
+        "time": "TIME",
+        "timestamptz": "TIMESTAMP WITH TIME ZONE",
+    }
+    for render, expected_type in expected_types.items():
+        expr = render_anchor_temporal_expr(anchor, "0", "v", render)
+        row = con.sql(f'SELECT typeof("v") AS t FROM (SELECT {expr})').fetchone()
+        assert row is not None
+        assert row[0] == expected_type
+
+
+def test_family_identity_date_and_time_match_the_naive_timestamp() -> None:
+    """`date` == the naive timestamp's date part, `time` its time-of-day."""
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-06-01T12:00:00-04:00"),
+        timezone=ZoneInfo("America/New_York"),
+    )
+    con = duckdb.connect()
+    ns = 3 * 3_600 * 1_000_000_000  # +3 hours from the origin
+    ts = _rendered(anchor, ns, "timestamp")
+    date_ = _rendered(anchor, ns, "date")
+    time_ = _rendered(anchor, ns, "time")
+    row = con.sql(
+        f"SELECT ({date_}) = CAST(({ts}) AS DATE) AS date_eq,"
+        f" ({time_}) = CAST(({ts}) AS TIME) AS time_eq"
+    ).fetchone()
+    assert row == (True, True)
+
+
+def test_timestamptz_renders_the_absolute_instant() -> None:
+    """`timestamptz` equals the anchor origin plus the elapsed physical delta."""
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2024-06-01T12:00:00-04:00"),
+        timezone=ZoneInfo("America/New_York"),
+    )
+    con = duckdb.connect()
+    ns = 90 * 60 * 1_000_000_000  # +90 minutes
+    tz_expr = _rendered(anchor, ns, "timestamptz")
+    row = con.sql(
+        f"SELECT ({tz_expr}) = TIMESTAMPTZ '2024-06-01T13:30:00-04:00' AS eq"
+    ).fetchone()
+    assert row == (True,)
+
+
+def test_dst_fold_naive_steps_back_but_timestamptz_strictly_increases() -> None:
+    """Across a DST fold, naive renderings may repeat/step back (existing
+    accepted behavior); `timestamptz` stays strictly increasing."""
+    anchor = EffectiveAnchor(
+        # America/New_York falls back at 2024-11-03 02:00 EDT -> 01:00 EST.
+        start_instant=datetime.fromisoformat("2024-11-03T05:00:00+00:00"),
+        timezone=ZoneInfo("America/New_York"),
+    )
+    con = duckdb.connect()
+    ns_before = 0
+    ns_after = 3_600 * 1_000_000_000  # +1 physical hour, crosses the fold
+    ts_before = _rendered(anchor, ns_before, "timestamp")
+    ts_after = _rendered(anchor, ns_after, "timestamp")
+    tz_before = _rendered(anchor, ns_before, "timestamptz")
+    tz_after = _rendered(anchor, ns_after, "timestamptz")
+    row = con.sql(
+        f"SELECT ({ts_after}) = ({ts_before}) AS naive_same,"
+        f" ({tz_after}) > ({tz_before}) AS tz_increases"
+    ).fetchone()
+    assert row == (True, True)
+
+
+def test_no_anchor_default_timestamp_aliases_raw_source() -> None:
+    """`anchor=None` + `render='timestamp'`: raw source aliased through unchanged."""
+    expr = render_anchor_temporal_expr(
+        None, '"_grain"."sim_time"', "created_at", "timestamp"
+    )
+    assert expr == '"_grain"."sim_time" AS "created_at"'
+
+
+def test_ns_truncates_to_microseconds_identically_across_all_elections() -> None:
+    """A sub-microsecond ns remainder truncates identically across all four
+    elections (Python datetime precision, the shipped rule)."""
+    anchor = EffectiveAnchor(
+        start_instant=datetime.fromisoformat("2020-01-01T00:00:00+00:00"),
+        timezone=ZoneInfo("UTC"),
+    )
+    con = duckdb.connect()
+    renders: tuple[TemporalRender, ...] = ("timestamp", "date", "time", "timestamptz")
+    for render in renders:
+        one_and_a_half_us = _rendered(anchor, 1_500, render)
+        exactly_one_us = _rendered(anchor, 1_000, render)
+        row = con.sql(
+            f"SELECT ({one_and_a_half_us}) = ({exactly_one_us}) AS eq"
+        ).fetchone()
+        assert row == (True,)

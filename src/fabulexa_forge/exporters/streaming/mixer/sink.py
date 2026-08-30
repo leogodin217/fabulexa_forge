@@ -139,7 +139,7 @@ class KafkaSink:
     async def deliver(self, event: "StreamEvent") -> None:
         """Produce one event (the injected schedule_releases sink).
 
-        Keys the message encode_pinned({"record_id": event.record_id})
+        Keys the message encode_pinned({event.key_column: event.key_value})
         (UTF-8), values it render_value(event), timestamps it
         rebased_epoch_ms(event.event_sim_time, anchor), produces to
         event.topic, and polls (0). The blocking produce+poll runs in a
@@ -154,7 +154,7 @@ class KafkaSink:
                 f"Kafka delivery failure: {self._delivery_errors[0]}"
             )
 
-        key_bytes = encode_pinned({"record_id": event.record_id}).encode("utf-8")
+        key_bytes = encode_pinned({event.key_column: event.key_value}).encode("utf-8")
         value_bytes = self._render_value(event)
         timestamp_ms = rebased_epoch_ms(event.event_sim_time, self._anchor)
         on_delivery = _make_delivery_callback(self._delivery_errors)

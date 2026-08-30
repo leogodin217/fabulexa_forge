@@ -4,11 +4,11 @@
 # by `fabulexa-forge`. Pairs with stream.yaml in this directory; the bundle is at ./bundle.
 # See dev/demo/README.md.
 #
-# NHS topic set (from stream.yaml routing — nhs.{kind} folded to domain names):
-#   nhs.patient          — patient clinical-flag changes
-#   nhs.diary            — clinic-diary next_opening drift
-#   nhs.pathway_episode  — care-pathway state transitions (busiest strip)
-#   nhs.consultant       — consultant allocation over time
+# NHS topic set (stream.yaml's declared streams — source.yaml's domain names):
+#   nhs.patient           — patient clinical-flag changes
+#   nhs.appointment_book  — clinic-book next_opening drift
+#   nhs.pathway_episode   — care-pathway state transitions (busiest strip)
+#   nhs.consultant        — consultant allocation over time
 #
 # All four topics are dimension-role kinds; there are no fact->dimension edges in
 # this config, so joins is empty. This is a valid pure read-back preset that

@@ -1,0 +1,25 @@
+# The union of source-state-tables' patient table and source-event-log's
+# log — deliberately unchanged. The description overrides are
+# documentation-inert: they render only in the companion README/manifest,
+# and no dataset byte depends on them.
+tables:
+  patient:
+    columns: [id, created_at, active, deactivated_at, updated_at, status, name, dob, doctor_id, primary_staff_id, backup_staff_id]
+    row_count: 2
+    contains_rows:
+      - id: p001
+        status: discharged
+        name: Alice
+      - id: p002
+        status: pending
+        name: Bob
+  versions:
+    columns: [id, item_type, item_id, event, occurred_at, changes]
+    row_count: 3
+    contains_rows:
+      - item_type: admission
+        item_id: a001
+        event: create
+      - item_type: admission
+        item_id: a002
+        event: destroy

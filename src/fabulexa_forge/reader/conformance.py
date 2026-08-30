@@ -1,4 +1,4 @@
-"""Conformance checks C1–C14 for base-layer emits.
+"""Conformance checks C1–C15 for base-layer emits.
 
 Independent reimplementation of the base-format conformance procedure.
 Zero imports outside the vendored contract. Reads the vendored JSON Schema and DuckDB
@@ -30,13 +30,13 @@ from fabulexa_forge.reader.sidecar import ColumnSpec, RecordRoles, TemporalClass
 
 @dataclass(frozen=True)
 class CheckResult:
-    """Outcome of one conformance check (C1–C14).
+    """Outcome of one conformance check (C1–C15).
 
     `passed` is the authoritative verdict; `messages` and `skips` are diagnostics
     and never decide pass/fail.
     """
 
-    check: str  # "C1" .. "C14"
+    check: str  # "C1" .. "C15"
     passed: bool
     messages: tuple[str, ...]  # failure detail; empty when passed
     skips: tuple[str, ...]  # parts deliberately not examined. Informational.
@@ -44,9 +44,9 @@ class CheckResult:
 
 @dataclass(frozen=True)
 class ConformanceReport:
-    """Aggregate outcome of running C1–C14 over one emit."""
+    """Aggregate outcome of running C1–C15 over one emit."""
 
-    results: tuple[CheckResult, ...]  # one per check, in C1..C14 order
+    results: tuple[CheckResult, ...]  # one per check, in C1..C15 order
 
     @property
     def ok(self) -> bool:
@@ -2017,6 +2017,45 @@ def _check_c14(emit: "Emit") -> CheckResult:
     )
 
 
+def _check_c15(emit: "Emit") -> CheckResult:
+    """C15: Surface consistency.
+
+    A published emit's `surface` MUST be the string "published", and it MUST
+    carry no `projection` block. The other invariants of a published emit (no
+    `firings` table, no machinery kinds, no provenance column group) are owned
+    by C3, C12, and C5; C15 checks only the `surface` discriminator itself and
+    the `projection` absence the contract pairs with it.
+
+    Reads only the raw sidecar; runs no data query.
+
+    Args:
+        emit: An open emit.
+
+    Returns:
+        A CheckResult for check id "C15".
+    """
+    messages: list[str] = []
+    raw = emit.sidecar.raw
+
+    surface = raw.get("surface")
+    if surface != "published":
+        messages.append(
+            f"C15: sidecar surface must be 'published'; got {surface!r}"
+            + (" (field absent)" if "surface" not in raw else "")
+        )
+    if "projection" in raw:
+        messages.append(
+            "C15: sidecar carries a 'projection' block — a published emit must not"
+        )
+
+    return CheckResult(
+        check="C15",
+        passed=len(messages) == 0,
+        messages=tuple(messages),
+        skips=(),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Check registry
 # ---------------------------------------------------------------------------
@@ -2036,6 +2075,7 @@ _CHECKS: dict[str, Callable[["Emit"], CheckResult]] = {
     "C12": _check_c12,
     "C13": _check_c13,
     "C14": _check_c14,
+    "C15": _check_c15,
 }
 
 _RECOGNIZED_IDS: tuple[str, ...] = (
@@ -2053,6 +2093,7 @@ _RECOGNIZED_IDS: tuple[str, ...] = (
     "C12",
     "C13",
     "C14",
+    "C15",
 )
 
 
@@ -2062,13 +2103,14 @@ _RECOGNIZED_IDS: tuple[str, ...] = (
 
 
 def validate(emit: "Emit") -> ConformanceReport:
-    """Run conformance checks C1–C14 against an opened emit.
+    """Run conformance checks C1–C15 against an opened emit.
 
     Reimplements the base-format conformance procedure independently of the
     producer's emitters.conformance. C1 validates base.json against the vendored
     JSON Schema; C2–C5 check catalog/sidecar agreement, required tables,
     and column shapes; C6–C13 check data-level integrity; C14 checks the
-    sub-type column partition's consistency against the sidecar.
+    sub-type column partition's consistency against the sidecar; C15 checks
+    the sidecar's `surface` discriminator.
 
     A conformance failure is reported as a failing CheckResult, never raised:
     callers inspect the report and choose an exit code. Operational failures
@@ -2078,7 +2120,7 @@ def validate(emit: "Emit") -> ConformanceReport:
         emit: An emit already opened — and therefore version-gated — by open_emit.
 
     Returns:
-        A ConformanceReport with one CheckResult per check, in C1..C14 order.
+        A ConformanceReport with one CheckResult per check, in C1..C15 order.
 
     Raises:
         RunDatabaseError: An operational failure reading run.duckdb mid-check.
@@ -2097,7 +2139,7 @@ def run_check(emit: "Emit", check_id: str) -> CheckResult:
 
     Args:
         emit: An opened emit.
-        check_id: One of "C1" .. "C14".
+        check_id: One of "C1" .. "C15".
 
     Returns:
         The CheckResult for that check.

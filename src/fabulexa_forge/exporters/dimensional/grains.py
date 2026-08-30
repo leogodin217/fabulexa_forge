@@ -12,18 +12,23 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import DimensionalConfig, TableDecl
     from fabulexa_forge.exporters.election import Election
+    from fabulexa_forge.exporters.query_spec import ColumnProvenance
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
+from fabulexa_forge.config.models import scd_window_bound
 from fabulexa_forge.derivations.versioned_intervals import (
     build_versioned_intervals_sql,
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.columns import (
     build_column_expr,
+    build_table_provenance,
 )
 from fabulexa_forge.exporters.dimensional.scd import (
     build_scd2_rows_sql,
@@ -595,13 +600,27 @@ def build_grain_sql(
     config: "DimensionalConfig | None" = None,
     window: "Window | None" = None,
     election: "Election | None" = None,
-) -> tuple[str, Literal["create", "append", "replace"], str | None, str | None]:
+) -> tuple[
+    str,
+    Literal["create", "append", "replace"],
+    str | None,
+    str | None,
+    "Mapping[str, ColumnProvenance]",
+]:
     """Dispatch a table declaration to the appropriate grain SQL builder.
 
-    Returns the SQL, write mode, and optional view name and view SQL.
+    Returns the SQL, write mode, optional view name and view SQL, and the
+    per-output-column provenance map — one entry per faithfully carried
+    column (projection, rename, cast-back, temporal/value rendering
+    election, `lookup`), keyed by output column name. Computed columns
+    (derived measures, elapsed, ordinal, SCD-2 valid_from / valid_to,
+    re-derived fk identity surfaces) get no entry. Uniform across every
+    grain and scd: type2 — source_table_name is already the grain's
+    resolved DuckDB source table (`validate_table`'s return), the same
+    identity provenance stamps against.
 
-    Full export (window=None): returns (sql, 'create', None, None) — the
-    existing shape unchanged.
+    Full export (window=None): returns (sql, 'create', None, None,
+    provenance) — the existing shape unchanged plus provenance.
 
     Windowed (window not None):
     - Records fact: append with half-open window predicate on last_mutation_sim_time.
@@ -624,8 +643,12 @@ def build_grain_sql(
             the all-default election internally.
 
     Returns:
-        (sql, write_mode, view_name, view_sql)
+        (sql, write_mode, view_name, view_sql, provenance)
     """
+    provenance = build_table_provenance(
+        table_decl, source_table_name, table_decl.source.kind
+    )
+
     if window is None:
         # Full export — existing behavior, write_mode='create', no views
         if table_decl.scd == "type2":
@@ -662,7 +685,7 @@ def build_grain_sql(
                     config,
                     election=election,
                 )
-        return sql, "create", None, None
+        return sql, "create", None, None, provenance
 
     # Windowed dispatch
     grain = table_decl.source.grain
@@ -678,12 +701,13 @@ def build_grain_sql(
             sidecar,
             election=election,
         )
-        return sql, "replace", None, None
+        return sql, "replace", None, None, provenance
 
     # SCD-2 dim
     if table_decl.scd == "type2":
         has_valid_to = any(
-            col.derived is not None and col.derived.scd_window == "valid_to"
+            col.derived is not None
+            and scd_window_bound(col.derived.scd_window) == "valid_to"
             for col in table_decl.columns
         )
 
@@ -700,7 +724,7 @@ def build_grain_sql(
             )
             rows_table_name = f"{table_decl.name}__rows"
             view_sql = build_scd2_view_sql(table_decl, rows_table_name)
-            return rows_sql, "append", table_decl.name, view_sql
+            return rows_sql, "append", table_decl.name, view_sql, provenance
         else:
             # No valid_to: plain append, no view
             sql = build_scd2_rows_sql(
@@ -712,7 +736,7 @@ def build_grain_sql(
                 window.end_ns,
                 fork_path,
             )
-            return sql, "append", None, None
+            return sql, "append", None, None, provenance
 
     # Facts (records and history_point grains)
     if grain == "records":
@@ -745,7 +769,7 @@ def build_grain_sql(
             window.end_ns,
             exclude_key=redirect,
         )
-        return windowed_sql, "append", None, None
+        return windowed_sql, "append", None, None, provenance
 
     if grain == "history_point":
         raw_key = "sim_time"
@@ -772,7 +796,7 @@ def build_grain_sql(
             window.end_ns,
             exclude_key=redirect,
         )
-        return windowed_sql, "append", None, None
+        return windowed_sql, "append", None, None, provenance
 
     # Unreachable: validate_table guards history_interval/membership
     raise ExportError(

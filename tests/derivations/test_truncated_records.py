@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any
 
 import duckdb
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from fabulexa_forge.derivations.truncated_tape import (
     build_truncated_records_sql,
@@ -203,7 +208,9 @@ def _build_emit(tmp_path: Path) -> Path:
                 "container",
             ),
         ],
-        extra={"enum_domains": {"widget": {"widget_type": ["alpha", "beta"]}}},
+        extra={
+            "enum_domains": {"widget": {"widget_type": enum_options("alpha", "beta")}}
+        },
     )
     return tmp_path
 

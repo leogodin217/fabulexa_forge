@@ -1,0 +1,390 @@
+{
+  "base_format_version": 9,
+  "branches": [
+    {
+      "fork_path": "trunk",
+      "parent": null,
+      "slice_at": 5000000000000
+    }
+  ],
+  "enum_domains": {
+    "actor": {
+      "actor_type": [
+        {
+          "description": "The child record. Joins exactly one group at creation via the immutable group reference \u2014 or none at all, for the rare group-less arrivals. Its projected email borrows the joined group's domain.",
+          "value": "member"
+        }
+      ]
+    },
+    "entity": {
+      "entity_type": [
+        {
+          "description": "The parent record. Carries no mechanism traits \u2014 it exists to be referenced; its rendered name and email domain are minted at presentation time and shared with every member that joins it.",
+          "value": "group"
+        }
+      ]
+    },
+    "journey_instance": {
+      "current_state": [
+        {
+          "description": "Terminal landing state; the member stays active.",
+          "value": "joined"
+        }
+      ],
+      "journey_type": [
+        {
+          "description": "Bookkeeping journey \u2014 every arrival lands in a single terminal state. Membership itself is assigned at creation by the arrival stream, not by journey behavior.",
+          "value": "membered"
+        }
+      ]
+    }
+  },
+  "record_roles": {
+    "actor": {
+      "member": "fact"
+    },
+    "entity": "dimension",
+    "journey_instance": "dimension"
+  },
+  "row_census": {
+    "trunk": {
+      "history_series": {
+        "actor": {
+          "email": {
+            "records": 30,
+            "rows": 30
+          },
+          "first_name": {
+            "records": 30,
+            "rows": 30
+          },
+          "group_domain": {
+            "records": 30,
+            "rows": 30
+          },
+          "last_name": {
+            "records": 30,
+            "rows": 30
+          }
+        },
+        "entity": {
+          "domain": {
+            "records": 8,
+            "rows": 8
+          },
+          "name": {
+            "records": 8,
+            "rows": 8
+          }
+        },
+        "journey_instance": {
+          "current_state": {
+            "records": 30,
+            "rows": 30
+          }
+        }
+      },
+      "sub_type_rows": {
+        "actor": {
+          "member": 30
+        },
+        "entity": {
+          "group": 8
+        }
+      },
+      "table_rows": {
+        "history": 166,
+        "records__actor": 30,
+        "records__entity": 8,
+        "records__journey_instance": 30
+      }
+    }
+  },
+  "scenario_description": "Minimal parent/child (membership) dataset. Five groups exist from the start; members arrive over a short horizon and join one group for life, chosen uniformly at creation. A rare second arrival stream mints members with no group at all, so consumers see honest NULL membership. Built for downstream consumers learning how a membership reference reads in the base layer.",
+  "sub_type_columns": {
+    "actor": {
+      "member": [
+        "prop__group",
+        "ref_index__group",
+        "prop__first_name",
+        "prop__last_name",
+        "prop__group_domain",
+        "prop__email"
+      ]
+    },
+    "entity": {
+      "group": [
+        "prop__label",
+        "prop__name",
+        "prop__domain"
+      ]
+    }
+  },
+  "surface": "published",
+  "tables": [
+    {
+      "category": "fixed",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "kind",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "property",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "value",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "history",
+      "rows": 166
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__group",
+          "references": "entity",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__group",
+          "type": "BIGINT"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__actor_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Member's given name.",
+          "history_tracked": true,
+          "name": "prop__first_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Member's family name.",
+          "history_tracked": true,
+          "name": "prop__last_name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Web domain of the member's group; NULL for members in no group.",
+          "history_tracked": true,
+          "name": "prop__group_domain",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Member's email address on their group's domain; NULL for members in no group.",
+          "history_tracked": true,
+          "name": "prop__email",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__actor",
+      "record_kind": "actor",
+      "rows": 30
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Always NULL in the base layer; the group's readable identity is minted at presentation time, so join on the member's group reference rather than reading this.",
+          "history_tracked": false,
+          "name": "prop__label",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "The record's declared sub-type.",
+          "history_tracked": false,
+          "immutable": true,
+          "name": "prop__entity_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Group's display name.",
+          "history_tracked": true,
+          "name": "prop__name",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Group's web domain.",
+          "history_tracked": true,
+          "name": "prop__domain",
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        }
+      ],
+      "name": "records__entity",
+      "record_kind": "entity",
+      "rows": 8
+    },
+    {
+      "category": "records",
+      "columns": [
+        {
+          "name": "fork_path",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "record_id",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "created_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "active",
+          "type": "BOOLEAN"
+        },
+        {
+          "name": "deactivated_at",
+          "type": "BIGINT"
+        },
+        {
+          "name": "last_mutation_sim_time",
+          "type": "BIGINT"
+        },
+        {
+          "name": "record_index",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Reference to the actor walking this journey.",
+          "history_tracked": false,
+          "name": "prop__actor",
+          "references": "actor",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "name": "ref_index__actor",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Name of the journey type this instance is an execution of.",
+          "history_tracked": false,
+          "name": "prop__journey_type",
+          "required": true,
+          "temporal_class": "constant",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Name of the state the journey instance currently occupies.",
+          "history_tracked": true,
+          "name": "prop__current_state",
+          "required": true,
+          "temporal_class": "tracked",
+          "type": "VARCHAR"
+        },
+        {
+          "description": "Simulation time the journey instance entered its current state.",
+          "history_tracked": false,
+          "name": "prop__state_entry_time",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BIGINT"
+        },
+        {
+          "description": "Whether the journey instance has reached a terminal state.",
+          "history_tracked": false,
+          "name": "prop__complete",
+          "required": true,
+          "temporal_class": "slice_only",
+          "type": "BOOLEAN"
+        }
+      ],
+      "description": "One actor's traversal of one journey: current state, entry time, completion flag, and every role binding acquired along the way.",
+      "name": "records__journey_instance",
+      "record_kind": "journey_instance",
+      "rows": 30
+    }
+  ]
+}

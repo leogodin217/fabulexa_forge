@@ -131,28 +131,6 @@ def resolve_subtype_index(
     return {str(record_id): str(sub_type) for record_id, sub_type in rows}
 
 
-def known_records_kinds(sidecar: "Sidecar") -> tuple[str, ...]:
-    """Every kind with a declared `records__<kind>` table, sidecar table order.
-
-    Reads the sidecar's structured `TableSpec.category` / `record_kind`
-    fields (the established codebase convention — `exporters.source.plan`
-    and `exporters.source.init` read the same fields), never the table name.
-
-    Args:
-        sidecar: The open emit's sidecar.
-
-    Returns:
-        Record kinds, in sidecar table-declaration order.
-    """
-    kinds: list[str] = []
-    for table in sidecar.tables():
-        if table.category == "records":
-            kind = table.record_kind
-            assert kind is not None, "records table must declare record_kind"
-            kinds.append(kind)
-    return tuple(kinds)
-
-
 def kind_reference_targets(
     sidecar: "Sidecar",
     kind: str,

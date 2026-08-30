@@ -12,12 +12,13 @@ when `declare_keys` meets a CSV target.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from fabulexa_forge.exporters.notices import Notice
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
     from pathlib import Path
 
     from fabulexa_forge.config.models import ExportConfig
@@ -43,6 +44,106 @@ class TableKeys:
 
 
 @dataclass(frozen=True)
+class ColumnProvenance:
+    """The one source column that faithfully fed an output column.
+
+    Stamped at plan compile for columns whose value is the faithful carry
+    of exactly one source (table, column). Computed and multi-source
+    columns get no entry — absence is the "inherits nothing" answer.
+
+    `value_map` is set only for a `derived: value_map` column: the applied
+    substitution as (source value, rendered output text) pairs in the map's
+    declaration order. The dictionary resolvers translate the source
+    property's declared enum values through it so the documented domain is
+    the values the column actually renders; None means the carry is
+    value-identical.
+    """
+
+    source_table: str
+    source_column: str
+    value_map: tuple[tuple[str, str], ...] | None = None
+
+
+@dataclass(frozen=True)
+class KindValueEntry:
+    """One rendered label of a kind-name-as-value output column.
+
+    label is the post-`kind_labels` rendered value; source_kind names the
+    kind whose rows render under it. List order is the plan's event-source
+    compile order.
+    """
+
+    label: str
+    source_kind: str
+
+
+def build_carried_provenance(
+    source_table: str,
+    columns: "Iterable[tuple[str, str]]",
+) -> "dict[str, ColumnProvenance]":
+    """Stamp provenance for a set of straight (source, output) column carries.
+
+    Shared by the source and base plan builders: every output column of a
+    `state` / `junction` table or a base flat table is a faithful, single-
+    source carry — projection, rename, or cast-back — of one source column
+    on one source table (no `lookup` / `derived` mode, unlike dimensional),
+    so one uniform map suffices for all three.
+
+    Args:
+        source_table: The one source table every entry is keyed against.
+        columns: (source column, output column) pairs — the caller's final,
+            post-selection/rename column set. A caller excludes any column
+            whose value is not a faithful single-source carry (e.g. a base
+            table's re-derived `<kind>_key` / `<p>_key` edge keys) before
+            calling this.
+
+    Returns:
+        Output column name -> ColumnProvenance, one entry per pair.
+    """
+    return {
+        out: ColumnProvenance(source_table=source_table, source_column=src)
+        for src, out in columns
+    }
+
+
+@dataclass(frozen=True)
+class TableReport:
+    """One output table as written.
+
+    `columns` are (output name, type-text) pairs in output order, transcribed
+    from the materialized relation via the writers' DESCRIBE authority.
+    `row_count` is None on windowed invocations. `keys` is the table's
+    declared `TableKeys`, or None when nothing was declared or the
+    declaration was CSV-dropped. `provenance`, `kind_values`,
+    `author_descriptions`, `author_table_description`, and `event_log` are
+    forwarded verbatim from the compiled `QuerySpec` that produced this
+    table — no default, so every report-assembly call site states them
+    explicitly.
+    """
+
+    name: str
+    columns: tuple[tuple[str, str], ...]
+    row_count: int | None
+    keys: TableKeys | None
+    provenance: "Mapping[str, ColumnProvenance]"
+    kind_values: "Mapping[str, tuple[KindValueEntry, ...]]"
+    author_descriptions: "Mapping[str, str]"
+    author_table_description: str | None
+    event_log: bool
+
+
+@dataclass(frozen=True)
+class ExportReport:
+    """Per-table reports for one export invocation, in plan iteration order.
+
+    Returned by every file-writing export entry point in place of the bare
+    table -> row-count mapping.
+    """
+
+    tables: tuple[TableReport, ...]
+
+
+@dataclass(frozen=True)
 class QuerySpec:
     """A compiled output table: name, SELECT, write mode, optional view pair.
 
@@ -50,6 +151,16 @@ class QuerySpec:
     the existing shape. A windowed compile tags facts and SCD-2 version
     tables 'append', type-1 dims 'replace', and carries the companion view
     (name + DDL SELECT body) for SCD-2 dims that declare a valid_to column.
+
+    `provenance`, `kind_values`, and `author_descriptions` are keyed by
+    output column name (post-rename). Empty means nothing stamped; every
+    mode engine stamps at plan compile (tests pin per-mode stamping).
+
+    `author_table_description` is the mode's table-level override translated
+    at plan compile; None means no override. `event_log` is True iff this
+    spec is the source mode's compiled polymorphic event log — the one table
+    whose documentation the companion dictionary answers from the
+    forge-pinned event-log set; stamped only by the source plan compiler.
     """
 
     table_name: str
@@ -58,6 +169,13 @@ class QuerySpec:
     view_name: str | None
     view_sql: str | None
     keys: TableKeys | None = None
+    provenance: "Mapping[str, ColumnProvenance]" = field(default_factory=dict)
+    kind_values: "Mapping[str, tuple[KindValueEntry, ...]]" = field(
+        default_factory=dict
+    )
+    author_descriptions: "Mapping[str, str]" = field(default_factory=dict)
+    author_table_description: str | None = None
+    event_log: bool = False
 
 
 NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"
@@ -132,13 +250,14 @@ def write_query_specs(
     specs: list[QuerySpec],
     out: "Path",
     fmt: Literal["csv", "duckdb"],
-) -> dict[str, int]:
+) -> ExportReport:
     """Dispatch a full-export QuerySpec list to the writer selected by fmt.
 
-    Every mode's full-export path (dimensional, source) compiles to this one
-    shape and shares this dispatch: flattens to name -> SQL and hands off to
-    `writers.duckdb.write_duckdb`, or one `writers.csv.write_csv` call per
-    table.
+    Every mode's full-export path (dimensional, source, base) compiles to
+    this one shape and shares this dispatch: flattens to name -> SQL and
+    hands off to `writers.duckdb.write_duckdb`, or one `writers.csv.write_csv`
+    call per table. Every full-export spec is `write_mode='create'` with no
+    view, so a spec's `table_name` is already its author-facing output name.
 
     Args:
         emit: The open emit.
@@ -149,9 +268,12 @@ def write_query_specs(
         fmt: Output format.
 
     Returns:
-        Mapping of every table name -> row count written (0 for a table whose
-        query resolved to no rows; such a table is still emitted — empty
-        typed DuckDB table or header-only CSV — never dropped).
+        One `TableReport` per spec, in plan iteration order — row count and
+        columns from the writer's `WrittenRelation`, `keys` the spec's
+        declared keys under `fmt='duckdb'`, always None under `fmt='csv'`
+        (CSV carries no constraint surface). A table whose query resolved to
+        no rows is still reported — empty typed DuckDB table or header-only
+        CSV — never dropped.
 
     Raises:
         ExportRuntimeError: A writer fails.
@@ -162,11 +284,40 @@ def write_query_specs(
         from fabulexa_forge.writers.duckdb import write_duckdb
 
         keys = {spec.table_name: spec.keys for spec in specs if spec.keys is not None}
-        return write_duckdb(emit, queries, out, keys)
+        written = write_duckdb(emit, queries, out, keys)
+        return ExportReport(
+            tables=tuple(
+                TableReport(
+                    name=spec.table_name,
+                    columns=written[spec.table_name].columns,
+                    row_count=written[spec.table_name].row_count,
+                    keys=spec.keys,
+                    provenance=spec.provenance,
+                    kind_values=spec.kind_values,
+                    author_descriptions=spec.author_descriptions,
+                    author_table_description=spec.author_table_description,
+                    event_log=spec.event_log,
+                )
+                for spec in specs
+            )
+        )
 
     from fabulexa_forge.writers.csv import write_csv
 
-    row_counts: dict[str, int] = {}
-    for table_name, sql in queries.items():
-        row_counts[table_name] = write_csv(emit, table_name, sql, out)
-    return row_counts
+    tables: list[TableReport] = []
+    for spec in specs:
+        relation = write_csv(emit, spec.table_name, spec.sql, out)
+        tables.append(
+            TableReport(
+                name=spec.table_name,
+                columns=relation.columns,
+                row_count=relation.row_count,
+                keys=None,
+                provenance=spec.provenance,
+                kind_values=spec.kind_values,
+                author_descriptions=spec.author_descriptions,
+                author_table_description=spec.author_table_description,
+                event_log=spec.event_log,
+            )
+        )
+    return ExportReport(tables=tuple(tables))

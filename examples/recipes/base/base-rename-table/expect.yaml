@@ -9,6 +9,7 @@ tables:
         deactivated_at,
         prop__status,
         prop__name,
+        prop__dob,
         prop__doctor_id,
         doctor_id_key,
         prop__primary_staff_id,
@@ -35,6 +36,20 @@ tables:
   admission:
     columns:
       [admission_key, id, created_sim_time, active, deactivated_at, prop__ward]
+    row_count: 2
+  team:
+    columns:
+      [
+        team_key,
+        id,
+        created_sim_time,
+        active,
+        deactivated_at,
+        prop__name,
+        prop__team_type,
+        prop__status,
+        prop__shift,
+      ]
     row_count: 2
   # The renamed table — `queue` no longer appears; `triage_desk` does, with
   # the author-verbatim table name and its output columns unchanged. The self

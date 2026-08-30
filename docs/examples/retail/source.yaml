@@ -35,9 +35,10 @@
 #     session_id, prop__store -> storefront_id, the junction's record_id ->
 #     customer_action_id, member id -> product_id) and de-simulates vocabulary
 #     names (journey_type -> session_type, decision_type -> action_type,
-#     pick_index -> position, joined/left -> bound_at/released_at).
-#   - The junction drops its constant kind column (entity_kind='entity' on all
-#     92,710 rows — one simulator word, zero information) via `columns:`.
+#     pick_index -> position, joined/left -> added_at/removed_at, role_name ->
+#     interaction_type, the decision counter presentation_id -> action_number).
+#   - The junction drops its constant kind column (entity_kind='entity' on
+#     every row — one simulator word, zero information) via `columns:`.
 #   - Per-source `rename:` keeps the `changes` payload keys in step with the
 #     renamed state-table columns.
 #   Renaming shopping_session.actor to customer_id accepts one known anomaly:
@@ -46,13 +47,14 @@
 #
 #   SPLIT  actor -> customer + ops_agent, two `state` tables over the same
 #          `kind: actor`, each narrowed by its own `sub_types:`. They are
-#          genuinely separate operational tables, not two views of one — measured
-#          11,468 shoppers against a single ops agent, and `sub_type_columns`
+#          genuinely separate operational tables, not two views of one — the
+#          whole shopper population against a single ops agent, and `sub_type_columns`
 #          gives them disjoint columns (the shopper's commercial and demographic
 #          attributes; the agent's monitored component).
 #   SPLIT  entity -> product + storefront, for the same reason: the partition
 #          gives product 11 columns and infrastructure 5, overlapping only on
-#          presentation_id. Measured 193 products against 1 storefront host. One
+#          presentation_id. Measured: a full product catalogue against a single
+#          storefront host. One
 #          combined catalogue table would be NULL for the other's columns on every
 #          row — a shape no app database would ship.
 #   PLAIN  journey_instance -> shopping_session, tick_decision -> customer_action.
@@ -96,8 +98,8 @@
 # business identifiers, not the engine's internal record ids. The registry
 # declares all four populations (CUST_/OPS_/SKU_/INFRA_ counter key spaces,
 # unique within the emit, pairwise union-safe), which matters here because the
-# bundle's record_id for products mixes two upstream id-assignment schemes (44
-# short integers, 149 64-char hashes). Under the election each state table's
+# bundle's record_id for products mixes two upstream id-assignment schemes (a
+# minority of short integers amid 64-char hashes). Under the election each state table's
 # `id` IS the presentation key (the standalone presentation_id column is
 # absorbed — emitting both would duplicate it), and every referencing column
 # renders its target's surface: shopping_session.actor -> CUST_/OPS_,
@@ -106,12 +108,32 @@
 # key. journey_instance carries no registry claim and tick_decision's claim is
 # a bare counter, so both keep record_id; their tables and edges are unchanged.
 #
+# HYGIENE (realism QA): the generator's naming machinery
+# (identity_naming_style, designator — inputs to how product names were minted)
+# stays off `product`, and `storefront` drops primary_ip / domain (constant on
+# every row and drawn from reserved documentation ranges — 203.0.113.10 is
+# RFC 5737 TEST-NET, techmart.example.com an example.com name). The same
+# columns are `ignore`d on the audit sources so create payloads match; the
+# constant sub-type discriminators (actor_type / entity_type), fully redundant
+# with item_type, are ignored there too. customer.storefront_id is KEPT here,
+# decided the other way from the dimensional config: an app table carrying an
+# FK to the (single) storefront row is ordinary schema; a dim carrying a
+# constant attribute is a tell.
+#
 # Two columns are largely empty, and both are faithful rather than defects. The
 # soft-delete `deactivated_at` is set only where something actually retires:
-# measured, 13 of 193 products are withdrawn from the catalogue and 31,502 of
-# 31,519 shopping sessions have ended, while no customer, storefront, ops agent or
-# customer action is ever deactivated. And `action_product.left_at` is empty for
-# all 92,710 rows because a product binding is never released once made.
+# measured, a small minority of products are withdrawn from the catalogue and
+# essentially every shopping session has ended, while no customer, storefront,
+# ops agent or customer action is ever deactivated. And
+# `action_product.removed_at` is empty on every row because a product binding
+# is never released once made.
+#
+# DESCRIPTIONS: every `descriptions:` map below overrides the inherited
+# engine-voice column prose with domain sentences for the generated README /
+# manifest, keyed by SOURCE identity (the same pre-rename vocabulary as
+# `rename:`). The `events:` declaration carries no descriptions surface —
+# audit_log's table and column docs are forge-pinned instead, mode-definitional
+# like the log's first id.
 
 mode: source
 
@@ -125,6 +147,7 @@ source:
     - name: customer
       kind: actor
       sub_types: [customer]
+      description: "One TechMart shopper account."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__first_name, prop__last_name, prop__name, prop__email, prop__username,
                 prop__phone, prop__birth_date, prop__street_address, prop__place_city,
@@ -133,64 +156,216 @@ source:
                 prop__income, prop__store, prop__total_purchases]
       rename:
         prop__store: storefront_id
+      # prop__birth_date is a plain upstream-minted date string (verified
+      # %Y-%m-%d on every row, no NULLs) — declared, not sniffed.
+      render:
+        prop__birth_date: {date_parse: "%Y-%m-%d"}
+      descriptions:
+        presentation_id: "Unique customer identifier (CUST_-prefixed)."
+        created_sim_time: "When the customer account was created."
+        active: "FALSE if the customer row was soft-deleted; TRUE otherwise."
+        deactivated_at: "When the customer row was soft-deleted; NULL while
+          active."
+        last_mutation_sim_time: "When the customer row was last updated
+          (creation, any column change, or soft-delete)."
+        prop__acquisition_source: "Marketing channel the customer first
+          arrived through: organic, paid_search, social, or referral."
+        prop__tier: "Loyalty tier: most customers are regular, with a small
+          vip minority who buy and return more often."
+        prop__segment: "Price segment the customer shops in: budget,
+          mainstream, or premium."
+        prop__income: "Household income in whole dollars; higher-income
+          customers complete checkout more often."
+        prop__country: "Country of the customer's home address (US, MX, or
+          UK)."
+        prop__store: "The storefront the customer shops on; joins to
+          storefront.id."
+        prop__total_purchases: "Lifetime number of completed orders; increases
+          by one with each purchase."
+        prop__place_city: "City of the customer's home address."
+        prop__place_subdivision: "State or province of the customer's home
+          address."
+        prop__place_postal_code: "Postal code of the customer's home address."
+        prop__place_area_code: "Telephone area code of the customer's home
+          address; matches the customer's phone number."
     - name: ops_agent
       kind: actor
       sub_types: [ops]
+      description: "The storefront operations monitor: the automated agent
+        that watches the storefront host and flips it degraded during
+        incidents."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__component]
+      descriptions:
+        presentation_id: "Unique identifier of the monitoring agent
+          (OPS_-prefixed)."
+        created_sim_time: "When the monitoring agent was set up."
+        active: "FALSE if the agent row was soft-deleted; TRUE otherwise."
+        deactivated_at: "When the agent row was soft-deleted; NULL while
+          active."
+        last_mutation_sim_time: "When the agent row was last updated."
     - name: product
       kind: entity
       sub_types: [product]
+      description: "One catalog item TechMart sells."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__product_name, prop__category, prop__price_cents, prop__margin,
                 prop__popularity, prop__identity_brand, prop__identity_line,
-                prop__identity_naming_style, prop__identity_tier, prop__designator]
+                prop__identity_tier]
+      descriptions:
+        presentation_id: "Unique product identifier (SKU_-prefixed)."
+        created_sim_time: "When the product was added to the catalog."
+        active: "FALSE if the product was withdrawn from the catalog; TRUE
+          while still sold."
+        deactivated_at: "When the product was withdrawn from the catalog;
+          NULL while still sold."
+        last_mutation_sim_time: "When the product row was last updated."
+        prop__category: "Product category: smartphones, laptops, tablets,
+          audio, gaming, or accessories."
+        prop__price_cents: "Retail price in cents (129900 = $1,299.00)."
+        prop__margin: "Gross margin on the product, in whole percentage
+          points."
+        prop__popularity: "Relative popularity weight: higher values mean
+          shoppers view, cart, compare, and buy this product more often."
+        prop__identity_brand: "Brand the product is sold under."
+        prop__identity_line: "Product line (series or family) within the
+          brand."
+        prop__identity_tier: "Market tier of the brand, from value to
+          premium."
     - name: storefront
       kind: entity
       sub_types: [infrastructure]
+      description: "The storefront host serving the shop."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
-                prop__status, prop__error_rate, prop__primary_ip, prop__domain]
+                prop__status, prop__error_rate]
+      descriptions:
+        presentation_id: "Unique identifier of the storefront host
+          (INFRA_-prefixed)."
+        created_sim_time: "When the storefront host was brought online."
+        active: "FALSE if the host row was soft-deleted; TRUE otherwise."
+        deactivated_at: "When the host row was soft-deleted; NULL while
+          active."
+        last_mutation_sim_time: "When the host row was last updated — here,
+          the latest status or error-rate change."
+        prop__status: "Health of the storefront host: healthy, or degraded
+          during a site incident."
+        prop__error_rate: "Fraction of requests failing on the storefront
+          host; near zero while healthy, elevated during incidents."
     # journey_instance is not sub-typed; `columns:` here drops `output_roles`,
     # which is engine role bookkeeping with no domain meaning.
     - name: shopping_session
       kind: journey_instance
+      description: "One customer's single visit to the store, funneling from
+        browsing through cart and checkout to a purchase or an abandonment."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__actor, prop__journey_type, prop__current_state, prop__customer_handle]
       rename:
         prop__actor: customer_id
         prop__journey_type: session_type
+      descriptions:
+        record_id: "Unique shopping-session identifier."
+        created_sim_time: "When the session started."
+        active: "FALSE once the session row was soft-deleted (the session
+          ended); TRUE while still open."
+        deactivated_at: "When the session ended; NULL while still open."
+        last_mutation_sim_time: "When the session row was last updated —
+          here, its latest funnel-stage change."
+        prop__actor: "The customer who ran this session; joins to customer.id
+          (the one storefront_ops row carries the monitoring agent's OPS_
+          id instead)."
+        prop__journey_type: "Type of session: shopping_session for shopper
+          visits, storefront_ops for the site-monitoring session."
+        prop__current_state: "The session's current funnel stage (browsing,
+          considering, checkout, purchased, or a *_stop stage where the
+          shopper left)."
     - name: customer_action
       kind: tick_decision
+      description: "One funnel action a customer took during a session: a
+        view, cart add, comparison, checkout start, or purchase."
       rename:
+        presentation_id: action_number
         prop__journey_instance: session_id
         prop__decision_type: action_type
+      descriptions:
+        record_id: "Unique identifier of this customer action."
+        presentation_id: "Sequential action number, increasing in the order
+          actions were recorded."
+        created_sim_time: "When the action happened."
+        active: "FALSE if the action row was soft-deleted; actions are never
+          deleted, so TRUE on every row."
+        deactivated_at: "When the action row was soft-deleted; always NULL —
+          actions are never deleted."
+        last_mutation_sim_time: "When the action row was last updated;
+          actions are written once, so this matches created_at."
+        prop__journey_instance: "The shopping session the action happened in;
+          joins to shopping_session.id."
+        prop__decision_type: "The kind of shopping action: visit,
+          product_view, add_to_cart, product_comparison, begin_checkout, or
+          purchase (plus the one store_bound setup row)."
+        prop__context: "JSON details of the action (e.g. quantity for cart
+          adds, discount_pct at checkout)."
+      # context.discount_pct carries raw float64 noise (up to 19 fraction
+      # digits, e.g. 0.027498429157793724) — no real instrumentation records
+      # that. Rounded in place to 4dp; every other payload byte verbatim.
+      render:
+        prop__context: {json_precision: {discount_pct: 4}}
     - name: action_product
       membership: {kind: tick_decision, property: bindings}
+      description: "One product bound to a customer action: the item viewed,
+        carted, or on one side of a comparison."
       columns: [joined_sim_time, left_sim_time, elem__role_name,
                 member__entity__id, elem__pick_index]
       rename:
         record_id: customer_action_id
         member__entity__id: product_id
+        elem__role_name: interaction_type
         elem__pick_index: position
-        joined_sim_time: bound_at
-        left_sim_time: released_at
+        joined_sim_time: added_at
+        left_sim_time: removed_at
+      descriptions:
+        record_id: "The customer action this product was part of; joins to
+          customer_action.id."
+        member__entity__id: "The product the action touched; joins to
+          product.id."
+        elem__role_name: "How the action touched the product: viewed_product,
+          carted_product, or compared_products."
+        elem__pick_index: "Position of the product among the pair compared in
+          a product_comparison; 0 for views and cart adds."
+        joined_sim_time: "When the product was added to the action."
+        left_sim_time: "When the product was removed from the action; always
+          NULL — a recorded product is never removed."
   events:
     name: audit_log
     sources:
+      # each split source ignores the OTHER sub-type's columns (a customer audit
+      # row logging the ops agent's component as null is a conformed-kind tell),
+      # the constant discriminator (redundant with item_type), and the same
+      # columns HYGIENE keeps off the state tables
       - kind: actor
         sub_types: [customer]
         item_type: customer
+        ignore: [actor_type, component]
         rename:
           store: storefront_id
       - kind: actor
         sub_types: [ops]
         item_type: ops_agent
+        ignore: [actor_type, acquisition_source, age, birth_date, country, email,
+                 first_name, income, last_name, name, phone, place_area_code,
+                 place_city, place_postal_code, place_subdivision, segment, store,
+                 street_address, tier, total_purchases, username]
       - kind: entity
         sub_types: [product]
         item_type: product
+        ignore: [entity_type, identity_naming_style, designator,
+                 status, error_rate, primary_ip, domain]
       - kind: entity
         sub_types: [infrastructure]
         item_type: storefront
+        ignore: [entity_type, primary_ip, domain,
+                 category, designator, identity_brand, identity_line,
+                 identity_naming_style, identity_tier, margin, popularity,
+                 price_cents, product_name]
       - kind: journey_instance
         item_type: shopping_session
         rename:

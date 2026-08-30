@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import math
 import re
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Annotated, Literal, TypeAlias
 
@@ -23,7 +24,8 @@ from pydantic import (
 )
 from typing_extensions import Self
 
-from fabulexa_forge._sql import is_recognized_sql_type
+from fabulexa_forge._sql import is_recognized_sql_type, validate_date_parse_format
+from fabulexa_forge.anchor import TemporalRender
 
 # ---------------------------------------------------------------------------
 # Identifier validation (author-supplied names spliced into SQL / filenames)
@@ -90,6 +92,37 @@ def _require_sql_identifier(value: str, context: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Temporal rendering elections: shared vocabulary + validators
+# ---------------------------------------------------------------------------
+
+
+def _require_render_map_valid(
+    value: "Mapping[str, object] | None", field_name: str
+) -> None:
+    """A `render` map: when present, non-empty, with non-empty keys.
+
+    Value-type-agnostic (`Mapping[str, object]`): shared by every `render`
+    field, whether its narrow structural-shorthand-only spelling (the events
+    block's own map) or the unified `RenderElection` spelling — the shape
+    check is the same regardless of the value form.
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty dict, or contains an empty key.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    for key in value:
+        if not key:
+            raise ValueError(f"{field_name} keys must be non-empty")
+
+
+# ---------------------------------------------------------------------------
 # Kafka connection config (streaming sink)
 # ---------------------------------------------------------------------------
 
@@ -98,6 +131,137 @@ class StrictBaseModel(BaseModel):
     """Base model rejecting unknown fields (extra='forbid')."""
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+
+# ---------------------------------------------------------------------------
+# Value rendering elections: the unified `render:` map's value forms
+# ---------------------------------------------------------------------------
+
+
+def _check_decimal_bounds(precision: int, scale: int, field_name: str) -> None:
+    """1 <= precision <= 38; 0 <= scale <= precision — shared by both decimal
+    spellings (the `render` map's `DecimalElection` and dimensional's
+    `derived: decimal` `DecimalSpec`).
+
+    Args:
+        precision: The declared precision.
+        scale: The declared scale.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `precision` outside 1..38, or `scale` outside 0..precision.
+    """
+    if not (1 <= precision <= 38):
+        raise ValueError(f"{field_name}: precision must be 1..38 (got {precision})")
+    if not (0 <= scale <= precision):
+        raise ValueError(
+            f"{field_name}: scale must be 0..precision"
+            f" (got scale={scale}, precision={precision})"
+        )
+
+
+def _check_json_precision_shape(leaves: "Mapping[str, int]", field_name: str) -> None:
+    """Leaf map non-empty; keys non-empty; 0 <= digits <= 12 — shared by both
+    json_precision spellings (the `render` map's `JsonPrecisionElection` and
+    dimensional's `derived: json_precision` `JsonPrecisionSpec`).
+
+    Args:
+        leaves: The declared top-level key -> fraction-digits map.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `leaves` is empty, has an empty key, or a digits value
+            outside 0..12.
+    """
+    if not leaves:
+        raise ValueError(f"{field_name}: leaf map must not be empty")
+    for key, digits in leaves.items():
+        if not key:
+            raise ValueError(f"{field_name}: keys must be non-empty")
+        if not (0 <= digits <= 12):
+            raise ValueError(
+                f"{field_name}: digits for key {key!r} must be 0..12 (got {digits})"
+            )
+
+
+class DecimalElection(StrictBaseModel):
+    """Numeric precision rendering: DOUBLE source -> DECIMAL(p, s)."""
+
+    decimal: tuple[int, int]
+    """(precision, scale); 1 <= precision <= 38, 0 <= scale <= precision."""
+
+    @model_validator(mode="after")
+    def decimal_bounds(self) -> Self:
+        """1 <= precision <= 38; 0 <= scale <= precision.
+
+        Raises:
+            ValueError: `precision` outside 1..38, or `scale` outside
+                0..precision.
+        """
+        precision, scale = self.decimal
+        _check_decimal_bounds(precision, scale, "decimal")
+        return self
+
+
+class InstantElection(StrictBaseModel):
+    """Payload sim-instant declaration: BIGINT ns source, rendered via the anchor through the shared instant-election vocabulary."""  # noqa: E501
+
+    instant: TemporalRender
+    """Which instant rendering the declared ns offset receives."""
+
+
+class JsonPrecisionElection(StrictBaseModel):
+    """In-place rounding of named top-level numeric leaves of a JSON payload."""
+
+    json_precision: dict[str, int]
+    """Top-level key -> fraction digits (0..12); non-empty."""
+
+    @model_validator(mode="after")
+    def json_precision_shape(self) -> Self:
+        """Leaf map non-empty; keys non-empty; 0 <= digits <= 12.
+
+        Raises:
+            ValueError: `json_precision` is empty, has an empty key, or a
+                digits value outside 0..12.
+        """
+        _check_json_precision_shape(self.json_precision, "json_precision")
+        return self
+
+
+class DateParseElection(StrictBaseModel):
+    """The declared parse, relocated into the unified render map; format semantics unchanged (validated by validate_date_parse_format)."""  # noqa: E501
+
+    date_parse: str
+    """strptime-style format; shared format rules."""
+
+    @model_validator(mode="after")
+    def format_valid(self) -> Self:
+        """`date_parse` denotes a complete date, a complete time, or both.
+
+        Raises:
+            ValueError: The format is empty, uses a directive outside the
+                closed set, violates a pairing rule, duplicates a temporal
+                field, or is neither date-complete nor time-complete (see
+                `validate_date_parse_format`).
+        """
+        validate_date_parse_format(self.date_parse, "render.date_parse")
+        return self
+
+
+RenderElection = (
+    TemporalRender
+    | DateParseElection
+    | InstantElection
+    | DecimalElection
+    | JsonPrecisionElection
+)
+"""A render-map value: a bare temporal-election literal (structural instant
+shorthand) or one typed election object. Source identity -> RenderElection."""
+
+StreamRenderElection = DecimalElection | JsonPrecisionElection
+"""A stream `render`-map value: the numeric elections only. Streaming's
+temporal exclusion admits no bare shorthand, `date_parse`, or `instant` form
+(design doc § Streaming attach)."""
 
 
 # ---------------------------------------------------------------------------
@@ -250,10 +414,153 @@ class ValueMapSpec(StrictBaseModel):
 
 
 class TimestampSpec(StrictBaseModel):
-    """A sim_time source column rendered as a wallclock TIMESTAMP via the anchor."""
+    """A sim_time source column rendered as an elected wallclock type via the anchor."""
 
     source: str
-    """The base-layer sim_time column to convert to a wallclock TIMESTAMP."""
+    """The base-layer sim_time column to convert."""
+    as_: TemporalRender | None = Field(None, alias="as")
+    """The instant rendering election. Absent (`None`) means the
+    mode-definitional default `timestamp` rendering — absence detection, not
+    an invented value. Any set value, `timestamp` included, is an explicit
+    election and makes the column anchor-required (business rule)."""
+
+
+class ScdWindowSpec(StrictBaseModel):
+    """An SCD-2 validity bound with an instant-rendering election."""
+
+    bound: Literal["valid_from", "valid_to"]
+    """Which validity bound this column carries."""
+    as_: TemporalRender = Field(alias="as")
+    """The instant rendering election — required. The object form exists to
+    elect (a bound-only object would duplicate the bare-literal shorthand),
+    so every object form is an explicit election with the same anchor
+    semantics as an explicit TimestampSpec election."""
+
+
+def scd_window_bound(
+    scd_window: "Literal['valid_from', 'valid_to'] | ScdWindowSpec | None",
+) -> "Literal['valid_from', 'valid_to'] | None":
+    """The validity bound of a `DerivedSpec.scd_window` field value.
+
+    The bare-literal shorthand and the object form carry the bound
+    differently; every reader of the field's bound goes through this one
+    function rather than re-deriving it.
+
+    Args:
+        scd_window: A `DerivedSpec.scd_window` field value.
+
+    Returns:
+        The bound, or None when `scd_window` is None.
+    """
+    if scd_window is None:
+        return None
+    if isinstance(scd_window, ScdWindowSpec):
+        return scd_window.bound
+    return scd_window
+
+
+def scd_window_render(
+    scd_window: "Literal['valid_from', 'valid_to'] | ScdWindowSpec",
+) -> TemporalRender:
+    """The instant-rendering election of a set `DerivedSpec.scd_window` value.
+
+    The bare-literal shorthand carries no election — the mode-definitional
+    default `timestamp` rendering (absence detection, not an invented value).
+
+    Args:
+        scd_window: A set (non-None) `DerivedSpec.scd_window` field value.
+
+    Returns:
+        The object form's `as_`, or `timestamp` for the bare literal.
+    """
+    if isinstance(scd_window, ScdWindowSpec):
+        return scd_window.as_
+    return "timestamp"
+
+
+def timestamp_render(spec: TimestampSpec) -> TemporalRender:
+    """The instant-rendering election of a `TimestampSpec`.
+
+    Absence (`as_ is None`) means the mode-definitional default `timestamp`
+    rendering — absence detection, not an invented value.
+
+    Args:
+        spec: A `TimestampSpec` field value.
+
+    Returns:
+        `spec.as_`, or `timestamp` when unset.
+    """
+    return spec.as_ if spec.as_ is not None else "timestamp"
+
+
+class DateParseSpec(StrictBaseModel):
+    """A declared reinterpretation of a VARCHAR source column as its format-denoted temporal type (DATE, TIME, or naive TIMESTAMP)."""  # noqa: E501
+
+    from_: str = Field(alias="from")
+    """The VARCHAR source column holding temporal strings (sidecar-validated)."""
+    format: str
+    """The author-declared parse format (closed strptime-directive set; see
+    validate_date_parse_format). Must denote a complete date, a complete
+    time, or both; validated at load time, never defaulted. The format is
+    the election — the denoted type is derived from it, never declared
+    separately."""
+
+    @model_validator(mode="after")
+    def format_denotes_a_temporal(self) -> Self:
+        """`from_` is non-empty; `format` denotes a complete temporal value.
+
+        Raises:
+            ValueError: `from_` is empty, or `format` is empty, uses a
+                directive outside the closed set, violates a pairing rule
+                (%I⇔%p, %M needs an hour, %S needs %M, %f/%g need %S),
+                duplicates a temporal field (a repeated directive, or two
+                alternative forms of one field), or is neither
+                date-complete nor time-complete.
+        """
+        _require_nonempty_str(self.from_, "date_parse.from")
+        validate_date_parse_format(self.format, "date_parse.format")
+        return self
+
+
+class DecimalSpec(StrictBaseModel):
+    """Dimensional derived spelling of the decimal election."""
+
+    from_: str = Field(alias="from")
+    """The grain-surface source column (DOUBLE payload column)."""
+    as_: tuple[int, int] = Field(alias="as")
+    """(precision, scale), same bounds as DecimalElection."""
+
+    @model_validator(mode="after")
+    def decimal_bounds(self) -> Self:
+        """1 <= precision <= 38; 0 <= scale <= precision.
+
+        Raises:
+            ValueError: `precision` outside 1..38, or `scale` outside
+                0..precision.
+        """
+        precision, scale = self.as_
+        _check_decimal_bounds(precision, scale, "derived.decimal")
+        return self
+
+
+class JsonPrecisionSpec(StrictBaseModel):
+    """Dimensional derived spelling of the json_precision election."""
+
+    from_: str = Field(alias="from")
+    """The grain-surface source column (VARCHAR JSON payload)."""
+    leaves: dict[str, int]
+    """Top-level key -> fraction digits (0..12); non-empty."""
+
+    @model_validator(mode="after")
+    def json_precision_shape(self) -> Self:
+        """Leaf map non-empty; keys non-empty; 0 <= digits <= 12.
+
+        Raises:
+            ValueError: `leaves` is empty, has an empty key, or a digits
+                value outside 0..12.
+        """
+        _check_json_precision_shape(self.leaves, "derived.json_precision")
+        return self
 
 
 class ElapsedSpec(StrictBaseModel):
@@ -268,8 +575,11 @@ class ElapsedSpec(StrictBaseModel):
     """The sim_time column on the counterpart row marking the interval start."""
     end_source: str
     """The sim_time column on this row marking the interval end."""
-    unit: Literal["minutes", "seconds", "hours"]
-    """The time unit for the computed delta output."""
+    unit: Literal["minutes", "seconds", "hours"] | None = None
+    """Numeric rendering: the delta divided to this unit (DOUBLE). Exclusive
+    with `as_`; exactly one of the two is required (exactly_one_rendering)."""
+    as_: Literal["interval"] | None = Field(None, alias="as")
+    """Typed rendering: the delta as an INTERVAL. Exclusive with `unit`."""
 
     @model_validator(mode="after")
     def other_where_non_empty(self) -> Self:
@@ -290,26 +600,51 @@ class ElapsedSpec(StrictBaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def exactly_one_rendering(self) -> Self:
+        """Exactly one of `unit` / `as_` is set.
+
+        Omitting both is an error (no default rendering is invented);
+        setting both is an error (the elections contradict).
+
+        Raises:
+            ValueError: Neither or both of `unit` / `as_` is set.
+        """
+        if (self.unit is None) == (self.as_ is None):
+            raise ValueError(
+                "elapsed must set exactly one of 'unit' / 'as'"
+                f" (got unit={self.unit!r}, as={self.as_!r})"
+            )
+        return self
+
 
 class DerivedSpec(StrictBaseModel):
-    """A computed column; exactly one of the five derivation kinds is set."""
+    """A computed column; exactly one of the eight derivation kinds is set."""
 
     ordinal: OrdinalSpec | None = None
     """Assigns a ROW_NUMBER within a partition ordered by a named column."""
     value_map: ValueMapSpec | None = None
     """Substitutes source values via a lookup table; unmapped values become NULL."""
     timestamp: TimestampSpec | None = None
-    """Converts a sim_time source column to a wallclock TIMESTAMP via the anchor."""
-    scd_window: Literal["valid_from", "valid_to"] | None = None
-    """Fills the SCD-2 validity bound — valid_from or valid_to — for this column."""
+    """Converts a sim_time source column to an elected wallclock type via the anchor."""
+    scd_window: Literal["valid_from", "valid_to"] | ScdWindowSpec | None = None
+    """Bare literal (shorthand, default rendering) or the object form
+    carrying an instant-rendering election."""
     elapsed: ElapsedSpec | None = None
     """Computes a cross-row time delta between two correlated events."""
+    date_parse: DateParseSpec | None = None
+    """Declared VARCHAR->DATE reinterpretation of a source column."""
+    decimal: DecimalSpec | None = None
+    """Numeric precision rendering of a DOUBLE grain-surface column."""
+    json_precision: JsonPrecisionSpec | None = None
+    """In-place leaf rounding of a VARCHAR JSON grain-surface column."""
 
     @model_validator(mode="after")
     def exactly_one_derived(self) -> Self:
         """A DerivedSpec sets exactly one derived kind.
 
-        Exactly one of ordinal/value_map/timestamp/scd_window/elapsed must be set.
+        Exactly one of ordinal/value_map/timestamp/scd_window/elapsed/
+        date_parse/decimal/json_precision must be set.
         """
         set_fields = [
             f
@@ -319,13 +654,17 @@ class DerivedSpec(StrictBaseModel):
                 ("timestamp", self.timestamp),
                 ("scd_window", self.scd_window),
                 ("elapsed", self.elapsed),
+                ("date_parse", self.date_parse),
+                ("decimal", self.decimal),
+                ("json_precision", self.json_precision),
             ]
             if v is not None
         ]
         if len(set_fields) != 1:
             raise ValueError(
                 "DerivedSpec must set exactly one of"
-                " ordinal/value_map/timestamp/scd_window/elapsed; "
+                " ordinal/value_map/timestamp/scd_window/elapsed/date_parse/"
+                "decimal/json_precision; "
                 f"got {len(set_fields)}: {set_fields}"
             )
         return self
@@ -374,6 +713,11 @@ class ColumnDecl(StrictBaseModel):
     """Emits a NULL column — a placeholder the author intends to fill externally."""
     lookup: LookupClause | None = None
     """Enriches the row with a type-1 scalar property of a related record."""
+    description: str | None = None
+    """Author-supplied rendered description for this output column. Replaces
+    the inherited (or forge-pinned) description in the companion README and
+    manifest; unit and declared-value resolution are unaffected. Absent ->
+    inheritance as before. Non-empty when present."""
 
     @model_validator(mode="before")
     @classmethod
@@ -419,6 +763,16 @@ class ColumnDecl(StrictBaseModel):
             ValueError: `name` does not match ^[A-Za-z_][A-Za-z0-9_]*$.
         """
         _require_sql_identifier(self.name, "column name")
+        return self
+
+    @model_validator(mode="after")
+    def description_nonempty(self) -> Self:
+        """`description`, when present, is non-empty and non-whitespace.
+
+        Raises:
+            ValueError: `description` is present and empty or whitespace-only.
+        """
+        _require_nonblank_str(self.description, f"column '{self.name}'.description")
         return self
 
 
@@ -479,6 +833,10 @@ class TableDecl(StrictBaseModel):
     """The output column names forming the primary key of this table."""
     columns: list[ColumnDecl]
     """The ordered list of output column declarations for this table."""
+    description: str | None = None
+    """Author-supplied rendered description for this output table. Replaces
+    the forwarded source-table description in the companion README and
+    manifest. Absent -> forwarding as before."""
 
     @model_validator(mode="after")
     def name_is_sql_identifier(self) -> Self:
@@ -502,11 +860,13 @@ class TableDecl(StrictBaseModel):
 
     @model_validator(mode="after")
     def non_empty_collections(self) -> Self:
-        """columns and key are non-empty."""
+        """columns and key are non-empty; description, when present, is
+        non-empty and non-whitespace."""
         if not self.columns:
             raise ValueError(f"table '{self.name}': 'columns' must not be empty")
         if not self.key:
             raise ValueError(f"table '{self.name}': 'key' must not be empty")
+        _require_nonblank_str(self.description, f"table '{self.name}': 'description'")
         return self
 
     @model_validator(mode="after")
@@ -599,20 +959,44 @@ class RenameEntry(StrictBaseModel):
     `event_sim_time`, `record_id`, `presentation_id`, `prop__<p>`). Never the derived
     default output name, so two source columns that share a default output name stay
     individually addressable."""
+    descriptions: dict[str, str] | None = None
+    """Source column identity -> author-supplied rendered description, keyed
+    like `columns` (state-at column identities). Replaces the inherited
+    description in the companion README and manifest. Keys validated at plan
+    time against the target table's columns. Counts toward the entry's
+    at-least-one-field rule. Absent -> inheritance as before."""
+    description: str | None = None
+    """Author-supplied rendered description for the entry's target table.
+    Replaces the forwarded source-table description in the companion README
+    and manifest. Counts toward the entry's at-least-one-field rule.
+    Absent -> forwarding as before."""
 
     @model_validator(mode="after")
     def entry_well_formed(self) -> Self:
-        """At least one of name/columns is set; columns (when present) is non-empty
-        with non-empty keys/values and distinct values; name/table/sub_type
+        """At least one of name/columns/descriptions/description is set;
+        columns (when present) is non-empty with non-empty keys/values and
+        distinct values; descriptions (when present) is non-empty with
+        non-empty keys and non-empty, non-whitespace values; description
+        (when present) is non-empty and non-whitespace; name/table/sub_type
         (when set) are non-empty strings.
 
         Raises:
-            ValueError: Neither name nor columns is set; columns is empty or has
-                an empty key/value; two columns entries share an output name; or
-                name/table/sub_type is an empty string.
+            ValueError: None of name/columns/descriptions/description is
+                set; columns is empty or has an empty key/value; two columns
+                entries share an output name; descriptions is empty or has
+                an empty key or a blank value; description is empty or
+                whitespace-only; or name/table/sub_type is an empty string.
         """
-        if self.name is None and self.columns is None:
-            raise ValueError("RenameEntry must set at least one of name / columns")
+        if (
+            self.name is None
+            and self.columns is None
+            and self.descriptions is None
+            and self.description is None
+        ):
+            raise ValueError(
+                "RenameEntry must set at least one of name / columns /"
+                " descriptions / description"
+            )
         if not self.table:
             raise ValueError("RenameEntry.table must be a non-empty string")
         if self.sub_type is not None and not self.sub_type:
@@ -638,6 +1022,8 @@ class RenameEntry(StrictBaseModel):
                     "RenameEntry.columns values must be distinct (two source"
                     f" columns may not rename to one output name): {duplicate_values}"
                 )
+        _require_descriptions_map_valid(self.descriptions, "RenameEntry.descriptions")
+        _require_nonblank_str(self.description, "RenameEntry.description")
         return self
 
     @model_validator(mode="after")
@@ -677,12 +1063,24 @@ def _require_nonempty_str(value: str, field_name: str) -> None:
         raise ValueError(f"{field_name} must be non-empty")
 
 
-def _require_distinct_nonempty_tuple(
-    value: tuple[str, ...] | None, field_name: str
-) -> None:
-    """A tuple field: when present, non-empty, with distinct entries.
+def _require_nonblank_str(value: str | None, field_name: str) -> None:
+    """Reject a present-but-blank author-supplied optional string field.
 
-    Shared by every declared-table / events-source list-valued field
+    Args:
+        value: The field's value, or None when absent (legal, not checked).
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is present and empty or whitespace-only.
+    """
+    if value is not None and not value.strip():
+        raise ValueError(f"{field_name} must be non-empty when present")
+
+
+def _require_distinct_nonempty(value: "Sequence[str] | None", field_name: str) -> None:
+    """A list/tuple field: when present, non-empty, with distinct entries.
+
+    Shared by every declared-table / events-source / stream list-valued field
     (`sub_types`, `columns`, `only`, `ignore`) — the parse-time rule applies
     identically to all of them.
 
@@ -691,7 +1089,7 @@ def _require_distinct_nonempty_tuple(
         field_name: The field's dotted name, for the error message.
 
     Raises:
-        ValueError: `value` is an empty tuple, or contains a duplicate entry.
+        ValueError: `value` is empty, or contains a duplicate entry.
     """
     if value is None:
         return
@@ -767,7 +1165,8 @@ def _require_dict_entries_nonempty(
     Shared by every dict-valued field whose grammar refuses empty keys or
     values on top of `_require_rename_map_valid`'s present-but-empty /
     distinct-values checks (`SourceEventSourceDecl.rename`,
-    `SourceConfig.kind_labels`).
+    `SourceConfig.kind_labels`, `KindStream.rename`, `MembershipStream.rename`,
+    `StreamConfig.kind_labels`).
 
     Args:
         value: The field's value, or None when absent.
@@ -783,6 +1182,38 @@ def _require_dict_entries_nonempty(
             raise ValueError(f"{field_name} keys must be non-empty")
         if not target:
             raise ValueError(f"{field_name} values must be non-empty")
+
+
+def _require_descriptions_map_valid(
+    value: dict[str, str] | None, field_name: str
+) -> None:
+    """A `descriptions` map: when present, non-empty, with non-empty keys and
+    non-empty, non-whitespace values.
+
+    Shared by `SourceTableDecl.descriptions` and `RenameEntry.descriptions` —
+    both key an author-supplied rendered description by source column
+    identity, and neither carries rename semantics, so no distinct-values
+    check applies (unlike `_require_rename_map_valid`).
+
+    Args:
+        value: The field's value, or None when absent.
+        field_name: The field's dotted name, for the error message.
+
+    Raises:
+        ValueError: `value` is an empty dict, has an empty key, or a value
+            that is empty or whitespace-only.
+    """
+    if value is None:
+        return
+    if not value:
+        raise ValueError(f"{field_name} must be non-empty when present")
+    for key, prose in value.items():
+        if not key:
+            raise ValueError(f"{field_name} keys must be non-empty")
+        if not prose.strip():
+            raise ValueError(
+                f"{field_name} values must be non-empty and non-whitespace"
+            )
 
 
 def _require_exactly_one_population_source(
@@ -834,6 +1265,23 @@ class SourceTableDecl(StrictBaseModel):
     properties of the subject kind (gated at plan time): source column names
     (`prop__<p>`) with `kind`, bare owner-property names with `membership`.
     Absent = every row of the selected populations."""
+    render: "dict[str, RenderElection] | None" = None
+    """Per-column rendering election, keyed by source identity (e.g.
+    `created_sim_time`, `prop__error_rate`). A bare temporal literal elects a
+    structural instant column (shorthand); a typed election object elects a
+    payload column (`prop__<p>` on `state`, `elem__<f>` on `junction`). One
+    column, one election; keys and shape validated at plan time. Absent =
+    default rendering."""
+    descriptions: dict[str, str] | None = None
+    """Source column identity -> author-supplied rendered description, keyed
+    like `rename` (source identity, never the output name). Replaces the
+    inherited description in the companion README and manifest for the
+    addressed output column. Keys validated at plan time against the table's
+    source columns. Absent -> inheritance as before."""
+    description: str | None = None
+    """Author-supplied rendered description for this output table. Replaces
+    the forwarded source-table description in the companion README and
+    manifest. Absent -> forwarding as before."""
 
     @model_validator(mode="after")
     def table_shape(self) -> Self:
@@ -844,16 +1292,26 @@ class SourceTableDecl(StrictBaseModel):
                 `membership` is set; `sub_types` / `columns` is
                 present-but-empty or carries a duplicate entry; `rename` is
                 present-but-empty or two keys share a target value; `where` is
-                present-but-empty or has an empty key. (Value emptiness /
-                duplication is carried by `PredicateValue` per entry.)
+                present-but-empty or has an empty key; `render` is
+                present-but-empty or has an empty key; `descriptions` is
+                present-but-empty or has an empty key or a blank value;
+                `description` is present and empty or whitespace-only.
+                (Value emptiness / duplication is carried by `PredicateValue`
+                per entry; each `render` entry's own shape is carried by its
+                `RenderElection` model.)
         """
         _require_nonempty_str(self.name, "SourceTableDecl.name")
         label = f"table {self.name!r}"
         _require_exactly_one_population_source(self.kind, self.membership, label)
-        _require_distinct_nonempty_tuple(self.sub_types, "SourceTableDecl.sub_types")
-        _require_distinct_nonempty_tuple(self.columns, "SourceTableDecl.columns")
+        _require_distinct_nonempty(self.sub_types, "SourceTableDecl.sub_types")
+        _require_distinct_nonempty(self.columns, "SourceTableDecl.columns")
         _require_rename_map_valid(self.rename, "SourceTableDecl.rename")
         _require_where_map_valid(self.where, "SourceTableDecl.where")
+        _require_render_map_valid(self.render, "SourceTableDecl.render")
+        _require_descriptions_map_valid(
+            self.descriptions, "SourceTableDecl.descriptions"
+        )
+        _require_nonblank_str(self.description, "SourceTableDecl.description")
         return self
 
 
@@ -906,11 +1364,9 @@ class SourceEventSourceDecl(StrictBaseModel):
         """
         label = "events source"
         _require_exactly_one_population_source(self.kind, self.membership, label)
-        _require_distinct_nonempty_tuple(
-            self.sub_types, "SourceEventSourceDecl.sub_types"
-        )
-        _require_distinct_nonempty_tuple(self.only, "SourceEventSourceDecl.only")
-        _require_distinct_nonempty_tuple(self.ignore, "SourceEventSourceDecl.ignore")
+        _require_distinct_nonempty(self.sub_types, "SourceEventSourceDecl.sub_types")
+        _require_distinct_nonempty(self.only, "SourceEventSourceDecl.only")
+        _require_distinct_nonempty(self.ignore, "SourceEventSourceDecl.ignore")
         if self.only is not None and self.ignore is not None:
             raise ValueError(f"{label}: 'only' and 'ignore' are mutually exclusive")
         if self.item_type is not None:
@@ -929,17 +1385,22 @@ class SourceEventsDecl(StrictBaseModel):
     sources: tuple[SourceEventSourceDecl, ...]
     """Audited populations, >= 1 entry, pairwise-disjoint (gated at plan
     time — `SourceEventSourceOverlap`)."""
+    render: dict[str, TemporalRender] | None = None
+    """Rendering election for the log's instant column, keyed by source
+    identity (`event_sim_time`, the log's one legal key)."""
 
     @model_validator(mode="after")
     def events_shape(self) -> Self:
         """The declaration's structural shape (design doc § Config Models).
 
         Raises:
-            ValueError: `name` is empty, or `sources` is empty.
+            ValueError: `name` is empty, `sources` is empty, or `render` is
+                present-but-empty or has an empty key.
         """
         _require_nonempty_str(self.name, "SourceEventsDecl.name")
         if not self.sources:
             raise ValueError("SourceEventsDecl.sources must be non-empty (>= 1 entry)")
+        _require_render_map_valid(self.render, "SourceEventsDecl.render")
         return self
 
 
@@ -1022,6 +1483,52 @@ class SourceConfig(StrictBaseModel):
         return self
 
 
+def _duplicate_tables(entries: "list[RenameEntry] | list[BaseRenderDecl]") -> list[str]:
+    """Return `table` values appearing more than once across `entries`, in order.
+
+    Args:
+        entries: A list of entries each carrying a `table` attribute.
+
+    Returns:
+        The `table` value of each repeat occurrence past the first.
+    """
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for entry in entries:
+        if entry.table in seen:
+            duplicates.append(entry.table)
+        seen.add(entry.table)
+    return duplicates
+
+
+class BaseRenderDecl(StrictBaseModel):
+    """Per-table rendering elections for the base mode."""
+
+    table: str
+    """The sidecar `records__<kind>` table this entry targets (the same
+    keying as the mode's rename entries; targets disjoint across entries)."""
+    render: "dict[str, RenderElection] | None" = None
+    """Per-column election, keyed on pre-default identities (e.g.
+    `created_sim_time`, `prop__error_rate`). A bare temporal literal elects
+    a structural lifecycle column (shorthand); a typed object elects a
+    payload column (`prop__<p>`). `last_mutation_sim_time` is outside the
+    key domain. One column, one election; keys and shape validated at
+    plan time. Absent = default rendering."""
+
+    @model_validator(mode="after")
+    def entry_well_formed(self) -> Self:
+        """`table` is non-empty; `render` is well-formed.
+
+        Raises:
+            ValueError: `table` is empty, or `render` is present-but-empty
+                or has an empty key. (Each entry's own shape is carried by
+                its `RenderElection` model.)
+        """
+        _require_nonempty_str(self.table, "BaseRenderDecl.table")
+        _require_render_map_valid(self.render, "BaseRenderDecl.render")
+        return self
+
+
 class BaseConfig(StrictBaseModel):
     """The base-mode section: presentation escape hatches plus an optional point-in-time slice."""  # noqa: E501
 
@@ -1033,6 +1540,8 @@ class BaseConfig(StrictBaseModel):
     `records__<kind>` name. `columns` keys are state-at column identities
     (`record_id`, `presentation_id`, `created_sim_time`, `active`,
     `deactivated_at`, `prop__<p>`). `sub_type` rejected; `table` targets disjoint."""
+    render: list[BaseRenderDecl] | None = None
+    """Per-table rendering elections; entries' `table` targets disjoint."""
     slice_at: int | None = None
     """Inclusive point-in-time horizon (sim-time ns). Absent -> tape's end.
     Mutually exclusive with `incremental` (enforced on ExportConfig)."""
@@ -1046,7 +1555,7 @@ class BaseConfig(StrictBaseModel):
     @model_validator(mode="after")
     def at_least_one_field(self) -> Self:
         """A present `base` section sets at least one of
-        exclude/rename/slice_at/declare_keys.
+        exclude/rename/render/slice_at/declare_keys.
 
         Raises:
             ValueError: An empty `base: {}` block; omit the section instead.
@@ -1054,8 +1563,8 @@ class BaseConfig(StrictBaseModel):
         if not self.model_fields_set:
             raise ValueError(
                 "base section must set at least one of exclude / rename /"
-                " slice_at / declare_keys (an empty base: {} block is not"
-                " meaningful; omit the section for a bare current-state dump)"
+                " render / slice_at / declare_keys (an empty base: {} block is"
+                " not meaningful; omit the section for a bare current-state dump)"
             )
         return self
 
@@ -1090,22 +1599,25 @@ class BaseConfig(StrictBaseModel):
 
     @model_validator(mode="after")
     def entries_disjoint(self) -> Self:
-        """No two rename entries share a `table` target.
+        """No two rename entries, and no two render entries, share a `table` target.
 
         Raises:
-            ValueError: Two rename entries target the same table.
+            ValueError: Two rename entries, or two render entries, target the
+                same table.
         """
         if self.rename is not None:
-            seen: set[str] = set()
-            duplicates: list[str] = []
-            for entry in self.rename:
-                if entry.table in seen:
-                    duplicates.append(entry.table)
-                seen.add(entry.table)
-            if duplicates:
+            rename_duplicates = _duplicate_tables(self.rename)
+            if rename_duplicates:
                 raise ValueError(
                     "base.rename contains more than one entry for the same"
-                    f" table: {duplicates}"
+                    f" table: {rename_duplicates}"
+                )
+        if self.render is not None:
+            render_duplicates = _duplicate_tables(self.render)
+            if render_duplicates:
+                raise ValueError(
+                    "base.render contains more than one entry for the same"
+                    f" table: {render_duplicates}"
                 )
         return self
 
@@ -1223,6 +1735,21 @@ class ExportConfig(StrictBaseModel):
     today. Kind/sub-type existence, registry declaration, and union safety
     are export-time gates against the sidecar, not parse-time checks (the
     config is emit-independent)."""
+    readme_overlay: str | None = None
+    """Path to the author's README overlay markdown, resolved against the
+    config file's directory by whoever loaded the config — the model never
+    touches the filesystem. Absent: the README renders from the mode template
+    and derived facts alone."""
+
+    @model_validator(mode="after")
+    def readme_overlay_nonempty(self) -> Self:
+        """A present `readme_overlay` is a non-empty, non-whitespace string.
+
+        Raises:
+            ValueError: `readme_overlay` is present and empty or whitespace-only.
+        """
+        _require_nonblank_str(self.readme_overlay, "readme_overlay")
+        return self
 
     @model_validator(mode="after")
     def keys_well_formed(self) -> Self:
@@ -1367,16 +1894,55 @@ class KindStream(StrictBaseModel):
     non-empty and duplicate-free when present. Omitted on a sub-typed kind =
     the full discriminator domain. A flat kind refuses it (business pass)."""
 
+    identity: list[KeySurface] | None = None
+    """The identity surfaces this topic publishes; must contain the stream's
+    elected surface (business pass). Non-empty and duplicate-free when
+    present. Absent: the elected surface alone."""
+
     properties: list[str]
     """Bare property names projected into the after-image — required, no
     default: `[]` must be written to declare a notification feed (identity-only
     payload; the event set is payload-independent). Never `prop__`-prefixed;
     duplicate-free."""
+    render: "dict[str, StreamRenderElection] | None" = None
+    """Per-property numeric rendering election, keyed by bare property name
+    (a member of `properties`). `decimal` / `json_precision` only — no
+    temporal election attaches to streaming (design doc § Streaming attach).
+    Absent = default rendering."""
+
+    where: dict[str, PredicateValue] | None = None
+    """Row predicate over the declared kind, keyed by bare constant-class
+    payload-property name; entries AND-joined (gated at validation time).
+    Absent = every row of the scoped populations."""
+    only: list[str] | None = None
+    """Change-scope subset by bare property name; mutually exclusive with
+    `ignore`. Governs u-event membership only — projection is `properties`.
+    Absent (with `ignore` absent) = the kind's full audited set."""
+    ignore: list[str] | None = None
+    """Change-scope exclusion by bare property name; mutually exclusive with
+    `only`."""
+    rename: dict[str, str] | None = None
+    """Selected bare property name -> after-image output key; additionally, a
+    published identity surface's contract column name -> that surface's wire
+    name (legality against the published set is a business rule). Keys are
+    source identities, never output keys."""
+    kind_label: str | None = None
+    """This stream's envelope `kind` value, verbatim, overriding the
+    kind_labels / kind-name default. Non-empty when present. Feed
+    presentation, not a kind claim — shareable across streams; must not
+    equal a different kind's rendered name (business pass)."""
 
     @model_validator(mode="after")
     def kind_stream_well_formed(self) -> Self:
         """name matches the topic-name rule; properties never prop__-prefixed
-        and duplicate-free; sub_types non-empty and duplicate-free when present.
+        and duplicate-free; sub_types non-empty and duplicate-free when
+        present; identity non-empty and duplicate-free when present (whether
+        it contains the elected surface, and whether the kind can source
+        each member, are business rules); render present-but-empty or
+        empty-keyed rejected; where present-but-empty or empty-keyed
+        rejected; only/ignore mutually exclusive, each distinct and
+        non-empty when present; rename present-but-empty, empty-keyed/valued,
+        or colliding-target rejected; kind_label non-empty when present.
 
         Raises:
             ValueError: Any of the above.
@@ -1392,6 +1958,19 @@ class KindStream(StrictBaseModel):
                     " present (omit the field for the full discriminator domain)"
                 )
             _reject_duplicate_names(self.sub_types, f"stream {self.name!r}: sub_types")
+        _require_distinct_nonempty(self.identity, f"stream {self.name!r}: identity")
+        _require_render_map_valid(self.render, f"stream {self.name!r}: render")
+        _require_where_map_valid(self.where, f"stream {self.name!r}: where")
+        _require_distinct_nonempty(self.only, f"stream {self.name!r}: only")
+        _require_distinct_nonempty(self.ignore, f"stream {self.name!r}: ignore")
+        if self.only is not None and self.ignore is not None:
+            raise ValueError(
+                f"stream {self.name!r}: 'only' and 'ignore' are mutually exclusive"
+            )
+        _require_rename_map_valid(self.rename, f"stream {self.name!r}: rename")
+        _require_dict_entries_nonempty(self.rename, f"stream {self.name!r}: rename")
+        if self.kind_label is not None:
+            _require_nonempty_str(self.kind_label, f"stream {self.name!r}: kind_label")
         return self
 
 
@@ -1404,15 +1983,50 @@ class MembershipStream(StrictBaseModel):
     membership: MembershipRef
     """The membership table."""
 
+    identity: list[KeySurface] | None = None
+    """The **owner** identity surfaces this topic publishes; must contain the
+    owner's elected surface (business pass). Non-empty and duplicate-free
+    when present. Absent: the owner's elected surface alone."""
+
     fields: list[str]
     """Bare element-schema field names — required, no default: `[]` must be
     written to declare an owner-identity-only feed. Never `elem__`/`member__`-
     prefixed; duplicate-free."""
+    render: "dict[str, StreamRenderElection] | None" = None
+    """Per-field numeric rendering election, keyed by bare element-schema
+    field name (a member of `fields`). `decimal` / `json_precision` only; a
+    reference field is outside the domain (reference identity is key
+    election's surface). Absent = default rendering."""
+
+    sub_types: list[str] | None = None
+    """Owner sub-type subset — the stream's addressed owner population set,
+    resolved per row through the parent lookup. Non-empty and duplicate-free
+    when present; absent = every declared owner sub-type. The owner kind
+    must be sub-typed (business pass)."""
+    where: dict[str, PredicateValue] | None = None
+    """Row predicate over the OWNER kind, keyed by bare constant-class
+    owner-property name; entries AND-joined. Element fields are not
+    predicate-addressable. Absent = every owner's intervals."""
+    rename: dict[str, str] | None = None
+    """Selected bare element-field name -> after-image output key; additionally,
+    a published owner identity surface's contract column name -> that surface's
+    wire name (legality against the published set is a business rule). A
+    reference field's entry renames its expanded `<f>_kind` / `<f>_id`
+    pair in place. The Debezium `event` column is not addressable."""
+    kind_label: str | None = None
+    """This stream's envelope `kind` value (the owner-kind slot), verbatim.
+    Non-empty when present."""
 
     @model_validator(mode="after")
     def membership_stream_well_formed(self) -> Self:
         """name matches the topic-name rule; fields never elem__/member__-
-        prefixed and duplicate-free.
+        prefixed and duplicate-free; identity non-empty and duplicate-free
+        when present (whether it contains the owner's elected surface, and
+        whether the owner kind can source each member, are business rules);
+        render present-but-empty or empty-keyed rejected; sub_types
+        non-empty and duplicate-free when present; where present-but-empty
+        or empty-keyed rejected; rename present-but-empty, empty-keyed/valued,
+        or colliding-target rejected; kind_label non-empty when present.
 
         Raises:
             ValueError: Any of the above.
@@ -1421,6 +2035,14 @@ class MembershipStream(StrictBaseModel):
         label = f"stream {self.name!r}: fields"
         _reject_prefixed_names(self.fields, ("elem__", "member__"), label)
         _reject_duplicate_names(self.fields, label)
+        _require_distinct_nonempty(self.identity, f"stream {self.name!r}: identity")
+        _require_render_map_valid(self.render, f"stream {self.name!r}: render")
+        _require_distinct_nonempty(self.sub_types, f"stream {self.name!r}: sub_types")
+        _require_where_map_valid(self.where, f"stream {self.name!r}: where")
+        _require_rename_map_valid(self.rename, f"stream {self.name!r}: rename")
+        _require_dict_entries_nonempty(self.rename, f"stream {self.name!r}: rename")
+        if self.kind_label is not None:
+            _require_nonempty_str(self.kind_label, f"stream {self.name!r}: kind_label")
         return self
 
 
@@ -1623,6 +2245,25 @@ class StreamConfig(StrictBaseModel):
     """Optional Kafka connection block; None ⇒ bootstrap comes from --bootstrap-servers
     or FABEXPORT_KAFKA_BOOTSTRAP. The optional-block `= None` exception, mirroring
     rebase / debezium / clock. Inert unless --sink kafka."""
+    kind_labels: dict[str, str] | None = None
+    """Engine kind -> domain label, applied at every kind-name-as-value
+    site: the envelope `kind` default and membership member-kind payload
+    values. Non-empty when present; keys/values non-empty; no two keys share
+    a label (parse time). Kind existence and masquerade-refusal are gated at
+    validation time. Absent: identity fall-through, verbatim kind names."""
+
+    @model_validator(mode="after")
+    def kind_labels_well_formed(self) -> Self:
+        """kind_labels non-empty when present; keys and values non-empty; no
+        two keys share one label.
+
+        Raises:
+            ValueError: The map is empty, a key or value is the empty
+                string, or two kinds map to one label.
+        """
+        _require_rename_map_valid(self.kind_labels, "StreamConfig.kind_labels")
+        _require_dict_entries_nonempty(self.kind_labels, "StreamConfig.kind_labels")
+        return self
 
     @model_validator(mode="after")
     def streams_match_content(self) -> Self:

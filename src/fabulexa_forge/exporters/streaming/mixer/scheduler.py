@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Awaitable, Callable, Literal
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import StreamConfig
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.streaming.types import StreamEvent
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -105,6 +106,7 @@ def seed_mixer_run(
     anchor: "EffectiveAnchor | None",
     sidecar: "Sidecar",
     transport: Transport,
+    notice_sink: "NoticeSink",
 ) -> "tuple[dict[str, deque[StreamEvent]], ControlState, FrontierState]":
     """Drain the engine once into per-topic buffers and build the initial mixer state.
 
@@ -129,6 +131,9 @@ def seed_mixer_run(
         sidecar: The open emit's sidecar view — the source of each selected kind's
             declared sub-type set via ``subtype_values``.
         transport: The launch transport (playing, speed) from the mixer-verb flags.
+        notice_sink: The caller-supplied notice receiver, passed through
+            verbatim to iter_stream_events (required — a caller wanting
+            silence passes a discarding sink).
 
     Returns:
         A triple of (per-topic FIFO buffers keyed by topic, the seeded ControlState,
@@ -149,7 +154,7 @@ def seed_mixer_run(
 
     buffers: dict[str, deque[StreamEvent]] = {t: deque() for t in topics_ordered}
 
-    for event in iter_stream_events(emit, config, anchor):
+    for event in iter_stream_events(emit, config, anchor, notice_sink):
         buffers[event.topic].append(event)
 
     content = config.content

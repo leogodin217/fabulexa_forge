@@ -1,0 +1,12 @@
+streams:
+  team__members:
+    # Owner t002 (name Bravo) fails `where: {name: Alpha}`, so its whole
+    # interval is dropped — the join@2d and the leave@3d both vanish. Only
+    # t001's open interval survives, and an open interval emits a join alone.
+    event_count: 1
+    contains_events:
+      - seq: 1
+        op: join
+        kind: team
+        record_id: t001       # the owner (team) is the message key
+        after.role: lead

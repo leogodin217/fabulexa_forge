@@ -31,6 +31,7 @@ import yaml
 from _support.sidecar_builder import identity_column as _identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
+import fabulexa_forge.cli
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from exporters.base._base_fixtures import build_base_test_emit
 from exporters.source._source_fixtures import build_day_scale_source_emit
@@ -107,6 +108,9 @@ def build_two_branch_emit(tmp_path: Path) -> Path:
             {"fork_path": "trunk", "parent": None, "slice_at": 0},
             {"fork_path": "trunk@branch_a", "parent": "trunk", "slice_at": 50},
         ],
+        # The vendored schema pins branches to exactly one entry; the
+        # multi-branch guard fixture is schema-invalid by construction.
+        schema_valid=False,
     )
     return tmp_path
 
@@ -204,6 +208,59 @@ def test_cmd_export_duckdb_success(
     exit_code = cmd_export(emit_dir, config_path, out_db, "duckdb")
     assert exit_code == 0
     assert out_db.exists()
+
+
+# ---------------------------------------------------------------------------
+# Tests — session-zone pin
+# ---------------------------------------------------------------------------
+
+
+def test_cmd_export_pins_session_when_anchor_resolves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cmd_export pins the session zone when a sidecar runtime anchor resolves."""
+    calls: list[object] = []
+    real_pin = fabulexa_forge.cli.pin_session_timezone
+
+    def _recording_pin(emit: object, anchor: object) -> None:
+        calls.append(anchor)
+        real_pin(emit, anchor)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(fabulexa_forge.cli, "pin_session_timezone", _recording_pin)
+
+    emit_dir = build_runtime_emit(
+        tmp_path / "emit", "2024-01-15T12:00:00+00:00", "America/New_York"
+    )
+    config_path = tmp_path / "config.yaml"
+    write_minimal_config(config_path)
+    out_dir = tmp_path / "out_csv"
+    out_dir.mkdir()
+
+    exit_code = cmd_export(emit_dir, config_path, out_dir, "csv")
+    assert exit_code == 0
+    assert len(calls) == 1
+
+
+def test_cmd_export_does_not_pin_when_anchor_is_none(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """cmd_export never touches session state when no anchor resolves."""
+    calls: list[object] = []
+    monkeypatch.setattr(
+        fabulexa_forge.cli,
+        "pin_session_timezone",
+        lambda emit, anchor: calls.append(anchor),
+    )
+
+    emit_dir = build_single_branch_emit(tmp_path / "emit")
+    config_path = tmp_path / "config.yaml"
+    write_minimal_config(config_path)
+    out_dir = tmp_path / "out_csv"
+    out_dir.mkdir()
+
+    exit_code = cmd_export(emit_dir, config_path, out_dir, "csv")
+    assert exit_code == 0
+    assert calls == []
 
 
 # ---------------------------------------------------------------------------
@@ -793,7 +850,7 @@ def test_next_without_incremental_block_exit_1(
 def test_next_drip_duckdb_to_drained(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--next drip exits 0 each window (label-prefixed counts), exits 3 when drained."""
+    """--next drip exits 0 each window (label-prefixed row counts), exits 3 when drained."""
     emit_dir = build_incremental_emit(tmp_path, slice_at=250)
     config_path = tmp_path / "config.yaml"
     write_incremental_config(config_path)
@@ -814,9 +871,12 @@ def test_next_drip_duckdb_to_drained(
         f"Expected 0 before drain, got {exit_codes}"
     )
 
-    # Each 0-exit window printed a label-prefixed count line
+    # Each 0-exit window printed a label-prefixed row-count line: the
+    # windowed manifest's own row_count stays None, but stdout restores the
+    # real per-table count (sourced from the writer's WrittenRelation).
     for stdout in all_stdout[:-1]:
         assert "[w" in stdout, f"Expected label-prefix in: {stdout!r}"
+        assert " rows" in stdout, f"Expected row count in: {stdout!r}"
 
     # Drained message on stdout
     last_stdout = all_stdout[-1]
@@ -884,7 +944,7 @@ def test_main_next_drip_duckdb(
 def test_from_to_fresh_target_exit_0(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """--from/--to to a fresh target exits 0 with label-prefixed counts."""
+    """--from/--to to a fresh target exits 0 with label-prefixed row counts."""
     emit_dir = build_incremental_emit(tmp_path, slice_at=250)
     config_path = tmp_path / "config.yaml"
     write_incremental_config(config_path)
@@ -902,6 +962,10 @@ def test_from_to_fresh_target_exit_0(
     assert exit_code == 0
     assert out.exists()
     assert "[r_ns0_ns200]" in captured.out
+    # A windowed export restores per-table row counts on stdout (the
+    # windowed manifest's own row_count stays None; this is presentation
+    # only, sourced from the writer's WrittenRelation).
+    assert " rows" in captured.out
 
 
 def test_from_to_existing_target_exit_1(

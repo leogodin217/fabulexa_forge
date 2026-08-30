@@ -24,7 +24,12 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.config.models import (
@@ -263,7 +268,7 @@ def build_star_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
         extra={
-            "enum_domains": {"entity": {"entity_type": ["alpha", "beta"]}},
+            "enum_domains": {"entity": {"entity_type": enum_options("alpha", "beta")}},
             "presentation_keys": _ALPHA_ONLY_PRESENTATION_KEYS,
         },
     )
@@ -486,7 +491,9 @@ def build_three_subtype_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
         extra={
-            "enum_domains": {"entity": {"entity_type": ["alpha", "beta", "gamma"]}},
+            "enum_domains": {
+                "entity": {"entity_type": enum_options("alpha", "beta", "gamma")}
+            },
         },
     )
     return tmp_path
@@ -815,7 +822,7 @@ def build_union_unsafe_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
         extra={
-            "enum_domains": {"entity": {"entity_type": ["alpha", "beta"]}},
+            "enum_domains": {"entity": {"entity_type": enum_options("alpha", "beta")}},
             "presentation_keys": _UNSAFE_PRESENTATION_KEYS,
         },
     )
@@ -1026,7 +1033,7 @@ def build_pit_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
         extra={
-            "enum_domains": {"owner": {"owner_type": ["alpha", "beta"]}},
+            "enum_domains": {"owner": {"owner_type": enum_options("alpha", "beta")}},
             "presentation_keys": _OWNER_ALPHA_ONLY_PRESENTATION_KEYS,
         },
     )
@@ -1187,7 +1194,7 @@ def build_guard_emit(
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
         extra={
-            "enum_domains": {"entity": {"entity_type": ["alpha", "beta"]}},
+            "enum_domains": {"entity": {"entity_type": enum_options("alpha", "beta")}},
             "presentation_keys": _GUARD_PRESENTATION_KEYS,
         },
     )
@@ -1290,7 +1297,7 @@ def test_incremental_driver_export_window_threads_election(tmp_path: Path) -> No
     window = Window(index=None, start_ns=0, end_ns=1_000, label="w")
     with open_emit(emit_dir) as emit:
         export_window(
-            emit, config, out, "duckdb", None, window, None, discard_notice_sink
+            emit, config, out, "duckdb", None, window, None, discard_notice_sink, None
         )
 
     conn = duckdb.connect(str(out), read_only=True)
@@ -1359,10 +1366,12 @@ def test_keys_field_changes_incremental_fingerprint(tmp_path: Path) -> None:
     out = tmp_path / "wh.duckdb"
 
     with open_emit(emit_dir) as emit:
-        export_incremental_next(emit, keyed, out, "duckdb", None, discard_notice_sink)
+        export_incremental_next(
+            emit, keyed, out, "duckdb", None, discard_notice_sink, None
+        )
 
     with open_emit(emit_dir) as emit:
         with pytest.raises(IncrementalFingerprintMismatch):
             export_incremental_next(
-                emit, unkeyed, out, "duckdb", None, discard_notice_sink
+                emit, unkeyed, out, "duckdb", None, discard_notice_sink, None
             )

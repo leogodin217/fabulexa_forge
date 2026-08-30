@@ -1,0 +1,19 @@
+tables:
+  dim_patient:
+    columns: [patient_id, name, status, valid_from, valid_to]
+    row_count: 4
+    contains_rows:
+      # DATE-grained bounds instead of TIMESTAMP; the open/current version's
+      # valid_to stays null under the date election too.
+      - patient_id: p001
+        status: pending
+        valid_from: 2024-01-02
+        valid_to: 2024-01-03
+      - patient_id: p001
+        status: discharged
+        valid_from: 2024-01-04
+        valid_to: null
+      - patient_id: p002
+        status: pending
+        valid_from: 2024-01-03
+        valid_to: null

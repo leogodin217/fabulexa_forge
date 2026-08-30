@@ -14,7 +14,12 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.anchor import resolve_effective_anchor
@@ -155,7 +160,7 @@ def _build_export_emit(tmp_path: Path) -> Path:
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 1000}],
         extra={
             "enum_domains": {
-                "journey_instance": {"entity_type": ["type_a", "type_b"]},
+                "journey_instance": {"entity_type": enum_options("type_a", "type_b")},
             }
         },
     )
@@ -252,17 +257,24 @@ def test_export_dimensional_csv_writes_one_file_per_table(tmp_path: Path) -> Non
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(
-            emit, config, out_dir, "csv", None, notice_sink=discard_notice_sink
+        report = export_dimensional(
+            emit,
+            config,
+            out_dir,
+            "csv",
+            None,
+            discard_notice_sink,
+            None,
         )
 
-    assert set(counts.keys()) == {
+    table_names = {table.name for table in report.tables}
+    assert table_names == {
         "dim_actor",
         "dim_journey",
         "fact_journey_event",
         "fact_empty",
     }
-    for table_name in counts:
+    for table_name in table_names:
         assert (out_dir / f"{table_name}.csv").exists()
 
 
@@ -274,11 +286,18 @@ def test_export_dimensional_csv_empty_table_is_header_only(tmp_path: Path) -> No
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(
-            emit, config, out_dir, "csv", None, notice_sink=discard_notice_sink
+        report = export_dimensional(
+            emit,
+            config,
+            out_dir,
+            "csv",
+            None,
+            discard_notice_sink,
+            None,
         )
 
-    assert counts["fact_empty"] == 0
+    row_counts = {table.name: table.row_count for table in report.tables}
+    assert row_counts["fact_empty"] == 0
     csv_path = out_dir / "fact_empty.csv"
     assert csv_path.exists()
     rows = list(csv.reader(csv_path.read_text(encoding="utf-8").splitlines()))
@@ -293,11 +312,18 @@ def test_export_dimensional_duckdb_writes_all_tables(tmp_path: Path) -> None:
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(
-            emit, config, out_path, "duckdb", None, notice_sink=discard_notice_sink
+        report = export_dimensional(
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            None,
         )
 
-    assert set(counts.keys()) == {
+    table_names = {table.name for table in report.tables}
+    assert table_names == {
         "dim_actor",
         "dim_journey",
         "fact_journey_event",
@@ -321,11 +347,18 @@ def test_export_dimensional_duckdb_empty_table_typed_not_dropped(
     config = _make_export_config()
 
     with open_emit(emit_dir) as emit:
-        counts = export_dimensional(
-            emit, config, out_path, "duckdb", None, notice_sink=discard_notice_sink
+        report = export_dimensional(
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            None,
         )
 
-    assert counts["fact_empty"] == 0
+    row_counts = {table.name: table.row_count for table in report.tables}
+    assert row_counts["fact_empty"] == 0
     out_conn = duckdb.connect(str(out_path), read_only=True)
     schema = out_conn.execute("DESCRIBE fact_empty").fetchall()
     out_conn.close()
@@ -343,14 +376,28 @@ def test_export_dimensional_idempotent_csv(tmp_path: Path) -> None:
     out_dir2.mkdir()
 
     with open_emit(emit_dir) as emit:
-        counts1 = export_dimensional(
-            emit, config, out_dir1, "csv", None, notice_sink=discard_notice_sink
+        report1 = export_dimensional(
+            emit,
+            config,
+            out_dir1,
+            "csv",
+            None,
+            discard_notice_sink,
+            None,
         )
     with open_emit(emit_dir) as emit:
-        counts2 = export_dimensional(
-            emit, config, out_dir2, "csv", None, notice_sink=discard_notice_sink
+        report2 = export_dimensional(
+            emit,
+            config,
+            out_dir2,
+            "csv",
+            None,
+            discard_notice_sink,
+            None,
         )
 
+    counts1 = {table.name: table.row_count for table in report1.tables}
+    counts2 = {table.name: table.row_count for table in report2.tables}
     assert counts1 == counts2
     for table_name in counts1:
         f1 = (out_dir1 / f"{table_name}.csv").read_bytes()
@@ -367,14 +414,28 @@ def test_export_dimensional_idempotent_duckdb_row_counts(tmp_path: Path) -> None
     out2 = tmp_path / "out2.duckdb"
 
     with open_emit(emit_dir) as emit:
-        counts1 = export_dimensional(
-            emit, config, out1, "duckdb", None, notice_sink=discard_notice_sink
+        report1 = export_dimensional(
+            emit,
+            config,
+            out1,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            None,
         )
     with open_emit(emit_dir) as emit:
-        counts2 = export_dimensional(
-            emit, config, out2, "duckdb", None, notice_sink=discard_notice_sink
+        report2 = export_dimensional(
+            emit,
+            config,
+            out2,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            None,
         )
 
+    counts1 = {table.name: table.row_count for table in report1.tables}
+    counts2 = {table.name: table.row_count for table in report2.tables}
     assert counts1 == counts2
 
 
@@ -389,7 +450,13 @@ def test_export_dimensional_writer_failure_raises_export_runtime_error(
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportRuntimeError):
             export_dimensional(
-                emit, config, bad_path, "duckdb", None, notice_sink=discard_notice_sink
+                emit,
+                config,
+                bad_path,
+                "duckdb",
+                None,
+                discard_notice_sink,
+                None,
             )
 
 
@@ -508,7 +575,13 @@ def test_records_grain_instant_columns_validate_and_export(tmp_path: Path) -> No
         sidecar_runtime = emit.sidecar.runtime()
         anchor = resolve_effective_anchor(sidecar_runtime, None, None, None)
         export_dimensional(
-            emit, config, out_path, "duckdb", anchor, notice_sink=discard_notice_sink
+            emit,
+            config,
+            out_path,
+            "duckdb",
+            anchor,
+            discard_notice_sink,
+            None,
         )
 
     conn = duckdb.connect(str(out_path), read_only=True)

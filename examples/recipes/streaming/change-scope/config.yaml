@@ -1,0 +1,47 @@
+# Recipe: streaming / change-scope
+# ============================================================
+# Narrow which property changes spawn a `u` — without narrowing what the
+# after-image carries.
+#
+# Two different lists, routinely conflated:
+#   - `properties` is the PAYLOAD PROJECTION — which properties ride the
+#     `after` image of every emitted event.
+#   - `only` / `ignore` is the CHANGE SCOPE — which history-tracked properties
+#     are audited for change, and so which `u` events EXIST at all.
+#
+# A property can sit in one list and not the other. Here `shift` is projected
+# but out of scope: its 3d change spawns no event, yet `shift` still rides
+# every emitted after-image at its as-of value. Change scope governs the event
+# set; projection governs the payload. Neither one implies the other.
+#
+# `only` and `ignore` are mutually exclusive (a load-time error together) and
+# are exact complements over the kind's audited set. On this two-property kind,
+# `ignore: [shift]` is the same stream as the `only: [status]` written below;
+# `ignore: [status]` is its mirror — it would keep the 3d shift `u` and drop
+# the 2d status `u`. Omit both for the kind's full audited set.
+#
+# Fixture world (recipe emit):
+#   records__team — the only kind with two history-tracked properties.
+#     t001 "Alpha" (surgical) created@1d
+#          status forming@1d -> active@2d ;  shift day@1d -> night@3d
+#     t002 "Bravo" (nursing)  created@2d
+#          status forming@2d ;               shift day@2d
+#   Genesis history rows fold into the `c` after-image and spawn no `u`, so
+#   full change scope would emit 4 events: c t001, c t002, u t001 (status@2d),
+#   u t001 (shift@3d). No team is deactivated, so there are no `d` events.
+#
+# Output (one team.jsonl stream, global seq order) — the shift `u` is gone,
+# but `shift` is on every payload:
+#   seq 1  c t001  after {status: forming, shift: day}
+#   seq 2  c t002  after {status: forming, shift: day}
+#   seq 3  u t001  after {status: active,  shift: day}   <- status changed;
+#                                                           shift rides along
+#   (no event at 3d for shift night — out of change scope)
+
+content: state-changes
+
+streams:
+  - name: team
+    kind: team
+    properties: [status, shift]   # payload projection — BOTH ride every event
+    only: [status]                # change scope — only status spawns a `u`

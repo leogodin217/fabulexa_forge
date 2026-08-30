@@ -1,0 +1,56 @@
+# Recipe: table-descriptions
+# ============================================================
+# The author description overrides, both granularities: a table-level
+# `description:` on the table entry and a per-column `description:` on a
+# column entry. Each replaces the description the companion README and
+# manifest would otherwise forward/inherit for that table or column —
+# author-first, prose only (units, declared-value lists, and the data
+# itself are untouched).
+#
+# Where the effect lands: the companion artifacts written beside the
+# dataset (`<prefix>-readme.md` / `<prefix>-manifest.json`). The DATASET
+# IS BYTE-IDENTICAL with or without every `description` below
+# (documentation inertness) — which is why this recipe's expect.yaml is
+# identical to table-column-rename's. The overrides pair naturally with
+# renaming: once `customer` / `full_name` replace the simulator's nouns,
+# only the author knows the prose that describes them in that vocabulary.
+#
+# Rules:
+#   - Non-empty, non-whitespace when present; there is no "render
+#     nothing" spelling — to suppress inherited prose, write better prose.
+#   - The override replaces the description ONLY; an inherited unit still
+#     rides along under the ordinary unit rules.
+#
+# Fixture world (recipe emit):
+#   records__patient — record_id, prop__name, created_sim_time
+#                      p001 Alice created@1*DAY, p002 Bob created@2*DAY
+#
+# Output:
+#   customer — 2 rows; identical data to table-column-rename, with the
+#              table and two columns re-described in the companions
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: customer
+      role: dim
+      scd: type1
+      # Table-level override: replaces the forwarded source-table
+      # (`tables[].description`) prose in the README/manifest.
+      description: "One row per registered customer, at their latest state."
+      source:
+        grain: records
+        kind: patient
+      key: [customer_id]
+      columns:
+        - name: customer_id
+          from: record_id
+        - name: full_name
+          from: prop__name
+          # Column-level override: replaces the description inherited
+          # from the source column (prop__name's sidecar prose).
+          description: "The customer's display name, as entered at sign-up."
+        - name: signed_up_at
+          from: created_sim_time
+          description: "When the customer record was created (sim-time ns)."

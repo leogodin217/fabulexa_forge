@@ -16,15 +16,18 @@ streaming-declared-streams.md § `init --mode streaming` inference contract):
 - Name collision -- a kind name vs. a sub-type value, and the membership
   `<K>_<p>` underscore ambiguity -- later entry commented, config parses.
 - Topic-illegal sub-type value -> commented, naming the rule and the value.
-- `keys:` proposal: presentation_id for registry-declared, record_index
-  otherwise; a gate failure degrades the implicated kind with a comment.
+- `keys:` proposal: uniform `record_index` active for every population,
+  `presentation_id` offered as a commented alternative only where
+  registry-declared; the retired degradation mechanism never emits
+  `NOTE: ElectionUnionUnsafe`.
 - Each membership table -> one commented stream in the membership-events
   alternative, `fields` bare.
 - No records kind, and all-names-illegal -> `StreamInitNothingToStream`.
 - An emit predating per-column temporal classes -> `TemporalClassUnavailableError`.
 - Non-exempt `slice_only` columns are never proposed; one notice each.
-- The `rebase`/`debezium`/`clock`/`kafka` blocks are never proposed, named in
-  a trailing comment.
+- The `rebase`/`debezium`/`clock`/`kafka` blocks and the authoring fields
+  (`rename`/`kind_label`/`kind_labels`/`where`/`only`/`ignore`/`identity`/
+  membership `sub_types`) are never proposed, named in a trailing comment.
 - Round-trip: the emitted text parses into a `StreamConfig` and
   `iter_stream_events` runs clean, including the membership alternative
   uncommented wholesale.
@@ -37,7 +40,12 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column, prop_column, write_emit
+from _support.sidecar_builder import (
+    enum_options,
+    identity_column,
+    prop_column,
+    write_emit,
+)
 
 from exporters.source._source_fixtures import build_source_test_emit
 from exporters.streaming._election_fixtures import (
@@ -81,7 +89,7 @@ def _assert_round_trip_streams_clean(
     cfg_path.write_text(content, encoding="utf-8")
     config = load_stream_config(cfg_path)
     with open_emit(emit_dir) as emit:
-        list(iter_stream_events(emit, config, None))
+        list(iter_stream_events(emit, config, None, notice_sink=discard_notice_sink))
 
 
 def _uncomment_membership_alternative(content: str) -> str:
@@ -175,8 +183,9 @@ def test_flat_kind_properties_are_bare_prop_columns_only(tmp_path: Path) -> None
     build_source_test_emit(tmp_path)
     content = _generate(tmp_path)
     assert (
-        "    - name: order\n      kind: order\n      properties: [location_id, amount]\n"
-        in content
+        "    - name: order\n      kind: order\n      properties:\n"
+        "        - location_id\n"
+        "        - amount\n" in content
     )
     assert "ref_index" not in content
 
@@ -212,7 +221,7 @@ def _build_gizmo_partition_emit(tmp_path: Path) -> Path:
         tables=[_table_spec("records__gizmo", "records", _GIZMO_COLUMNS, 1, "gizmo")],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
-            "enum_domains": {"gizmo": {"gizmo_type": ["alpha", "beta"]}},
+            "enum_domains": {"gizmo": {"gizmo_type": enum_options("alpha", "beta")}},
             "sub_type_columns": {
                 "gizmo": {"alpha": ["prop__weight"], "beta": ["prop__color"]}
             },
@@ -232,13 +241,15 @@ def test_subtyped_kind_partition_prunes_to_owned_columns(tmp_path: Path) -> None
         "    - name: alpha\n"
         "      kind: gizmo\n"
         "      sub_types: [alpha]\n"
-        "      properties: [weight]\n" in content
+        "      properties:\n"
+        "        - weight\n" in content
     )
     assert (
         "    - name: beta\n"
         "      kind: gizmo\n"
         "      sub_types: [beta]\n"
-        "      properties: [color]\n" in content
+        "      properties:\n"
+        "        - color\n" in content
     )
     assert "gizmo_type" not in content
     assert "sidecar carries no sub_type_columns partition" not in content
@@ -281,7 +292,8 @@ def test_subtyped_kind_missing_partition_falls_back_to_union_with_comment(
         "    - name: consultant\n"
         "      kind: actor\n"
         "      sub_types: [consultant]\n"
-        "      properties: [name]\n" in content
+        "      properties:\n"
+        "        - name\n" in content
     )
     assert (
         "    # NOTE: the sidecar carries no sub_type_columns partition for kind"
@@ -291,7 +303,8 @@ def test_subtyped_kind_missing_partition_falls_back_to_union_with_comment(
         "    - name: nurse\n"
         "      kind: actor\n"
         "      sub_types: [nurse]\n"
-        "      properties: [name]\n" in content
+        "      properties:\n"
+        "        - name\n" in content
     )
 
 
@@ -310,7 +323,9 @@ def test_lifecycle_only_flat_population_live_under_comment(tmp_path: Path) -> No
         " lifecycle-only (c/d events only) -- delete to opt out\n"
         "    - name: location\n"
         "      kind: location\n"
-        "      properties: [name, region]\n" in content
+        "      properties:\n"
+        "        - name\n"
+        "        - region\n" in content
     )
 
 
@@ -362,7 +377,7 @@ def _build_kind_subtype_collision_emit(tmp_path: Path) -> Path:
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"catalog": {"catalog_type": ["product"]}}},
+        extra={"enum_domains": {"catalog": {"catalog_type": enum_options("product")}}},
     )
     return tmp_path
 
@@ -376,8 +391,10 @@ def test_kind_and_subtype_name_collision_comments_out_later_proposal(
     _build_kind_subtype_collision_emit(tmp_path)
     content = _generate(tmp_path)
     assert (
-        "    - name: product\n      kind: product\n      properties: [status]\n"
-        in content
+        "    - name: product\n"
+        "      kind: product\n"
+        "      properties:\n"
+        "        - status\n" in content
     )
     assert (
         "    # NOTE: name 'product' collides with an earlier proposal above;"
@@ -469,7 +486,8 @@ def test_membership_underscore_ambiguity_collision(tmp_path: Path) -> None:
     assert (
         "#   - name: a_b_c\n"
         "#     membership: {kind: a_b, property: c}\n"
-        "#     fields: [seat]\n" in content
+        "#     fields:\n"
+        "#       - seat\n" in content
     )
     assert (
         "#   # NOTE: name 'a_b_c' collides with an earlier proposal; excluded"
@@ -528,7 +546,7 @@ def _build_topic_illegal_subtype_emit(tmp_path: Path) -> Path:
             _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"gadget2": {"gadget2_type": ["bad type"]}}},
+        extra={"enum_domains": {"gadget2": {"gadget2_type": enum_options("bad type")}}},
     )
     return tmp_path
 
@@ -539,8 +557,10 @@ def test_topic_illegal_subtype_value_commented_never_sanitized(tmp_path: Path) -
     _build_topic_illegal_subtype_emit(tmp_path)
     content = _generate(tmp_path)
     assert (
-        "    - name: widget2\n      kind: widget2\n      properties: [status]\n"
-        in content
+        "    - name: widget2\n"
+        "      kind: widget2\n"
+        "      properties:\n"
+        "        - status\n" in content
     )
     assert (
         "    # NOTE: sub-type value 'bad type' of kind 'gadget2' is not a legal"
@@ -555,41 +575,55 @@ def test_topic_illegal_subtype_value_commented_never_sanitized(tmp_path: Path) -
 
 
 # ---------------------------------------------------------------------------
-# `keys:` proposal, self-gated
+# `keys:` proposal — uniform record_index active, resolvability alternatives
 # ---------------------------------------------------------------------------
 
 
-def test_keys_registry_declared_proposes_presentation_id(tmp_path: Path) -> None:
-    """A registry-declared, gate-safe population proposes `presentation_id`;
-    an undeclared population proposes `record_index`."""
+def test_keys_registry_declared_proposes_presentation_id_alternative(
+    tmp_path: Path,
+) -> None:
+    """Every population proposes the uniform `record_index` active election;
+    a registry-declared population additionally offers `presentation_id` as
+    a commented alternative, an undeclared one offers only `record_id`."""
     build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
     content = _generate(tmp_path)
-    assert "  widget: presentation_id\n" in content
+    assert "  # widget: presentation_id\n  widget: record_index\n" in content
+    assert "# gadget: presentation_id" not in content
     assert "  gadget: record_index\n" in content
-    assert "  person: presentation_id\n" in content
-    assert "  pet: presentation_id\n" in content
+    assert "  # person: presentation_id\n  person: record_index\n" in content
+    assert "  # pet: presentation_id\n  pet: record_index\n" in content
 
 
-def test_keys_gate_failure_degrades_to_record_index_with_comment(
+def test_keys_pairwise_unsafe_declaration_proposes_clean_no_degradation(
     tmp_path: Path,
 ) -> None:
     """`creature`'s declared-but-pairwise-unsafe election, gated against
-    `trainer.prop__pet_id`'s reference edge, degrades to uniform
-    `record_index` with a comment naming the forcing gate."""
+    `trainer.prop__pet_id`'s reference edge, proposes the uniform
+    `record_index` per-sub-type map cleanly -- the degradation mechanism is
+    retired, so no `NOTE: ElectionUnionUnsafe` comment appears anywhere."""
     build_election_emit(tmp_path, presentation_keys=FULL_REGISTRY)
     content = _generate(tmp_path)
-    assert "  creature: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "ElectionUnionUnsafe" not in content
+    assert (
+        "  creature:\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # cat: record_id\n"
+        "    # cat: presentation_id\n"
+        "    cat: record_index\n" in content
+    )
 
 
 def test_keys_undeclared_registry_proposes_record_index(tmp_path: Path) -> None:
     """No `presentation_keys` block at all -> every population proposes the
-    `record_index` scalar."""
+    `record_index` scalar, with only the record_id alternative commented."""
     build_election_emit(tmp_path, presentation_keys=None)
     content = _generate(tmp_path)
-    assert "  widget: record_index\n" in content
-    assert "  person: record_index\n" in content
-    assert "  pet: record_index\n" in content
-    assert "  creature: record_index\n" in content
+    assert "  # widget: record_id\n  widget: record_index\n" in content
+    assert "  # person: record_id\n  person: record_index\n" in content
+    assert "  # pet: record_id\n  pet: record_index\n" in content
+    assert "  # creature: record_id\n  creature: record_index\n" in content
+    assert "presentation_id" not in content
 
 
 _MIN_PERSON_COLS: list[dict[str, object]] = [
@@ -673,23 +707,32 @@ def _build_membership_member_field_degrade_emit(tmp_path: Path) -> Path:
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
         extra={
-            "enum_domains": {"creature": {"creature_type": ["cat", "dog"]}},
+            "enum_domains": {"creature": {"creature_type": enum_options("cat", "dog")}},
             "presentation_keys": CREATURE_UNSAFE_REGISTRY,
         },
     )
     return tmp_path
 
 
-def test_keys_membership_member_field_reference_degrades_admitted_kind(
+def test_keys_membership_member_field_kind_proposes_clean_no_degradation(
     tmp_path: Path,
 ) -> None:
-    """A membership stream's reference-valued member field alone admits
-    `creature` to the edge gate -- its pairwise-unsafe presentation_id claims
-    degrade it to `record_index`, with no kind-shaped stream reference
-    involved at all."""
+    """`propose_key_election` reads the sidecar's known kinds directly, not
+    edge admission: `creature`'s pairwise-unsafe presentation_id claims still
+    propose cleanly as the uniform `record_index` per-sub-type map, with no
+    `NOTE: ElectionUnionUnsafe` comment, even though no kind-shaped stream
+    references it -- only a membership member field does."""
     _build_membership_member_field_degrade_emit(tmp_path)
     content = _generate(tmp_path)
-    assert "  creature: record_index  # NOTE: ElectionUnionUnsafe" in content
+    assert "ElectionUnionUnsafe" not in content
+    assert (
+        "  creature:\n"
+        "    # NOTE: an uncommented alternative below SWAPS the active line"
+        " for this population -- delete the active line, don't just uncomment\n"
+        "    # cat: record_id\n"
+        "    # cat: presentation_id\n"
+        "    cat: record_index\n" in content
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -708,7 +751,9 @@ def test_membership_table_proposes_commented_stream_with_bare_fields(
     assert (
         "#   - name: visit_team\n"
         "#     membership: {kind: visit, property: team}\n"
-        "#     fields: [role_name, actor]\n" in content
+        "#     fields:\n"
+        "#       - role_name\n"
+        "#       - actor\n" in content
     )
 
 
@@ -760,7 +805,11 @@ def _build_all_names_illegal_emit(tmp_path: Path) -> Path:
             _table_spec("records__onlybad", "records", _ONLYBAD_COLUMNS, 0, "onlybad")
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
-        extra={"enum_domains": {"onlybad": {"onlybad_type": ["bad one", "bad/two"]}}},
+        extra={
+            "enum_domains": {
+                "onlybad": {"onlybad_type": enum_options("bad one", "bad/two")}
+            }
+        },
     )
     return tmp_path
 
@@ -848,7 +897,7 @@ def test_slice_only_column_never_proposed_one_notice(tmp_path: Path) -> None:
     _build_slice_only_notice_emit(tmp_path)
     content, sink = _generate_recording_notices(tmp_path)
     assert "zone_note" not in content
-    assert "properties: [status]" in content
+    assert "properties:\n        - status\n" in content
     slice_only_notices = [
         n for n in sink.notices if n.code == "slice-only-column-omitted"
     ]
@@ -877,6 +926,233 @@ def test_delivery_blocks_never_proposed_trailing_comment(tmp_path: Path) -> None
         "# knobs, not emit-derived. Add them yourself, e.g. debezium:"
         " {table_identity: source_table, ...}\n" in content
     )
+
+
+def test_authoring_fields_never_proposed_trailing_comment(tmp_path: Path) -> None:
+    """`rename`/`kind_label`/`kind_labels`/`where`/`only`/`ignore`/`identity`/
+    membership `sub_types` are never proposed -- `init` proposes no
+    `identity` block, joining streaming's never-proposed list; the trailing
+    comment names them alongside the delivery blocks, and the proposal is
+    otherwise unchanged and parse-clean."""
+    build_source_test_emit(tmp_path)
+    content = _generate(tmp_path)
+    live_lines = [
+        line for line in content.splitlines() if not line.strip().startswith("#")
+    ]
+    for field in (
+        "rename:",
+        "kind_label:",
+        "kind_labels:",
+        "where:",
+        "only:",
+        "ignore:",
+        "identity:",
+    ):
+        assert not any(line.strip().startswith(field) for line in live_lines)
+    membership_block = content.split("# Alternative")[1]
+    assert "sub_types:" not in membership_block
+    assert (
+        "# rename: / kind_label: / kind_labels: / where: / only: / ignore: /"
+        " identity: / sub_types: (membership) --\n"
+        "# never proposed either; each is author intent with no sidecar-derived"
+        " value (proposing one would be invention). Add them yourself.\n" in content
+    )
+    _assert_round_trip_streams_clean(tmp_path, content, tmp_path)
+
+
+# ---------------------------------------------------------------------------
+# `init` documentation annotations (documentation-channel Phase 6)
+# ---------------------------------------------------------------------------
+
+#: A documented flat `location` kind (a tracked, documented `name`; an
+#: untracked, documented-with-unit `capacity`; an undocumented `notes`) plus
+#: a documented, sub-typed `vehicle` kind (car/truck, a partially-glossed
+#: domain, an undocumented discriminator, a documented `label`) that owns a
+#: `passengers` membership table with a documented reference field
+#: (`rider`) and an undocumented plain field (`seat`).
+_DOC_LOCATION_COLUMNS: list[dict[str, object]] = [
+    *_IDENTITY_PREFIX,
+    prop_column(
+        "prop__name",
+        "VARCHAR",
+        history_tracked=True,
+        temporal_class="tracked",
+        description="Human-readable location name.",
+    ),
+    prop_column(
+        "prop__capacity",
+        "BIGINT",
+        history_tracked=False,
+        temporal_class="constant",
+        description="Maximum occupancy.",
+        unit="people",
+    ),
+    prop_column(
+        "prop__notes", "VARCHAR", history_tracked=False, temporal_class="constant"
+    ),
+]
+
+_DOC_VEHICLE_COLUMNS: list[dict[str, object]] = [
+    *_IDENTITY_PREFIX,
+    prop_column(
+        "prop__vehicle_type",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+    ),
+    prop_column(
+        "prop__label",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        description="Vehicle's fleet label.",
+    ),
+]
+
+_DOC_PASSENGERS_COLUMNS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "joined_sim_time", "type": "BIGINT"},
+    {"name": "left_sim_time", "type": "BIGINT"},
+    {"name": "elem__seat", "type": "VARCHAR"},
+    {
+        "name": "member__rider__kind",
+        "type": "VARCHAR",
+        "description": "Kind of the passenger riding this vehicle.",
+    },
+    {"name": "member__rider__id", "type": "VARCHAR"},
+]
+
+
+def _build_documented_streaming_emit(
+    tmp_path: Path, *, scenario_description: str | None
+) -> Path:
+    """A documented flat `location` kind plus a documented, sub-typed
+    `vehicle` kind owning a `passengers` membership table."""
+    conn = duckdb.connect(str(tmp_path / "run.duckdb"))
+    conn.execute(_ddl("records__location", _DOC_LOCATION_COLUMNS))
+    conn.execute(_ddl("records__vehicle", _DOC_VEHICLE_COLUMNS))
+    conn.execute(_ddl("membership__vehicle__passengers", _DOC_PASSENGERS_COLUMNS))
+    conn.execute(_ddl("history", _HISTORY_COLUMNS))
+    conn.execute(
+        'INSERT INTO "records__location" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)',
+        ["trunk", "loc1", 10, True, 10, 0, "Central Depot", 40, None],
+    )
+    conn.execute(
+        'INSERT INTO "records__vehicle" VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?)',
+        ["trunk", "veh1", 10, True, 10, 0, "car", "Shuttle-1"],
+    )
+    conn.execute(
+        'INSERT INTO "membership__vehicle__passengers" VALUES (?, ?, ?, NULL, ?, ?, ?)',
+        ["trunk", "veh1", 5, "1A", "location", "loc1"],
+    )
+    conn.execute(
+        'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+        ["trunk", "location", "loc1", "name", 10, "Central Depot"],
+    )
+    conn.close()
+    car_option, truck_option = enum_options("car", "truck")
+    car_option["description"] = "A passenger car."
+    location_table = _table_spec(
+        "records__location", "records", _DOC_LOCATION_COLUMNS, 1, "location"
+    )
+    location_table["description"] = "Physical locations recorded during the run."
+    vehicle_table = _table_spec(
+        "records__vehicle", "records", _DOC_VEHICLE_COLUMNS, 1, "vehicle"
+    )
+    vehicle_table["description"] = "Vehicles operating in the fleet."
+    passengers_table = _membership_table_spec(
+        "membership__vehicle__passengers",
+        _DOC_PASSENGERS_COLUMNS,
+        1,
+        "vehicle",
+        "passengers",
+    )
+    passengers_table["description"] = "Passengers riding each vehicle."
+    extra: dict[str, object] = {
+        "enum_domains": {"vehicle": {"vehicle_type": [car_option, truck_option]}}
+    }
+    if scenario_description is not None:
+        extra["scenario_description"] = scenario_description
+    write_emit(
+        tmp_path,
+        tables=[
+            location_table,
+            vehicle_table,
+            passengers_table,
+            _table_spec("history", "fixed", _HISTORY_COLUMNS, 1),
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
+        extra=extra,
+    )
+    return tmp_path
+
+
+def test_scenario_comment_present_when_declared(tmp_path: Path) -> None:
+    """A declared `scenario_description` renders as a `# Scenario:` block."""
+    _build_documented_streaming_emit(
+        tmp_path, scenario_description="A city fleet simulation."
+    )
+    content = _generate(tmp_path)
+    assert "# Scenario:\n#   A city fleet simulation.\n" in content
+
+
+def test_scenario_comment_absent_when_not_declared(tmp_path: Path) -> None:
+    """No `scenario_description` -> no `# Scenario:` block anywhere."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert "# Scenario:" not in content
+
+
+def test_table_description_annotates_stream_stub(tmp_path: Path) -> None:
+    """Each stream's source table's description comments its stub."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert "    # Physical locations recorded during the run.\n" in content
+    assert "    # Vehicles operating in the fleet.\n" in content
+
+
+def test_sub_type_gloss_on_sub_types_line(tmp_path: Path) -> None:
+    """A glossed sub-type value's `sub_types:` line carries the gloss."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert "sub_types: [car]  # A passenger car.\n" in content
+
+
+def test_property_entries_carry_description_and_unit(tmp_path: Path) -> None:
+    """Block-style `properties:` entries carry description (+ unit);
+    undocumented properties carry no comment."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert (
+        "      properties:\n"
+        "        - name  # Human-readable location name.\n"
+        "        - capacity  # Maximum occupancy. (people)\n"
+        "        - notes\n" in content
+    )
+    assert "        - label  # Vehicle's fleet label.\n" in content
+
+
+def test_membership_alternative_annotates_reference_field(tmp_path: Path) -> None:
+    """The membership alternative's reference field reads its
+    `member__<f>__kind` documentation; the undocumented plain field
+    carries no comment."""
+    _build_documented_streaming_emit(tmp_path, scenario_description=None)
+    content = _generate(tmp_path)
+    assert "#   # Passengers riding each vehicle.\n" in content
+    assert (
+        "#       - seat\n"
+        "#       - rider  # Kind of the passenger riding this vehicle.\n" in content
+    )
+
+
+def test_documented_proposal_streams_clean(tmp_path: Path) -> None:
+    """The annotated candidate config still parses and streams clean."""
+    _build_documented_streaming_emit(
+        tmp_path, scenario_description="A city fleet simulation."
+    )
+    content = _generate(tmp_path)
+    _assert_round_trip_streams_clean(tmp_path, content, tmp_path)
 
 
 # ---------------------------------------------------------------------------

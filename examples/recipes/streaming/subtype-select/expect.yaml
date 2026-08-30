@@ -8,4 +8,4 @@ streams:
         op: c
         kind: staff
         record_id: s001
-        after.prop__name: Nora Vega
+        after.name: Nora Vega

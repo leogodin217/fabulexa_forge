@@ -69,7 +69,7 @@ See [`architecture/reader.md`](architecture/reader.md) and
   `enum_domains`, per-column `references`, and the per-column temporal pair
   (`history_tracked` + the `Sidecar.temporal_class` narrowing accessor — verbatim
   carry, never inferred) — all read from the sidecar, never hard-coded.
-- ✓ **Conformance C1–C14** — reimplemented independently of the producer (`fabulexa-forge
+- ✓ **Conformance C1–C15** — reimplemented independently of the producer (`fabulexa-forge
   validate <emit_dir>`). The producer's reference conformance checker is a reference to
   read, never a dependency.
 - ✓ **Records-column taxonomy** — `records_column_role` classifies every
@@ -95,6 +95,15 @@ See [`architecture/reader.md`](architecture/reader.md) and
   Beside it, the contract's union-safety algebra (`union_safe`, `combined_claim`) as
   pure, kind-scoped functions. See [`architecture/reader.md`](architecture/reader.md)
   § The presentation-keys registry is strict on read.
+- ✓ **Documentation view** — `Sidecar.documentation()` resolves the emit's five
+  documentation surfaces (per-column `description`/`unit`, `tables[].description`,
+  `enum_domains` per-value glosses, `scenario_description`, and the vendored
+  contract's pinned structural-column strings) behind one authority-per-column
+  rule — contract strings for structural columns, the sidecar for every other
+  declared column, absence is silence. `ColumnSpec`/`TableSpec` carry the
+  contract's optional documentation and value-declaration attributes verbatim.
+  See [`architecture/reader.md`](architecture/reader.md) § The documentation
+  view.
 
 ---
 
@@ -146,7 +155,7 @@ Each mode reads the same emit and writes a different target shape.
   table: *things get tables; events get the log.* A source config declares every
   output table through the declared-table grammar — author-verbatim name, source
   populations (`kind`, optional `sub_types` subset, or a `membership` reference),
-  optional per-table `columns` / `rename`. A records declaration renders as a
+  optional per-table `columns` / `rename`, and optional row selection. A records declaration renders as a
   `state` thing-table (one current row per record, soft-delete lifecycle:
   `created_at` / `updated_at` / `active` / `deactivated_at`); a membership
   declaration as a `junction` association table (`joined_at` / `left_at`, NULL
@@ -156,7 +165,20 @@ Each mode reads the same emit and writes a different target shape.
   row-state-events and membership-events folds, keyed by a dense tape-anchored
   `id` that publishes the log's total order and is its primary key under
   `declare_keys`), with `only` / `ignore`
-  audited-property filters per source. An author-declared domain vocabulary
+  audited-property filters per source. Row selection narrows a declared unit on
+  two axes: `sub_types` picks populations, and `where` — a scalar-or-list
+  predicate gated to `temporal_class: constant` payload properties, so its row
+  set is identical at every horizon — picks rows. Both are legal on state
+  tables, junction tables, and event-log sources; on a membership unit they read
+  the *owner* through a fan-out-free identity join, so a sub-typed kind's
+  junctions and join/leave streams split alongside its state tables, and a kind
+  partitioned by an undeclared-but-constant property (a de facto discriminator)
+  splits into separate tables with separate audit streams. Predicate literals
+  are cast against the sidecar's declared type at plan time, and two event
+  sources auditing one item space are legal only where their owner `sub_types`
+  or a common predicated column's typed value sets are disjoint. `init` proposes
+  per-sub-type junction and membership-event stubs for a sub-typed owner, and
+  never proposes a `where`. An author-declared domain vocabulary
   resolves kind names and `changes` keys that would otherwise render engine
   vocabulary as data: `source.kind_labels` (engine kind → domain label,
   applied wherever a kind name renders as a value — item-type defaults,
@@ -203,7 +225,29 @@ Each mode reads the same emit and writes a different target shape.
   insert-only with the domain op as a leading `event` column). Full-row after-images,
   anchored timestamps; composes the row-state-events (two-scope) and membership-events
   derivations. A configurable clock paces emission — `realtime × speed` with an idle
-  cap, or as-fast-as-possible (`--speed` / `--idle-cap` / `--fast`). *Gaps:* the Debezium
+  cap, or as-fast-as-possible (`--speed` / `--idle-cap` / `--fast`). Each stream carries
+  the same three author surfaces the batch modes carry. **Output vocabulary:** after-image
+  keys are bare property / field names (a reference field expands to a `<f>_kind` /
+  `<f>_id` pair), renamable per stream with `rename`, while `kind_labels` maps engine kind
+  → domain label wherever a kind name renders as a *value* (the envelope `kind` default,
+  member-kind payload entries; identity fall-through for anything unmapped) and a
+  per-stream `kind_label` names the concept that feed represents. **Identity
+  projection:** a per-stream `identity` list declares which gated identity surfaces the
+  after-image publishes beside the elected message key (the elected surface alone by
+  default), every published surface running the election's gates; a published
+  surface's contract column name is a legal `rename` key, and the elected surface's
+  resolved key applies to the message key, the after-image entry, the Debezium `d`
+  before-image, and the value schema at once. One naming authority feeds the rendered
+  rows and the Debezium value schema, so they cannot disagree. **Row selection:** `where` — the same
+  scalar-or-list predicate gated to `temporal_class: constant` payload properties, so a
+  stream's event set is identical at every instant of the tape — on both stream shapes,
+  plus owner `sub_types` on a membership stream, read through the shared fan-out-free
+  parent lookup; a selection matching nothing yields a declared-but-empty topic, and an
+  unobserved predicate value draws a notice rather than an error. **Change scope:**
+  `only` / `ignore` narrow which properties' changes fire a `u`, independently of what the
+  stream projects — so a notification-shaped feed and a lifecycle-only feed are both
+  expressible. `init` proposes none of the three: each is author intent with no
+  sidecar-derived value. *Gaps:* the Debezium
   value message only (no separate key message or compaction tombstone), and whole-stream
   (not windowed). See
   [`architecture/streaming.md`](architecture/streaming.md).
@@ -214,9 +258,19 @@ Each mode reads the same emit and writes a different target shape.
 - ✓ **Type / table exclusion** — `exclude.kinds` / `exclude.tables` drop kinds or
   sidecar tables before export (validated so no declared table sources an excluded one).
 - ✓ **Table / column rename** — every output `name` is author-verbatim; `init` proposes
-  prefix-stripped names with a structural-column collision check.
+  prefix-stripped names with a structural-column collision check. Every output mode can
+  name its payload columns: the dimensional grammar names each column outright, source
+  and base carry per-table `rename`, and streaming carries per-stream `rename` over bare
+  after-image keys and published identity surfaces (keyed by contract column name).
+  Identity output keys are reserved under their resolved names — a rename colliding
+  with one, or with another output key, is refused rather than silently collided.
 - ◐ **Output transforms** — `derived` columns ship (ordinal, value-map, anchored
-  timestamp, SCD window); arbitrary per-table transforms beyond these are not.
+  timestamp, SCD window, elapsed, declared temporal parse, decimal precision,
+  JSON leaf rounding); arbitrary per-table transforms beyond these are not. On
+  an `scd: type2` dim the pure per-row value renderings (`timestamp`,
+  `date_parse`, `value_map`, `decimal`, `json_precision`) apply over both
+  source classes — per record for untracked sources, per version for tracked
+  ones; `fk`, `correlation`, `ordinal`, and `elapsed` are refused there.
 - ✓ **`init`** — generate a commented candidate config from the sidecar; `--mode`
   selects the target (`dimensional`, the default, `source`, or `streaming`). Dimensional
   reads `record_roles` for warehouse role, kinds, discriminators, membership tables,
@@ -229,24 +283,31 @@ Each mode reads the same emit and writes a different target shape.
   explicitly when the emit carries no census. Source proposes one state table per records kind (combined,
   with the per-sub-type split alternative in comments), one junction table per
   membership table, an `events` stub covering every tracked kind
-  (lifecycle-only kinds and membership sources commented out), and the aligned
+  (lifecycle-only kinds and membership sources commented out), and the election-menu
   `keys` block — consuming no `record_roles`; the emitted config always parses
   and plans clean. Streaming proposes one live stream per population — per declared
   sub-type for a sub-typed kind (names verbatim, `properties` from the
   `sub_type_columns` partition), per kind for a flat kind — with the membership-events
   alternative fully commented, name-collision losers and topic-illegal names commented
-  out, and the self-gated `keys` block; the emitted config always parses and streams
-  clean, and a recordless emit is refused rather than proposed.
-- ✓ **List-valued row predicates** *(dimensional)* — every predicate value in the
-  dimensional grammar (`source.filter`, `source.where`, `source.value`, a membership
-  `fk.where`, `derived.elapsed.other_where`) is a scalar or a non-empty list of
+  out, and the election-menu `keys` block; the emitted config always parses and streams
+  clean, and a recordless emit is refused rather than proposed. Every mode's `keys`
+  proposal is the one shared election menu — a uniform `record_index` active line
+  with each population's resolvable alternatives as comments, rendered by a single
+  renderer and gate-clean by construction.
+- ✓ **List-valued row predicates** *(dimensional, source, streaming)* — every predicate
+  value in
+  the dimensional grammar (`source.filter`, `source.where`, `source.value`, a membership
+  `fk.where`, `derived.elapsed.other_where`), in source's two selection surfaces
+  (`tables[].where`, `events.sources[].where`), and in streaming's two
+  (`streams[].where` on either stream shape) is a scalar or a non-empty list of
   alternatives, compiling to `=` or `IN` through one rendering authority. A list is
   what groups several discriminator values into one named table — the domain's own
   shape (an NHS "Emergency Care" dataset spanning several decision types) instead of
   one table per value or one undifferentiated table. Equality and set membership
   only; entries over distinct columns are AND-joined. On a sub-typed dim's
   discriminator the value set also selects the dim's source population set, keeping
-  FK output closed over its target. See
+  FK output closed over its target. Each mode adds its own gate on which columns are
+  addressable — never a second value grammar. See
   [`architecture/row-predicates.md`](architecture/row-predicates.md).
   *Teaches: authoring warehouse subject areas that don't line up 1:1 with source
   event types.*
@@ -269,6 +330,40 @@ Each mode reads the same emit and writes a different target shape.
   streaming, and base renderers all consume it — source and the `debezium` stream
   format *require* a resolved anchor, dimensional and base fall back to raw
   sim-time ns. See [`architecture/anchor.md`](architecture/anchor.md).
+- ✓ **Temporal rendering elections** — author-electable output types on the render
+  sites that already compute temporal values: an instant renders as `date` / `time`
+  / `timestamptz` in place of the default `timestamp` (dimensional `derived:
+  timestamp` / `scd_window`; source's declared-table and event-log `render` maps;
+  base's per-table render declarations), an elapsed delta renders as `interval` in
+  place of the divided numeric, and a declared VARCHAR source column parses under
+  an author format (`date_parse`, never sniffed) as the type that format denotes
+  — `DATE`, `TIME`, or naive `TIMESTAMP`, derived from the date and time-of-day
+  directives the author wrote, with no second type knob. One shared election
+  vocabulary through the one renderer every wallclock mode shares; an explicit
+  election requires a resolved anchor, while a parse never reads one. The reader's session-zone pin and pinned
+  CSV text forms make zone-bearing output machine-independent. See
+  [`architecture/temporal-elections.md`](architecture/temporal-elections.md).
+  *Teaches: realistic warehouse/app-database column typing (admission dates,
+  wait-time intervals, zone-aware timestamps) instead of one universal
+  `TIMESTAMP`.*
+- ✓ **Value rendering elections** — author-elected renderings of payload column
+  *values*, declared in one property-first `render:` map on source declared
+  tables and base render entries (shared with the temporal shorthand and
+  `date_parse`, so one column can never carry two elections), as
+  `derived: decimal` / `derived: json_precision` on dimensional, and per
+  declared stream on streaming (numeric family only): `decimal` renders a
+  DOUBLE payload as exact `DECIMAL(p, s)` (ties away from zero, loud
+  overflow/NaN error, pinned CSV text form); `instant` declares a payload
+  BIGINT a sim-instant and renders it through the temporal vocabulary and the
+  anchor; `json_precision` rounds named top-level numeric leaves of a JSON
+  payload in place, every other byte preserved. One rendering authority per
+  election keeps every mode byte-identical; in source, elections reach the
+  event log's `changes` entries under a per-kind agreement gate, while
+  changeset membership and `id` numbering compare raw values. A config with no
+  election renders byte-identically to before. See
+  [`architecture/value-rendering-elections.md`](architecture/value-rendering-elections.md).
+  *Teaches: realistic numeric precision (no 17-digit floats in payloads) and
+  consistent wallclock rendering of payload-held instants across modes.*
 - ✓ **`slice_only` export policy** — export-wide: no output value, row membership,
   linkage, or ordering derives from a `slice_only` column's value. Author-named reads
   refused always-on (dimensional + streaming); auto-projected surfaces omit with a
@@ -297,10 +392,53 @@ Each mode reads the same emit and writes a different target shape.
   makes the id-space value surface elective beside its
   always-on index keys; dimensional FKs inherit the destination dim's election
   (`fk.target_key` per-edge override, dim-key agreement check); streaming renders the
-  elected surface as the message key (one stream, one key surface); `init` proposes a
-  self-gated `keys` block. Absent the block, output keeps the `record_id` default.
-  Forge never mints — election selects among surfaces the emit carries. See
+  elected surface as the message key (one stream, one key surface) and lets a
+  per-stream `identity` list publish further gated surfaces in the after-image, every
+  published surface running the election's gates; `init` proposes the `keys` block as
+  a visible election menu — a uniform `record_index` active line plus per-population
+  commented alternatives, gate-clean by construction, with the config loaders
+  refusing duplicate YAML mapping keys so activating an alternative without removing
+  the active line is a named error. Absent the block, output keeps the `record_id`
+  default. Forge never mints — election selects among surfaces the emit carries. See
   [`architecture/key-election.md`](architecture/key-election.md).
+- ✓ **Companion artifacts** *(post-Stage 4; dimensional, source, base)* — every
+  file-writing export invocation deposits a human-readable `<prefix>-readme.md`
+  and a deterministic machine-readable `<prefix>-manifest.json` beside its
+  datasets (inside a CSV output directory; as `<db-stem>-<mode>-*` siblings of a
+  `.duckdb` file). The README renders from the packaged per-mode template, the
+  optional author `readme_overlay` markdown (H2 slots: `## overview`,
+  `## table: <name>` — exact-match grammar, plan-time refusal of notes naming
+  tables the export does not produce), and derived facts (columns/types from the
+  materialized Arrow schema, declared keys, row counts, anchor, emit identity).
+  The manifest embeds the full config and per-table facts under a pinned byte
+  form. Artifacts are inert (dataset bytes, notices, exit codes identical with
+  or without them) and rewritten whole-state per emitting incremental window;
+  the incremental fingerprint ignores `readme_overlay` and the per-column and
+  table-level description overrides, so documentation can improve mid-drip. See
+  [`architecture/companion-artifacts.md`](architecture/companion-artifacts.md).
+  *Teaches: reading an unfamiliar dataset from its own docs — the habit real
+  handed-off extracts demand.*
+- ✓ **Documentation channel (data dictionary + annotated proposals)** — the
+  companion README and manifest embed the emit's forwarded documentation:
+  scenario narrative, per-table descriptions, per-column description/unit under
+  the single-source inheritance rule (provenance stamped at plan compile), and
+  declared-value gloss lists; the manifest mirrors it machine-readably (`null`
+  for absence). An optional per-column `description` override in each
+  companion-writing mode's config (dimensional column entry, source / base
+  `descriptions` maps) re-voices a column's rendered description author-first
+  — inherited prose replaced, computed columns documentable, units and value
+  lists untouched. An optional table-level `description` on the same modes'
+  table-addressing entries (dimensional / source table entries, base rename
+  entries) replaces the forwarded `tables[].description` the same way. The
+  source event log — whose forge-constructed table and columns inherit
+  nothing and take no author prose — renders a forge-pinned table + column
+  dictionary in every source export, undocumented emits included. All three
+  `init` engines annotate their proposals with the same
+  documentation as YAML comments (comments are not grammar — proposals still
+  plan clean), and the corrupter's base-emit writer forwards the attributes so
+  a corrupted emit keeps its dictionary. Sourced, never invented — an
+  undocumented item renders nothing. See
+  [`architecture/documentation-channel.md`](architecture/documentation-channel.md).
 - ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
   through a required caller-supplied sink; CLI renders one line per notice to stderr,
   off stdout. See [`architecture/notices.md`](architecture/notices.md).
@@ -335,7 +473,7 @@ these are out of reach until the contract restores multi-branch / provenance:
 
 Read base, write base. Break **semantic** conformance (C6/C7/C9–C13, including C13's
 genesis clause — now a declared impact) while preserving **structural** conformance
-(C1–C5, C8, C13's structural clauses, and the sidecar-only C14); output stays base-shaped
+(C1–C5, C8, C13's structural clauses, and the sidecar-only C14 and C15); output stays base-shaped
 so any exporter can run
 downstream of a corrupter. A `CorruptConfig` YAML envelope (sibling of `ExportConfig` /
 `StreamConfig`) declares a seed and an ordered list of operations over a shared
@@ -389,6 +527,13 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   units the draw hits: `entity_scoped` (seeded entity subset), `clustered_temporal`
   (sim-time windows), `correlated` (MNAR cross-column weighting); a seeded weighted draw
   that preserves `amount`'s exactness.
+- ✓ **Documentation fidelity** — the base-emit writer round-trips every sidecar
+  column attribute the reader models, the documentation and value-declaration
+  attributes included, plus `tables[].description`: attributes follow a
+  `schema_drift` rename, drop with a dropped column, and survive a retype, so a
+  corrupted emit keeps its data dictionary for every corrupt→export
+  composition. See
+  [`architecture/documentation-channel.md`](architecture/documentation-channel.md).
 
 ---
 
@@ -398,9 +543,38 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   Generic relation → file/table serializers; a writer holds no mode or schema
   knowledge. See [`architecture/writers.md`](architecture/writers.md).
 
+## Dataset comparison
+
+- ✓ **Compare surface** — `compare_datasets()` + `fabulexa-forge compare`: an exact
+  dataset-equivalence verdict (boolean + deterministic, bounded discrepancy report)
+  on an actual dataset (DuckDB or CSV directory) against an authoritative expected
+  forge render (DuckDB), under a forge-owned canonical form — canonical type
+  families absorbing lossless representation drift (a decimal family keeps
+  decimal-elected renders comparable, scale-normalized), Python-side canonical
+  value encoding, a UTC-pinned compare session, multiset row comparison. No tolerances,
+  no scoring; a pure two-input surface that never opens an emit. Text and
+  byte-stable JSON report renderers. The deterministic-grading consumer's verdict
+  surface and the shared engine for internal agreement checks. See
+  [`architecture/compare.md`](architecture/compare.md).
+
+## Dataset distribution
+
+- ✓ **Published example datasets** — `fabulexa-forge datasets list` / `datasets get
+  <name>`: real producer-emitted example datasets (bundle + authored export /
+  corrupt / stream configs) as self-contained packs on GitHub Releases, named by
+  an authored-allowlist manifest shipped inside the wheel. `list` is fully
+  offline (`--format text|json`, byte-stable JSON); `get` downloads over
+  anonymous HTTPS, verifies (byte count, sha256, archive-member safety) before
+  touching the target path, extracts, and prints the entry's ready-to-run
+  example commands. A hygiene test pins every entry's `base_format_version` to
+  `SUPPORTED_BASE_FORMAT_VERSION`, so an install can only list datasets its own
+  reader opens. Packs are built by a deterministic repo-side builder
+  (`tools/build_dataset_pack.py`). The shipped catalog is currently empty. See
+  [`architecture/datasets.md`](architecture/datasets.md).
+
 ## CLI
 
-- ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C14 against an emit.
+- ✓ `fabulexa-forge validate` *(Stage 1)* — run C1–C15 against an emit.
 - ✓ `fabulexa-forge export` *(Stage 2)* — run an export config against an emit,
   dispatching on `config.mode` to the dimensional, source, or base engine;
   `--fmt csv|duckdb` selects delivery; `--next` / `--from` / `--to` drive
@@ -426,6 +600,17 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   --out <out_dir>`: apply a corrupter config, writing the broken `run.duckdb` +
   regenerated `base.json` plus `defects.json` (always written; no suppress flag). See
   [`architecture/corrupters.md`](architecture/corrupters.md).
+- ✓ `fabulexa-forge compare` — `fabulexa-forge compare EXPECTED ACTUAL [--tables ...]
+  [--max-row-diffs N] [--format text|json]`: exact-equality verdict + discrepancy
+  report on two materialized datasets; exit codes `0` equal · `1` not equal ·
+  `2` input error (its own contract, distinct from the other verbs' `0/1/3`). See
+  [`architecture/compare.md`](architecture/compare.md).
+- ✓ `fabulexa-forge datasets` — the first verb with sub-verbs: `datasets list
+  [--format text|json]` (offline catalog of published example datasets) and
+  `datasets get <name> [--dir DIR] [--force]` (download, verify, extract a
+  pack; prints ready-to-run example commands). Exit codes `0` success · `1`
+  failure · `2` usage error. See
+  [`architecture/datasets.md`](architecture/datasets.md).
 
 ---
 
@@ -436,6 +621,9 @@ it breaks. See [`architecture/corrupters.md`](architecture/corrupters.md).
   a label-grade defect manifest (`defects.json`) as the answer key.
 - ✓ ML feature-store training data — point-in-time reconstruction from `history`
   via `mode: base` + `slice_at: T`, one flat as-of-T row per record.
+- ✓ Deterministic grading — a learner-built dataset judged exactly equal (or not,
+  with a structured discrepancy report) against forge's own render of the same
+  emit, via `fabulexa-forge compare`.
 - ○ Entity-resolution / MDM workloads — multi-observer views (needs a multi-branch
   contract + multi-emit; parked).
 

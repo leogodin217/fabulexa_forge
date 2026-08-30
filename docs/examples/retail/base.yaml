@@ -8,8 +8,28 @@
 # classification, no sub-type split, no FK joins — the faithful "current state of every record"
 # landing shape. On journey_instance and tick_decision `record_id` presents as
 # `id`; actor and entity elect presentation_id (KEYS below), so their `id` is
-# the business key. Every other column is presentation-verbatim (`prop__*`
-# keeps its prefix).
+# the business key.
+#
+# RENAME: base never splits a kind (one table spans all its sub-types), so the
+# tables take each kind's natural whole-kind name from the atlas, mirroring
+# source.yaml's mapping where a table maps 1:1:
+#
+#   records__actor            -> customers        (plus the one ops agent row)
+#   records__entity           -> products         (plus the one storefront row)
+#   records__journey_instance -> shopping_sessions
+#   records__tick_decision    -> customer_actions
+#
+# Columns are domainized the same way: every prop__ prefix is stripped,
+# created_sim_time -> created_at, references land on the <table>_id convention
+# (actor -> customer_id, journey_instance -> session_id, store -> storefront_id),
+# vocabulary columns de-simulate (decision_type -> action_type, journey_type ->
+# session_type, actor_type -> account_type, entity_type -> item_type, the
+# identity_* branding trio -> brand / product_line / brand_tier as in the
+# dimensional config), and the record-index key columns follow their tables
+# (customer_key / product_key / session_key / action_key, edge keys likewise).
+# Each entry's `descriptions:` map (keyed by the same pre-rename source
+# identities as `columns:`) overrides the inherited engine-voice prose with
+# domain sentences in the generated README / manifest.
 #
 # The only author decision here is which kinds to drop — and unlike the NHS
 # bundle, retail drops no kind. NHS excluded two simulation-MECHANISM kinds
@@ -37,11 +57,12 @@
 # table spans all its sub-types, so the election must be uniform and the
 # spanned key spaces pairwise union-safe (they are: distinct non-empty
 # prefixes). Motivation: the bundle's record_id for products mixes two
-# upstream id-assignment schemes (44 short integers, 149 64-char hashes);
+# upstream id-assignment schemes (a minority of short integers amid 64-char hashes);
 # under the election the id-space value column carries the uniform business
 # key instead, and reference columns into these kinds (journey_instance's
 # prop__actor) render the same surface. The `<kind>_key` index keys ship
-# regardless — election chooses the id-space VALUE surface beside them.
+# regardless (renamed customer_key / product_key / session_key / action_key
+# above) — election chooses the id-space VALUE surface beside them.
 # journey_instance and tick_decision keep the default: the former carries no
 # registry claim, the latter's claim is a bare counter with nothing to gain.
 #
@@ -53,8 +74,204 @@
 # whatever units the scenario wrote them. Add a `rebase:` block (see source.yaml)
 # only to override the origin instant or timezone; an emit with NO sidecar anchor
 # and no `rebase:` is the case where lifecycle columns stay raw BIGINT ns.
+#
+# ELECTED: actor.prop__birth_date is a plain upstream-minted date string
+# (verified every value matches `%Y-%m-%d`, no NULLs) — declared via
+# `date_parse` and reinterpreted as a real DATE.
 
 mode: base
+
+base:
+  rename:
+    - table: records__actor
+      name: customers
+      description: "One TechMart shopper account, or the storefront's automated
+        monitoring agent."
+      columns:
+        record_index: customer_key
+        created_sim_time: created_at
+        prop__acquisition_source: acquisition_source
+        prop__tier: tier
+        prop__segment: segment
+        prop__income: income
+        prop__age: age
+        prop__country: country
+        prop__store: storefront_id
+        ref_index__store: storefront_key
+        prop__total_purchases: total_purchases
+        prop__component: component
+        prop__actor_type: account_type
+        prop__first_name: first_name
+        prop__last_name: last_name
+        prop__name: name
+        prop__place_city: place_city
+        prop__place_subdivision: place_subdivision
+        prop__place_postal_code: place_postal_code
+        prop__place_area_code: place_area_code
+        prop__birth_date: birth_date
+        prop__email: email
+        prop__username: username
+        prop__phone: phone
+        prop__street_address: street_address
+      descriptions:
+        presentation_id: "Unique identifier: CUST_-prefixed for customers,
+          OPS_-prefixed for the monitoring agent."
+        record_index: "Integer join key for this row; other tables'
+          customer_key columns reference it."
+        created_sim_time: "When the account was created."
+        active: "FALSE if the row was soft-deleted; TRUE otherwise."
+        deactivated_at: "When the row was soft-deleted; NULL while active."
+        prop__actor_type: "Type of account: customer (a shopper) or ops (the
+          automated site-monitoring agent)."
+        prop__acquisition_source: "Marketing channel the customer first
+          arrived through: organic, paid_search, social, or referral."
+        prop__tier: "Loyalty tier: most customers are regular, with a small
+          vip minority who buy and return more often."
+        prop__segment: "Price segment the customer shops in: budget,
+          mainstream, or premium."
+        prop__income: "Household income in whole dollars; higher-income
+          customers complete checkout more often."
+        prop__age: "Customer's age in years when the account was created."
+        prop__country: "Country of the customer's home address (US, MX, or
+          UK)."
+        prop__store: "The storefront the customer shops on; matches the
+          storefront row's id in the products table."
+        ref_index__store: "Join key of the customer's storefront; joins to
+          products.product_key."
+        prop__total_purchases: "Lifetime number of completed orders; increases
+          by one with each purchase."
+        prop__component: "Which piece of storefront infrastructure the ops
+          agent monitors; NULL on customer rows."
+        prop__place_city: "City of the customer's home address."
+        prop__place_subdivision: "State or province of the customer's home
+          address."
+        prop__place_postal_code: "Postal code of the customer's home address."
+        prop__place_area_code: "Telephone area code of the customer's home
+          address; matches the customer's phone number."
+    - table: records__entity
+      name: products
+      description: "One catalog item TechMart sells, or the storefront host
+        serving the shop."
+      columns:
+        record_index: product_key
+        created_sim_time: created_at
+        prop__category: category
+        prop__price_cents: price_cents
+        prop__popularity: popularity
+        prop__margin: margin
+        prop__status: status
+        prop__error_rate: error_rate
+        prop__entity_type: item_type
+        prop__identity_brand: brand
+        prop__identity_line: product_line
+        prop__identity_naming_style: naming_style
+        prop__identity_tier: brand_tier
+        prop__designator: designator
+        prop__product_name: product_name
+        prop__primary_ip: primary_ip
+        prop__domain: domain
+      descriptions:
+        presentation_id: "Unique identifier: SKU_-prefixed for products,
+          INFRA_-prefixed for the storefront host."
+        record_index: "Integer join key for this row; customers'
+          storefront_key references the storefront row."
+        created_sim_time: "When the item was added to the catalog."
+        active: "FALSE if the product was withdrawn from the catalog; TRUE
+          otherwise."
+        deactivated_at: "When the product was withdrawn from the catalog;
+          NULL while still sold."
+        prop__entity_type: "Type of catalog record: product (an item TechMart
+          sells) or infrastructure (the storefront host serving the shop)."
+        prop__category: "Product category: smartphones, laptops, tablets,
+          audio, gaming, or accessories."
+        prop__price_cents: "Retail price in cents (129900 = $1,299.00)."
+        prop__popularity: "Relative popularity weight: higher values mean
+          shoppers view, cart, compare, and buy this product more often."
+        prop__margin: "Gross margin on the product, in whole percentage
+          points."
+        prop__identity_brand: "Brand the product is sold under."
+        prop__identity_line: "Product line (series or family) within the
+          brand."
+        prop__identity_naming_style: "Naming convention used to compose the
+          product's display name."
+        prop__identity_tier: "Market tier of the brand, from value to
+          premium."
+        prop__designator: "Model designator (a number, code, or generation
+          marker) appearing at the end of the product name."
+        prop__status: "Health of the storefront host: healthy, or degraded
+          during a site incident; NULL on product rows."
+        prop__error_rate: "Fraction of requests failing on the storefront
+          host; near zero while healthy, elevated during incidents; NULL on
+          product rows."
+    - table: records__journey_instance
+      name: shopping_sessions
+      description: "One customer's single visit to the store, funneling from
+        browsing through cart and checkout to a purchase or an abandonment."
+      columns:
+        record_index: session_key
+        created_sim_time: created_at
+        prop__actor: customer_id
+        ref_index__actor: customer_key
+        prop__journey_type: session_type
+        prop__current_state: current_state
+        prop__customer_handle: customer_handle
+      descriptions:
+        record_id: "Unique shopping-session identifier."
+        record_index: "Integer join key for this session;
+          customer_actions.session_key references it."
+        created_sim_time: "When the session started."
+        active: "FALSE once the session ended; TRUE while still open."
+        deactivated_at: "When the session ended; NULL while still open."
+        prop__actor: "The customer who ran this session (the one
+          storefront_ops row carries the monitoring agent's OPS_ id
+          instead)."
+        ref_index__actor: "Join key of the session's customer; joins to
+          customers.customer_key."
+        prop__journey_type: "Type of session: shopping_session for shopper
+          visits, storefront_ops for the site-monitoring session."
+        prop__current_state: "The session's current funnel stage (browsing,
+          considering, checkout, purchased, or a *_stop stage where the
+          shopper left)."
+    - table: records__tick_decision
+      name: customer_actions
+      description: "One funnel action a customer took during a session: a
+        view, cart add, comparison, checkout start, or purchase."
+      columns:
+        record_index: action_key
+        created_sim_time: created_at
+        presentation_id: action_number
+        prop__journey_instance: session_id
+        ref_index__journey_instance: session_key
+        prop__decision_type: action_type
+        prop__context: context
+      descriptions:
+        record_id: "Unique identifier of this customer action."
+        record_index: "Integer join key for this action."
+        presentation_id: "Sequential action number, increasing in the order
+          actions were recorded."
+        created_sim_time: "When the action happened."
+        active: "FALSE if the action row was soft-deleted; actions are never
+          deleted, so TRUE on every row."
+        deactivated_at: "When the action row was soft-deleted; always NULL —
+          actions are never deleted."
+        prop__journey_instance: "The shopping session the action happened in;
+          matches shopping_sessions.id."
+        ref_index__journey_instance: "Join key of the action's session; joins
+          to shopping_sessions.session_key."
+        prop__decision_type: "The kind of shopping action: visit,
+          product_view, add_to_cart, product_comparison, begin_checkout, or
+          purchase (plus the one store_bound setup row)."
+        prop__context: "JSON details of the action (e.g. quantity for cart
+          adds, discount_pct at checkout)."
+  render:
+    - table: records__actor
+      render:
+        prop__birth_date: {date_parse: "%Y-%m-%d"}
+    # context.discount_pct rounded in place to 4dp (raw float64 noise
+    # otherwise); every other payload byte verbatim.
+    - table: records__tick_decision
+      render:
+        prop__context: {json_precision: {discount_pct: 4}}
 
 # Uniform shorthand: every declared sub-type of the kind elects the surface.
 keys:
