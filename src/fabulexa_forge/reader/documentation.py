@@ -33,14 +33,15 @@ class ColumnDoc:
     structural column (pinned strings, instance placeholders bound),
     "sidecar" for a per-run column (verbatim carry), "author" for a
     companion-dictionary resolution answered by the export config's
-    per-column description override. This reader's documentation view never
-    produces "author" — it is stamped only downstream, by the companion
-    dictionary.
+    per-column description override, "forge" for a companion-dictionary
+    resolution answered by the forge-pinned event-log column set. This
+    reader's documentation view never produces "author" or "forge" — both
+    are stamped only downstream, by the companion dictionary.
     """
 
     description: str | None
     unit: str | None
-    origin: Literal["contract", "sidecar", "author"]
+    origin: Literal["contract", "sidecar", "author", "forge"]
 
 
 @dataclass(frozen=True)

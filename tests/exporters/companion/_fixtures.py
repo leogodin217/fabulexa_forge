@@ -242,6 +242,7 @@ def documented_actor_table_report(
     table_name: str = "actor_state",
     row_count: int | None = 1,
     author_descriptions: Mapping[str, str] | None = None,
+    author_table_description: str | None = None,
 ) -> TableReport:
     """One `actor_state` output table's report, faithfully carried from
     `write_documented_emit`'s `records__actor` (+ one `records__team` gloss).
@@ -264,6 +265,8 @@ def documented_actor_table_report(
         row_count: The report's row count (None for a windowed invocation).
         author_descriptions: Per-column author overrides, keyed by output
             column name; empty when omitted.
+        author_table_description: The table-level author override, when
+            given -- exercises author-first table-description resolution.
 
     Returns:
         The `TableReport`.
@@ -297,8 +300,61 @@ def documented_actor_table_report(
             )
         },
         author_descriptions=author_descriptions or {},
-        author_table_description=None,
+        author_table_description=author_table_description,
         event_log=False,
+    )
+
+
+#: The event log's forge-pinned prose, mirrored here for test assertions
+#: (the resolution module's constants are private to that module).
+EVENT_LOG_TABLE_DESCRIPTION = (
+    "The change log: one row per change to an audited item — a creation, an"
+    " update, or a deletion — in event order."
+)
+EVENT_LOG_ITEM_TYPE_DESCRIPTION = (
+    "The type of the changed item. The values listed below name each audited item type."
+)
+
+
+def event_log_table_report(
+    *,
+    table_name: str = "audit_log",
+    row_count: int | None = 1,
+) -> TableReport:
+    """The compiled source event log's report: the six forge-pinned columns,
+    marked `event_log=True`, with an `item_type` gloss list carried exactly
+    as the mode compiles it (design doc § The pinned event-log
+    documentation).
+
+    Args:
+        table_name: The output table's name.
+        row_count: The report's row count (None for a windowed invocation).
+
+    Returns:
+        The `TableReport`.
+    """
+    return TableReport(
+        name=table_name,
+        columns=(
+            ("id", "BIGINT"),
+            ("item_type", "VARCHAR"),
+            ("item_id", "VARCHAR"),
+            ("event", "VARCHAR"),
+            ("occurred_at", "TIMESTAMPTZ"),
+            ("changes", "JSON"),
+        ),
+        row_count=row_count,
+        keys=None,
+        provenance={},
+        kind_values={
+            "item_type": (
+                KindValueEntry(label="Actor", source_kind="actor"),
+                KindValueEntry(label="Team", source_kind="team"),
+            )
+        },
+        author_descriptions={},
+        author_table_description=None,
+        event_log=True,
     )
 
 

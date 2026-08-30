@@ -87,6 +87,40 @@ _LEAD_SIM_TIME_DESCRIPTION = (
 #: nothing here parses the owner kind or property out of the name.
 _MEMBERSHIP_TABLE_PREFIX = "membership__"
 
+#: The source event log's forge-pinned documentation (design doc § The
+#: pinned event-log documentation) — mode-definitional, like the log's fixed
+#: column set and first id; no config surface exists. Applied only to a
+#: `TableReport` marked `event_log=True`.
+_EVENT_LOG_TABLE_DESCRIPTION = (
+    "The change log: one row per change to an audited item — a creation, an"
+    " update, or a deletion — in event order."
+)
+
+_EVENT_LOG_COLUMN_DESCRIPTIONS: "dict[str, str]" = {
+    "id": (
+        "Sequence number of this log row: dense, ascending in event order,"
+        " starting at 1."
+    ),
+    "item_type": (
+        "The type of the changed item. The values listed below name each"
+        " audited item type."
+    ),
+    "item_id": (
+        "Identifier of the changed item, scoped by item_type: one item"
+        " keeps one identifier across its rows."
+    ),
+    "event": "What happened to the item: 'create', 'update', or 'destroy'.",
+    "occurred_at": (
+        "When the change took effect. Changes are logged in order, so this"
+        " never decreases as id ascends."
+    ),
+    "changes": (
+        "JSON object of the fields this change touched, each mapped to an"
+        " [old, new] value pair — old is null on a creation, new is null on"
+        " a deletion."
+    ),
+}
+
 #: Export-facing rewrites of the pinned structural strings whose prose
 #: points at base-layer structure a shaped export does not contain — a
 #: `records__<kind>` table to equality-join, the `membership__<K>__<p>`
@@ -152,18 +186,22 @@ _INTEGER_DUCKDB_TYPES = frozenset(
 
 
 def resolve_table_description(doc: "Documentation", table: "TableReport") -> str | None:
-    """One table's forwarded description.
+    """One table's resolved description, author-first.
 
     Args:
         doc: The emit's documentation view.
         table: The output table report.
 
     Returns:
-        The single source table's `tables[].description`, when every
-        carried column agrees on one source table; None when the table
-        carries no provenance, or its carried columns span more than one
-        source table.
+        The report's author table description when present; else the pinned
+        event-log table description when the report is marked as the event
+        log; else the single source table's `tables[].description` when
+        every carried column agrees on one source table; else None.
     """
+    if table.author_table_description is not None:
+        return table.author_table_description
+    if table.event_log:
+        return _EVENT_LOG_TABLE_DESCRIPTION
     sources = {entry.source_table for entry in table.provenance.values()}
     if len(sources) != 1:
         return None
@@ -230,19 +268,27 @@ def resolve_column_doc(
         output_type: The column's materialized DuckDB type text.
 
     Returns:
-        With an `author_descriptions` entry for the column: the resolved doc
-        with the author's description and origin "author" — on a carried
-        column the inherited unit rides along under today's unit rules; on a
-        column with no carried provenance the doc is description-only (unit
-        None). Without an entry: exactly today's resolution — the source
-        column's resolved `ColumnDoc` (history_interval's virtual
-        `lead_sim_time` case above), a contract-answered description
-        rewritten per `_EXPORT_STRUCTURAL_REWRITES` where the pinned string
-        points at base-layer structure the export does not contain, unit
-        dropped where `output_type` shows the rendering left the source's
+        On a report marked as the event log, a column named in the pinned
+        event-log set resolves to a description-only `ColumnDoc` with origin
+        "forge" (author entries cannot exist there; nothing inherits there
+        today). Otherwise, with an `author_descriptions` entry for the
+        column: the resolved doc with the author's description and origin
+        "author" — on a carried column the inherited unit rides along under
+        today's unit rules; on a column with no carried provenance the doc
+        is description-only (unit None). Without an entry: exactly today's
+        resolution — the source column's resolved `ColumnDoc`
+        (history_interval's virtual `lead_sim_time` case above), a
+        contract-answered description rewritten per
+        `_EXPORT_STRUCTURAL_REWRITES` where the pinned string points at
+        base-layer structure the export does not contain, unit dropped
+        where `output_type` shows the rendering left the source's
         raw-nanosecond form behind; None for a column with no carried
         provenance, or whose source carries neither description nor unit.
     """
+    if table.event_log:
+        pinned = _EVENT_LOG_COLUMN_DESCRIPTIONS.get(column_name)
+        if pinned is not None:
+            return ColumnDoc(description=pinned, unit=None, origin="forge")
     provenance = table.provenance.get(column_name)
     override = table.author_descriptions.get(column_name)
     if override is not None:

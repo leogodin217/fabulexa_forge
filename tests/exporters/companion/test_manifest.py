@@ -11,8 +11,11 @@ from zoneinfo import ZoneInfo
 
 from exporters.companion._fixtures import (
     ACTOR_TABLE_DESCRIPTION,
+    EVENT_LOG_ITEM_TYPE_DESCRIPTION,
+    EVENT_LOG_TABLE_DESCRIPTION,
     SCENARIO_DESCRIPTION,
     documented_actor_table_report,
+    event_log_table_report,
     write_documented_emit,
     write_minimal_emit,
 )
@@ -465,6 +468,67 @@ def test_table_spanning_multiple_source_tables_forwards_no_description(
     tables = document["tables"]
     assert isinstance(tables, list)
     assert tables[0]["description"] is None
+
+
+def test_author_table_description_overrides_sidecar_forward(tmp_path: Path) -> None:
+    """A declared table's author override renders in the manifest's
+    per-table `description`; the sidecar forward is not consulted."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+
+    with open_emit(emit_dir) as emit:
+        document = build_manifest_document(
+            emit=emit,
+            config=ExportConfig(mode="base"),
+            fmt="csv",
+            anchor=None,
+            report=ExportReport(
+                tables=(
+                    documented_actor_table_report(
+                        author_table_description="Custom table prose."
+                    ),
+                )
+            ),
+            windowed=None,
+        )
+
+    tables = document["tables"]
+    assert isinstance(tables, list)
+    assert tables[0]["description"] == "Custom table prose."
+
+
+def test_event_log_table_and_columns_carry_pinned_descriptions(
+    tmp_path: Path,
+) -> None:
+    """A marked event-log report's manifest entry carries the pinned table
+    description and all six pinned column descriptions, no units, no
+    enum_options."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+
+    with open_emit(emit_dir) as emit:
+        document = build_manifest_document(
+            emit=emit,
+            config=ExportConfig(mode="base"),
+            fmt="csv",
+            anchor=None,
+            report=ExportReport(tables=(event_log_table_report(),)),
+            windowed=None,
+        )
+
+    tables = document["tables"]
+    assert isinstance(tables, list)
+    assert tables[0]["description"] == EVENT_LOG_TABLE_DESCRIPTION
+
+    columns = _documented_columns(document)
+    assert columns["item_type"]["description"] == EVENT_LOG_ITEM_TYPE_DESCRIPTION
+    assert columns["item_type"]["unit"] is None
+    assert columns["item_type"]["enum_options"] is None
+    for name in ("id", "item_id", "event", "occurred_at", "changes"):
+        assert columns[name]["description"] is not None
+        assert columns[name]["unit"] is None
 
 
 def test_readme_and_manifest_render_same_authored_prose(tmp_path: Path) -> None:

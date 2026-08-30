@@ -10,7 +10,11 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from exporters.companion._fixtures import (
+    ACTOR_TABLE_DESCRIPTION,
+    EVENT_LOG_ITEM_TYPE_DESCRIPTION,
+    EVENT_LOG_TABLE_DESCRIPTION,
     documented_actor_table_report,
+    event_log_table_report,
     history_interval_table_report,
     structural_identity_table_report,
     value_mapped_table_report,
@@ -21,7 +25,12 @@ from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.exporters.companion import readme as readme_module
 from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
 from fabulexa_forge.exporters.companion.readme import render_readme
-from fabulexa_forge.exporters.query_spec import ExportReport, TableKeys, TableReport
+from fabulexa_forge.exporters.query_spec import (
+    ColumnProvenance,
+    ExportReport,
+    TableKeys,
+    TableReport,
+)
 from fabulexa_forge.reader.emit import open_emit
 
 # ---------------------------------------------------------------------------
@@ -452,6 +461,182 @@ def test_two_renders_are_byte_identical(tmp_path: Path) -> None:
     first = _render_documented(tmp_path, overlay=overlay, emit_subdir="emit1")
     second = _render_documented(tmp_path, overlay=overlay, emit_subdir="emit2")
     assert first == second
+
+
+# ---------------------------------------------------------------------------
+# Data dictionary -- author table description + forge-pinned event log
+# ---------------------------------------------------------------------------
+
+
+def test_author_table_description_overrides_sidecar_forward(tmp_path: Path) -> None:
+    """A declared table's author override renders in the description slot;
+    the forwarded sidecar description is not consulted."""
+    report = documented_actor_table_report(
+        author_table_description="Custom table prose."
+    )
+    text = _render_report(tmp_path, report)
+    section = text[text.index("### actor_state") : text.index("Columns:")]
+    assert "Custom table prose." in section
+    assert ACTOR_TABLE_DESCRIPTION not in section
+
+
+def test_overlay_note_and_author_description_both_render(tmp_path: Path) -> None:
+    """The overlay `table:` note renders first, then the resolved author
+    description -- both, never either-or."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+    report = documented_actor_table_report(
+        author_table_description="Custom table prose."
+    )
+    overlay = ReadmeOverlay(overview=None, table_notes={"actor_state": "A note."})
+    with open_emit(emit_dir) as emit:
+        text = render_readme(
+            mode="source",
+            emit=emit,
+            report=ExportReport(tables=(report,)),
+            overlay=overlay,
+            anchor=None,
+            manifest_filename="source-manifest.json",
+        )
+    section = text[text.index("### actor_state") :]
+    note_index = section.index("A note.")
+    description_index = section.index("Custom table prose.")
+    assert note_index < description_index
+
+
+def test_event_log_section_renders_pinned_table_and_column_descriptions(
+    tmp_path: Path,
+) -> None:
+    """A marked event-log report renders the pinned table description and
+    all six pinned column lines; item_type's gloss list renders beneath its
+    pinned description."""
+    text = _render_report(tmp_path, event_log_table_report())
+    section = text[text.index("### audit_log") :]
+    assert EVENT_LOG_TABLE_DESCRIPTION in section
+
+    assert _column_line(section, "id") == (
+        "- `id` (BIGINT): Sequence number of this log row: dense, ascending"
+        " in event order, starting at 1."
+    )
+    assert _column_line(section, "item_type") == (
+        f"- `item_type` (VARCHAR): {EVENT_LOG_ITEM_TYPE_DESCRIPTION}"
+    )
+    assert _column_line(section, "item_id") == (
+        "- `item_id` (VARCHAR): Identifier of the changed item, scoped by"
+        " item_type: one item keeps one identifier across its rows."
+    )
+    assert _column_line(section, "event") == (
+        "- `event` (VARCHAR): What happened to the item: 'create', 'update',"
+        " or 'destroy'."
+    )
+    assert _column_line(section, "occurred_at") == (
+        "- `occurred_at` (TIMESTAMPTZ): When the change took effect. Changes"
+        " are logged in order, so this never decreases as id ascends."
+    )
+    assert _column_line(section, "changes") == (
+        "- `changes` (JSON): JSON object of the fields this change touched,"
+        " each mapped to an [old, new] value pair — old is null on a"
+        " creation, new is null on a deletion."
+    )
+
+    glosses = section[section.index("Declared values:") :]
+    item_type_block = glosses[glosses.index("- `item_type`:") :]
+    assert "- `Actor`: Hospital staff members." in item_type_block
+    assert "- `Team`\n" in item_type_block or item_type_block.rstrip().endswith(
+        "- `Team`"
+    )
+
+
+def test_event_log_pinned_prose_renders_against_undocumented_emit(
+    tmp_path: Path,
+) -> None:
+    """The pinned event-log prose renders even against a bare, undocumented
+    sidecar -- it depends on nothing inherited."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir, documented=False)
+    with open_emit(emit_dir) as emit:
+        text = render_readme(
+            mode="source",
+            emit=emit,
+            report=ExportReport(tables=(event_log_table_report(),)),
+            overlay=None,
+            anchor=None,
+            manifest_filename="source-manifest.json",
+        )
+    section = text[text.index("### audit_log") :]
+    assert EVENT_LOG_TABLE_DESCRIPTION in section
+    assert _column_line(section, "id") == (
+        "- `id` (BIGINT): Sequence number of this log row: dense, ascending"
+        " in event order, starting at 1."
+    )
+
+
+def test_event_log_marker_wins_over_single_source_provenance_forward(
+    tmp_path: Path,
+) -> None:
+    """A marked report never sees the sidecar forward, even when its carried
+    columns happen to agree on a single source table."""
+    report = TableReport(
+        name="audit_log",
+        columns=(("item_id", "VARCHAR"),),
+        row_count=1,
+        keys=None,
+        provenance={"item_id": ColumnProvenance("records__actor", "record_id")},
+        kind_values={},
+        author_descriptions={},
+        author_table_description=None,
+        event_log=True,
+    )
+    text = _render_report(tmp_path, report)
+    section = text[text.index("### audit_log") :]
+    assert EVENT_LOG_TABLE_DESCRIPTION in section
+    assert ACTOR_TABLE_DESCRIPTION not in section
+
+
+def test_column_outside_pinned_set_resolves_normally_on_marked_report(
+    tmp_path: Path,
+) -> None:
+    """On a marked report, a column named outside the pinned six resolves
+    through the ordinary carried-column rule, not the pinned set."""
+    report = TableReport(
+        name="audit_log",
+        columns=(("id", "BIGINT"), ("extra", "VARCHAR")),
+        row_count=1,
+        keys=None,
+        provenance={"extra": ColumnProvenance("records__actor", "prop__full_name")},
+        kind_values={},
+        author_descriptions={},
+        author_table_description=None,
+        event_log=True,
+    )
+    text = _render_report(tmp_path, report)
+    section = text[text.index("### audit_log") :]
+    assert (
+        _column_line(section, "extra")
+        == "- `extra` (VARCHAR): Staff member's full legal name."
+    )
+
+
+def test_unmarked_report_never_consults_pinned_event_log_set(tmp_path: Path) -> None:
+    """An unmarked report's `id`-named column resolves through the ordinary
+    carried-column rule, not the pinned event-log set."""
+    report = TableReport(
+        name="actor_ids",
+        columns=(("id", "VARCHAR"),),
+        row_count=1,
+        keys=None,
+        provenance={"id": ColumnProvenance("records__actor", "prop__full_name")},
+        kind_values={},
+        author_descriptions={},
+        author_table_description=None,
+        event_log=False,
+    )
+    text = _render_report(tmp_path, report)
+    assert (
+        _column_line(text, "id") == "- `id` (VARCHAR): Staff member's full legal name."
+    )
 
 
 # ---------------------------------------------------------------------------

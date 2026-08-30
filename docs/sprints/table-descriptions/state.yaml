@@ -38,6 +38,6 @@ phases:
           - "tests/incremental/test_fingerprint.py"
           - "tests/incremental/test_driver.py"
   3:
-    status: pending
+    status: complete
     name: "Dictionary resolution — author tier, pinned event-log set, forge origin"
     demo: "docs/sprints/table-descriptions/demos/phase_3_rendered_companions.py"
