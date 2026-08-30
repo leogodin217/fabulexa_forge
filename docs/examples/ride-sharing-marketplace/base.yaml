@@ -207,6 +207,9 @@ base:
         prop__place_area_code: Phone area code of the zone.
     - table: records__journey_instance
       name: user_session
+      description: >-
+        One rider's trip request or one driver's shift — the app session a
+        user is currently in, from open to close.
       columns:
         record_index: session_key
         created_sim_time: created_at
@@ -232,6 +235,9 @@ base:
           lapsed for riders; available, driving, or offline for drivers).
     - table: records__pairing
       name: match
+      description: >-
+        A rider paired with a driver for one trip, held from the moment
+        they're matched to when the trip finishes or falls through.
       columns:
         record_index: match_key
         created_sim_time: created_at

@@ -156,6 +156,9 @@ source:
                 prop__actor]
       rename:
         prop__actor: host_id
+      description: >-
+        One session a host runs — the correlation row every security_events
+        entry in it shares by session_id.
       descriptions:
         record_index: >-
           Surrogate key for the session; join target of
@@ -176,6 +179,10 @@ source:
         prop__journey_instance: session_id
         prop__decision_type: event_type
         prop__context: context
+      description: >-
+        One immutable log row for one event the collector recorded — a
+        connection attempt, firewall evaluation, authentication attempt or
+        rejection, or session opening.
       # source mode has no value-remap surface, so event_type keeps the
       # collector's raw vocabulary; the description below glosses each value
       # with the warehouse name the dimensional export maps it to.
@@ -210,6 +217,9 @@ source:
       rename:
         record_id: event_id
         member__entity__id: entity_id
+      description: >-
+        One binding of a security event to the server, account, or firewall
+        rule it involved.
       descriptions:
         record_id: The security_events.id this link belongs to.
         member__entity__id: >-

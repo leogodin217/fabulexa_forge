@@ -231,6 +231,9 @@ source:
         prop__place_area_code: Phone area code of the zone.
     - name: user_session
       kind: journey_instance
+      description: >-
+        One rider's trip request or one driver's shift — the app session a
+        user is currently in, from open to close.
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__actor, prop__journey_type, prop__current_state]
       rename:
@@ -255,6 +258,9 @@ source:
           lapsed for riders; available, driving, or offline for drivers).
     - name: match
       kind: pairing
+      description: >-
+        A rider paired with a driver for one trip, held from the moment
+        they're matched to when the trip finishes or falls through.
       rename:
         prop__requester: rider_id
         prop__counterpart: driver_id

@@ -153,6 +153,8 @@ base:
           ('default') in this dataset."
     - table: records__resource
       name: consultant
+      description: "One row per consultant, latest tracked state (capacity,
+        caseload, specialty) as of the tape's end."
       columns:
         record_index: consultant_key
         presentation_id: staff_number
@@ -191,6 +193,10 @@ base:
           source system; the table it points at is not part of this export."
     - table: records__journey_instance
       name: pathway_episode
+      description: "One row per care episode — the pathway a patient runs
+        through (A&E, inpatient, outpatient, diagnostics, cancer, surgical, or
+        post-discharge follow-up, or FFT survey), latest state as of the
+        tape's end."
       columns:
         record_index: episode_key
         created_sim_time: created_at
@@ -217,6 +223,9 @@ base:
           occupies (see the declared values below)."
     - table: records__tick_decision
       name: clinical_event
+      description: "One row per clinical milestone recorded across every
+        pathway (ed_arrival, triage, admission, surgery_performed, ...), the
+        full event stream as of the tape's end."
       columns:
         record_index: event_key
         created_sim_time: created_at
@@ -241,6 +250,8 @@ base:
         prop__context: "Extra event details as JSON text, where the event
           type records any."
     - table: records__booking
+      description: "One row per e-RS appointment booking, latest state as of
+        the tape's end."
       columns:
         record_index: booking_key
         created_sim_time: created_at
@@ -275,6 +286,9 @@ base:
           slot was withdrawn; empty on every row in this dataset."
     - table: records__diary
       name: appointment_book
+      description: "One row per appointment book — outpatient clinic,
+        two-week-wait cancer clinic, or elective operating list — latest
+        state as of the tape's end."
       columns:
         record_index: appointment_book_key
         created_sim_time: created_at

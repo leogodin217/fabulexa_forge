@@ -263,6 +263,8 @@ dimensional:
         kind: resource
         filter: {prop__resource_type: consultant}
       key: [consultant_id]
+      description: "One row per consultant: identity, specialty, and
+        job-plan capacity."
       columns:
         - {name: consultant_id, from: record_index,
            description: "Surrogate key for this consultant."}
@@ -388,6 +390,9 @@ dimensional:
         grain: records
         kind: diary
       key: [book_id]
+      description: "One row per appointment book: its type and specialty,
+        conformed across outpatient, cancer two-week-wait, and elective
+        operating lists."
       columns:
         # Every scheduler setting the diary carries is DROPPED — see the
         # generator-parameter note in the header. What is left is the book's
@@ -408,6 +413,7 @@ dimensional:
         grain: records
         kind: booking
       key: [booking_id]
+      description: "One row per appointment booking against a diary slot."
       columns:
         - {name: booking_id, from: record_id,
            description: "Surrogate key for this booking."}
@@ -473,6 +479,8 @@ dimensional:
         kind: resource
         property: holders
       key: [consultant_id, patient_id, allocated_at]
+      description: "One row per interval a patient held a consultant's
+        caseload slot — utilisation and caseload at that patient's grain."
       columns:
         # zero-hop self edge: the binding's owner IS the consultant, rendered
         # in the dim's elected surrogate key
@@ -638,6 +646,9 @@ dimensional:
         kind: tick_decision
         filter: {prop__decision_type: intake}
       key: [event_id]
+      description: "One row per patient routed at the front door to their
+        care pathway — emergency, elective outpatient, cancer, or
+        surgical."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this intake event."}
@@ -659,6 +670,8 @@ dimensional:
         filter:
           prop__decision_type: [ed_arrival, triage, ed_assessment, ed_diagnosis]
       key: [event_id]
+      description: "One row per A&E milestone — arrival, triage, assessment,
+        or diagnosis — on the path to discharge home or admission."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this A&E event."}
@@ -694,6 +707,8 @@ dimensional:
         filter:
           prop__decision_type: [referral_created, appointment_attended, appointment_dna]
       key: [event_id]
+      description: "One row per outpatient milestone — referral, attendance,
+        or a missed appointment (DNA) — on an elective clinic referral."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this outpatient event."}
@@ -718,6 +733,9 @@ dimensional:
           prop__decision_type:
             [diagnostic_ordered, diagnostic_performed, diagnostic_result_communicated]
       key: [event_id]
+      description: "One row per diagnostic-test milestone — order,
+        performance, or result communication — for a test running
+        alongside an A&E or outpatient episode."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this diagnostics event."}
@@ -759,6 +777,9 @@ dimensional:
              medication_administered, medically_fit, dtoc_assessment,
              safety_incident, icu_care]
       key: [event_id]
+      description: "One row per inpatient-spell milestone — admission, ward
+        assignment, specialty or ICU care, medical fitness, delayed
+        transfer, or discharge."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this inpatient-care event."}
@@ -790,6 +811,9 @@ dimensional:
             [cancer_referral, cancer_first_seen, cancer_diagnosis_confirmed,
              cancer_treatment_decision]
       key: [event_id]
+      description: "One row per suspected-cancer pathway milestone —
+        referral, first appointment, diagnosis confirmation, or treatment
+        decision — tracked against the two-week-wait and 62-day standards."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this cancer-pathway event."}
@@ -829,6 +853,9 @@ dimensional:
             [surgeon_assigned, pre_op_assessment, surgery_performed,
              recovery_started]
       key: [event_id]
+      description: "One row per elective surgical-pathway milestone —
+        surgeon assignment, pre-operative assessment, the operation, or the
+        start of recovery."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this surgical-pathway event."}
@@ -852,6 +879,8 @@ dimensional:
         kind: tick_decision
         filter: {prop__decision_type: post_discharge_check}
       key: [event_id]
+      description: "One row per post-discharge follow-up check, resolving to
+        recovery or an emergency readmission."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this follow-up event."}
@@ -871,6 +900,8 @@ dimensional:
         kind: tick_decision
         filter: {prop__decision_type: fft_invited}
       key: [event_id]
+      description: "One row per Friends and Family Test invitation sent to a
+        discharged patient."
       columns:
         - {name: event_id, from: record_id,
            description: "Surrogate key for this invitation event."}
@@ -927,6 +958,8 @@ dimensional:
         property: bindings
         where: {elem__role_name: dx_test}
       key: [event_id]
+      description: "One row per diagnostic test bound to its ordering or
+        performing event, from the diagnostics catalogue."
       columns:
         - {name: event_id, from: record_id,
            description: "The clinical event this link belongs to; joins
@@ -950,6 +983,8 @@ dimensional:
         property: bindings
         where: {elem__role_name: admitted_meds}
       key: [event_id, medication_id, position]
+      description: "One row per medication administered to an inpatient, up
+        to three per event, from the trust's formulary."
       columns:
         - {name: event_id, from: record_id,
            description: "The clinical event this link belongs to; joins
@@ -972,6 +1007,8 @@ dimensional:
         property: bindings
         where: {elem__role_name: spell_ward}
       key: [event_id]
+      description: "One row per ward a patient was assigned to during an
+        inpatient spell."
       columns:
         - {name: event_id, from: record_id,
            description: "The clinical event this link belongs to; joins
@@ -992,6 +1029,8 @@ dimensional:
         property: bindings
         where: {elem__role_name: surgery_procedure}
       key: [event_id]
+      description: "One row per surgical procedure bound to its planning or
+        performing event, from the OPCS-4 catalogue."
       columns:
         - {name: event_id, from: record_id,
            description: "The clinical event this link belongs to; joins
@@ -1013,6 +1052,7 @@ dimensional:
         property: bindings
         where: {elem__role_name: surgery_theatre}
       key: [event_id]
+      description: "One row per theatre used for an operation."
       columns:
         - {name: event_id, from: record_id,
            description: "The clinical event this link belongs to; joins

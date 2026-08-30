@@ -269,6 +269,9 @@ dimensional:
     # --- fact: pairing (the match) — grain: one rider<->driver match ---
     - name: fact_pairing
       role: fact
+      description: >-
+        A rider paired with a driver for one trip, held from the moment
+        they're matched to when the trip finishes or falls through.
       source:
         grain: records
         kind: pairing

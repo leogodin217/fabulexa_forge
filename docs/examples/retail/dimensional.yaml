@@ -320,6 +320,8 @@ dimensional:
     - name: dim_session
       role: dim
       scd: type1
+      description: "One customer's single visit to the store, funneling from
+        browsing through cart and checkout to a purchase or an abandonment."
       source:
         grain: records
         kind: journey_instance
@@ -338,6 +340,8 @@ dimensional:
     #     actions (see SEPARATE). ---
     - name: fact_customer_action
       role: fact
+      description: "One funnel action a customer took during a session: a
+        view, cart add, comparison, checkout start, or purchase."
       source:
         grain: records
         kind: tick_decision
@@ -384,6 +388,9 @@ dimensional:
     #     comparison_position / occurred_at. ---
     - name: fact_action_product
       role: fact
+      description: "One product bound to a customer action: the item viewed,
+        carted, or on one side of a comparison — one row per compared product
+        when two are compared."
       source:
         grain: membership
         kind: tick_decision

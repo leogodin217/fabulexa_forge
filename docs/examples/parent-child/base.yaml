@@ -90,6 +90,7 @@ base:
         prop__entity_type: "Kind of group record; always 'group' in this dataset."
     - table: records__journey_instance
       name: memberships
+      description: "The membership record. Tracks one member's status, assigned once at creation and never revisited."
       columns:
         record_index: membership_key
         created_sim_time: created_at

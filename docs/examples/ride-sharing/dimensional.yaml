@@ -152,6 +152,7 @@ dimensional:
     - name: dim_driver
       role: dim
       scd: type1
+      description: "One row per driver in the finite metro fleet."
       source:
         grain: records
         kind: resource
@@ -231,6 +232,7 @@ dimensional:
     #     duration is driver utilisation.
     - name: fact_trip_driver
       role: fact
+      description: "One row per driver hold on a trip, from match through drop-off or cancellation."
       source:
         grain: membership
         kind: resource

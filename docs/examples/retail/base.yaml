@@ -205,6 +205,8 @@ base:
           product rows."
     - table: records__journey_instance
       name: shopping_sessions
+      description: "One customer's single visit to the store, funneling from
+        browsing through cart and checkout to a purchase or an abandonment."
       columns:
         record_index: session_key
         created_sim_time: created_at
@@ -232,6 +234,8 @@ base:
           shopper left)."
     - table: records__tick_decision
       name: customer_actions
+      description: "One funnel action a customer took during a session: a
+        view, cart add, comparison, checkout start, or purchase."
       columns:
         record_index: action_key
         created_sim_time: created_at

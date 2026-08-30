@@ -292,6 +292,7 @@ dimensional:
     # --- fact_usage_event: one row per product usage event (tick_decision) ---
     - name: fact_usage_event
       role: fact
+      description: One row per product usage session, attributing the volume a seat holder ran to the SKU it was recorded against.
       source:
         grain: records
         kind: tick_decision

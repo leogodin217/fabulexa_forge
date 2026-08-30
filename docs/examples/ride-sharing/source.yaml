@@ -119,6 +119,7 @@ source:
         prop__status: "Trip lifecycle stage: requested, matching, en_route, on_trip, completed, or cancelled."
     - name: driver
       kind: resource
+      description: "A driver in the finite metro fleet, held by one trip at a time from match through drop-off."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__name, prop__region, prop__capacity, prop__allocated,
                 prop__retiring]
@@ -162,6 +163,7 @@ source:
         prop__name: "Pickup zone's display name."
     - name: trip_lifecycle
       kind: journey_instance
+      description: "One trip's lifecycle record: its current stage and when that lifecycle began, from request through to a completed or cancelled outcome."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__actor, prop__current_state]
       rename:
@@ -176,6 +178,7 @@ source:
         prop__current_state: "The stage the trip is in right now: requested, matching, en_route, on_trip, completed, or cancelled."
     - name: driver_assignment
       membership: {kind: resource, property: holders}
+      description: "One driver hold on one trip, from match through drop-off or cancellation."
       columns: [joined_sim_time, left_sim_time, member__actor__id, elem__slots_held]
       rename:
         record_id: driver_id
@@ -188,6 +191,7 @@ source:
         elem__slots_held: "How much of the driver's capacity this trip occupies."
     - name: trip_binding
       membership: {kind: tick_decision, property: bindings}
+      description: "One rider or pickup-zone binding recorded for a trip at request time."
       columns: [joined_sim_time, left_sim_time, elem__role_name, member__entity__id]
       rename:
         record_id: trip_match_id

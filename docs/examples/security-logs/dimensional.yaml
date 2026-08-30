@@ -203,6 +203,10 @@ dimensional:
     # --- fact: the unified SIEM event stream (all 440,107 decisions) ---
     - name: fact_security_event
       role: fact
+      description: >-
+        One security event in the unified SIEM stream — a connection
+        attempt, firewall decision, authentication attempt or rejection, or
+        session establishment.
       source:
         grain: records
         kind: tick_decision

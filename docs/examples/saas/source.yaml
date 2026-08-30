@@ -170,6 +170,7 @@ source:
         prop__actor: owner_id
         prop__journey_type: lifecycle_type
         prop__current_state: current_state
+      description: One row per company or user lifecycle traversal — the account's onboarding-to-churn run, or a seat's provisioned-to-offboarded run.
       descriptions:
         record_index: Sequential lifecycle id (0-based), ascending in creation order.
         prop__actor: The account (companies.id) or user (users.id) this lifecycle belongs to; `lifecycle_type` says which.
@@ -190,6 +191,7 @@ source:
       # 65.38160578755163). Rounded in place to 2dp; other bytes verbatim.
       render:
         prop__context: {json_precision: {volume: 2}}
+      description: One row per product usage session a seat holder ran, recorded against the lifecycle it occurred under.
       descriptions:
         record_index: Sequential event id (0-based), ascending in event order.
         prop__journey_instance: lifecycle_instances.id of the user lifecycle this session was recorded under.
@@ -202,6 +204,7 @@ source:
       rename:
         record_id: usage_event_id
         member__entity__id: sku_id
+      description: One row per SKU a usage event was recorded against, binding the usage session to the product line it exercised.
       descriptions:
         record_id: usage_events.id this link belongs to.
         member__entity__id: The SKU (skus.id) exercised by this usage event.

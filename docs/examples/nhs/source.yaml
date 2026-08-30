@@ -238,6 +238,7 @@ source:
           readmission risk."
     - name: consultant
       kind: resource
+      description: "One row per consultant, current state."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__capacity, prop__allocated, prop__retiring, prop__entity_code,
                 prop__main_specialty, prop__grade]
@@ -261,6 +262,9 @@ source:
           under."
     - name: pathway_episode
       kind: journey_instance
+      description: "One row per care episode — A&E attendance, inpatient
+        spell, outpatient referral, diagnostics, cancer pathway, surgical
+        pathway, post-discharge follow-up, or FFT survey — current state."
       rename:
         prop__actor: patient_id
         prop__journey_type: pathway_type
@@ -280,6 +284,7 @@ source:
           occupies (see the declared values below)."
     - name: booking
       kind: booking
+      description: "One row per e-RS appointment booking, current state."
       rename:
         prop__subject: patient_id
         prop__diary: appointment_book_id
@@ -307,6 +312,9 @@ source:
           slot was withdrawn; empty on every row in this dataset."
     - name: appointment_book
       kind: diary
+      description: "One row per appointment book — outpatient clinic,
+        two-week-wait cancer clinic, or elective operating list — current
+        state."
       rename:
         prop__diary_type: book_type
       # next_opening is a tracked payload BIGINT holding a sim-instant (the
@@ -443,6 +451,9 @@ source:
 
     - name: clinical_event
       kind: tick_decision
+      description: "One row per clinical milestone recorded across the
+        trust's care pathways: ed_arrival, triage, admission,
+        surgery_performed, and the rest of the event stream."
       rename:
         prop__journey_instance: pathway_episode_id
         prop__decision_type: event_type
@@ -463,6 +474,10 @@ source:
           type records any."
     - name: clinical_event_binding
       membership: {kind: tick_decision, property: bindings}
+      description: "One row per catalogue item — ward, theatre, diagnostic
+        test, procedure, or medication — linked to a clinical event under
+        its binding role (dx_test, admitted_meds, spell_ward,
+        surgery_procedure, surgery_theatre)."
       columns: [joined_sim_time, left_sim_time, elem__role_name,
                 member__entity__id, elem__pick_index]
       rename:
@@ -486,6 +501,8 @@ source:
           first); a medication event can carry up to three."
     - name: consultant_allocation
       membership: {kind: resource, property: holders}
+      description: "One row per interval a patient was allocated to a
+        consultant's caseload."
       # on_preempted_rule is DROPPED here — an engine rule id, empty on all
       # rows (see the header note).
       columns: [joined_sim_time, left_sim_time, member__actor__id,

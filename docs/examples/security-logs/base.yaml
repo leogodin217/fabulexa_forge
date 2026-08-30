@@ -134,6 +134,9 @@ base:
 
     - table: records__journey_instance
       name: session
+      description: >-
+        One session a host runs, from open to close — the correlation row
+        every security_event in it shares by session_id.
       columns:
         record_index: session_key
         record_id: session_id
@@ -167,6 +170,10 @@ base:
 
     - table: records__tick_decision
       name: security_event
+      description: >-
+        One event the collector logged for a session — a connection attempt,
+        firewall evaluation, authentication attempt or rejection, or session
+        opening.
       columns:
         record_index: event_key
         record_id: event_id

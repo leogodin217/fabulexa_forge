@@ -255,6 +255,8 @@ source:
     # which is engine role bookkeeping with no domain meaning.
     - name: shopping_session
       kind: journey_instance
+      description: "One customer's single visit to the store, funneling from
+        browsing through cart and checkout to a purchase or an abandonment."
       columns: [created_sim_time, active, deactivated_at, last_mutation_sim_time,
                 prop__actor, prop__journey_type, prop__current_state, prop__customer_handle]
       rename:
@@ -278,6 +280,8 @@ source:
           shopper left)."
     - name: customer_action
       kind: tick_decision
+      description: "One funnel action a customer took during a session: a
+        view, cart add, comparison, checkout start, or purchase."
       rename:
         presentation_id: action_number
         prop__journey_instance: session_id
@@ -307,6 +311,8 @@ source:
         prop__context: {json_precision: {discount_pct: 4}}
     - name: action_product
       membership: {kind: tick_decision, property: bindings}
+      description: "One product bound to a customer action: the item viewed,
+        carted, or on one side of a comparison."
       columns: [joined_sim_time, left_sim_time, elem__role_name,
                 member__entity__id, elem__pick_index]
       rename:
