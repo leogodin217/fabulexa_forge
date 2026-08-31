@@ -54,10 +54,12 @@ from fabulexa_forge.derivations.membership_events import (
 from fabulexa_forge.derivations.properties import has_presentation_id
 from fabulexa_forge.derivations.row_state_events import (
     build_row_state_events_sql,
+    resolve_stream_columns,
 )
 from fabulexa_forge.derivations.row_state_events import (
     fold_row_column_names as record_fold_row_column_names,
 )
+from fabulexa_forge.derivations.state_at import STATE_AT_COLUMNS, build_state_at_sql
 from fabulexa_forge.errors import (
     DecimalSourceIsDouble,
     ExportError,
@@ -115,6 +117,10 @@ _IDX_RECORD_ID = 0
 _IDX_EVENT_SIM_TIME = 1
 _IDX_EVENT_CLASS = 2
 _IDX_OP = 3
+
+# Index into the state-at fold's row (STATE_AT_COLUMNS): the seek snapshot
+# phase's liveness flag.
+_IDX_STATE_ACTIVE = 2
 
 # The canonical merge key: (event_sim_time, event_class, stream_name, record_id).
 _MergeKey = tuple[int, int, str, str]
@@ -1528,30 +1534,26 @@ def _wrap_stream_render_sql(
 def _build_after_image(
     row: tuple[object, ...],
     col_names: list[str],
-    op: str,
-) -> dict[str, object] | None:
-    """Build the raw after-image dict for one row-state-events row.
+) -> dict[str, object]:
+    """Build the raw after-image dict for one row whose after-image columns
+    start at index 4.
 
-    On a delete op the after-image is None. Otherwise, builds a dict from
-    every column after the 4-column fixed prefix (record_id, event_sim_time,
-    event_class, op), which gives: presentation_id (when the kind carries
-    one) and all prop__<p> columns, keyed by fold column name — an
-    intermediate value `_apply_output_columns` re-keys to the published,
-    output-named after-image; an unpublished raw entry (presentation_id
-    under a record_id/record_index election) never survives that pass. Also
-    adds record_id as the first after-image key.
+    Shared by the row-state-events fold's 'c'/'u' rows and the seek snapshot
+    phase's state-at fold 'r' rows — both column layouts carry record_id
+    first (index 0) and after-image columns from index 4: presentation_id
+    (when the kind carries one) and all prop__<p> columns, keyed by fold
+    column name. An intermediate value: `_apply_output_columns` re-keys it
+    to the published, output-named after-image; an unpublished raw entry
+    (presentation_id under a record_id/record_index election) never
+    survives that pass. Also adds record_id as the first after-image key.
 
     Args:
         row: The fold output row.
         col_names: Column names parallel to the row tuple.
-        op: The op string ('c', 'u', or 'd').
 
     Returns:
-        A dict[str, object] (str-or-null values) for c/u, or None for d.
+        A dict[str, object] (str-or-null values), record_id first.
     """
-    if op == "d":
-        return None
-
     after: dict[str, object] = {}
     after["record_id"] = row[_IDX_RECORD_ID]
     for i in range(4, len(col_names)):
@@ -1699,7 +1701,7 @@ def _iter_kind_streams_inner(
         )
         key_value = identity_values[identity.elected]
 
-        after = _build_after_image(row, col_names, op)
+        after = None if op == "d" else _build_after_image(row, col_names)
         after = _translate_reference_columns(
             after,
             reference_targets_by_stream[stream_name],
@@ -2053,6 +2055,172 @@ def iter_resolved_stream_events(
         )
 
     return _filter_events_by_bounds(events, start, end)
+
+
+def _iter_kind_snapshot_events(
+    emit: "Emit",
+    config: "StreamConfig",
+    anchor: "EffectiveAnchor | None",
+    resolution: StreamResolution,
+    at_sim_time: int,
+) -> Iterator[StreamEvent]:
+    """Materialize the seek snapshot phase for content='state-changes'.
+
+    One 'r' event per record live at T (created_sim_time <= T, not
+    deactivated at any instant <= T — compaction semantics) per covering
+    stream, ordered (stream_name ASC, record_id ASC). Reconstructs each
+    live record's after-image via the state-at fold (`build_state_at_sql`)
+    at the exclusive horizon T + 1 — which renders T's own creation,
+    history, and deactivation points inclusive — then runs the same
+    reference-translation / output-column / identity-rendering pipeline a
+    'c'/'u' after-image runs, so the image is identical to a same-instant
+    change event's. seq is shared by the whole phase: the count of in-scope
+    events with event_sim_time <= T (0 when the phase precedes every
+    event), read by consuming the engine's own bounded resolved iterator
+    over (None, T + 1) — the same seq-stamping pass, never re-derived.
+    Called only for content='state-changes'; iter_resolved_snapshot_events
+    short-circuits membership-events to empty.
+
+    Args:
+        emit: The open emit.
+        config: The validated streaming configuration.
+        anchor: The resolved effective anchor, or None.
+        resolution: The pair's own eager-pass result (resolve_streams).
+        at_sim_time: The snapshot position T (ns), inclusive.
+
+    Returns:
+        An iterator of 'r' StreamEvents, possibly empty.
+    """
+    sidecar = emit.sidecar
+    fork_path = resolution.fork_path
+    election = resolution.election
+    subtype_indexes = _build_subtype_indexes(emit, config, sidecar)
+    known_kinds = frozenset(sidecar.record_kinds())
+    identity_index_cache: dict[tuple[str, str], dict[str, str]] = {}
+    horizon_ns = at_sim_time + 1
+
+    seq = sum(
+        1
+        for _ in iter_resolved_stream_events(
+            emit, config, anchor, resolution, None, horizon_ns
+        )
+    )
+    ts = render_ts(at_sim_time, anchor)
+
+    for stream in sorted(config.streams, key=lambda s: s.name):
+        assert isinstance(stream, KindStream)
+        kind = stream.kind
+        properties = frozenset(stream.properties)
+        identity = resolution.identity_by_stream[stream.name]
+
+        after_image_cols = resolve_stream_columns(sidecar, kind, properties)
+        col_names = list(STATE_AT_COLUMNS) + after_image_cols[1:]
+
+        sql = build_state_at_sql(sidecar, fork_path, kind, properties, horizon_ns)
+        rows = [row for row in emit.query(sql, ()) if row[_IDX_STATE_ACTIVE]]
+
+        if stream.sub_types is not None and kind in subtype_indexes:
+            rows = _filter_rows_by_types(rows, stream.sub_types, subtype_indexes[kind])
+        rows = _filter_rows_by_selection(
+            rows, resolution.selection_by_stream[stream.name]
+        )
+        rows.sort(key=lambda row: str(row[_IDX_RECORD_ID]))
+
+        reference_targets = kind_reference_targets(
+            sidecar, kind, stream.properties, known_kinds
+        )
+        output_columns = resolve_stream_output_columns(
+            sidecar, kind, stream.properties, stream.rename, identity
+        )
+        key_output_key = resolve_identity_output_key(stream.rename, identity.elected)
+        envelope_kind = resolve_stream_envelope_kind(
+            stream.kind_label, resolution.kind_vocabulary, kind
+        )
+        kind_is_subtyped = _is_kind_subtyped(kind, sidecar)
+
+        for row in rows:
+            record_id = str(row[_IDX_RECORD_ID])
+            identity_values = _resolve_row_identity_values(
+                record_id,
+                identity.published,
+                kind,
+                emit,
+                fork_path,
+                identity_index_cache,
+            )
+            key_value = identity_values[identity.elected]
+
+            after: dict[str, object] | None = _build_after_image(row, col_names)
+            after = _translate_reference_columns(
+                after,
+                reference_targets,
+                emit,
+                fork_path,
+                sidecar,
+                election,
+                identity_index_cache,
+                subtype_indexes,
+            )
+            after = _apply_output_columns(after, output_columns, identity_values)
+
+            sub_type: str | None = None
+            if kind_is_subtyped and kind in subtype_indexes:
+                sub_type = subtype_indexes[kind].get(record_id)
+            attrs = route_attributes(kind_is_subtyped, kind, sub_type)
+
+            yield StreamEvent(
+                seq=seq,
+                op="r",
+                kind=envelope_kind,
+                record_id=record_id,
+                event_sim_time=at_sim_time,
+                ts=ts,
+                after=after,
+                topic=stream.name,
+                route_table=attrs["route_table"],
+                key_column=key_output_key,
+                key_value=key_value,
+            )
+
+
+def iter_resolved_snapshot_events(
+    emit: "Emit",
+    config: "StreamConfig",
+    anchor: "EffectiveAnchor | None",
+    resolution: StreamResolution,
+    at_sim_time: int,
+) -> Iterator[StreamEvent]:
+    """Yield the seek snapshot phase: one 'r' event per record live at T
+    per covering stream, ordered (stream_name ASC, record_id ASC).
+
+    state-changes content: a record is live iff created_sim_time <= T and
+    not deactivated at any instant <= T (compaction semantics). Each 'r'
+    carries op='r', seq = N (the internal count of in-scope events with
+    event_sim_time <= T; 0 when the phase precedes every event; shared by
+    the whole phase), event_sim_time = T, ts = T rendered under `anchor`,
+    and after = the record's full published image at T — the state fold
+    over the kind's full tracked + constant property set, projected through
+    the stream's identity projection, properties, renames, vocabulary, and
+    codec exactly as a 'c'/'u' image. Change scope does not narrow the 'r'
+    set or image. membership-events content: yields nothing (an
+    append-only fact log has no per-key state), so the head's seek is
+    content-uniform: chain(this, events(T + 1, None)). Total over any int
+    T (T < 0 selects nothing); the PlaybackError check is the head's.
+    Lazy; no notices.
+
+    Args:
+        emit: The open emit.
+        config: The validated streaming configuration.
+        anchor: The resolved effective anchor, or None.
+        resolution: The pair's own eager-pass result (resolve_streams).
+        at_sim_time: The snapshot position T (ns), inclusive.
+
+    Returns:
+        An iterator of 'r' StreamEvents, possibly empty.
+    """
+    if config.content == "membership-events":
+        return iter(())
+    return _iter_kind_snapshot_events(emit, config, anchor, resolution, at_sim_time)
 
 
 def build_topic_set(config: "StreamConfig") -> tuple[str, ...]:
