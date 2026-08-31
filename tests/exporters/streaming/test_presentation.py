@@ -5,7 +5,7 @@ resolve_membership_output_columns) against `IdentityProjection` /
 `OutputEntry`, the kind-vocabulary resolver (resolve_stream_kind_vocabulary),
 the member-kind value mapping (apply_kind_vocabulary), and the
 presentation-invariance / Debezium-schema-agreement properties end to end
-through the engine and driver.
+through the engine and the playback render surface.
 
 No absorption branch: `identity.published` always carries the elected
 surface exactly once, so a `presentation_id`-elected stream publishes one
@@ -37,8 +37,10 @@ from fabulexa_forge.errors import (
     StreamOutputNameCollision,
     StreamRenameUnresolvable,
 )
-from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
-from fabulexa_forge.exporters.streaming.engine import iter_stream_events
+from fabulexa_forge.exporters.streaming.engine import (
+    iter_stream_events,
+    resolve_streams,
+)
 from fabulexa_forge.exporters.streaming.presentation import (
     IdentityProjection,
     apply_kind_vocabulary,
@@ -47,6 +49,7 @@ from fabulexa_forge.exporters.streaming.presentation import (
     resolve_stream_kind_vocabulary,
     resolve_stream_output_columns,
 )
+from fabulexa_forge.playback.stream_render import _build_schema_map
 from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import _ddl, _membership_table_spec
@@ -885,7 +888,10 @@ class TestDebeziumSchemaMatchesResolver:
         )
         source_identity = _source_identity()
         with open_emit(emit_dir) as emit:
-            schemas = _build_value_schemas(emit, config, source_identity, "topic")
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            schemas = _build_schema_map(
+                emit, config, resolution, source_identity, "topic"
+            )
             expected = [
                 entry.output_key
                 for entry in resolve_stream_output_columns(
@@ -897,7 +903,7 @@ class TestDebeziumSchemaMatchesResolver:
                 )
             ]
 
-        schema = schemas["item"]
+        schema = schemas[("item", "item")]
         after_struct = schema["fields"][1]
         field_names = [f["field"] for f in after_struct["fields"]]
         assert field_names == expected
@@ -944,9 +950,12 @@ class TestDebeziumSchemaMatchesResolver:
         )
         source_identity = _source_identity()
         with open_emit(emit_dir) as emit:
-            schemas = _build_value_schemas(emit, config, source_identity, "topic")
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            schemas = _build_schema_map(
+                emit, config, resolution, source_identity, "topic"
+            )
 
-        schema = schemas["item"]
+        schema = schemas[("item", "item")]
         after_struct = schema["fields"][1]
         field_names = [f["field"] for f in after_struct["fields"]]
         assert field_names == ["record_id", "presentation_id", "status"]
@@ -972,7 +981,10 @@ class TestDebeziumSchemaMatchesResolver:
         )
         source_identity = _source_identity()
         with open_emit(emit_dir) as emit:
-            schemas = _build_value_schemas(emit, config, source_identity, "topic")
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            schemas = _build_schema_map(
+                emit, config, resolution, source_identity, "topic"
+            )
             expected = ["event"] + [
                 entry.output_key
                 for entry in resolve_membership_output_columns(
@@ -984,7 +996,7 @@ class TestDebeziumSchemaMatchesResolver:
                 )
             ]
 
-        schema = schemas["team"]
+        schema = schemas[("team", "team")]
         after_struct = schema["fields"][1]
         field_names = [f["field"] for f in after_struct["fields"]]
         assert field_names == expected
@@ -1025,14 +1037,25 @@ class TestKindLabelsDoNotAffectRouting:
         )
         source_identity = _source_identity()
         with open_emit(emit_dir) as emit:
-            base_schemas = _build_value_schemas(
-                emit, base_config, source_identity, "source_table"
+            base_resolution = resolve_streams(emit, base_config, discard_notice_sink)
+            base_schemas = _build_schema_map(
+                emit, base_config, base_resolution, source_identity, "source_table"
             )
-            labeled_schemas = _build_value_schemas(
-                emit, labeled_config, source_identity, "source_table"
+            labeled_resolution = resolve_streams(
+                emit, labeled_config, discard_notice_sink
+            )
+            labeled_schemas = _build_schema_map(
+                emit,
+                labeled_config,
+                labeled_resolution,
+                source_identity,
+                "source_table",
             )
         assert set(base_schemas) == set(labeled_schemas)
-        assert base_schemas["item"]["name"] == labeled_schemas["item"]["name"]
+        assert (
+            base_schemas[("item", "item")]["name"]
+            == labeled_schemas[("item", "item")]["name"]
+        )
 
         with open_emit(emit_dir) as emit:
             base_events = list(

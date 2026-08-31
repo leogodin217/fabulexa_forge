@@ -17,10 +17,8 @@ from fabulexa_forge.errors import (
     KafkaClientUnavailable,
     KafkaDeliveryError,
 )
-from fabulexa_forge.exporters.streaming.encoding import encode_pinned
 
 if TYPE_CHECKING:
-    from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import KafkaConfig
     from fabulexa_forge.exporters.streaming.types import StreamEvent, StreamOutcome
 
@@ -215,21 +213,22 @@ def _make_delivery_callback(errors: list[str]) -> Callable[..., None]:
 def write_kafka_stream(
     events: Iterable[StreamEvent],
     render_value: Callable[[StreamEvent], bytes],
-    anchor: EffectiveAnchor,
+    render_key: Callable[[StreamEvent], bytes],
+    render_timestamp: Callable[[StreamEvent], int],
     bootstrap_servers: str,
     topic_set: tuple[str, ...],
     paced: bool,
 ) -> StreamOutcome:
     """Produce the event stream to Kafka, one message per event.
 
-    Format-agnostic: the value bytes come from render_value (built by the driver from
-    the selected format), so this sink holds no jsonl/debezium knowledge. Pre-creates
-    every topic in topic_set (1 partition, replication factor 1, idempotent) before the
-    first produce, configures an ordered idempotent fully-acked producer, produces each
-    event keyed by encode_pinned({event.key_column: event.key_value}) (UTF-8) with
-    record timestamp rebased_epoch_ms(event.event_sim_time, anchor), and flushes
-    (blocks on all acks) before returning. A topic that receives zero events still
-    appears in events_per_topic with count 0.
+    Fully format- and time-agnostic: value, key, and record-timestamp bytes come from
+    the three callables (the driver passes the render surface's render_bytes /
+    render_key_bytes / timestamp_ms), so this sink holds no jsonl/debezium/anchor
+    knowledge. Pre-creates every topic in topic_set (1 partition, replication factor 1,
+    idempotent) before the first produce, configures an ordered idempotent fully-acked
+    producer, produces each event with the three callables' bytes/timestamp, and
+    flushes (blocks on all acks) before returning. A topic that receives zero events
+    still appears in events_per_topic with count 0.
 
     paced=True serves delivery incrementally as each event arrives (the pacer governs
     arrival); paced=False produces all events then flushes once. In both modes
@@ -244,10 +243,9 @@ def write_kafka_stream(
     Args:
         events: The merged, seq-stamped event stream in canonical order, already wrapped
             by the pacer when the run is realtime.
-        render_value: Per-event value serializer producing the pinned-encoded message
-            bytes (no trailing newline); built by the driver from the format.
-        anchor: The resolved effective anchor (the driver guarantees non-None for the
-            kafka sink); used for the epoch-millisecond record timestamp.
+        render_value: Per-event message-body bytes (unframed).
+        render_key: Per-event key bytes.
+        render_timestamp: Per-event epoch-ms record timestamp.
         bootstrap_servers: The resolved non-empty bootstrap-servers string.
         topic_set: The full enumerated topic set; every entry is created and seeded with
             a zero count.
@@ -266,7 +264,6 @@ def write_kafka_stream(
             reported as already existing is absent from the re-read cluster
             metadata (partition count unverifiable).
     """
-    from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
     from fabulexa_forge.exporters.streaming.types import StreamOutcome
 
     ck = _import_confluent_kafka_checked()
@@ -292,9 +289,9 @@ def write_kafka_stream(
     for event in events:
         if delivery_errors:
             raise KafkaDeliveryError(f"Kafka delivery failure: {delivery_errors[0]}")
-        key_bytes = encode_pinned({event.key_column: event.key_value}).encode("utf-8")
+        key_bytes = render_key(event)
         value_bytes = render_value(event)
-        timestamp_ms = rebased_epoch_ms(event.event_sim_time, anchor)
+        timestamp_ms = render_timestamp(event)
 
         try:
             producer.produce(

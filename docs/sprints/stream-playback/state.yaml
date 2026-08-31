@@ -40,7 +40,7 @@ phases:
           - "tests/exporters/streaming/test_jsonl.py"
           - "tests/exporters/streaming/test_debezium.py"
   4:
-    status: pending
+    status: complete
     name: "The verb re-seam"
     demo: "docs/sprints/stream-playback/demos/phase_4_verb_reseam.py"
     steps:

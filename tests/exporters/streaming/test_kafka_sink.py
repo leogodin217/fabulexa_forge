@@ -387,6 +387,20 @@ def _make_anchor() -> Any:
     return _shared_make_anchor()
 
 
+def _render_key(event: Any) -> bytes:
+    """The render surface's key-bytes shape: encode_pinned({key_column: key_value})."""
+    from fabulexa_forge.exporters.streaming.encoding import encode_pinned
+
+    return encode_pinned({event.key_column: event.key_value}).encode("utf-8")
+
+
+def _render_timestamp(event: Any) -> int:
+    """The render surface's timestamp shape: rebased_epoch_ms under a fixed anchor."""
+    from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
+
+    return rebased_epoch_ms(event.event_sim_time, _make_anchor())
+
+
 def _make_event(
     seq: int,
     record_id: str,
@@ -450,7 +464,8 @@ def _run_write(
     outcome = write_kafka_stream(
         events=events,
         render_value=_render_value,
-        anchor=_make_anchor(),
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers="localhost:9092",
         topic_set=topic_set,
         paced=paced,
@@ -518,7 +533,7 @@ def test_produce_topic_is_event_topic(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_produce_key_is_record_id_pinned(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Produce key = encode_pinned({"record_id": event.record_id}) UTF-8 bytes."""
+    """Produce key = render_key(event)'s output, verbatim: encode_pinned({"record_id": ...})."""
     from fabulexa_forge.exporters.streaming.encoding import encode_pinned
 
     events = [_make_event(1, "abc-123", "topic_a")]
@@ -536,7 +551,7 @@ def test_produce_key_is_record_id_pinned(monkeypatch: pytest.MonkeyPatch) -> Non
 
 
 def test_produce_key_never_presentation_id(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Produce key is record_id, never presentation_id."""
+    """Produce key (render_key's output) is record_id, never presentation_id."""
     import json
 
     events = [_make_event(1, "r1", "topic_a")]
@@ -555,7 +570,7 @@ def test_produce_key_never_presentation_id(monkeypatch: pytest.MonkeyPatch) -> N
 
 
 def test_produce_key_for_delete_op(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Delete (op='d') events also use encode_pinned({"record_id": ...}) as key."""
+    """Delete (op='d') events also produce render_key's encode_pinned({"record_id": ...})."""
     from fabulexa_forge.exporters.streaming.encoding import encode_pinned
 
     events = [_make_event(1, "r1", "topic_a", op="d")]
@@ -588,7 +603,7 @@ def test_produce_value_is_render_value_output(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_produce_timestamp_is_rebased_epoch_ms(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Produce timestamp = rebased_epoch_ms(event.event_sim_time, anchor)."""
+    """Produce timestamp = render_timestamp(event)'s output, verbatim: rebased_epoch_ms."""
     from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
 
     sim_time = 5_000_000_000  # 5 seconds in nanoseconds
@@ -647,7 +662,8 @@ def test_flush_called_before_return(monkeypatch: pytest.MonkeyPatch) -> None:
     write_kafka_stream(
         events=[],
         render_value=_render_value,
-        anchor=_make_anchor(),
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers="localhost:9092",
         topic_set=("t",),
         paced=False,
@@ -673,7 +689,8 @@ def test_unacked_at_flush_raises_delivery_error(
         write_kafka_stream(
             events=[],
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=("t",),
             paced=False,
@@ -699,7 +716,8 @@ def test_delivery_callback_error_raises_delivery_error(
         write_kafka_stream(
             events=[_make_event(1, "r1", "t")],
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=("t",),
             paced=False,
@@ -736,7 +754,8 @@ def test_loop_entry_delivery_error_raised_before_second_event(
         write_kafka_stream(
             events=[_make_event(1, "r1", "t"), _make_event(2, "r2", "t")],
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=("t",),
             paced=False,
@@ -772,7 +791,8 @@ def test_preexisting_topic_wrong_partitions_raises(
         write_kafka_stream(
             events=[],
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=("multi_topic",),
             paced=False,
@@ -803,7 +823,8 @@ def test_preexisting_topic_wrong_partitions_message_includes_count(
         write_kafka_stream(
             events=[],
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=("my_topic",),
             paced=False,
@@ -833,7 +854,8 @@ def test_preexisting_topic_one_partition_used_as_is(
     outcome = write_kafka_stream(
         events=[],
         render_value=_render_value,
-        anchor=_make_anchor(),
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers="localhost:9092",
         topic_set=("good_topic",),
         paced=False,
@@ -873,7 +895,8 @@ def test_preexisting_topic_absent_from_metadata_raises(
         write_kafka_stream(
             events=[],
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=("ghost_topic",),
             paced=False,
@@ -918,7 +941,8 @@ def test_topic_creation_generic_failure_raises_delivery_error(
         write_kafka_stream(
             events=[],
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=("bad_topic",),
             paced=False,
@@ -963,7 +987,8 @@ def test_paced_and_unpaced_produce_identical_tuples(
         write_kafka_stream(
             events=events,
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=topic_set,
             paced=paced,
@@ -1019,7 +1044,8 @@ def test_poll_called_every_iteration_regardless_of_paced(
     write_kafka_stream(
         events=events,
         render_value=_render_value,
-        anchor=_make_anchor(),
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers="localhost:9092",
         topic_set=("t",),
         paced=paced,
@@ -1060,7 +1086,8 @@ def test_produce_buffererror_raises_delivery_error(
         write_kafka_stream(
             events=[_make_event(1, "r1", "t")],
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=("t",),
             paced=paced,
@@ -1085,7 +1112,8 @@ def test_client_unavailable_when_confluent_kafka_is_none(
         write_kafka_stream(
             events=[],
             render_value=_render_value,
-            anchor=_make_anchor(),
+            render_key=_render_key,
+            render_timestamp=_render_timestamp,
             bootstrap_servers="localhost:9092",
             topic_set=("t",),
             paced=False,
@@ -1130,7 +1158,8 @@ def test_client_unavailable_when_confluent_kafka_import_fails(
             write_kafka_stream(
                 events=[],
                 render_value=_render_value,
-                anchor=_make_anchor(),
+                render_key=_render_key,
+                render_timestamp=_render_timestamp,
                 bootstrap_servers="localhost:9092",
                 topic_set=("t",),
                 paced=False,
@@ -1186,7 +1215,8 @@ def test_write_kafka_stream_does_not_require_pre_imported_admin(
     outcome = write_kafka_stream(
         events=[],
         render_value=_render_value,
-        anchor=_make_anchor(),
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers="localhost:9092",
         topic_set=("t",),
         paced=False,
