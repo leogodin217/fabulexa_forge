@@ -187,14 +187,21 @@ def _build_source_block(
     seq: int,
     table: str,
     source_identity: "DebeziumSourceIdentity",
+    op: str,
 ) -> dict[str, object]:
-    """Build the source block for one event in the pinned source key order."""
+    """Build the source block for one event in the pinned source key order.
+
+    `snapshot` reports "true" on a seek snapshot read ('r') and "false" on
+    every other op — canonical Debezium snapshot-read semantics; every 'r'
+    of one snapshot phase repeats one `lsn` (the shared position N),
+    deliberately, since a snapshot read has no distinct source position.
+    """
     return {
         "version": source_identity.version,
         "connector": source_identity.connector,
         "name": source_identity.name,
         "ts_ms": ts_ms,
-        "snapshot": "false",
+        "snapshot": "true" if op == "r" else "false",
         "db": source_identity.db,
         "sequence": f'[null,"{seq}"]',
         "schema": source_identity.schema_,
@@ -214,7 +221,7 @@ def _build_envelope(
 
     Op branches:
       - 'd'              -> before={<key_column>: <key_value>}; after=null; op='d'.
-      - 'c' / 'u'        -> before=null; after=event.after; op=event.op.
+      - 'c' / 'u' / 'r'  -> before=null; after=event.after; op=event.op.
       - 'join' / 'leave' -> before=null; after={'event': op, **event.after}; op='c'.
     """
     if event.op == "d":
@@ -231,7 +238,7 @@ def _build_envelope(
         after = event.after
         envelope_op = event.op
 
-    source = _build_source_block(ts_ms, event.seq, table, source_identity)
+    source = _build_source_block(ts_ms, event.seq, table, source_identity, event.op)
 
     return {
         "before": before,
@@ -260,7 +267,9 @@ def render_debezium_message(
     Op branches, by event.op:
       - 'd'              -> envelope op 'd'; before={<key_column>: <key_value>};
                             after=null.
-      - 'c' / 'u'        -> envelope op = event.op; before=null; after=event.after.
+      - 'c' / 'u' / 'r'  -> envelope op = event.op; before=null; after=event.after.
+                            'r' additionally reports source.snapshot='true'
+                            (every other op reports 'false').
       - 'join' / 'leave' -> envelope op 'c'; before=null;
                             after={'event': event.op, **event.after}.
 
@@ -287,7 +296,7 @@ def _serialize_message(obj: dict[str, object]) -> str:
     return encode_pinned(obj) + "\n"
 
 
-def _resolve_table_identity(event: "StreamEvent", table_identity: str) -> str:
+def resolve_table_identity(event: "StreamEvent", table_identity: str) -> str:
     """Resolve the Debezium source.table / value-schema key for one event.
 
     Args:
@@ -322,7 +331,7 @@ def _render_debezium_line(
         A (topic, serialized_line) pair.
     """
     ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-    table = _resolve_table_identity(event, table_identity)
+    table = resolve_table_identity(event, table_identity)
     schema = value_schemas[table] if value_schemas is not None else None
     msg = render_debezium_message(event, ts_ms, source_identity, table, schema)
     return event.topic, _serialize_message(msg)
@@ -476,7 +485,7 @@ def write_debezium_stream(
         else:
             for event in events:
                 ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-                table = _resolve_table_identity(event, table_identity)
+                table = resolve_table_identity(event, table_identity)
                 schema = value_schemas[table] if value_schemas is not None else None
                 msg = render_debezium_message(
                     event, ts_ms, source_identity, table, schema
@@ -501,7 +510,7 @@ def write_debezium_stream(
             buffers: dict[str, list[str]] = {}
             for event in events:
                 ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-                table = _resolve_table_identity(event, table_identity)
+                table = resolve_table_identity(event, table_identity)
                 schema = value_schemas[table] if value_schemas is not None else None
                 msg = render_debezium_message(
                     event, ts_ms, source_identity, table, schema

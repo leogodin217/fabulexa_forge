@@ -79,7 +79,7 @@ def _make_identity(
 
 def _make_event(
     seq: int = 1,
-    op: Literal["c", "u", "d"] = "c",
+    op: Literal["c", "u", "d", "r"] = "c",
     kind: str = "actor",
     record_id: str = "r1",
     event_sim_time: int = 0,
@@ -516,6 +516,59 @@ class TestRenderDebeziumMessage:
             "lsn",
         ]
         assert list(parsed.keys()) == expected
+
+
+# ---------------------------------------------------------------------------
+# render_debezium_message — the 'r' snapshot-read op
+# ---------------------------------------------------------------------------
+
+
+class TestRenderDebeziumMessageSnapshot:
+    """'r' (the seek snapshot read): before=null, after=the full after-image,
+    op='r', source.snapshot='true', source.lsn/sequence carry the shared
+    snapshot position N. Every other op still renders snapshot='false'
+    byte-identically (TestRenderDebeziumMessage, unchanged)."""
+
+    def setup_method(self) -> None:
+        self.identity = _make_identity()
+        self.anchor = make_anchor()
+
+    def _render(self, event: StreamEvent) -> dict[str, object]:
+        ts_ms = rebased_epoch_ms(event.event_sim_time, self.anchor)
+        return render_debezium_message(event, ts_ms, self.identity, event.kind, None)
+
+    def test_op_is_r(self) -> None:
+        event = _make_event(op="r")
+        payload = self._render(event)
+        assert payload["op"] == "r"
+
+    def test_before_null_after_full_image(self) -> None:
+        after = {"record_id": "r1", "status": "active"}
+        event = _make_event(op="r", after=after)
+        payload = self._render(event)
+        assert payload["before"] is None
+        assert payload["after"] == after
+
+    def test_source_snapshot_true(self) -> None:
+        event = _make_event(op="r")
+        payload = self._render(event)
+        assert _payload_source(payload)["snapshot"] == "true"
+
+    def test_source_lsn_equals_shared_seq(self) -> None:
+        event = _make_event(op="r", seq=9)
+        payload = self._render(event)
+        assert _payload_source(payload)["lsn"] == 9
+
+    def test_source_sequence_format(self) -> None:
+        event = _make_event(op="r", seq=9)
+        payload = self._render(event)
+        assert _payload_source(payload)["sequence"] == '[null,"9"]'
+
+    def test_every_other_op_still_reports_snapshot_false(self) -> None:
+        for op in ("c", "u", "d"):
+            event = _make_event(op=op)  # type: ignore[arg-type]
+            payload = self._render(event)
+            assert _payload_source(payload)["snapshot"] == "false"
 
 
 # ---------------------------------------------------------------------------

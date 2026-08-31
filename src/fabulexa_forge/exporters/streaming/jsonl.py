@@ -26,7 +26,10 @@ def render_jsonl_object(event: "StreamEvent") -> dict[str, object]:
     (write_jsonl_stream does not sort). The key is the event's elected
     surface — {record_id} under no election (§ Keying), or one entry keyed by
     the elected surface's contract column name. `after` is the reconstructed
-    row map (all values str-or-null, codec VARCHAR) on c/u and null on d.
+    row map (all values str-or-null, codec VARCHAR) on c/u/r and null on d.
+    On 'r' (the seek snapshot-read op) `after` is the record's full
+    published image at the snapshot position; `seq` is the shared snapshot
+    position N and `ts` renders event_sim_time = N's read position T.
 
     Args:
         event: The event to render.

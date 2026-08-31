@@ -26,7 +26,7 @@ from fabulexa_forge.exporters.streaming.types import StreamEvent
 
 def _make_event(
     seq: int = 1,
-    op: Literal["c", "u", "d"] = "c",
+    op: Literal["c", "u", "d", "r"] = "c",
     kind: str = "item",
     record_id: str = "r1",
     event_sim_time: int = 1000,
@@ -146,6 +146,37 @@ class TestRenderJsonlObject:
         event = _make_event(ts=86_400_000_000_000)
         obj = render_jsonl_object(event)
         assert obj["ts"] == 86_400_000_000_000
+
+
+# ---------------------------------------------------------------------------
+# render_jsonl_object — the 'r' snapshot-read op
+# ---------------------------------------------------------------------------
+
+
+class TestRenderJsonlObjectSnapshot:
+    """The 'r' op renders like 'c'/'u': the standard object shape with the
+    full after-image, seq carrying the shared snapshot position N."""
+
+    def test_op_is_r(self) -> None:
+        event = _make_event(op="r")
+        obj = render_jsonl_object(event)
+        assert obj["op"] == "r"
+
+    def test_after_is_full_image(self) -> None:
+        after = {"record_id": "r1", "status": "active"}
+        event = _make_event(op="r", after=after)
+        obj = render_jsonl_object(event)
+        assert obj["after"] == after
+
+    def test_seq_is_the_shared_snapshot_position(self) -> None:
+        event = _make_event(op="r", seq=3, event_sim_time=100)
+        obj = render_jsonl_object(event)
+        assert obj["seq"] == 3
+
+    def test_key_order_unchanged(self) -> None:
+        event = _make_event(op="r")
+        obj = render_jsonl_object(event)
+        assert list(obj.keys()) == ["seq", "op", "ts", "kind", "key", "after"]
 
 
 # ---------------------------------------------------------------------------
