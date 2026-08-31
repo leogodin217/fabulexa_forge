@@ -32,6 +32,7 @@ CLI.
 from __future__ import annotations
 
 import heapq
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Iterator, Literal, Sequence, cast
 
 from fabulexa_forge._sql import render_decimal_expr, render_json_precision_expr
@@ -1178,15 +1179,30 @@ def _validate_stream_naming(
             raise type(exc)(f"stream '{stream.name}': {exc}") from exc
 
 
-def _validate_streams(
+@dataclass(frozen=True)
+class StreamResolution:
+    """The eager business-rule pass's resolved outputs for one (emit, config).
+
+    Produced by resolve_streams; consumed by the engine's resolved iterators
+    and by the playback seam's head and render. A pure function of
+    (emit, config) — two resolutions of one pair are equal.
+    """
+
+    fork_path: str
+    """The resolved single branch's fork_path."""
+    election: "Election"
+    """The resolved message-key election."""
+    identity_by_stream: "Mapping[str, IdentityProjection]"
+    """Every stream's gated identity projection, by stream name."""
+    kind_vocabulary: "Mapping[str, str]"
+    """The resolved config-level kind -> label map."""
+    selection_by_stream: "Mapping[str, frozenset[str] | None]"
+    """Every stream's resolved selection set (None = no narrowing device)."""
+
+
+def resolve_streams(
     emit: "Emit", config: "StreamConfig", notice_sink: "NoticeSink"
-) -> tuple[
-    str,
-    "Election",
-    dict[str, IdentityProjection],
-    "Mapping[str, str]",
-    dict[str, "frozenset[str] | None"],
-]:
+) -> StreamResolution:
     """Run the eager business-rule validation pass over every declared stream.
 
     Checks the single-branch guard, then each stream's rules, in declaration
@@ -1213,11 +1229,7 @@ def _validate_streams(
             notices flow through.
 
     Returns:
-        (fork_path, election, identity_by_stream, kind_vocabulary,
-        selection_by_stream) — the resolved fork_path, the resolved
-        election, every stream's gated identity projection, the resolved
-        config-level kind -> label map, and every stream's resolved
-        selection set (None = no selection this device narrows).
+        The StreamResolution the pass resolves.
 
     Raises:
         ExportError: The single-branch guard fails, or any per-stream business
@@ -1269,7 +1281,13 @@ def _validate_streams(
     identity_by_stream = resolve_stream_identities(sidecar, election, config)
     _validate_stream_naming(sidecar, config, identity_by_stream)
     kind_vocabulary = resolve_stream_kind_vocabulary(config, sidecar)
-    return fork_path, election, identity_by_stream, kind_vocabulary, selection_by_stream
+    return StreamResolution(
+        fork_path=fork_path,
+        election=election,
+        identity_by_stream=identity_by_stream,
+        kind_vocabulary=kind_vocabulary,
+        selection_by_stream=selection_by_stream,
+    )
 
 
 def _is_kind_subtyped(kind: str, sidecar: "Sidecar") -> bool:
@@ -1573,9 +1591,9 @@ def _iter_kind_streams_inner(
     sidecar: "Sidecar",
     subtype_indexes: dict[str, dict[str, str]],
     election: "Election",
-    identity_by_stream: dict[str, IdentityProjection],
+    identity_by_stream: "Mapping[str, IdentityProjection]",
     kind_vocabulary: "Mapping[str, str]",
-    selection_by_stream: dict[str, "frozenset[str] | None"],
+    selection_by_stream: "Mapping[str, frozenset[str] | None]",
 ) -> Iterator[StreamEvent]:
     """Materialize one fold per kind-shaped stream, merge, and yield StreamEvents.
 
@@ -1725,9 +1743,9 @@ def _iter_membership_streams_inner(
     fork_path: str,
     sidecar: "Sidecar",
     election: "Election",
-    identity_by_stream: dict[str, IdentityProjection],
+    identity_by_stream: "Mapping[str, IdentityProjection]",
     kind_vocabulary: "Mapping[str, str]",
-    selection_by_stream: dict[str, "frozenset[str] | None"],
+    selection_by_stream: "Mapping[str, frozenset[str] | None]",
 ) -> Iterator[StreamEvent]:
     """Materialize one fold per membership-shaped stream, merge, and yield events.
 
@@ -1940,37 +1958,101 @@ def iter_stream_events(
             StreamWhereColumnUnresolved, StreamWhereValueUncastable: A
             stream's `where` resolution fails.
     """
-    fork_path, election, identity_by_stream, kind_vocabulary, selection_by_stream = (
-        _validate_streams(emit, config, notice_sink)
-    )
+    resolution = resolve_streams(emit, config, notice_sink)
+    return iter_resolved_stream_events(emit, config, anchor, resolution, None, None)
+
+
+def _filter_events_by_bounds(
+    events: Iterator[StreamEvent], start: int | None, end: int | None
+) -> Iterator[StreamEvent]:
+    """Restrict a merged, seq-stamped event stream to a half-open time window.
+
+    Pure row selection: every surviving event (seq included) is untouched —
+    the caller's inner iterator already stamped seq over the whole in-scope
+    set before this filter runs. Total over any int pair: `start > end` and
+    `start == end` both yield nothing; a bound past the last event exhausts
+    without error.
+
+    Args:
+        events: The merged, seq-stamped event stream in canonical order.
+        start: Inclusive lower bound on event_sim_time, or None for no floor.
+        end: Exclusive upper bound on event_sim_time, or None for no ceiling.
+
+    Returns:
+        An iterator yielding only in-window events, in the same order.
+    """
+    for event in events:
+        if start is not None and event.event_sim_time < start:
+            continue
+        if end is not None and event.event_sim_time >= end:
+            continue
+        yield event
+
+
+def iter_resolved_stream_events(
+    emit: "Emit",
+    config: "StreamConfig",
+    anchor: "EffectiveAnchor | None",
+    resolution: StreamResolution,
+    start: int | None,
+    end: int | None,
+) -> Iterator[StreamEvent]:
+    """Yield bounded events under a pre-resolved eager pass.
+
+    The post-pass half of iter_stream_events: materializes the per-stream
+    folds, applies sub_types/selection drops, merges, stamps seq, renders ts.
+    Pure row selection over the merged in-scope set: every surviving event is
+    byte-identical (seq included) to its (None, None) self; the first event
+    of a bounded ask carries seq = 1 + N, N = the internal deterministic
+    count of in-scope events strictly before start. Bounds are total: any int
+    pair is a legal selection (start > end selects nothing); the seam's
+    PlaybackError bound check is the head's, not the engine's. Emits no
+    notices and re-runs no gates; `resolution` must be
+    resolve_streams(emit, config, ...) for this same pair — threading a
+    foreign resolution is a caller error the engine does not detect. Lazy:
+    nothing computes until pulled.
+
+    Args:
+        emit: The open emit.
+        config: The validated streaming configuration.
+        anchor: The resolved effective anchor, or None (raw-ns ts).
+        resolution: The pair's own eager-pass result.
+        start: Inclusive lower bound (ns), or None for tape start.
+        end: Exclusive upper bound (ns), or None for tape end.
+
+    Returns:
+        An iterator of StreamEvent in canonical order.
+    """
     sidecar = emit.sidecar
 
     if config.content == "membership-events":
-        return _iter_membership_streams_inner(
+        events = _iter_membership_streams_inner(
             emit,
             config,
             anchor,
-            fork_path,
+            resolution.fork_path,
             sidecar,
-            election,
-            identity_by_stream,
-            kind_vocabulary,
-            selection_by_stream,
+            resolution.election,
+            resolution.identity_by_stream,
+            resolution.kind_vocabulary,
+            resolution.selection_by_stream,
+        )
+    else:
+        subtype_indexes = _build_subtype_indexes(emit, config, sidecar)
+        events = _iter_kind_streams_inner(
+            emit,
+            config,
+            anchor,
+            resolution.fork_path,
+            sidecar,
+            subtype_indexes,
+            resolution.election,
+            resolution.identity_by_stream,
+            resolution.kind_vocabulary,
+            resolution.selection_by_stream,
         )
 
-    subtype_indexes = _build_subtype_indexes(emit, config, sidecar)
-    return _iter_kind_streams_inner(
-        emit,
-        config,
-        anchor,
-        fork_path,
-        sidecar,
-        subtype_indexes,
-        election,
-        identity_by_stream,
-        kind_vocabulary,
-        selection_by_stream,
-    )
+    return _filter_events_by_bounds(events, start, end)
 
 
 def build_topic_set(config: "StreamConfig") -> tuple[str, ...]:
