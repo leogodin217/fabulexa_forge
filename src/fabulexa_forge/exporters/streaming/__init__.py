@@ -8,11 +8,9 @@ Public surface:
     StreamOutcome — result of a stream run (per-topic event counts)
     iter_stream_events — yields events in canonical total order with seq stamped
     render_jsonl_object — render one event as the S1 JSONL object dict
-    write_jsonl_stream  — serialize events to stdout or per-topic files
     build_debezium_value_schema — Connect value-schema descriptor for one table identity
     rebased_epoch_ms    — rebase an event's sim_time to epoch-milliseconds
     render_debezium_message — re-wrap one StreamEvent as a Debezium value message
-    write_debezium_stream   — serialize events as Debezium to stdout or per-topic files
     encode_pinned       — byte-stable JSON encoder shared by all streaming sinks
     write_kafka_stream  — produce events to Kafka (requires the kafka extra)
     stream_export       — end-to-end: events → format → sink
@@ -35,16 +33,12 @@ from fabulexa_forge.exporters.streaming.debezium import (
     build_debezium_value_schema,
     rebased_epoch_ms,
     render_debezium_message,
-    write_debezium_stream,
 )
 from fabulexa_forge.exporters.streaming.driver import stream_export
 from fabulexa_forge.exporters.streaming.encoding import encode_pinned
 from fabulexa_forge.exporters.streaming.engine import iter_stream_events
 from fabulexa_forge.exporters.streaming.init import generate_stream_init_config
-from fabulexa_forge.exporters.streaming.jsonl import (
-    render_jsonl_object,
-    write_jsonl_stream,
-)
+from fabulexa_forge.exporters.streaming.jsonl import render_jsonl_object
 from fabulexa_forge.exporters.streaming.kafka_sink import (
     resolve_bootstrap_servers,
     write_kafka_stream,
@@ -95,7 +89,5 @@ __all__ = [
     "schedule_releases",
     "seed_mixer_run",
     "stream_export",
-    "write_debezium_stream",
-    "write_jsonl_stream",
     "write_kafka_stream",
 ]

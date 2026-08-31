@@ -744,6 +744,91 @@ def _resolve_oracle_render(
 
 
 # ---------------------------------------------------------------------------
+# write_line_stream — paced file-sink abort cleanup
+# ---------------------------------------------------------------------------
+
+
+def _line_event(seq: int, kind: str, record_id: str) -> StreamEvent:
+    """Build a minimal StreamEvent for write_line_stream tests."""
+    return StreamEvent(
+        seq=seq,
+        op="c",
+        kind=kind,
+        record_id=record_id,
+        event_sim_time=0,
+        ts="2026-01-01T00:00:00+00:00",
+        after={"record_id": record_id},
+        topic=kind,
+        route_table=kind,
+        key_column="record_id",
+        key_value=record_id,
+    )
+
+
+class TestWriteLineStreamPacedAbort:
+    """write_line_stream's paced file-sink cleanup on a mid-stream failure."""
+
+    def test_paced_abort_closes_all_open_handles(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An exception mid-stream closes every per-topic handle (finally cleanup).
+
+        Covers _write_line_file_paced's ``finally: for handle in
+        handles.values(): handle.close()`` abort path: when the event source
+        raises mid-run (e.g. the pacer's clock fails), the exception propagates
+        AND every lazily-opened per-topic handle is closed — no leaked open
+        file objects. Lines flushed before the abort remain on disk.
+        """
+        import builtins
+        from typing import IO, Iterator
+
+        from fabulexa_forge.exporters.streaming.driver import write_line_stream
+
+        opened: list[IO[Any]] = []
+        real_open = builtins.open
+
+        def _tracking_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+            handle = real_open(file, *args, **kwargs)
+            if str(tmp_path) in str(file):
+                opened.append(handle)
+            return handle
+
+        monkeypatch.setattr(builtins, "open", _tracking_open)
+
+        class _StreamAbort(RuntimeError):
+            """Sentinel raised by the event source mid-run."""
+
+        def _events() -> Iterator[StreamEvent]:
+            yield _line_event(seq=1, kind="alpha", record_id="a1")
+            yield _line_event(seq=2, kind="beta", record_id="b1")
+            raise _StreamAbort("event source failed mid-run")
+
+        def _render_value(event: StreamEvent) -> bytes:
+            return json.dumps({"seq": event.seq}).encode("utf-8")
+
+        with pytest.raises(_StreamAbort):
+            write_line_stream(
+                _events(),
+                _render_value,
+                "file",
+                tmp_path,
+                topic_set=("alpha", "beta"),
+                paced=True,
+            )
+
+        # Both per-topic handles were opened, and the finally closed each one.
+        assert len(opened) == 2
+        assert all(handle.closed for handle in opened)
+        # Events written before the abort were flushed and survive on disk.
+        alpha_lines = (
+            (tmp_path / "alpha.jsonl").read_bytes().decode("utf-8").splitlines()
+        )
+        beta_lines = (tmp_path / "beta.jsonl").read_bytes().decode("utf-8").splitlines()
+        assert [json.loads(ln)["seq"] for ln in alpha_lines] == [1]
+        assert [json.loads(ln)["seq"] for ln in beta_lines] == [2]
+
+
+# ---------------------------------------------------------------------------
 # Kafka sink: KafkaRequiresAnchor
 # ---------------------------------------------------------------------------
 
