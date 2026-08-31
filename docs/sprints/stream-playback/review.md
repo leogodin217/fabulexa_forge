@@ -4,46 +4,74 @@ Date: 2026-08-31
 Reviewer: Claude (fresh eyes, tier-2 context loaded)
 
 Diff base: `ddec86392b1f01a57d4e0c6d1ba4711183ba9c2e` (merge-base of `HEAD` and
-`prepare_for_loom`). HEAD reviewed: `8dee67c0` (Phase 4: The verb re-seam).
+`prepare_for_loom`). HEAD reviewed (cycle 2): `4659621` (Sprint stream-playback -
+review cleanup), which fixes cycle 1's sole blocker on top of `8dee67c0` (Phase 4:
+The verb re-seam).
+
+## Cycle 2 note
+
+Cycle 1's single blocker (finding 3 below: mixer CLI double notice emission) was
+fixed by commit `4659621` ("Sprint stream-playback - review cleanup"). `cmd_mixer`
+now threads a new discarding sink, `_discard_mixer_render_notice` (`cli.py:685`),
+into its `resolve_stream_render` call, while `seed_mixer_run`'s call keeps
+`render_notice_stderr` — restoring one stderr line per notice for the mixer path.
+The fix is pinned by a new regression test,
+`test_mixer_emits_out_of_domain_notice_once` (`tests/test_cli_mixer.py:589`), which
+builds an emit with a `status` enum domain, a `where` config value outside that
+domain, runs `cmd_mixer` end-to-end, and asserts `captured.err` contains exactly one
+`"notice:"` line. Verified genuine (not merely asserted): read the diff, confirmed
+`_discard_mixer_render_notice` has exactly one call site (`find_references`), traced
+`resolve_stream_render`'s unconditional `resolve_streams` call against
+`seed_mixer_run`'s independent `iter_stream_events` → `resolve_streams` call — the
+two-pass structure is unchanged (still runs twice internally) but only one pass now
+renders to stderr — and ran `uv run pytest tests/test_cli_mixer.py` (33 passed,
+including the new regression test). The new sink is a plain no-op callback (no
+closure state, no config value touched) and introduces no config-boundary issue;
+`find_workspace_symbols` for "discard"/"NoticeSink" shows the same per-module
+discarding-sink idiom already used by all four sprint demos (`_discard_notice`) and
+by `tests/_support/notices.py` (`discard_notice_sink`, test-only, not importable
+from production code) — no duplication, just the established convention repeated at
+its natural site.
 
 ## Summary
 
 | Gate | Severity | Notes |
 |---|---|---|
-| 1. Dead code scan | observations | No sprint-added scaffolding/TODOs found; `write_jsonl_stream` / `write_debezium_stream` (pre-existing public API) lost their last production caller when Phase 4 re-seamed `stream_export` over `write_line_stream`, and are now reachable only from `__init__.py`'s re-export and tests — checked via `find_references` on both symbols. |
-| 2. Consistency / DRY | clean | Compared every new top-level def (`StreamResolution`, `resolve_streams`, `iter_resolved_stream_events`, `iter_resolved_snapshot_events`, `StreamPlayback`, `StreamRender`, `resolve_stream_render`, `write_line_stream`) against tier-1/tier-2 siblings (`shaped.py`, `head.py`, `snapshot.py`, driver's deleted schema-map family); no structural duplicates beyond the spec-declared, deliberate `_stream_route_tables` duplication (stream_render.py owns a copy since tier-2 may not import `driver`; the driver's old copy was deleted in Phase 4, confirmed via `find_workspace_symbols`). |
-| 3. Test name audit | clean | Read `test_stream_head.py`, `test_stream_seek.py`, `test_stream_render.py`, and the `test_engine.py` additions in full; every test name accurately describes its assertion body (e.g. `test_bound_past_tape_is_a_data_condition_not_an_error` genuinely asserts no raise, `test_coincident_update_and_delete_at_t_absent_from_phase` genuinely checks absence). |
-| 4. Test value audit | observations | No weak assertions or literal-multiplication candidates found in the new suites; one architecture-guard test gap noted below (`stream_render.py`'s forbidden-import rule is undeclared by any test, unlike `stream.py`'s). |
-| 5. Coverage | clean | `pytest tests/playback tests/exporters/streaming --cov=...` → 952 passed, overall 99% (2866 stmts / 26 miss); every sprint-new file (`playback/stream.py`, `playback/stream_render.py`) is 100%; the handful of uncovered lines in `driver.py` (156, 280, 284) and `kafka_sink.py` (94-96, 112-115, 120) are pre-existing defensive/environment-check patterns unrelated to this sprint's diff. |
-| 6. Type-ignore density | clean | Diff adds exactly one `# type: ignore[arg-type]` in a test (`test_debezium.py`); well under the >1/file or ≥3-same-shape threshold. |
-| 7. Spec ↔ codebase (both directions) | blockers | 7a/7b: contracts (`StreamResolution`, `resolve_streams`, `iter_resolved_stream_events`, `iter_resolved_snapshot_events`, `write_kafka_stream`, `stream_export` internals, seam placement) all implemented verbatim against the spec's signatures/docstrings/Raises. **However**, Phase 4's mechanical fix to `cli.py`'s `cmd_mixer` (replacing `build_kafka_render_value` with `resolve_stream_render`) introduces an undeclared, untested regression: the mixer CLI path now runs the eager business-rule pass twice against the same `notice_sink` (once in `resolve_stream_render`, once inside `seed_mixer_run`'s `iter_stream_events`), doubling any out-of-domain `where` notice printed to stderr — for *every* mixer run, both formats — where previously (via `_build_value_schemas`, which never threaded a `notice_sink`) it emitted once. The spec's "What Doesn't Change" section explicitly lists "both mixer surfaces" as unchanged and only declares the double-notice cost for the re-seamed `stream_export` verb; this mixer-side doubling is not one of the two declared "Observable" changes and has no corresponding test (`test_cli_mixer.py` was not touched this sprint and has no stderr/notice assertions). 7c: no case found where the spec prescribes something the codebase already had. |
-| 8. Workspace | clean | `git status --porcelain` empty at review time. |
-| 9. Pre-commit | clean | `pre-commit run --all-files` — all 8 hooks (trailing-whitespace, end-of-file, yaml/toml checks, ruff, ruff-format, mypy-strict, understand-bundles) passed with zero modifications; `git status --porcelain` still empty afterward. |
-| 10. Demos | clean | All four `docs/sprints/stream-playback/demos/phase_[1-4]_*.py` ran twice each via `uv run python`; all exited 0 and produced byte-identical stdout across both runs (diffed pairwise). |
+| 1. Dead code scan | observations | Carried forward unchanged: `write_jsonl_stream` / `write_debezium_stream` (pre-existing public API) still have zero production callers post-fix (re-checked via `find_references`) — only `__init__.py`'s re-export and their own tests. |
+| 2. Consistency / DRY | clean | No new structural duplication from the fix; `_discard_mixer_render_notice` matches the existing per-module discarding-sink idiom (demos' `_discard_notice`, tests' `discard_notice_sink`) rather than introducing a competing abstraction. |
+| 3. Test name audit | clean | `test_mixer_emits_out_of_domain_notice_once` accurately describes its assertion (exactly one `"notice:"` line in stderr after a full `cmd_mixer` run with a deliberately out-of-domain `where` value). |
+| 4. Test value audit | observations | Carried forward unchanged: `stream_render.py`'s forbidden-import rule (`never driver, kafka_sink, pacer`) remains unverified by a dedicated test, asymmetric with `stream.py`'s `test_stream_playback_imports_only_pure_streaming_surfaces`; not touched by the fix. |
+| 5. Coverage | clean | Fix commit only touches `cli.py` (+17/-3) and its test file; `tests/test_cli_mixer.py` full run: 33 passed. |
+| 6. Type-ignore density | clean | Fix diff adds zero `# type: ignore`. |
+| 7. Spec ↔ codebase (both directions) | clean (blocker resolved) | Cycle 1's blocker (mixer CLI double notice emission, undeclared/untested regression) is fixed by commit `4659621`: `cmd_mixer`'s `resolve_stream_render` call now passes `_discard_mixer_render_notice` instead of `render_notice_stderr`, so only `seed_mixer_run`'s pass reaches stderr — restoring the spec's "both mixer surfaces" unaffected guarantee, now pinned by `test_mixer_emits_out_of_domain_notice_once`. No new spec deviation introduced by the fix. |
+| 8. Workspace | clean | `git status --porcelain` empty at review time (post-fix). |
+| 9. Pre-commit | clean | `pre-commit run --files src/fabulexa_forge/cli.py tests/test_cli_mixer.py docs/sprints/stream-playback/review.md` — all 8 hooks passed with zero modifications; `git status --porcelain` empty afterward. |
+| 10. Demos | clean | Fix commit does not touch any demo file; cycle 1's demo runs stand. |
 
 ## Findings
 
-### Gate 1 — Dead code scan (observations)
+### Gate 1 — Dead code scan (observation, carried forward unchanged)
 
 1. **`write_jsonl_stream` / `write_debezium_stream` now have zero production callers.**
    File: `src/fabulexa_forge/exporters/streaming/jsonl.py:129` (def), `src/fabulexa_forge/exporters/streaming/debezium.py:422` (def).
    Severity: observation.
-   Before this sprint, `driver.py`'s `stream_export` called these two functions directly for the stdout/file sinks. Phase 4 collapsed that dispatch to the new `write_line_stream` (`driver.py:241`), driven by `StreamRender.render_bytes` instead. `find_references` on both symbols shows the only remaining call sites are their own `__init__.py` re-export (`exporters/streaming/__init__.py:38,46,98,99`) and their own test suites (`test_jsonl.py`, `test_debezium.py`) — no production module calls either function anymore (confirmed the mixer's `sink.py` uses its own async produce loop, not these). This was a scoping decision recorded in the Phase 4 git note ("write_jsonl_stream/write_debezium_stream left untouched — not in Phase 4's file table"), so it is disclosed, but it leaves genuinely orphaned public API surface per the end-state test in the gate-1 checklist (must terminate in a production caller outside tests/demos/`__init__` re-exports).
+   Unchanged from cycle 1. `find_references` on both symbols still shows only `__init__.py`'s re-export and their own test suites as callers; the fix commit does not touch either file. Disclosed scoping decision from Phase 4; not addressed by this sprint.
 
-### Gate 4 — Test value audit (observations)
+### Gate 4 — Test value audit (observation, carried forward unchanged)
 
 2. **Architecture-guard test asymmetry: `stream_render.py`'s forbidden imports are unverified by a test.**
    File: `tests/playback/test_selection.py:632-651`.
    Severity: observation.
-   The spec's "Seam-side placement" section says of *both* `stream.py` and `stream_render.py`: "never `driver`, `kafka_sink`, `pacer`." The sprint added `test_stream_playback_imports_only_pure_streaming_surfaces`, which enforces this rule for `stream.py` only; no parallel test enforces it for `stream_render.py`. Manual inspection of `stream_render.py`'s imports (`debezium`, `encoding`, `engine`, `jsonl`, `presentation`, `routing` — no `driver`/`kafka_sink`/`pacer`) confirms the code itself is compliant today, so this is a guard-rail gap rather than a live violation.
+   Unchanged from cycle 1. The fix commit does not touch `stream_render.py` or `test_selection.py`. Manual inspection of `stream_render.py`'s imports remains compliant with the spec's forbidden-import rule (`debezium`, `encoding`, `engine`, `jsonl`, `presentation`, `routing` only), but no test enforces it the way `test_stream_playback_imports_only_pure_streaming_surfaces` does for `stream.py`.
 
-### Gate 7 — Spec ↔ codebase (blocker)
+### Gate 7 — Spec ↔ codebase (RESOLVED)
 
-3. **Undeclared, untested double notice emission in the mixer CLI path.**
-   File: `src/fabulexa_forge/cli.py:846-849` (new `resolve_stream_render` call) and `:853-860` (existing `seed_mixer_run` call), both passed the same `render_notice_stderr` sink.
-   Severity: blocker.
-   Phase 4 replaced `cmd_mixer`'s use of the deleted `build_kafka_render_value` with `resolve_stream_render(emit, config, fmt_lit, anchor, render_notice_stderr)`. `resolve_stream_render` unconditionally calls `resolve_streams` (the eager, notice-emitting business-rule pass) regardless of `fmt`. `seed_mixer_run` (unchanged, `mixer/scheduler.py:157`) independently calls `iter_stream_events(..., notice_sink)`, which also runs `resolve_streams` internally. Pre-sprint, the mixer's render-value builder (`_build_value_schemas`, only invoked for `fmt='debezium'` with `schemas_enable=True`) called `resolve_stream_surfaces`/`resolve_stream_identities` directly — neither of which accepts a `notice_sink` — so the mixer only ever emitted a stream's out-of-domain notices once (from `seed_mixer_run`). Post-sprint, every `fabulexa-forge mixer` invocation (any format) prints each such notice twice to stderr. The spec's "What Doesn't Change" section lists "both mixer surfaces" as unchanged, and its only two declared "Observable" changes are the two schema-identity fixes and the `stream_export` verb's declared double-pass cost — the mixer is not among them. `tests/test_cli_mixer.py` was not touched this sprint and asserts nothing about stderr/notice output, so this regression has no test coverage. This should be fixed (dedupe the eager pass for the mixer path, or explicitly document/test the new cost) before merge.
+3. **Undeclared, untested double notice emission in the mixer CLI path — FIXED.**
+   File: `src/fabulexa_forge/cli.py:685` (new `_discard_mixer_render_notice`), `:859-861` (`resolve_stream_render` call now uses the discarding sink).
+   Severity: was blocker in cycle 1; resolved in cycle 2 by commit `4659621`.
+   `cmd_mixer` now passes `_discard_mixer_render_notice` (a no-op `NoticeSink`) to `resolve_stream_render`, while `seed_mixer_run`'s independent call retains `render_notice_stderr`. The eager business-rule pass still runs twice internally (unchanged architecture — `resolve_stream_render` unconditionally calls `resolve_streams`; `seed_mixer_run`'s `iter_stream_events` calls it again), but only one of the two passes now writes to stderr, restoring one line per notice for every `fabulexa-forge mixer` invocation, any format — matching the spec's "both mixer surfaces" unaffected guarantee. Regression test `test_mixer_emits_out_of_domain_notice_once` (`tests/test_cli_mixer.py:589`) pins this by building an emit with a declared `status` enum domain, a `where` config value outside it, running `cmd_mixer` end-to-end with a stubbed `serve_mixer`, and asserting exactly one `"notice:"` line in captured stderr. `uv run pytest tests/test_cli_mixer.py` → 33 passed.
 
 ## Recommendation
 
-**REVISIONS NEEDED** — one blocker (finding 3: undeclared/untested double notice emission on the mixer CLI path). Findings 1 and 2 are recorded observations only.
+**APPROVED-WITH-NOTES** — cycle 1's sole blocker (finding 3) is resolved and verified.
+Findings 1 and 2 remain as carried-forward observations, unaffected by the fix.
