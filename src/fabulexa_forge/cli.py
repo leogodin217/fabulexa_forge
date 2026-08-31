@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.corrupters.state import CorruptReport
     from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
-    from fabulexa_forge.exporters.notices import NoticeSink
+    from fabulexa_forge.exporters.notices import Notice, NoticeSink
     from fabulexa_forge.exporters.query_spec import ExportReport
     from fabulexa_forge.reader.conformance import CheckResult
     from fabulexa_forge.reader.emit import Emit
@@ -682,6 +682,19 @@ def _parse_join_flag(value: str) -> tuple[str, str] | None:
     return (parts[0], parts[1])
 
 
+def _discard_mixer_render_notice(_notice: "Notice") -> None:
+    """Drop a notice from the mixer's render-resolution pass.
+
+    `cmd_mixer` runs streaming's eager business-rule pass twice over the same
+    (emit, config) — once inside `resolve_stream_render`, once inside
+    `seed_mixer_run`'s `iter_stream_events` — because the render surface is
+    self-vetting (§ resolve_stream_render). Both passes discover the same
+    notices; threading `render_notice_stderr` through only `seed_mixer_run`
+    keeps the mixer's stderr output at one line per notice, matching every
+    other verb (the spec's "both mixer surfaces" unaffected guarantee).
+    """
+
+
 def cmd_mixer(
     emit_dir: Path,
     config_path: Path,
@@ -844,7 +857,7 @@ def cmd_mixer(
 
             fmt_lit = cast(Literal["jsonl", "debezium"], fmt)
             render = resolve_stream_render(
-                emit, config, fmt_lit, anchor, render_notice_stderr
+                emit, config, fmt_lit, anchor, _discard_mixer_render_notice
             )
             render_value = render.render_bytes
 

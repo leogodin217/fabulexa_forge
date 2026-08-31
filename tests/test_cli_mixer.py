@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock
 import duckdb
 import pytest
 import yaml
-from _support.sidecar_builder import identity_column
+from _support.sidecar_builder import enum_options, identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.cli import _parse_join_flag, cmd_mixer, main
@@ -114,6 +114,92 @@ def _build_minimal_emit(tmp_path: Path) -> Path:
         },
     )
     return emit_dir
+
+
+_CONSTANT_RECORD_COLS: list[dict[str, object]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    {
+        "name": "prop__status",
+        "type": "VARCHAR",
+        "history_tracked": False,
+        "temporal_class": "constant",
+    },
+]
+
+
+def _build_minimal_emit_with_status_domain(tmp_path: Path) -> Path:
+    """Like `_build_minimal_emit`, plus a constant-class `status` property
+    with a declared domain that excludes the value a `where`-bearing config
+    below names — so resolving the stream draws exactly one out-of-domain
+    notice per eager pass."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir(parents=True, exist_ok=True)
+    db_path = emit_dir / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_ddl("records__actor", _CONSTANT_RECORD_COLS))
+    conn.execute(_ddl("history", _HISTORY_COLS))
+
+    _DAY = 86_400_000_000_000
+    actor_rows: list[tuple[Any, ...]] = [
+        ("trunk", "a001", 1 * _DAY, True, None, 1 * _DAY, 0, "active"),
+    ]
+    for row in actor_rows:
+        conn.execute(
+            'INSERT INTO "records__actor" VALUES (?, ?, ?, ?, ?, ?, ?, ?)', list(row)
+        )
+    conn.close()
+
+    _write_sidecar(
+        emit_dir,
+        tables=[
+            {
+                "name": "records__actor",
+                "category": "records",
+                "columns": _CONSTANT_RECORD_COLS,
+                "rows": 1,
+                "record_kind": "actor",
+            },
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": _HISTORY_COLS,
+                "rows": 0,
+            },
+        ],
+        branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra={
+            "runtime": {
+                "start_datetime": "2026-01-01T00:00:00+00:00",
+                "timezone": "UTC",
+            },
+            "enum_domains": {"actor": {"status": enum_options("active")}},
+        },
+    )
+    return emit_dir
+
+
+def _write_where_stream_config(config_path: Path) -> None:
+    """Write a stream config whose `where` names a value outside the
+    declared `status` domain — a single, deterministic notice source."""
+    doc: dict[str, object] = {
+        "content": "state-changes",
+        "streams": [
+            {
+                "name": "actor",
+                "kind": "actor",
+                "properties": ["status"],
+                "where": {"status": "missing"},
+            }
+        ],
+        "kafka": {"bootstrap_servers": "localhost:9092"},
+    }
+    config_path.write_text(yaml.dump(doc), encoding="utf-8")
 
 
 def _write_stream_config(config_path: Path) -> None:
@@ -498,6 +584,44 @@ def test_happy_path_exit_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> N
     )
 
     assert code == 0
+
+
+def test_mixer_emits_out_of_domain_notice_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The mixer path runs streaming's eager business-rule pass twice
+    internally (resolve_stream_render, then seed_mixer_run) — but a notice
+    the pass discovers must still reach stderr exactly once, matching every
+    other verb (the spec's "both mixer surfaces" unaffected guarantee), not
+    once per internal pass."""
+    emit_dir = _build_minimal_emit_with_status_domain(tmp_path)
+    config_path = tmp_path / "config.yaml"
+    _write_where_stream_config(config_path)
+
+    import fabulexa_forge.exporters.streaming.mixer.serve as serve_mod
+
+    async def _noop_serve(**kwargs: Any) -> None:
+        pass
+
+    monkeypatch.setattr(serve_mod, "serve_mixer", _noop_serve)
+    code = cmd_mixer(
+        emit_dir=emit_dir,
+        config_path=config_path,
+        fmt="jsonl",
+        cli_base_date=None,
+        cli_timezone=None,
+        cli_speed=1.0,
+        cli_playing=False,
+        cli_tick_seconds=0.05,
+        cli_bootstrap_servers="localhost:9092",
+        host="127.0.0.1",
+        port=8765,
+    )
+
+    assert code == 0
+    captured = capsys.readouterr()
+    notice_lines = [line for line in captured.err.splitlines() if "notice:" in line]
+    assert len(notice_lines) == 1
 
 
 # ---------------------------------------------------------------------------
