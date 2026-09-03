@@ -21,11 +21,15 @@ class StreamEvent:
 
     seq: int
     """1-based position in the stream's canonical total order; monotonic, global."""
-    op: Literal["c", "d", "u", "join", "leave"]
+    op: Literal["c", "d", "u", "join", "leave", "r"]
     """The event op — the 1-to-1 recoding of the fold's `event_class`. State-changes
     content uses 'c'/'u'/'d'; membership-events content uses 'join'/'leave'. event_class
     is deliberately not carried here: the cross-stream merge consumes it from the
-    materialized fold rows, and once `seq` is stamped the order lives in `seq`."""
+    materialized fold rows, and once `seq` is stamped the order lives in `seq`.
+    'r' is the seek snapshot-read op: the record's published state at the seek
+    position, emitted once per covering stream for each record live at T. All
+    other fields keep their shipped contracts; on an 'r', seq is the shared
+    snapshot position N and event_sim_time is T."""
     kind: str
     """The stream's resolved envelope value (§ Kind vocabulary): the
     stream's own `kind_label` when declared, else the record kind's

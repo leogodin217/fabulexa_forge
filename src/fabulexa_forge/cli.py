@@ -56,7 +56,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.corrupters.state import CorruptReport
     from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
-    from fabulexa_forge.exporters.notices import NoticeSink
+    from fabulexa_forge.exporters.notices import Notice, NoticeSink
     from fabulexa_forge.exporters.query_spec import ExportReport
     from fabulexa_forge.reader.conformance import CheckResult
     from fabulexa_forge.reader.emit import Emit
@@ -682,6 +682,19 @@ def _parse_join_flag(value: str) -> tuple[str, str] | None:
     return (parts[0], parts[1])
 
 
+def _discard_mixer_render_notice(_notice: "Notice") -> None:
+    """Drop a notice from the mixer's render-resolution pass.
+
+    `cmd_mixer` runs streaming's eager business-rule pass twice over the same
+    (emit, config) — once inside `resolve_stream_render`, once inside
+    `seed_mixer_run`'s `iter_stream_events` — because the render surface is
+    self-vetting (§ resolve_stream_render). Both passes discover the same
+    notices; threading `render_notice_stderr` through only `seed_mixer_run`
+    keeps the mixer's stderr output at one line per notice, matching every
+    other verb (the spec's "both mixer surfaces" unaffected guarantee).
+    """
+
+
 def cmd_mixer(
     emit_dir: Path,
     config_path: Path,
@@ -750,7 +763,6 @@ def cmd_mixer(
     from fabulexa_forge.config.loader import load_stream_config
     from fabulexa_forge.errors import ExportError
     from fabulexa_forge.exporters.notices import render_notice_stderr
-    from fabulexa_forge.exporters.streaming.driver import build_kafka_render_value
     from fabulexa_forge.exporters.streaming.engine import build_topic_set
     from fabulexa_forge.exporters.streaming.kafka_sink import resolve_bootstrap_servers
     from fabulexa_forge.exporters.streaming.mixer.scheduler import (
@@ -758,6 +770,7 @@ def cmd_mixer(
         seed_mixer_run,
     )
     from fabulexa_forge.exporters.streaming.mixer.serve import serve_mixer
+    from fabulexa_forge.playback.stream_render import resolve_stream_render
 
     # Flag-level usage checks — before the funnel
     if fmt not in ("jsonl", "debezium"):
@@ -843,9 +856,10 @@ def cmd_mixer(
             topic_set = build_topic_set(config)
 
             fmt_lit = cast(Literal["jsonl", "debezium"], fmt)
-            render_value = build_kafka_render_value(
-                emit, config, fmt_lit, anchor, topic_set
+            render = resolve_stream_render(
+                emit, config, fmt_lit, anchor, _discard_mixer_render_notice
             )
+            render_value = render.render_bytes
 
             launch_transport = Transport(playing=cli_playing, speed=cli_speed)
 

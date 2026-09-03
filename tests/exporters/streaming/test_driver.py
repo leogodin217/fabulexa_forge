@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from unittest.mock import patch
 
 import duckdb
@@ -33,12 +33,10 @@ from fabulexa_forge.errors import (
     ExportError,
     ExportRuntimeError,
 )
-from fabulexa_forge.exporters.streaming.driver import (
-    build_kafka_render_value,
-    stream_export,
-)
+from fabulexa_forge.exporters.streaming.driver import stream_export
 from fabulexa_forge.exporters.streaming.pacer import ResolvedClock
 from fabulexa_forge.exporters.streaming.types import StreamEvent, StreamOutcome
+from fabulexa_forge.playback.stream_render import StreamRender, resolve_stream_render
 from fabulexa_forge.reader.emit import open_emit
 
 from ._helpers import _ddl, _membership_table_spec, make_anchor
@@ -705,7 +703,8 @@ def _fake_write_kafka_stream(
     def _fake(
         events: Any,
         render_value: Callable[[StreamEvent], bytes],
-        anchor: Any,
+        render_key: Callable[[StreamEvent], bytes],
+        render_timestamp: Callable[[StreamEvent], int],
         bootstrap_servers: str,
         topic_set: tuple[str, ...],
         *,
@@ -714,7 +713,8 @@ def _fake_write_kafka_stream(
         captured.append(
             {
                 "render_value": render_value,
-                "anchor": anchor,
+                "render_key": render_key,
+                "render_timestamp": render_timestamp,
                 "bootstrap_servers": bootstrap_servers,
                 "topic_set": topic_set,
                 "paced": paced,
@@ -725,6 +725,107 @@ def _fake_write_kafka_stream(
         return StreamOutcome(total_events=0, events_per_topic=counts)
 
     return _fake
+
+
+def _resolve_oracle_render(
+    emit_dir: Path,
+    config: StreamConfig,
+    fmt: Literal["jsonl", "debezium"],
+    anchor: EffectiveAnchor | None,
+) -> StreamRender:
+    """Resolve an independent StreamRender oracle for byte-parity assertions.
+
+    A second, independent resolution of the same (emit, config, fmt, anchor) —
+    render purity guarantees it agrees with whatever render_value/render_key
+    the driver threaded through to write_kafka_stream.
+    """
+    with open_emit(emit_dir) as emit:
+        return resolve_stream_render(emit, config, fmt, anchor, discard_notice_sink)
+
+
+# ---------------------------------------------------------------------------
+# write_line_stream — paced file-sink abort cleanup
+# ---------------------------------------------------------------------------
+
+
+def _line_event(seq: int, kind: str, record_id: str) -> StreamEvent:
+    """Build a minimal StreamEvent for write_line_stream tests."""
+    return StreamEvent(
+        seq=seq,
+        op="c",
+        kind=kind,
+        record_id=record_id,
+        event_sim_time=0,
+        ts="2026-01-01T00:00:00+00:00",
+        after={"record_id": record_id},
+        topic=kind,
+        route_table=kind,
+        key_column="record_id",
+        key_value=record_id,
+    )
+
+
+class TestWriteLineStreamPacedAbort:
+    """write_line_stream's paced file-sink cleanup on a mid-stream failure."""
+
+    def test_paced_abort_closes_all_open_handles(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An exception mid-stream closes every per-topic handle (finally cleanup).
+
+        Covers _write_line_file_paced's ``finally: for handle in
+        handles.values(): handle.close()`` abort path: when the event source
+        raises mid-run (e.g. the pacer's clock fails), the exception propagates
+        AND every lazily-opened per-topic handle is closed — no leaked open
+        file objects. Lines flushed before the abort remain on disk.
+        """
+        import builtins
+        from typing import IO, Iterator
+
+        from fabulexa_forge.exporters.streaming.driver import write_line_stream
+
+        opened: list[IO[Any]] = []
+        real_open = builtins.open
+
+        def _tracking_open(file: Any, *args: Any, **kwargs: Any) -> Any:
+            handle = real_open(file, *args, **kwargs)
+            if str(tmp_path) in str(file):
+                opened.append(handle)
+            return handle
+
+        monkeypatch.setattr(builtins, "open", _tracking_open)
+
+        class _StreamAbort(RuntimeError):
+            """Sentinel raised by the event source mid-run."""
+
+        def _events() -> Iterator[StreamEvent]:
+            yield _line_event(seq=1, kind="alpha", record_id="a1")
+            yield _line_event(seq=2, kind="beta", record_id="b1")
+            raise _StreamAbort("event source failed mid-run")
+
+        def _render_value(event: StreamEvent) -> bytes:
+            return json.dumps({"seq": event.seq}).encode("utf-8")
+
+        with pytest.raises(_StreamAbort):
+            write_line_stream(
+                _events(),
+                _render_value,
+                "file",
+                tmp_path,
+                topic_set=("alpha", "beta"),
+                paced=True,
+            )
+
+        # Both per-topic handles were opened, and the finally closed each one.
+        assert len(opened) == 2
+        assert all(handle.closed for handle in opened)
+        # Events written before the abort were flushed and survive on disk.
+        alpha_lines = (
+            (tmp_path / "alpha.jsonl").read_bytes().decode("utf-8").splitlines()
+        )
+        beta_lines = (tmp_path / "beta.jsonl").read_bytes().decode("utf-8").splitlines()
+        assert [json.loads(ln)["seq"] for ln in alpha_lines] == [1]
+        assert [json.loads(ln)["seq"] for ln in beta_lines] == [2]
 
 
 # ---------------------------------------------------------------------------
@@ -935,37 +1036,12 @@ class TestKafkaDebeziumRules:
         debezium_cfg = config.debezium
         assert debezium_cfg is not None and debezium_cfg.schemas_enable is True
 
-        from fabulexa_forge.exporters.streaming.debezium import (
-            _serialize_message,
-            rebased_epoch_ms,
-            render_debezium_message,
-        )
-        from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
-
-        table_identity = debezium_cfg.table_identity
-        with open_emit(emit_dir) as emit2:
-            value_schemas = _build_value_schemas(
-                emit2,
-                config,
-                debezium_cfg.source,
-                table_identity,
-            )
-
-        # Build the expected bytes via the FILE-SINK path (independent of the
-        # kafka driver's _build_debezium_render_value closure).
+        # Independent oracle: a second resolve_stream_render over the same
+        # (emit, config, fmt, anchor) — render purity guarantees agreement
+        # with the render the driver threaded into write_kafka_stream.
+        oracle = _resolve_oracle_render(emit_dir, config, "debezium", anchor)
         for event in events:
-            ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-            table = event.topic if table_identity == "topic" else event.route_table
-            value_schema = (
-                value_schemas.get(table) if value_schemas is not None else None
-            )
-            msg = render_debezium_message(
-                event, ts_ms, debezium_cfg.source, table, value_schema
-            )
-            # File sink: _serialize_message appends '\n'; strip it to get the
-            # byte-identical kafka payload.
-            expected = _serialize_message(msg).rstrip("\n").encode("utf-8")
-            assert render_value(event) == expected
+            assert render_value(event) == oracle.render_bytes(event)
 
 
 # ---------------------------------------------------------------------------
@@ -1731,35 +1807,12 @@ class TestMembershipDebeziumKafka:
         render_value: Callable[[StreamEvent], bytes] = call["render_value"]
         assert len(events) >= 1
 
-        from fabulexa_forge.exporters.streaming.debezium import (
-            _serialize_message,
-            rebased_epoch_ms,
-            render_debezium_message,
-        )
-        from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
-
-        debezium_cfg = config.debezium
-        assert debezium_cfg is not None
-        table_identity = debezium_cfg.table_identity
-        with open_emit(emit_dir) as emit2:
-            value_schemas = _build_value_schemas(
-                emit2,
-                config,
-                debezium_cfg.source,
-                table_identity,
-            )
-
+        # Independent oracle: a second resolve_stream_render over the same
+        # (emit, config, fmt, anchor) — render purity guarantees agreement
+        # with the render the driver threaded into write_kafka_stream.
+        oracle = _resolve_oracle_render(emit_dir, config, "debezium", anchor)
         for event in events:
-            ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-            table = event.topic if table_identity == "topic" else event.route_table
-            value_schema = (
-                value_schemas.get(table) if value_schemas is not None else None
-            )
-            msg = render_debezium_message(
-                event, ts_ms, debezium_cfg.source, table, value_schema
-            )
-            expected = _serialize_message(msg).rstrip("\n").encode("utf-8")
-            assert render_value(event) == expected
+            assert render_value(event) == oracle.render_bytes(event)
 
     def test_membership_kafka_schemas_disabled_bare_render(
         self, tmp_path: Path
@@ -1797,107 +1850,3 @@ class TestMembershipDebeziumKafka:
             msg = json.loads(render_value(event).decode("utf-8"))
             assert "schema" not in msg
             assert msg["op"] == "c"
-
-
-# ---------------------------------------------------------------------------
-# build_kafka_render_value: direct tests
-# ---------------------------------------------------------------------------
-
-
-class TestBuildKafkaRenderValueJsonl:
-    """build_kafka_render_value(fmt='jsonl') returns bytes byte-identical to jsonl line."""
-
-    def test_jsonl_bytes_match_file_line_minus_newline(self, tmp_path: Path) -> None:
-        """fmt='jsonl' render_value bytes == encode_pinned(render_jsonl_object(event))."""
-        from fabulexa_forge.exporters.streaming.encoding import encode_pinned
-        from fabulexa_forge.exporters.streaming.jsonl import render_jsonl_object
-
-        emit_dir = _build_emit_with_events(tmp_path / "emit", "item")
-        config = _make_config("item")
-        anchor = _make_anchor()
-
-        with open_emit(emit_dir) as emit:
-            from fabulexa_forge.exporters.streaming.engine import build_topic_set
-
-            topic_set = build_topic_set(config)
-            render = build_kafka_render_value(emit, config, "jsonl", anchor, topic_set)
-            from fabulexa_forge.exporters.streaming.engine import iter_stream_events
-
-            events = list(
-                iter_stream_events(
-                    emit, config, anchor, notice_sink=discard_notice_sink
-                )
-            )
-
-        assert len(events) > 0
-        for event in events:
-            expected = encode_pinned(render_jsonl_object(event)).encode("utf-8")
-            assert render(event) == expected
-            assert not render(event).endswith(b"\n")
-
-
-class TestBuildKafkaRenderValueDebezium:
-    """build_kafka_render_value(fmt='debezium') enforces rules and returns correct bytes."""
-
-    def test_debezium_requires_config_raises(self, tmp_path: Path) -> None:
-        """fmt='debezium' with no debezium block raises ExportError (DebeziumRequiresConfig)."""
-        emit_dir = _build_emit(tmp_path, "item", [], [])
-        config = _make_config("item")  # no debezium block
-        anchor = _make_anchor()
-
-        with open_emit(emit_dir) as emit:
-            from fabulexa_forge.exporters.streaming.engine import build_topic_set
-
-            topic_set = build_topic_set(config)
-            with pytest.raises(ExportError, match="debezium.*config block"):
-                build_kafka_render_value(emit, config, "debezium", anchor, topic_set)
-
-    def test_debezium_bytes_match_file_line_minus_newline(self, tmp_path: Path) -> None:
-        """fmt='debezium' render_value bytes == file line bytes (no trailing newline)."""
-        from fabulexa_forge.exporters.streaming.debezium import (
-            _serialize_message,
-            rebased_epoch_ms,
-            render_debezium_message,
-        )
-        from fabulexa_forge.exporters.streaming.driver import _build_value_schemas
-
-        emit_dir = _build_emit_with_events(tmp_path / "emit", "item")
-        config = _make_debezium_stream_config("item", schemas_enable=True)
-        anchor = _make_anchor()
-
-        with open_emit(emit_dir) as emit:
-            from fabulexa_forge.exporters.streaming.engine import (
-                build_topic_set,
-                iter_stream_events,
-            )
-
-            topic_set = build_topic_set(config)
-            render = build_kafka_render_value(
-                emit, config, "debezium", anchor, topic_set
-            )
-            events = list(
-                iter_stream_events(
-                    emit, config, anchor, notice_sink=discard_notice_sink
-                )
-            )
-
-        debezium_cfg = config.debezium
-        assert debezium_cfg is not None
-        table_identity = debezium_cfg.table_identity
-        with open_emit(emit_dir) as emit2:
-            value_schemas = _build_value_schemas(
-                emit2, config, debezium_cfg.source, table_identity
-            )
-
-        assert len(events) > 0
-        for event in events:
-            ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-            table = event.topic if table_identity == "topic" else event.route_table
-            value_schema = (
-                value_schemas.get(table) if value_schemas is not None else None
-            )
-            msg = render_debezium_message(
-                event, ts_ms, debezium_cfg.source, table, value_schema
-            )
-            expected = _serialize_message(msg).rstrip("\n").encode("utf-8")
-            assert render(event) == expected

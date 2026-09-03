@@ -148,6 +148,20 @@ def _render_jsonl(event: Any) -> bytes:
     return encode_pinned(payload).encode("utf-8")
 
 
+def _render_key(event: Any) -> bytes:
+    """Minimal render_key for integration tests: pinned {record_id}."""
+    from fabulexa_forge.exporters.streaming.encoding import encode_pinned
+
+    return encode_pinned({event.key_column: event.key_value}).encode("utf-8")
+
+
+def _render_timestamp(event: Any) -> int:
+    """Minimal render_timestamp for integration tests: rebased epoch-ms."""
+    from fabulexa_forge.exporters.streaming.debezium import rebased_epoch_ms
+
+    return rebased_epoch_ms(event.event_sim_time, _make_anchor())
+
+
 @pytest.fixture()
 def sink_topic(kafka_bootstrap: str) -> Iterator[str]:
     """A unique single-partition topic for write_kafka_stream tests."""
@@ -174,7 +188,6 @@ def test_sink_key_is_record_id(kafka_bootstrap: str, sink_topic: str) -> None:
     """write_kafka_stream: every key = pinned {record_id}."""
     from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
-    anchor = _make_anchor()
     events = [
         _make_stream_event(1, "r1", sink_topic, event_sim_time=0),
         _make_stream_event(2, "r2", sink_topic, event_sim_time=1_000_000_000),
@@ -183,7 +196,8 @@ def test_sink_key_is_record_id(kafka_bootstrap: str, sink_topic: str) -> None:
     write_kafka_stream(
         events=events,
         render_value=_render_jsonl,
-        anchor=anchor,
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers=kafka_bootstrap,
         topic_set=(sink_topic,),
         paced=False,
@@ -202,7 +216,6 @@ def test_sink_seq_monotonic_in_consume_order(
     """write_kafka_stream: seq is strictly increasing in consume order."""
     from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
-    anchor = _make_anchor()
     events = [
         _make_stream_event(1, "r1", sink_topic, op="c", event_sim_time=0),
         _make_stream_event(2, "r2", sink_topic, op="c", event_sim_time=500_000_000),
@@ -213,7 +226,8 @@ def test_sink_seq_monotonic_in_consume_order(
     write_kafka_stream(
         events=events,
         render_value=_render_jsonl,
-        anchor=anchor,
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers=kafka_bootstrap,
         topic_set=(sink_topic,),
         paced=False,
@@ -229,7 +243,6 @@ def test_sink_upsert_log_shape(kafka_bootstrap: str, sink_topic: str) -> None:
     """write_kafka_stream: first event per record_id is op:c, rest are op:u."""
     from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
-    anchor = _make_anchor()
     events = [
         _make_stream_event(1, "r1", sink_topic, op="c", event_sim_time=0),
         _make_stream_event(2, "r2", sink_topic, op="c", event_sim_time=500_000_000),
@@ -239,7 +252,8 @@ def test_sink_upsert_log_shape(kafka_bootstrap: str, sink_topic: str) -> None:
     write_kafka_stream(
         events=events,
         render_value=_render_jsonl,
-        anchor=anchor,
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers=kafka_bootstrap,
         topic_set=(sink_topic,),
         paced=False,
@@ -273,7 +287,8 @@ def test_sink_record_timestamp_is_rebased_event_time(
     write_kafka_stream(
         events=events,
         render_value=_render_jsonl,
-        anchor=anchor,
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers=kafka_bootstrap,
         topic_set=(sink_topic,),
         paced=False,
@@ -295,13 +310,13 @@ def test_sink_declared_but_empty_topic_created(
 
     from fabulexa_forge.exporters.streaming.kafka_sink import write_kafka_stream
 
-    anchor = _make_anchor()
     events = [_make_stream_event(1, "r1", sink_topic, event_sim_time=0)]
 
     outcome = write_kafka_stream(
         events=events,
         render_value=_render_jsonl,
-        anchor=anchor,
+        render_key=_render_key,
+        render_timestamp=_render_timestamp,
         bootstrap_servers=kafka_bootstrap,
         topic_set=(sink_topic, sink_empty_topic),
         paced=False,

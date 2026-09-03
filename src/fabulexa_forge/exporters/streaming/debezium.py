@@ -1,21 +1,15 @@
-"""Debezium format renderer and sink for the streaming exporter.
+"""Debezium format renderer for the streaming exporter.
 
 Renders StreamEvents as Debezium value messages (the envelope + optional
-schema wrapper) and writes them to stdout or one-file-per-topic under an output
-directory. Pure output re-wrapping of the S1 event stream — no new content,
-no new order, no new fold.
+schema wrapper). Pure output re-wrapping of the S1 event stream — no new
+content, no new order, no new fold. Framing and sink delivery live in the
+driver's format-agnostic write_line_stream.
 """
 
 from __future__ import annotations
 
-import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
-from typing import TYPE_CHECKING, Iterable, Literal
-
-from fabulexa_forge.errors import ExportRuntimeError
-from fabulexa_forge.exporters.streaming.encoding import encode_pinned
-from fabulexa_forge.exporters.streaming.types import StreamOutcome
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -187,14 +181,21 @@ def _build_source_block(
     seq: int,
     table: str,
     source_identity: "DebeziumSourceIdentity",
+    op: str,
 ) -> dict[str, object]:
-    """Build the source block for one event in the pinned source key order."""
+    """Build the source block for one event in the pinned source key order.
+
+    `snapshot` reports "true" on a seek snapshot read ('r') and "false" on
+    every other op — canonical Debezium snapshot-read semantics; every 'r'
+    of one snapshot phase repeats one `lsn` (the shared position N),
+    deliberately, since a snapshot read has no distinct source position.
+    """
     return {
         "version": source_identity.version,
         "connector": source_identity.connector,
         "name": source_identity.name,
         "ts_ms": ts_ms,
-        "snapshot": "false",
+        "snapshot": "true" if op == "r" else "false",
         "db": source_identity.db,
         "sequence": f'[null,"{seq}"]',
         "schema": source_identity.schema_,
@@ -214,7 +215,7 @@ def _build_envelope(
 
     Op branches:
       - 'd'              -> before={<key_column>: <key_value>}; after=null; op='d'.
-      - 'c' / 'u'        -> before=null; after=event.after; op=event.op.
+      - 'c' / 'u' / 'r'  -> before=null; after=event.after; op=event.op.
       - 'join' / 'leave' -> before=null; after={'event': op, **event.after}; op='c'.
     """
     if event.op == "d":
@@ -231,7 +232,7 @@ def _build_envelope(
         after = event.after
         envelope_op = event.op
 
-    source = _build_source_block(ts_ms, event.seq, table, source_identity)
+    source = _build_source_block(ts_ms, event.seq, table, source_identity, event.op)
 
     return {
         "before": before,
@@ -260,7 +261,9 @@ def render_debezium_message(
     Op branches, by event.op:
       - 'd'              -> envelope op 'd'; before={<key_column>: <key_value>};
                             after=null.
-      - 'c' / 'u'        -> envelope op = event.op; before=null; after=event.after.
+      - 'c' / 'u' / 'r'  -> envelope op = event.op; before=null; after=event.after.
+                            'r' additionally reports source.snapshot='true'
+                            (every other op reports 'false').
       - 'join' / 'leave' -> envelope op 'c'; before=null;
                             after={'event': event.op, **event.after}.
 
@@ -282,12 +285,7 @@ def render_debezium_message(
     return {"schema": value_schema, "payload": envelope}
 
 
-def _serialize_message(obj: dict[str, object]) -> str:
-    """Serialize one Debezium message with the pinned encoder settings."""
-    return encode_pinned(obj) + "\n"
-
-
-def _resolve_table_identity(event: "StreamEvent", table_identity: str) -> str:
+def resolve_table_identity(event: "StreamEvent", table_identity: str) -> str:
     """Resolve the Debezium source.table / value-schema key for one event.
 
     Args:
@@ -300,224 +298,3 @@ def _resolve_table_identity(event: "StreamEvent", table_identity: str) -> str:
     if table_identity == "topic":
         return event.topic
     return event.route_table
-
-
-def _render_debezium_line(
-    event: "StreamEvent",
-    anchor: "EffectiveAnchor",
-    source_identity: "DebeziumSourceIdentity",
-    table_identity: str,
-    value_schemas: dict[str, dict[str, object]] | None,
-) -> tuple[str, str]:
-    """Render one event to a serialized Debezium line and its topic.
-
-    Args:
-        event: The stream event.
-        anchor: The resolved effective anchor.
-        source_identity: The masquerade source identity.
-        table_identity: 'source_table' or 'topic'.
-        value_schemas: Value schemas keyed by table identity; None for bare payloads.
-
-    Returns:
-        A (topic, serialized_line) pair.
-    """
-    ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-    table = _resolve_table_identity(event, table_identity)
-    schema = value_schemas[table] if value_schemas is not None else None
-    msg = render_debezium_message(event, ts_ms, source_identity, table, schema)
-    return event.topic, _serialize_message(msg)
-
-
-def _write_debezium_stdout_paced(
-    events: "Iterable[StreamEvent]",
-    anchor: "EffectiveAnchor",
-    source_identity: "DebeziumSourceIdentity",
-    table_identity: str,
-    value_schemas: dict[str, dict[str, object]] | None,
-    events_per_topic: dict[str, int],
-) -> int:
-    """Write Debezium events to stdout with per-line flush (paced mode).
-
-    Args:
-        events: The ordered events to write.
-        anchor: The resolved effective anchor.
-        source_identity: The masquerade source identity.
-        table_identity: 'source_table' or 'topic'.
-        value_schemas: Value schemas keyed by table identity; None for bare payloads.
-        events_per_topic: Mutable dict updated with per-topic counts.
-
-    Returns:
-        Total events written.
-    """
-    total_events = 0
-    for event in events:
-        topic, line = _render_debezium_line(
-            event, anchor, source_identity, table_identity, value_schemas
-        )
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        events_per_topic[topic] = events_per_topic.get(topic, 0) + 1
-        total_events += 1
-    return total_events
-
-
-def _write_debezium_file_paced(
-    events: "Iterable[StreamEvent]",
-    out: Path,
-    anchor: "EffectiveAnchor",
-    source_identity: "DebeziumSourceIdentity",
-    table_identity: str,
-    value_schemas: dict[str, dict[str, object]] | None,
-    events_per_topic: dict[str, int],
-) -> int:
-    """Write Debezium events to per-topic files with lazy open and per-line flush.
-
-    Each topic's handle is opened on first event, kept open across the run, and
-    closed in a finally on completion or abort. A zero-event topic opens no handle.
-
-    Args:
-        events: The ordered events to write.
-        out: The output directory for topic files.
-        anchor: The resolved effective anchor.
-        source_identity: The masquerade source identity.
-        table_identity: 'source_table' or 'topic'.
-        value_schemas: Value schemas keyed by table identity; None for bare payloads.
-        events_per_topic: Mutable dict updated with per-topic counts.
-
-    Returns:
-        Total events written.
-    """
-    import io
-
-    handles: dict[str, io.TextIOWrapper] = {}
-    total_events = 0
-    try:
-        for event in events:
-            topic, line = _render_debezium_line(
-                event, anchor, source_identity, table_identity, value_schemas
-            )
-            if topic not in handles:
-                handles[topic] = open(  # noqa: WPS515
-                    out / f"{topic}.jsonl", "w", encoding="utf-8"
-                )
-            handles[topic].write(line)
-            handles[topic].flush()
-            events_per_topic[topic] = events_per_topic.get(topic, 0) + 1
-            total_events += 1
-    finally:
-        for handle in handles.values():
-            handle.close()
-    return total_events
-
-
-def write_debezium_stream(
-    events: "Iterable[StreamEvent]",
-    sink: Literal["stdout", "file"],
-    out: "Path | None",
-    anchor: "EffectiveAnchor",
-    source_identity: "DebeziumSourceIdentity",
-    value_schemas: dict[str, dict[str, object]] | None,
-    table_identity: str = "source_table",
-    topic_set: tuple[str, ...] = (),
-    paced: bool = False,
-) -> "StreamOutcome":
-    """Serialize events as newline-delimited Debezium value messages to the sink.
-
-    Mirrors write_jsonl_stream: the same pinned deterministic encoder (UTF-8,
-    compact separators, no BOM, construction order, one trailing newline), the same
-    stdout-interleaved / one-file-per-topic layout, and the same per-topic counts. Per
-    event, computes ts_ms via rebased_epoch_ms and renders via render_debezium_message
-    with the value schema keyed by table_identity.
-
-    Args:
-        events: The ordered events to write.
-        sink: 'stdout' or 'file'.
-        out: The output directory for the file sink; must be None for stdout.
-        anchor: The resolved effective anchor (the driver guarantees non-None).
-        source_identity: The masquerade source identity.
-        value_schemas: Value schemas keyed by table_identity (route_table or topic)
-            when schemas are enabled; None for bare payloads across the run.
-        table_identity: 'source_table' (default) or 'topic'; controls source.table
-            and value-schema lookup key.
-        topic_set: Ordered topic set for initializing zero-count entries;
-            provided by the driver from enumerate_topics.
-        paced: True to flush each line as written (incremental delivery); False for
-            buffered/at-close delivery. Byte output is identical across modes.
-
-    Returns:
-        The StreamOutcome (total and per-topic counts).
-
-    Raises:
-        ExportRuntimeError: A sink/out mismatch — defensive; the CLI is the
-            primary guard.
-    """
-    if sink == "file" and out is None:
-        raise ExportRuntimeError(
-            "sink='file' requires an output directory (out must not be None)"
-        )
-    if sink == "stdout" and out is not None:
-        raise ExportRuntimeError(
-            "sink='stdout' requires out=None (no output directory)"
-        )
-
-    events_per_topic: dict[str, int] = {topic: 0 for topic in topic_set}
-    total_events = 0
-
-    if sink == "stdout":
-        if paced:
-            total_events = _write_debezium_stdout_paced(
-                events,
-                anchor,
-                source_identity,
-                table_identity,
-                value_schemas,
-                events_per_topic,
-            )
-        else:
-            for event in events:
-                ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-                table = _resolve_table_identity(event, table_identity)
-                schema = value_schemas[table] if value_schemas is not None else None
-                msg = render_debezium_message(
-                    event, ts_ms, source_identity, table, schema
-                )
-                sys.stdout.write(_serialize_message(msg))
-                t = event.topic
-                events_per_topic[t] = events_per_topic.get(t, 0) + 1
-                total_events += 1
-    else:
-        assert out is not None
-        if paced:
-            total_events = _write_debezium_file_paced(
-                events,
-                out,
-                anchor,
-                source_identity,
-                table_identity,
-                value_schemas,
-                events_per_topic,
-            )
-        else:
-            buffers: dict[str, list[str]] = {}
-            for event in events:
-                ts_ms = rebased_epoch_ms(event.event_sim_time, anchor)
-                table = _resolve_table_identity(event, table_identity)
-                schema = value_schemas[table] if value_schemas is not None else None
-                msg = render_debezium_message(
-                    event, ts_ms, source_identity, table, schema
-                )
-                topic = event.topic
-                if topic not in buffers:
-                    buffers[topic] = []
-                buffers[topic].append(_serialize_message(msg))
-                events_per_topic[topic] = events_per_topic.get(topic, 0) + 1
-                total_events += 1
-
-            for topic, lines in buffers.items():
-                file_path = out / f"{topic}.jsonl"
-                file_path.write_text("".join(lines), encoding="utf-8")
-
-    return StreamOutcome(
-        total_events=total_events,
-        events_per_topic=events_per_topic,
-    )

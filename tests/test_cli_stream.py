@@ -921,7 +921,8 @@ def _write_kafka_stream_config(
 def _fake_write_kafka_stream_ok(
     events: Any,
     render_value: Any,
-    anchor: Any,
+    render_key: Any,
+    render_timestamp: Any,
     bootstrap_servers: str,
     topic_set: tuple[str, ...],
     *,
@@ -1034,8 +1035,15 @@ class TestKafkaBootstrapPrecedence:
         captured_bs: list[str] = []
 
         def _capture_bs(
-            events: Any, rv: Any, anchor: Any, bs: str, ts: Any, *, paced: bool = False
-        ) -> StreamOutcome:  # noqa: E501
+            events: Any,
+            rv: Any,
+            rk: Any,
+            rt: Any,
+            bs: str,
+            ts: Any,
+            *,
+            paced: bool = False,
+        ) -> StreamOutcome:
             captured_bs.append(bs)
             return StreamOutcome(total_events=0, events_per_topic={t: 0 for t in ts})
 
@@ -1072,8 +1080,15 @@ class TestKafkaBootstrapPrecedence:
         captured_bs: list[str] = []
 
         def _capture_bs(
-            events: Any, rv: Any, anchor: Any, bs: str, ts: Any, *, paced: bool = False
-        ) -> StreamOutcome:  # noqa: E501
+            events: Any,
+            rv: Any,
+            rk: Any,
+            rt: Any,
+            bs: str,
+            ts: Any,
+            *,
+            paced: bool = False,
+        ) -> StreamOutcome:
             captured_bs.append(bs)
             return StreamOutcome(total_events=0, events_per_topic={t: 0 for t in ts})
 
@@ -1108,8 +1123,15 @@ class TestKafkaBootstrapPrecedence:
         captured_bs: list[str] = []
 
         def _capture_bs(
-            events: Any, rv: Any, anchor: Any, bs: str, ts: Any, *, paced: bool = False
-        ) -> StreamOutcome:  # noqa: E501
+            events: Any,
+            rv: Any,
+            rk: Any,
+            rt: Any,
+            bs: str,
+            ts: Any,
+            *,
+            paced: bool = False,
+        ) -> StreamOutcome:
             captured_bs.append(bs)
             return StreamOutcome(total_events=0, events_per_topic={t: 0 for t in ts})
 

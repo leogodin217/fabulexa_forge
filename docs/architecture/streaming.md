@@ -67,8 +67,8 @@ format: jsonl {seq, op, ts, kind, key:{<elected>}, after}
 |---|---|
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `StreamConfig` (the `content` axis, the `streams` declaration list, and the cross-mode `keys` election block), the `StreamDeclaration` union — `KindStream` (name / kind / `sub_types` / `identity` / `properties`) and `MembershipStream` (name / `MembershipRef` / `identity` / `fields`), discriminated on which of `kind` / `membership` an entry carries so a shape-mixing declaration is unrepresentable — the optional `DebeziumConfig` (home of `table_identity`) / `DebeziumSourceIdentity` block, and the optional `KafkaConfig` connection block — the top-level streaming envelope and its parse-time validators |
 | [`config/loader.py`](../../src/fabulexa_forge/config/loader.py) | `load_stream_config` — YAML → validated `StreamConfig`, hard-bound (no mode dispatch) |
-| [`exporters/streaming/types.py`](../../src/fabulexa_forge/exporters/streaming/types.py) | `StreamEvent` (one format-agnostic change event — `op` admits `c`/`u`/`d` and `join`/`leave`; carries `topic`, `route_table`, and the rendered `key_column` / `key_value` pair) and `StreamOutcome` (run counts) |
-| [`exporters/streaming/engine.py`](../../src/fabulexa_forge/exporters/streaming/engine.py) | `iter_stream_events` — the up-front business-rule pass (per-stream resolvability, the vocabulary / naming / selection / change-scope gates, the election gates), per-stream fold materialization (kind-shaped: change scope = the stream's declared audited set, projection = the declared `properties`; membership-shaped: the declared table and `fields`), post-fold row scoping (the `sub_types` discriminator index and the resolved satisfying-record set), the cross-stream k-way merge, `seq` stamping, per-event `topic` / `route_table` stamping, identity-projection resolution and gating (`resolve_identity_projection` / `resolve_stream_identities` — the per-stream gated published-surface set), elected-key rendering, output-key assembly, and Python-side `ts` rendering; `build_topic_set` — the run's topic set (the declared names, declaration order) |
+| [`exporters/streaming/types.py`](../../src/fabulexa_forge/exporters/streaming/types.py) | `StreamEvent` (one format-agnostic change event — `op` admits `c`/`u`/`d`, `join`/`leave`, and the seek snapshot-read `r` ([`stream-playback.md`](stream-playback.md) § Seek); carries `topic`, `route_table`, and the rendered `key_column` / `key_value` pair) and `StreamOutcome` (run counts) |
+| [`exporters/streaming/engine.py`](../../src/fabulexa_forge/exporters/streaming/engine.py) | `iter_stream_events` — the up-front business-rule pass (per-stream resolvability, the vocabulary / naming / selection / change-scope gates, the election gates), per-stream fold materialization (kind-shaped: change scope = the stream's declared audited set, projection = the declared `properties`; membership-shaped: the declared table and `fields`), post-fold row scoping (the `sub_types` discriminator index and the resolved satisfying-record set), the cross-stream k-way merge, `seq` stamping, per-event `topic` / `route_table` stamping, identity-projection resolution and gating (`resolve_identity_projection` / `resolve_stream_identities` — the per-stream gated published-surface set), elected-key rendering, output-key assembly, and Python-side `ts` rendering; `resolve_streams` — the eager pass factored as a standalone resolution (`StreamResolution`) the playback surfaces run at open; `iter_resolved_stream_events` — the bounded post-pass iterator (pure row selection, entry-point-invariant `seq`) and `iter_resolved_snapshot_events` — the seek `r` phase, both promoted by the stream head ([`stream-playback.md`](stream-playback.md)); `build_topic_set` — the run's topic set (the declared names, declaration order) |
 | [`exporters/streaming/presentation.py`](../../src/fabulexa_forge/exporters/streaming/presentation.py) | The per-stream naming and vocabulary resolution — `IdentityProjection` / `OutputEntry` (the runtime types), `resolve_identity_output_key` (the single producer of every published identity surface's wire name), `resolve_stream_output_columns` / `resolve_membership_output_columns` (the single naming authority: the ordered `OutputEntry` list — identity entries and payload entries with their resolved output keys — both the after-image assembly and the Debezium value-schema build read), `resolve_stream_kind_vocabulary` (the run's kind vocabulary, validated and returned as the declared value mapping), `resolve_stream_envelope_kind`, and `apply_kind_vocabulary` (the per-value identity-fall-through map). Pure config + sidecar; imports neither the engine nor the drivers |
 | [`exporters/streaming/selection.py`](../../src/fabulexa_forge/exporters/streaming/selection.py) | `resolve_stream_selection` — a stream's satisfying record set (owner set, membership-shaped) from its declared `where` / owner `sub_types`: the constant-column gate walk and plan-time literal casts, then the shared parent-lookup relation ([`selection-spine.md`](selection-spine.md)) and the per-element out-of-domain notice |
 | [`exporters/streaming/routing.py`](../../src/fabulexa_forge/exporters/streaming/routing.py) | The Layer-A leaf derivation — `route_attributes` / `membership_route_attributes` / `resolve_subtype_index` (the per-event `route_table`, consumed by the Debezium `source_table` masquerade and the discriminator index) — and the election-support sidecar reads (`kind_reference_targets`, `membership_reference_fields`) |
@@ -77,7 +77,7 @@ format: jsonl {seq, op, ts, kind, key:{<elected>}, after}
 | [`exporters/streaming/debezium.py`](../../src/fabulexa_forge/exporters/streaming/debezium.py) | `render_debezium_message` / `build_debezium_value_schema` / `rebased_epoch_ms` (the Debezium value-message shape, the embedded Connect schema, and the epoch-millisecond timestamp) and `write_debezium_stream` (the same shared `encode_pinned` + stdout / per-topic-file sinks, the same `paced` flush mode) |
 | [`exporters/streaming/kafka_sink.py`](../../src/fabulexa_forge/exporters/streaming/kafka_sink.py) | `resolve_bootstrap_servers` (CLI → config block → environment bootstrap precedence) and `write_kafka_stream` (the Kafka producer lifecycle — topic pre-creation, per-event produce keyed by the elected key map, flush-before-return); `confluent-kafka` is imported lazily here only |
 | [`exporters/streaming/pacer.py`](../../src/fabulexa_forge/exporters/streaming/pacer.py) | `ResolvedClock` / `resolve_clock` / `pace_events` — the realtime-pacing surface the driver composes. Its contract is owned by [`streaming-pacing.md`](streaming-pacing.md) |
-| [`exporters/streaming/driver.py`](../../src/fabulexa_forge/exporters/streaming/driver.py) | `stream_export` — events → (pace when realtime) → format → sink for one run, the Debezium config/anchor business rules, the per-stream value-schema build, and the declared-but-empty-topic backfill (empty files + zero counts) |
+| [`exporters/streaming/driver.py`](../../src/fabulexa_forge/exporters/streaming/driver.py) | `stream_export` — the delivery driver over the playback seam's stream head and render surface ([`stream-playback.md`](stream-playback.md) § The delivery driver): opens `StreamPlayback`, resolves `StreamRender`, consumes the whole-tape events → (pace when realtime) → sink; owns sink selection and framing, the Kafka anchor business rule, and the declared-but-empty-topic backfill (empty files + zero counts) |
 | [`exporters/streaming/init.py`](../../src/fabulexa_forge/exporters/streaming/init.py) | `generate_stream_init_config` — the `init --mode streaming` proposal engine (§ `init --mode streaming`); tests in [`tests/exporters/streaming/test_init.py`](../../tests/exporters/streaming/test_init.py) |
 | [`derivations/row_state_events.py`](../../src/fabulexa_forge/derivations/row_state_events.py), [`derivations/membership_events.py`](../../src/fabulexa_forge/derivations/membership_events.py) | The composed event-content folds — their semantics are owned by [`derivations.md`](derivations.md) § The row-state-events derivation and § The membership-events derivation |
 | [`cli.py`](../../src/fabulexa_forge/cli.py) | `cmd_stream` — the `fabulexa-forge stream` verb, flag-level usage checks (including the `--speed` / `--idle-cap` / `--fast` clock checks and the `--sink stdout\|file\|kafka` / `--out` pairing), clock resolution, the `--bootstrap-servers` flag and `FABEXPORT_KAFKA_BOOTSTRAP` read for the kafka sink, the `init --mode streaming` arm, and the `(ReaderError, ExporterError)` funnel |
@@ -852,8 +852,10 @@ The key-only `before` on `d` is canonical Debezium under `REPLICA IDENTITY DEFAU
 where a delete carries only the primary key. The elected key is creation-constant,
 known at every time ≤ the event, so it is the one before-image producible without state
 reconstruction — it keeps the deleted identity visible in the value even though the
-value-only stream emits no separate key message. No before-image reconstruction, no `r`
-snapshot, no `t`/`m`.
+value-only stream emits no separate key message. No before-image reconstruction, no
+`t`/`m`; the snapshot-read `r` exists only in the playback seam's `seek` phase
+([`stream-playback.md`](stream-playback.md) § Seek) — a whole-tape play never emits
+one.
 
 **Membership-events content.** For `content: membership-events` the Debezium stream is an
 **append-only event log**, not an upsert log. Every `join` / `leave` event renders as a
@@ -908,7 +910,9 @@ key, then one entry per selected property under its resolved output key) is code
 is the author-supplied identity plus the derived `ts_ms` / `lsn` / `sequence` /
 `snapshot` / `txId` / `table`: `lsn` is `StreamEvent.seq`, `sequence` is
 `"[null,\"<seq>\"]"` (mimicking Postgres `[last_commit, current]`), `snapshot` is
-`"false"`, `txId` is `null`, and `table` follows `debezium.table_identity` (below). Two
+`"false"` on every op except the seek snapshot-read `r`, which renders `"true"`
+([`stream-playback.md`](stream-playback.md) § Rendering `r`), `txId` is `null`, and
+`table` follows `debezium.table_identity` (below). Two
 values are declared deviations from canonical Debezium: `payload.transaction` is always
 `null` (the sanitised subset has no transaction grain), and `payload.ts_ms` equals
 `payload.source.ts_ms` equals the rebased event time — the determinism invariant
@@ -938,7 +942,11 @@ bare envelope. The value schema is built **per stream** — one declared column 
 topic, for both `table_identity` values — so a per-topic schema is well-defined by
 construction (one topic = one stream = one column list, and one key space per topic by
 the one-stream-one-key-surface gate); no schema-ambiguity check exists because no
-ambiguous case is expressible. It is a Kafka-Connect `struct` descriptor of the
+ambiguous case is expressible. Which schema a given message embeds is resolved per
+event from its `(topic, table-identity value)` pair — the render surface's contract
+([`stream-playback.md`](stream-playback.md) § The render surface), which keeps
+schema ↔ row agreement unconditional when overlapping streams share a `route_table`
+leaf under `source_table` identity. It is a Kafka-Connect `struct` descriptor of the
 envelope: `before` and `after` are each an **optional** struct of optional-string
 columns in after-image order, each field carrying the single naming authority's output key
 (the `resolve_stream_columns` order — see
@@ -1607,9 +1615,12 @@ What the streaming exporter deliberately does not own:
   when a realtime clock resolves; the scheduling, clock resolution, and paced-sink
   contract live in [`streaming-pacing.md`](streaming-pacing.md). Absent a clock the
   driver delivers unpaced, exactly as the default.
-- **Windowed / incremental streaming.** The `--from` / `--to` / `--next` window
-  machinery (see [`incremental.md`](incremental.md)) is not wired into `stream`; a run
-  emits the whole stream in one invocation.
+- **Time bounds and mid-tape join live at the seam, not the verb.** Bounded replay
+  and snapshot-then-stream seek are library-call arguments on the playback seam's
+  stream head ([`stream-playback.md`](stream-playback.md)); `StreamConfig` carries no
+  horizon field, and a `stream` run emits the whole stream in one invocation. The
+  `--from` / `--to` / `--next` window machinery (see
+  [`incremental.md`](incremental.md)) is not wired into `stream`.
 - **Before-images.** The stream is after-only CDC: a record's terminal state is
   delivered by the preceding `c`/`u`, and no full before-image is reconstructed. The
   JSONL `d` is a `null`-after tombstone; the Debezium `d` carries only the elected key
@@ -1626,7 +1637,8 @@ What the streaming exporter deliberately does not own:
 | [`key-election.md`](key-election.md) | The cross-mode election surface streaming consumes — the `keys` grammar, resolution gates, union-safety algebra, identity join relations, uniqueness guard, the streaming render sites (§ Rendering: streaming), and the derivation/publication identity layer split (§ Identity publication) |
 | [`streaming-pacing.md`](streaming-pacing.md) | The realtime-pacing surface this driver composes — clock resolution (config × CLI), the drift-free release schedule, paced per-line-flush delivery, and the clock validation rules |
 | [`derivations.md`](derivations.md) | The row-state-events fold (`state-changes` — including the change-scope / projection two-scope contract) and the membership-events fold (`membership-events`) this driver composes — `c`/`u`/`d` and `join`/`leave` generation, op classification, after-image reconstruction, and per-source order; the source of the shared `require_single_branch` guard |
-| [`playback.md`](playback.md) | The seam that owns the canonical total order and the global-`seq` definition this stream conforms to; the tier-1 `events` head that re-seams `stream` later |
+| [`playback.md`](playback.md) | The seam that owns the canonical total order and the global-`seq` definition this stream conforms to |
+| [`stream-playback.md`](stream-playback.md) | The stream-shaped head and per-event render surface the delivery driver consumes — bounds, seek and the `r` op, per-event schema resolution, and the driver-adds-no-bytes contract |
 | [`selection-spine.md`](selection-spine.md) | The mode-neutral parent-lookup relation a stream's `where` and membership owner `sub_types` resolve through |
 | [`row-predicates.md`](row-predicates.md) | The scalar-or-list `where` grammar, its literal typing, and the one rendering authority streaming compiles through |
 | [`notices.md`](notices.md) | The channel the per-element `discriminator-value-unobserved` notice flows through, and the required-sink posture `iter_stream_events` follows |

@@ -619,18 +619,62 @@ def _imported_module_names(file_path: Path) -> set[str]:
 
 
 def test_playback_package_imports_no_exporters_or_config() -> None:
-    """Tier 1 (every module but `shaped.py`) imports no `exporters.*` / `config`
-    name. `shaped.py` (tier 2) is the seam's one deliberate crossing — it wraps
-    the exporters' own compile surfaces rather than reimplementing their
-    business rules (design doc § Shaped playback (tier 2))."""
+    """Tier 1 (every module but `shaped.py` / `stream.py` / `stream_render.py`)
+    imports no `exporters.*` / `config` name. `shaped.py`, `stream.py`, and
+    `stream_render.py` (tier 2) are the seam's deliberate crossings — they wrap
+    the exporters' own compile / engine surfaces rather than reimplementing
+    their business rules (design doc § Shaped playback (tier 2);
+    stream-playback sprint spec § Seam-side placement)."""
     package_dir = (
         Path(__file__).resolve().parents[2] / "src" / "fabulexa_forge" / "playback"
     )
+    tier2_modules = {"shaped.py", "stream.py", "stream_render.py"}
     for py_file in package_dir.glob("*.py"):
-        if py_file.name == "shaped.py":
+        if py_file.name in tier2_modules:
             continue
         for module_name in _imported_module_names(py_file):
             assert "exporters" not in module_name, f"{py_file}: imports {module_name}"
             assert not module_name.endswith(".config") and module_name != "config", (
                 f"{py_file}: imports {module_name}"
             )
+
+
+def test_stream_playback_imports_only_pure_streaming_surfaces() -> None:
+    """`stream.py` imports streaming's pure surfaces only — never `driver`,
+    `kafka_sink`, or `pacer` (the sink-lifecycle / format-render layers stay
+    driver-owned; stream-playback sprint spec § Seam-side placement)."""
+    stream_file = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "fabulexa_forge"
+        / "playback"
+        / "stream.py"
+    )
+    forbidden = {
+        "fabulexa_forge.exporters.streaming.driver",
+        "fabulexa_forge.exporters.streaming.kafka_sink",
+        "fabulexa_forge.exporters.streaming.pacer",
+    }
+    imported = _imported_module_names(stream_file)
+    assert not imported & forbidden, f"stream.py imports {imported & forbidden}"
+
+
+def test_stream_render_imports_only_pure_streaming_surfaces() -> None:
+    """`stream_render.py` imports streaming's pure surfaces only — never
+    `driver`, `kafka_sink`, or `pacer` (the sink-lifecycle / format-render
+    layers stay driver-owned; stream-playback sprint spec § Seam-side
+    placement)."""
+    stream_render_file = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "fabulexa_forge"
+        / "playback"
+        / "stream_render.py"
+    )
+    forbidden = {
+        "fabulexa_forge.exporters.streaming.driver",
+        "fabulexa_forge.exporters.streaming.kafka_sink",
+        "fabulexa_forge.exporters.streaming.pacer",
+    }
+    imported = _imported_module_names(stream_render_file)
+    assert not imported & forbidden, f"stream_render.py imports {imported & forbidden}"

@@ -35,9 +35,11 @@ from fabulexa_forge.errors import (
 from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.streaming.engine import (
     build_topic_set,
+    iter_resolved_stream_events,
     iter_stream_events,
     resolve_identity_projection,
     resolve_stream_key_populations,
+    resolve_streams,
 )
 from fabulexa_forge.exporters.streaming.presentation import (
     IdentityProjection,
@@ -2538,3 +2540,204 @@ class TestIdentitySurfacesOutsideChangeScopeAndRender:
                 ),
             ):
                 iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+
+
+# ---------------------------------------------------------------------------
+# resolve_streams / iter_resolved_stream_events: bounded iteration
+# ---------------------------------------------------------------------------
+
+
+class TestResolvedBoundedIteration:
+    """resolve_streams (the promoted eager pass) + iter_resolved_stream_events'
+    (start, end) bounds — pure row selection over the whole in-scope set."""
+
+    def _two_kind_emit_four_events(self, tmp_path: Path) -> Path:
+        """Two kind streams, four creates spread across sim_time: alpha at
+        10 and 40, beta at 20 and 30 — canonical order interleaves by time."""
+        return _build_two_kind_emit(
+            tmp_path,
+            "alpha",
+            [
+                ("trunk", "a1", 10, True, None, 10, 0, "x", "p"),
+                ("trunk", "a2", 40, True, None, 40, 1, "x", "p"),
+            ],
+            "beta",
+            [
+                ("trunk", "b1", 20, True, None, 20, 0, "y", "q"),
+                ("trunk", "b2", 30, True, None, 30, 1, "y", "q"),
+            ],
+            history_rows=[],
+        )
+
+    def _two_stream_config(self) -> StreamConfig:
+        return _state_changes_config(
+            [_kind_stream("alpha", "alpha", []), _kind_stream("beta", "beta", [])]
+        )
+
+    def test_none_none_equals_iter_stream_events(self, tmp_path: Path) -> None:
+        """(None, None) matches iter_stream_events event-for-event, every
+        field including seq."""
+        emit_dir = self._two_kind_emit_four_events(tmp_path)
+        config = self._two_stream_config()
+        with open_emit(emit_dir) as emit:
+            whole_tape = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            resolved = list(
+                iter_resolved_stream_events(emit, config, None, resolution, None, None)
+            )
+
+        assert resolved == whole_tape
+
+    def test_bounded_window_selects_byte_identical_events_seq_offset(
+        self, tmp_path: Path
+    ) -> None:
+        """A bounded (T1, T2) ask selects the events whose event_sim_time
+        falls in [T1, T2); each is byte-identical to its whole-tape self, and
+        the first selected event's seq = 1 + count of in-scope events
+        strictly before T1."""
+        emit_dir = self._two_kind_emit_four_events(tmp_path)
+        config = self._two_stream_config()
+        with open_emit(emit_dir) as emit:
+            whole_tape = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            bounded = list(
+                iter_resolved_stream_events(emit, config, None, resolution, 15, 35)
+            )
+
+        by_seq = {e.seq: e for e in whole_tape}
+        assert bounded == [by_seq[2], by_seq[3]]
+        assert bounded[0].seq == 2  # 1 + count(events strictly before 15) == 1 + 1
+
+    def test_start_equals_end_yields_nothing(self, tmp_path: Path) -> None:
+        emit_dir = self._two_kind_emit_four_events(tmp_path)
+        config = self._two_stream_config()
+        with open_emit(emit_dir) as emit:
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            events = list(
+                iter_resolved_stream_events(emit, config, None, resolution, 20, 20)
+            )
+        assert events == []
+
+    def test_start_greater_than_end_yields_nothing_no_raise(
+        self, tmp_path: Path
+    ) -> None:
+        emit_dir = self._two_kind_emit_four_events(tmp_path)
+        config = self._two_stream_config()
+        with open_emit(emit_dir) as emit:
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            events = list(
+                iter_resolved_stream_events(emit, config, None, resolution, 30, 10)
+            )
+        assert events == []
+
+    def test_bound_past_last_event_exhausts_without_error(self, tmp_path: Path) -> None:
+        emit_dir = self._two_kind_emit_four_events(tmp_path)
+        config = self._two_stream_config()
+        with open_emit(emit_dir) as emit:
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            events = list(
+                iter_resolved_stream_events(emit, config, None, resolution, 1_000, None)
+            )
+        assert events == []
+
+    def test_zero_in_window_stream_still_in_topic_set(self, tmp_path: Path) -> None:
+        """A window that excludes one declared stream's only in-scope event
+        yields nothing for it, while build_topic_set still lists the stream."""
+        emit_dir = self._two_kind_emit_four_events(tmp_path)
+        config = self._two_stream_config()
+        with open_emit(emit_dir) as emit:
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            events = list(
+                iter_resolved_stream_events(emit, config, None, resolution, 0, 15)
+            )
+        assert [e.topic for e in events] == ["alpha"]
+        assert build_topic_set(config) == ("alpha", "beta")
+
+    def test_bounds_land_on_membership_events(self, tmp_path: Path) -> None:
+        """A membership-events window selects only the in-window join."""
+        emit_dir = _build_single_membership_emit(
+            tmp_path,
+            "queue",
+            "waiters",
+            _MEMBERSHIP_BASIC_COLS,
+            [("trunk", "r1", 10, None), ("trunk", "r2", 30, None)],
+        )
+        config = _membership_events_config(
+            [_membership_stream("wait_events", "queue", "waiters", [])]
+        )
+        with open_emit(emit_dir) as emit:
+            whole_tape = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            bounded = list(
+                iter_resolved_stream_events(emit, config, None, resolution, 20, None)
+            )
+
+        assert [e.record_id for e in bounded] == ["r2"]
+        assert bounded[0] == next(e for e in whole_tape if e.record_id == "r2")
+
+    def test_membership_multiplicity_ties_counted_not_collapsed_under_bounds(
+        self, tmp_path: Path
+    ) -> None:
+        """Two physical join rows tying the canonical key (contract-legal
+        multiplicity) both survive a bound covering their instant — bounded
+        count is by multiplicity, exactly as the shipped whole-tape seq is."""
+        emit_dir = _build_single_membership_emit(
+            tmp_path,
+            "queue",
+            "waiters",
+            _MEMBERSHIP_BASIC_COLS,
+            [("trunk", "r1", 10, None), ("trunk", "r1", 10, None)],
+        )
+        config = _membership_events_config(
+            [_membership_stream("wait_events", "queue", "waiters", [])]
+        )
+        with open_emit(emit_dir) as emit:
+            whole_tape = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            bounded = list(
+                iter_resolved_stream_events(emit, config, None, resolution, 0, None)
+            )
+
+        assert len(whole_tape) == 2
+        assert bounded == whole_tape
+
+    def test_resolve_streams_raises_shipped_gate_identity(self, tmp_path: Path) -> None:
+        """resolve_streams runs the same eager gates iter_stream_events does —
+        an unknown kind raises ExportError naming the stream."""
+        emit_dir = _build_single_kind_emit(
+            tmp_path,
+            "item",
+            record_rows=[("trunk", "r1", 10, True, None, 10, 0, "a", "x")],
+            history_rows=[],
+        )
+        config = _state_changes_config([_kind_stream("items", "missing_kind", [])])
+        with open_emit(emit_dir) as emit:
+            with pytest.raises(ExportError, match="stream 'items'"):
+                resolve_streams(emit, config, discard_notice_sink)
+
+    def test_resolve_streams_drives_resolved_iterator_same_as_entry_point(
+        self, tmp_path: Path
+    ) -> None:
+        """A green config's StreamResolution drives iter_resolved_stream_events
+        to the same output as the self-validating iter_stream_events entry
+        point."""
+        emit_dir = self._two_kind_emit_four_events(tmp_path)
+        config = self._two_stream_config()
+        with open_emit(emit_dir) as emit:
+            resolution = resolve_streams(emit, config, discard_notice_sink)
+            via_resolution = list(
+                iter_resolved_stream_events(emit, config, None, resolution, None, None)
+            )
+            via_entry_point = list(
+                iter_stream_events(emit, config, None, notice_sink=discard_notice_sink)
+            )
+
+        assert via_resolution == via_entry_point

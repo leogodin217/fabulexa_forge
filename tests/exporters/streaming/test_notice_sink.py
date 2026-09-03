@@ -1,10 +1,11 @@
-"""Phase 2: required notice_sink on the stream entry points.
+"""Required notice_sink on the stream entry points.
 
-Covers only the signature change itself (source step) — `iter_stream_events`,
-`stream_export`, and `seed_mixer_run` all require a trailing/positional
-notice_sink argument, and thread it through without altering the event set.
-Existing call-site suites migrate in a later step (spec Phase 2 "migrate"
-step); this file is new and self-contained.
+Covers the signature change itself — `iter_stream_events`, `stream_export`,
+and `seed_mixer_run` all require a trailing/positional notice_sink argument,
+and thread it through without altering the event set — and the re-seamed
+verb's declared double-pass notice cost: `stream_export` now opens a head and
+resolves a render, each running the eager business-rule pass over the same
+sink, so a notice the pass emits arrives twice.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 import duckdb
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
-from _support.sidecar_builder import identity_column
+from _support.sidecar_builder import enum_options, identity_column
 from _support.sidecar_builder import write_emit as _write_sidecar
 
 from fabulexa_forge.config.models import KindStream, StreamConfig
@@ -54,7 +55,9 @@ _HISTORY_COLS: list[dict[str, object]] = [
 ]
 
 
-def _build_single_record_emit(tmp_path: Path) -> Path:
+def _build_single_record_emit(
+    tmp_path: Path, extra: dict[str, object] | None = None
+) -> Path:
     """Build a minimal one-kind, one-record emit: a single 'c' event."""
     db_path = tmp_path / "run.duckdb"
     conn = duckdb.connect(str(db_path))
@@ -86,8 +89,33 @@ def _build_single_record_emit(tmp_path: Path) -> Path:
             },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 9999}],
+        extra=extra,
     )
     return tmp_path
+
+
+_ENUM_DOMAINS: dict[str, object] = {"widget": {"status": enum_options("pending")}}
+
+
+def _build_where_notice_emit(tmp_path: Path) -> Path:
+    """Build the single-record emit with a declared `status` domain, so a
+    `where` value outside it draws exactly one out-of-domain notice."""
+    return _build_single_record_emit(tmp_path, extra={"enum_domains": _ENUM_DOMAINS})
+
+
+def _where_config() -> StreamConfig:
+    """A StreamConfig whose `where` names a value outside the declared domain."""
+    return StreamConfig(
+        content="state-changes",
+        streams=[
+            KindStream(
+                name="widgets",
+                kind="widget",
+                properties=["status"],
+                where={"status": "missing"},
+            )
+        ],
+    )
 
 
 @pytest.fixture
@@ -174,3 +202,19 @@ def test_seed_mixer_run_threads_notice_sink(
         )
 
     assert [e.op for e in buffers["widgets"]] == ["c"]
+
+
+def test_stream_export_emits_eager_pass_notices_twice(tmp_path: Path) -> None:
+    """The re-seamed verb opens a head and resolves a render over one sink,
+    each running the eager business-rule pass — so a notice the pass emits
+    arrives twice, the declared double-pass cost of the re-seam."""
+    emit_dir = _build_where_notice_emit(tmp_path)
+    config = _where_config()
+    sink = RecordingNoticeSink()
+    with open_emit(emit_dir) as emit:
+        anchor = make_anchor()
+        stream_export(emit, config, "jsonl", "stdout", None, anchor, sink)
+
+    assert len(sink.notices) == 2
+    assert sink.notices[0] == sink.notices[1]
+    assert sink.notices[0].code == "discriminator-value-unobserved"
