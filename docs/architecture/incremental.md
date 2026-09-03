@@ -198,7 +198,9 @@ is also the playback seam's tier-2 `window` contract, promoted verbatim from
 driver-internal to seam-owned ([`playback.md`](playback.md) § Shaped window). The
 driver keeps its own mechanics (the window-boundary sequence, cursor, fingerprint,
 drained detection, labels, staging, writers); those remain above the seam, and the
-driver becomes tier 2's first re-seam customer when it is next materially touched.
+driver re-seams over tier 2's `window` when it is next materially touched (the
+`stream` verb is already delivered over the seam's stream head —
+[`stream-playback.md`](stream-playback.md)).
 
 ### The SCD-2 view
 

@@ -7,7 +7,11 @@ inclusive-T event-time line**: primitive playback (atom populations →
 events / point-in-time state) below the modes, and shaped playback (a
 declared target shape → its tables per window or as of T) above them. Both
 tiers are pull-only, deterministic, permissive, and stateless; the caller
-owns the emit's lifetime and the frontier. A **tape** is the emit under
+owns the emit's lifetime and the frontier. Beside the shaped tier sits the
+**stream-shaped head and render surface** — `StreamConfig`-bound playback of
+the streaming exporter's event feed, with bounds, seek, and per-event byte
+rendering — whose contract is owned by
+[`stream-playback.md`](stream-playback.md). A **tape** is the emit under
 playback — a repo-local name for the seam's view of it; the input remains the
 emit, and the **truncated tape** (the emit presented as if its slice ended at
 T) is how shaped `state` is realized.
@@ -28,11 +32,18 @@ Two tiers with different layer heights under one package:
   `ShapedTable`. Imports `config` (the shape envelope), the modes' pure
   compile surfaces, the notice channel ([`notices.md`](notices.md)), the
   derivations truncated-tape surface, and the reader's `Emit` (to compose the
-  truncated emit view). It sits above the modes.
+  truncated emit view). It sits above the modes. Its stream-shaped sibling —
+  `open_stream_playback` / `StreamPlayback` / `resolve_stream_render` /
+  `StreamRender` — sits at the same layer height and imports the streaming
+  exporter's pure compile/render surfaces only; its contract is
+  [`stream-playback.md`](stream-playback.md).
 
 The dependency chain `tier 2 → modes → derivations → reader` is acyclic by
-construction; tier 1 is a sibling consumer of derivations; no mode imports
-either tier.
+construction; tier 1 is a sibling consumer of derivations. No mode's
+compile/render surface imports either tier; the one sanctioned mode-side
+consumer of the seam is the streaming delivery driver (`stream_export`),
+which consumes the stream head and render surface
+([`stream-playback.md`](stream-playback.md) § Boundary).
 
 **Inputs.** An open `Emit`; an atom `PlaybackSelection` (tier 1) or a
 validated `ExportConfig` shape (tier 2); a resolved `EffectiveAnchor | None`;
@@ -380,7 +391,11 @@ untouched.
 ## Invariants
 
 1. **Pull-only.** No operation performs I/O until an answer is pulled;
-   `open_*` reads the sidecar only. No clock, sleep, sink, or session exists at
+   `open_*` reads the sidecar only (the stream head is the one declared,
+   scoped divergence: its open runs streaming's eager pass, whose selection
+   resolution reads the records spine — a bounded scope check, never a
+   replay; [`stream-playback.md`](stream-playback.md) § Open-time behavior
+   and errors). No clock, sleep, sink, or session exists at
    the seam. Outstanding lazy answers are independently pullable.
 2. **Deterministic.** Same tape + selection + anchor + ask arguments + code
    version → identical events, `seq`, and tables. Corrupted tapes included.
@@ -408,8 +423,9 @@ untouched.
    wherever it appears — event `ts`, snapshot `_ts` — under one resolved anchor
    (a tier-1 guarantee); tier-2 values keep their mode's shipped full-export
    rendering, a different representation of the same instant.
-8. **Layer direction.** As § Boundary; the chain is acyclic and no mode imports
-   a tier.
+8. **Layer direction.** As § Boundary; the chain is acyclic, no mode's
+   compile/render surface imports a tier, and the streaming delivery driver
+   is the one sanctioned mode-side consumer of the seam.
 9. **Bridging (a theorem, not a stipulation).** `state(T_slice)` equals the
    shape's full export for every shape that opens, so the seam is provably
    sufficient to rewrite the shipped verbs on.
@@ -478,9 +494,11 @@ any id.
   a declared target shape through the modes and inherits their identity
   rendering (the `keys` election, per-mode render rules); a second grammar at
   that tier would duplicate the modes'.
-- **Re-seaming the shipped verbs is deferred.** `stream` and the incremental
-  driver re-seam when next materially touched, with byte-identical output as
-  the bar; the seam owns no verb today.
+- **The seam owns one verb.** `fabulexa-forge stream` is delivered over the
+  stream head and render surface
+  ([`stream-playback.md`](stream-playback.md) § The delivery driver); the
+  incremental driver re-seams when next materially touched, with
+  byte-identical output as the bar.
 - **Trunk-only.** The seam composes `require_single_branch` and is
   single-branch; multi-branch playback is Stage 5.
 
@@ -492,6 +510,7 @@ any id.
 | [`source.md`](source.md) · [`dimensional.md`](dimensional.md) | The modes tier 2 compiles; the `base_relations` compile parameter and the `last_mutation_sim_time` reserved-output-name posture |
 | [`incremental.md`](incremental.md) | The per-table-class window-membership contract tier-2 `window` promotes |
 | [`streaming.md`](streaming.md) | The canonical order and `seq` a single-content stream conforms to |
+| [`stream-playback.md`](stream-playback.md) | The stream-shaped head and per-event render surface — bounds, seek (snapshot-then-stream), the `r` op, and the seam's one byte-producing contract |
 | [`key-election.md`](key-election.md) | The identity-publication layer split (§ Identity publication) — why the seam projects published identity but never gates it |
 | [`slice-only.md`](slice-only.md) | The `slice_only` policy the seam inherits at selection and at open |
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` both tiers render wallclock through |

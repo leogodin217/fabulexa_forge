@@ -247,9 +247,14 @@ Each mode reads the same emit and writes a different target shape.
   `only` / `ignore` narrow which properties' changes fire a `u`, independently of what the
   stream projects — so a notification-shaped feed and a lifecycle-only feed are both
   expressible. `init` proposes none of the three: each is author intent with no
-  sidecar-derived value. *Gaps:* the Debezium
-  value message only (no separate key message or compaction tombstone), and whole-stream
-  (not windowed). See
+  sidecar-derived value. The CLI verb is delivered over the playback seam's
+  stream head + render surface, which also offers (library-only, no CLI or YAML
+  surface) bounded replay (`events(T1, T2)`), mid-tape join (`seek(T)` —
+  Debezium snapshot-then-stream with `r` read events), and per-event byte
+  rendering ([`architecture/stream-playback.md`](architecture/stream-playback.md)).
+  *Gaps:* the Debezium
+  value message only (no separate key message or compaction tombstone); the verb
+  itself is whole-stream (bounds are library arguments, not flags). See
   [`architecture/streaming.md`](architecture/streaming.md).
   *Teaches: streaming ingestion, event-time processing, CDC.*
 
