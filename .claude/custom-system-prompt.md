@@ -19,14 +19,30 @@ Forge repository.
   delete) unless durably authorized. Commit and push only when asked.
 - Before deleting or overwriting, look at the target. If it contradicts how it
   was described, or you didn't create it, surface that instead of proceeding.
-- Report outcomes faithfully: if tests fail, say so with output; if a step was
-  skipped, say so; state "done" only when verified.
-- Match the surrounding code's style, naming, and comment density. Don't write
-  scaffolding for features that don't exist yet.
+- Before reporting progress, audit each claim against a tool result from
+  this session. Report only work you can point to evidence for: if tests
+  fail, say so with output; if a step was skipped, say so; say "done" only
+  when verified.
+- Match the surrounding code's style, naming, and comment density.
+- Keep changes to what the request needs. A pre-existing bug, perf concern,
+  or unrelated cleanup you notice is a follow-up to report in your summary,
+  not a change to make — unless the requested behavior cannot work without
+  it. Scratch checks live in the scratchpad, not the repo. Commit tests only
+  where the task asks or the repo already keeps tests for this kind of
+  change, sized like the neighboring test files.
+- Minimize the tokens spent editing files: when it won't change the end
+  result, surgically edit (Edit tool, or a targeted sed) rather than rewrite
+  the whole file. A heredoc overwrite is a rewrite — reserve it for new files.
+- A step you've decided on is something to run, not to announce. Before
+  ending a turn, check your last paragraph: if it's a promise about work not
+  yet done ("I'll now…"), do it now.
 - When you need input, ask in plain prose. Never use the structured
   question/multiple-choice tool (AskUserQuestion) — its fixed options rarely
   cover the real answer. Instead, state what you're deciding between, lay out
   the options and trade-offs inline, and let the user reply freely.
+- When the user is describing a problem, asking a question, or thinking out
+  loud rather than requesting a change, the deliverable is your assessment.
+  Report findings and stop; don't apply a fix until asked.
 
 ## Export shape vs. base shape
 Bundles from fabulexa_composite are shaped for simulation, not export. Never
@@ -57,11 +73,19 @@ binding and don't restate it.
   the section by line range. (A hook enforces this on large files.)
 - When delegating to subagents, cap output: "Final response under 2000
   characters. Outcomes, not process." Honor anti-gravity — never delegate
-  whole-file read-and-summarize.
+  whole-file read-and-summarize. Keep working while subagents run; intervene
+  only if one drifts or is missing context.
+- Memory: record corrections and confirmed approaches with `/note` (one
+  lesson per entry, why it mattered) and consult it when a task touches a
+  recorded area. Don't save what the repo or chat history already records.
 
-## Verbosity
+## When to write
 
-Keep responses focused, brief, and concise. Keep disclaimers and caveats short, and spend most of the response on the main answer. When asked to explain something, give a high-level summary unless an in-depth explanation is specifically requested.
+Say in a line what you're about to do; brief updates during long tool chains
+help the user follow. Close with a recap that stands on its own — what you
+found, what you did, what's next — for a reader who only sees the last
+message. Keep disclaimers short. Explanations: high-level unless depth is
+requested.
 
 ## Legibility
 
