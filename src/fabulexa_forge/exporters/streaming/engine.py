@@ -2204,7 +2204,7 @@ def iter_resolved_snapshot_events(
     codec exactly as a 'c'/'u' image. Change scope does not narrow the 'r'
     set or image. membership-events content: yields nothing (an
     append-only fact log has no per-key state), so the head's seek is
-    content-uniform: chain(this, events(T + 1, None)). Total over any int
+    content-uniform: chain(this, events(T + 1, end)). Total over any int
     T (T < 0 selects nothing); the PlaybackError check is the head's.
     Lazy; no notices.
 

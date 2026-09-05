@@ -9,9 +9,9 @@ a declared, scoped divergence from tier 1's open-reads-the-sidecar-only
 rule). `StreamPlayback.events()` promotes the engine's own bounded resolved
 iterator (`iter_resolved_stream_events`) verbatim: bounds select, never
 recompute, and seq stays entry-point-invariant. `StreamPlayback.seek()`
-fuses the engine's snapshot phase (`iter_resolved_snapshot_events`) to the
-live tail (`events(T + 1, None)`) — Debezium snapshot-then-stream, the one
-composed answer this tier offers (§ Seek).
+composes the engine's snapshot phase (`iter_resolved_snapshot_events`) with
+the live phase (`events(T + 1, end)`) — Debezium snapshot-then-stream, with
+`end = T + 1` the snapshot phase alone (§ Seek).
 
 Layer-direction invariant: tier-2 sibling of `shaped.py` — imports `config`
 and streaming's pure surfaces only (`engine`'s `resolve_streams`,
@@ -61,17 +61,20 @@ def _validate_stream_event_bounds(start: int | None, end: int | None) -> None:
         raise PlaybackError(f"start ({start}) must be <= end ({end})")
 
 
-def _validate_seek_position(at_sim_time: int) -> None:
-    """Reject a negative seek position.
+def _validate_seek_position(at_sim_time: int, end: int | None) -> None:
+    """Reject a negative seek position or an end bound at or before it.
 
     Args:
         at_sim_time: The caller's inclusive position T.
+        end: The caller's exclusive live-phase end bound, or None.
 
     Raises:
-        PlaybackError: at_sim_time is negative.
+        PlaybackError: at_sim_time is negative, or end <= at_sim_time.
     """
     if at_sim_time < 0:
         raise PlaybackError(f"at_sim_time must be >= 0, got {at_sim_time}")
+    if end is not None and end <= at_sim_time:
+        raise PlaybackError(f"end ({end}) must be > at_sim_time ({at_sim_time})")
 
 
 class StreamPlayback:
@@ -130,28 +133,30 @@ class StreamPlayback:
             self._emit, self._config, self._anchor, self._resolution, start, end
         )
 
-    def seek(self, at_sim_time: int) -> "Iterator[StreamEvent]":
-        """Snapshot-then-stream from position T (inclusive).
+    def seek(self, at_sim_time: int, end: int | None = None) -> "Iterator[StreamEvent]":
+        """Snapshot-then-stream from position T (inclusive) to end (exclusive).
 
         state-changes content: first the 'r' phase — one read event per
         record live at T per covering stream, ordered
         (stream_name, record_id), each carrying seq = N and the record's
-        published state at T — then every event of events(T + 1, None).
+        published state at T — then every event of events(T + 1, end).
         membership-events content: the initial phase is empty (an
         append-only fact log has no per-key state to seed); the answer is
-        events(T + 1, None).
+        events(T + 1, end). end = T + 1 yields the snapshot phase alone.
 
         Args:
             at_sim_time: The seek position T (ns), inclusive.
+            end: Exclusive upper bound (ns) of the live phase, or None for
+                tape end.
 
         Returns:
             An iterator of StreamEvent: the snapshot phase, then the live
-            phase, matching a full play byte-for-byte from T + 1 onward.
+            phase, matching a full play byte-for-byte over [T + 1, end).
 
         Raises:
-            PlaybackError: at_sim_time is negative.
+            PlaybackError: at_sim_time is negative, or end <= at_sim_time.
         """
-        _validate_seek_position(at_sim_time)
+        _validate_seek_position(at_sim_time, end)
         snapshot_phase = iter_resolved_snapshot_events(
             self._emit, self._config, self._anchor, self._resolution, at_sim_time
         )
@@ -161,7 +166,7 @@ class StreamPlayback:
             self._anchor,
             self._resolution,
             at_sim_time + 1,
-            None,
+            end,
         )
         return chain(snapshot_phase, live_phase)
 
