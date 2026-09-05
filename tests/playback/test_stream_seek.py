@@ -5,7 +5,8 @@ stream composition.
 Materialized against minimal in-process emits built via _data_fixtures.
 Covers compaction semantics, coincident-instant folding, change-scope
 non-narrowing, sub_types/where scoping, phase ordering, membership-events
-short-circuiting, and the seek-state upsert-log equivalence to a full play.
+short-circuiting, the bounded live phase (end = T + 1 is the snapshot
+alone), and the seek-state upsert-log equivalence to a full play.
 """
 
 from __future__ import annotations
@@ -379,6 +380,29 @@ class TestMembershipEventsSnapshotIsEmpty:
         assert _r_events(seek_events) == []
         assert seek_events == live_events
 
+    def test_bounded_seek_equals_events_t_plus_1_to_end(self, tmp_path: "Path") -> None:
+        emit_dir = build_data_emit(
+            tmp_path,
+            records=[RecordSpec("crew", _LIFECYCLE_COLS, [])],
+            memberships=[
+                MembershipSpec(
+                    "crew",
+                    "team",
+                    self._TEAM_COLS,
+                    [("trunk", "c1", 10, None), ("trunk", "c2", 20, 30)],
+                )
+            ],
+        )
+        config = membership_events_config(
+            [membership_stream("team_feed", "crew", "team", [])]
+        )
+        with open_emit(emit_dir) as emit:
+            head = open_stream_playback(emit, config, None, discard_notice_sink)
+            seek_events = list(head.seek(15, 25))
+            live_events = list(head.events(16, 25))
+        assert seek_events == live_events
+        assert [e.event_sim_time for e in seek_events] == [20]
+
 
 # ---------------------------------------------------------------------------
 # Seek-state equivalence
@@ -404,3 +428,55 @@ class TestSeekStateEquivalence:
 
                 live_tail = list(head.events(at_sim_time + 1, None))
                 assert seek_events[len(seek_events) - len(live_tail) :] == live_tail
+
+
+# ---------------------------------------------------------------------------
+# Bounded seek: the live phase under an exclusive end
+# ---------------------------------------------------------------------------
+
+
+class TestBoundedSeek:
+    def test_end_at_t_plus_1_is_the_snapshot_phase_alone(
+        self, tmp_path: "Path"
+    ) -> None:
+        emit_dir = _build_widget_scenario(tmp_path)
+        config = state_changes_config([kind_stream("widgets", "widget", ["status"])])
+        with open_emit(emit_dir) as emit:
+            head = open_stream_playback(emit, config, None, discard_notice_sink)
+            seek_events = list(head.seek(25, 26))
+            unbounded_r = _r_events(head.seek(25))
+        assert seek_events == unbounded_r
+        assert [e.record_id for e in seek_events] == ["w1", "w5"]
+
+    def test_bounded_live_phase_equals_events_t_plus_1_to_end(
+        self, tmp_path: "Path"
+    ) -> None:
+        emit_dir = _build_widget_scenario(tmp_path)
+        config = state_changes_config([kind_stream("widgets", "widget", ["status"])])
+        with open_emit(emit_dir) as emit:
+            head = open_stream_playback(emit, config, None, discard_notice_sink)
+            seek_events = list(head.seek(12, 36))
+            r_phase = _r_events(seek_events)
+            live_tail = list(head.events(13, 36))
+        assert [e.record_id for e in r_phase] == ["w1", "w5"]
+        assert seek_events[len(r_phase) :] == live_tail
+        assert [(e.op, e.record_id, e.event_sim_time) for e in live_tail] == [
+            ("c", "w2", 15),
+            ("d", "w2", 20),
+            ("u", "w1", 25),
+            ("c", "w3", 35),
+        ]
+
+    def test_bounded_seek_folds_to_the_prefix_play_state(
+        self, tmp_path: "Path"
+    ) -> None:
+        emit_dir = _build_widget_scenario(tmp_path)
+        config = state_changes_config([kind_stream("widgets", "widget", ["status"])])
+        with open_emit(emit_dir) as emit:
+            head = open_stream_playback(emit, config, None, discard_notice_sink)
+            for at_sim_time, end in ((0, 16), (12, 26), (25, 41), (30, 31)):
+                prefix_state = _fold_upsert_log(list(head.events(None, end)))
+                seek_state = _fold_upsert_log(list(head.seek(at_sim_time, end)))
+                assert seek_state == prefix_state, (
+                    f"seek({at_sim_time}, {end}) must fold to events(None, {end})"
+                )

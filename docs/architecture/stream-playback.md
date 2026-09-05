@@ -75,8 +75,8 @@ them.
 where the head entered. A head opened at a lower bound numbers its first
 event `1 + N`, where `N` counts in-scope events strictly before the bound in
 canonical order — a deterministic count, not a replay. Bounded and unbounded
-heads agree; `seek(T)` then iterate matches a full play byte-for-byte from
-`T + 1` onward.
+heads agree; `seek(T, end)` then iterate matches a full play byte-for-byte
+over `[T + 1, end)`.
 
 The count is well-defined under the one order-totality caveat the stream
 carries ([`streaming.md`](streaming.md) § Cross-stream merge): byte-identical
@@ -86,10 +86,13 @@ emitted byte stream is unaffected by which physical row sorts first.
 
 ### Seek
 
-`seek(T)` = an initial-state phase at T, then `events(T + 1, None)`.
+`seek(T, end)` = an initial-state phase at T, then `events(T + 1, end)`.
 Position T is inclusive: the phase represents "every event with
 `event_sim_time ≤ T` applied," and the live phase resumes at the next
-instant, so no event is duplicated or lost across the boundary.
+instant, so no event is duplicated or lost across the boundary. `end` is
+the live phase's exclusive upper bound under the seam's one half-open
+convention — `None` for the tape's end, `T + 1` for the initial-state phase
+alone (an empty live phase) — and must exceed T.
 
 **`state-changes` content — the `r` phase.** For each declared stream, one
 `r` (read) event per record in the stream's scoped row set that is **live at
@@ -131,8 +134,8 @@ ignored is still live and still snapshots with its state at T.
 | No record live at T | Empty phase, then the live stream |
 | Row outside the stream's `sub_types` / `where` scope | Absent, as everywhere |
 
-**`membership-events` content — no snapshot phase.** `seek(T)` is
-`events(T + 1, None)` with an empty initial phase. The content is an
+**`membership-events` content — no snapshot phase.** `seek(T, end)` is
+`events(T + 1, end)` with an empty initial phase. The content is an
 owner-keyed append-only *fact log* — there is no per-key upsert state for a
 snapshot to seed, and a connector snapshot over an outbox table replays
 historical rows, which in this shape is a bounded replay the caller can
@@ -142,20 +145,19 @@ membership snapshot ([`playback.md`](playback.md) § Snapshot). The two
 content types are behaviorally distinct at seek exactly as they are at
 delivery (upsert log vs fact log).
 
-**The fusion is deliberate.** `seek` is the one composed answer — Debezium
-snapshot-then-stream — and the `r` phase is not separately addressable, nor
-is a bounded live tail (`seek` takes no end bound). A caller wanting free
-composition has the primitive tier (`snapshot(T)` + `events`, in atom
-shape); a stream-shaped standalone snapshot or bounded seek waits on a
-demonstrated consumer need (vault note
-`stream-playback-seek-fuses-the-snapshot-phase-to-an-unbounded-live-tail`).
+**One verb, both shapes.** `seek` is the head's one composed answer —
+Debezium snapshot-then-stream — and the `end` bound is how a caller
+addresses its parts: `seek(T, T + 1)` is the stream-shaped snapshot alone,
+`seek(T, E)` snapshot-then-bounded-window, `seek(T)` snapshot-then-tape's-end.
+There is no separate snapshot verb; the bounded live phase subsumes it.
 
 **The seek-state equivalence (the testable headline).** For any consumer
 folding the `state-changes` stream as an upsert log keyed by the elected key
 (insert on `c`/`r`, upsert on `u`, retire on `d`): the folded state after
-`seek(T)` + the live phase equals the folded state after a full play, for
-every T. Byte equality holds from `T + 1` onward; the prefix is
-state-equivalent, not byte-equivalent, by design. The equivalence is
+`seek(T, end)` equals the folded state after `events(None, end)`, for every
+T and every `end` (the full play when `end` is `None`). Byte equality holds
+over `[T + 1, end)`; the prefix is state-equivalent, not byte-equivalent,
+by design. The equivalence is
 **conditional** exactly as the seam's consistency algebra is: on a tape
 whose defect manifest declares family-C/E breakage there is no single
 consistent world-state, so seek and replay disagree exactly where the
@@ -237,7 +239,8 @@ event materializes, raising the pass's own error identities
 (`ExportError` and its election/streaming subclasses, plus the reader-domain
 `TemporalClassUnavailableError` the pass's `slice_only` check propagates).
 The single-branch guard applies. Seam contract violations — negative bounds,
-`start > end`, a negative `seek` argument — raise `PlaybackError`. Opening
+`start > end`, a negative `seek` position, a `seek` end at or before its
+position — raise `PlaybackError`. Opening
 replays nothing: no answer computes until an iterator is pulled, and
 outstanding lazy answers are independently pullable (two heads over one emit
 do not contend). Open is deliberately **not** sidecar-only — a declared,
@@ -271,8 +274,8 @@ message's body, key, and record timestamp are the render's.
    of `(tape, config, T)`.
 2. **Bounds select, never recompute.** Every bounded answer's events are
    byte-identical to their whole-tape selves.
-3. **Seek-state equivalence.** The upsert-log fold of `seek(T)` + live phase
-   equals the fold of a full play, every T (state-changes content) —
+3. **Seek-state equivalence.** The upsert-log fold of `seek(T, end)` equals
+   the fold of `events(None, end)`, every T and end (state-changes content) —
    conditional on temporal/interval integrity exactly as the seam's
    consistency algebra: on declared family-C/E breakage the two disagree
    where the defect manifest says the data is broken.
@@ -299,7 +302,7 @@ arguments. All checks are open-, resolve-, or call-time business rules:
 | Rule | Checks | Error |
 |---|---|---|
 | Open gates | The streaming eager pass: resolvability, vocabulary, naming, selection, change scope, elections; single-branch | The pass's `ExportError` / election identities (plus the reader-domain `TemporalClassUnavailableError`), at `open_stream_playback` |
-| Bound validity | `start ≤ end`, both non-negative when given; `seek` position non-negative | `PlaybackError` (seam contract) |
+| Bound validity | `start ≤ end`, both non-negative when given; `seek` position non-negative and its `end`, when given, greater than the position | `PlaybackError` (seam contract) |
 | Render self-vetting | `resolve_stream_render` runs the eager pass verbatim (spine read included), head or no head | The same identities, at `resolve_stream_render` |
 | Debezium anchor | `fmt='debezium'` requires a resolved anchor | The format's `ExportError` identity, at `resolve_stream_render` |
 | Debezium block | `fmt='debezium'` requires the `debezium` block (the source identity) | The format's `ExportError` identity, at `resolve_stream_render` |
@@ -318,17 +321,18 @@ and [`playback/stream_render.py`](../../src/fabulexa_forge/playback/stream_rende
   `exporters.streaming.engine` directly, the squat-on-internals pattern the
   mixer established and the seam exists to end.
 - **Seek composes what the primitive tier already proved.** The seam's
-  `seek(T)` = `snapshot(T)` + `events(T + 1, ∞)` identity is exactly
+  `seek(T, end)` = `snapshot(T)` + `events(T + 1, end)` identity is exactly
   Debezium snapshot-then-stream semantics; the stream head emits that
   composition as `StreamEvent`s rather than inventing a second mid-tape-join
   mechanism.
-- **The fusion, and no standalone snapshot.** One composed `seek` keeps the
-  head's answer set minimal; free composition already exists in atom shape
-  at the primitive tier. A stream-shaped standalone snapshot, a bounded
-  seek, and a run-level value-schema enumeration accessor (for
-  registry-registering adapters) each wait on a demonstrated consumer need
-  (vault notes
-  `stream-playback-seek-fuses-the-snapshot-phase-to-an-unbounded-live-tail`,
+- **One verb with an end bound, not a snapshot verb.** A start/stop/seek
+  consumer needs the `r` phase alone (re-seed one topic) and
+  snapshot-then-bounded-window (release between two frontier positions).
+  Both are the composed verb with its live phase bounded — `end = T + 1`
+  is the degenerate empty tail — so the head's answer set stays minimal and
+  the bound follows the same half-open convention as `events`. A run-level
+  value-schema enumeration accessor (for registry-registering adapters)
+  still waits on a demonstrated consumer need (vault note
   `stream-render-value-schema-enumeration-waits-on-a-demonstrated-consumer`).
 - **Compaction semantics for the `r` set.** A mid-tape joiner models a
   consumer attaching to a log-compacted topic: dropped keys are invisible,
@@ -363,8 +367,8 @@ and [`playback/stream_render.py`](../../src/fabulexa_forge/playback/stream_rende
   is whole-tape with no `--from` / `--to` (time bounds arrive via the
   playback API — see [`incremental.md`](incremental.md) for the windowed
   batch machinery, which is a different surface).
-- **The `r` phase is not separately addressable.** No standalone
-  stream-shaped snapshot, no bounded seek — § Rationale.
+- **No separate snapshot verb.** The `r` phase alone is `seek(T, T + 1)`;
+  the head offers no second entry point for it — § Rationale.
 - **No run-level value-schema enumeration.** Schemas resolve per event;
   a declared-domain pre-enumeration waits on a demonstrated consumer.
 - **Delivery is above the surface.** Pacing, sinks, framing, and the Kafka

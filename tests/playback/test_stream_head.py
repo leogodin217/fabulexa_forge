@@ -195,6 +195,19 @@ class TestSeekBoundCheck:
             head = open_stream_playback(emit, config, None, discard_notice_sink)
             list(head.seek(1_000_000))  # no raise
 
+    def test_end_at_or_before_position_raises_playback_error(
+        self, tmp_path: "Path"
+    ) -> None:
+        emit_dir = _build_two_kind_emit(tmp_path)
+        config = state_changes_config([kind_stream("alphas", "alpha", [])])
+        with open_emit(emit_dir) as emit:
+            head = open_stream_playback(emit, config, None, discard_notice_sink)
+            with pytest.raises(PlaybackError):
+                head.seek(10, 10)
+            with pytest.raises(PlaybackError):
+                head.seek(10, 5)
+            list(head.seek(10, 11))  # no raise: the snapshot phase alone
+
 
 # ---------------------------------------------------------------------------
 # Open-time behavior: eager gates, notices, laziness
