@@ -18,7 +18,6 @@ from fabulexa_forge.derivations.truncated_tape import (
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.election import resolve_election
-from fabulexa_forge.exporters.query_spec import query_spec_output_name
 from fabulexa_forge.exporters.source.engine import build_source_query_specs
 from fabulexa_forge.exporters.source.plan import build_source_plan
 from fabulexa_forge.playback.errors import PlaybackError
@@ -165,7 +164,7 @@ def test_bridging_theorem_dimensional(tmp_path: "Path") -> None:
             base_relations=None,
         )
         full_by_name = {
-            query_spec_output_name(spec): emit.query_arrow(spec.sql, ()).to_pydict()
+            spec.table_name: emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in full_specs
         }
     assert set(stated) == set(full_by_name)
@@ -182,7 +181,7 @@ def test_bridging_theorem_source(tmp_path: "Path") -> None:
         stated = _tables_by_name(head.state(100))
         full_specs = _direct_source_full_specs(emit, config)
         full_by_name = {
-            query_spec_output_name(spec): emit.query_arrow(spec.sql, ()).to_pydict()
+            spec.table_name: emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in full_specs
         }
     assert set(stated) == set(full_by_name)
@@ -220,7 +219,7 @@ def test_interior_t_matches_materialized_truncated_emit_dimensional(
             base_relations=None,
         )
         oracle_by_name = {
-            query_spec_output_name(spec): mat_emit.query_arrow(spec.sql, ()).to_pydict()
+            spec.table_name: mat_emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in oracle_specs
         }
     assert set(stated) == set(oracle_by_name)
@@ -243,7 +242,7 @@ def test_interior_t_matches_materialized_truncated_emit_source(
     with open_emit(materialized_dir) as mat_emit:
         oracle_specs = _direct_source_full_specs(mat_emit, config)
         oracle_by_name = {
-            query_spec_output_name(spec): mat_emit.query_arrow(spec.sql, ()).to_pydict()
+            spec.table_name: mat_emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in oracle_specs
         }
     assert set(stated) == set(oracle_by_name)
@@ -282,8 +281,7 @@ def test_state_event_log_is_the_full_exports_exact_leading_prefix_id_included(
         stated = _tables_by_name(head.state(at_sim_time))
         full_specs = _direct_source_full_specs(emit, config)
         full_tables = {
-            query_spec_output_name(spec): emit.query_arrow(spec.sql, ())
-            for spec in full_specs
+            spec.table_name: emit.query_arrow(spec.sql, ()) for spec in full_specs
         }
 
     assert config.source is not None

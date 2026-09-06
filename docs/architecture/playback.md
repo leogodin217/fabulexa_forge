@@ -250,21 +250,23 @@ canonical relation's order. Presentation-property and identity columns beyond
 ### Shaped window (tier 2)
 
 `window(T1, T2)` returns one relation per output table the shape declares, each
-tagged with its **delivery class** (`append` or `snapshot`) so a caller lands
-it correctly. Classes are static per table class / render and knowable at open
-through `tables()`, so a caller provisions sinks before the first ask. The
-per-table-class / per-render window-membership contract is the incremental
-driver's, promoted verbatim to seam contract — stateless, relations out,
-caller owns the frontier (see [`incremental.md`](incremental.md) § Window
-membership per table class and [`source.md`](source.md) § Incremental
-composition). The window predicate is the outermost filter over the shape's
-full-export relation: every emitted value is its full-export value; the window
-selects rows, never recomputes them. The shipped windowed business rules gate
-the config on the first `window` ask so selecting-not-recomputing is
-temporally honest. The windowed-grain rule is whole-shape: a shape declaring a
-`history_interval` or `membership` grain table cannot `window()` at all —
-`tables()` marks the offender `window_delivery=None` at open so a caller learns
-before asking which table it must drop.
+tagged with its **delivery class** (`snapshot` / `upsert` / `append`) so a
+caller lands it correctly. Classes are static per declaration and knowable at
+open through `tables()` — never a refusal — so a caller provisions sinks before
+the first ask. For a dimensional shape the answer is the incremental driver's
+horizon compile, run through the same `build_query_specs` call
+([`incremental.md`](incremental.md) § Horizon windowing): per table,
+`state(T2 − 1)` whole for a `snapshot` declaration, else its delta against
+`state(T1 − 1)` reconciled by the declared key — so `window(T1, T2)` and
+`state(T2 − 1)` agree on every `snapshot` table, and successive `window()`
+deltas reconcile to `state()` at every horizon (the consistency algebra,
+extended to tier 2). The two windowed rules (`WindowKeyMutable`, static;
+`WindowKeyDuplicate`, against the data) raise on the first `window()` ask;
+`state()` is unaffected. For a source shape the answer is the mode's shipped
+per-render window membership ([`source.md`](source.md) § Incremental
+composition): `state` tables `snapshot`, junction and event log `append` —
+where a junction's extract-on-change rows are reconciled by the class's
+documented consumer merge, not by key.
 
 ### Shaped state (tier 2): the truncated tape
 
@@ -284,16 +286,19 @@ physical base-table name to a replacing relation — redirects a compiled
 query's base reads. It has two equivalent realizations, one per mode shape:
 dimensional's pure compile surface carries it as an additive, time-agnostic
 parameter (`base_relations: Mapping[str, str] | None`, required, no default;
-`None` compiles byte-identical to a full export, and the full-export and
-windowed callers pass `None`); source's compile carries no such parameter —
+`None` compiles byte-identical to a full export; the full-export caller passes
+`None` and the windowed compile passes each horizon's tape mapping); source's
+compile carries no such parameter —
 the seam applies the mapping itself, post-compile, as a pure SQL rewrite over
 the engine's plain specs (`apply_base_relations` in
 [`exporters/base_relations.py`](../../src/fabulexa_forge/exporters/base_relations.py),
-composed by `playback/shaped.py`). Tier-2 `state` builds the mapping with one
-entry per base table the sidecar declares (fk-hop target spines and lookup
-reads must resolve truncated too) and runs the compile against the truncated
-emit view so every faithful builder enumerates exactly the columns the
-replacing relations carry; the mode never sees a horizon.
+composed by `playback/shaped.py`). Tier-2 `state` opens the truncated tape (`open_truncated_tape`,
+[`derivations.md`](derivations.md) § The truncated-tape surface — one mapping
+entry per base table the sidecar declares, since fk-hop target spines and
+lookup reads must resolve truncated too) and runs the compile against the
+truncated emit view (`Emit.with_sidecar`) so every faithful builder enumerates
+exactly the columns the replacing relations carry; the mode never sees a
+horizon.
 
 **Realization: name shadowing** — a normative algorithm an independent
 reimplementation must honor. The mapping wraps the compiled query in one CTE
@@ -384,7 +389,10 @@ final state / exhaustion — total, no range check. An empty population yields
 zero events and zero-row typed tables (declared atoms always answer).
 Selection-resolvability failure raises `PlaybackError` at open, before any data
 read; a source shape with `anchor=None` raises at `open_shaped_playback`; the
-windowed business rules raise on the first `window` ask. Upstream guard/reader
+windowed rules (`WindowKeyMutable` / `WindowKeyDuplicate` for a dimensional
+shape, the source mode's own for a source shape) raise on the first `window`
+ask; `window(T, T)` (the empty tape at both horizons for `T = 0`) answers
+empty deltas and whole snapshots. Upstream guard/reader
 errors (`ExportError`, `TableNotFoundError`, the version gate) pass through
 untouched.
 
@@ -403,8 +411,10 @@ untouched.
    `(tape, selection)`; bounded and unbounded heads agree.
 4. **One event-time line, across both tiers.** On a temporally-intact tape the
    tier-1 consistency algebra holds for every `(selection, T1, T2)`; tier-2
-   agreement is per table class, exact at the slice bound (the bridging
-   theorem) and up to the class's documented consumer merge elsewhere. A shaped
+   agreement is exact at every horizon for a dimensional shape (successive
+   `window()` deltas reconciled by key equal `state()`), and for a source shape
+   exact at the slice bound (the bridging theorem) and up to the class's
+   documented consumer merge elsewhere. A shaped
    event-log table over `[T1, T2)` and a tier-1 `events(T1, T2)` pull carry
    the same change set.
 5. **Faithful reshaping + temporal honesty, per answer.** Every delivered value
@@ -497,8 +507,9 @@ any id.
 - **The seam owns one verb.** `fabulexa-forge stream` is delivered over the
   stream head and render surface
   ([`stream-playback.md`](stream-playback.md) § The delivery driver); the
-  incremental driver re-seams when next materially touched, with
-  byte-identical output as the bar.
+  incremental driver and tier-2 `window()` share one dimensional compile
+  (`build_query_specs` with a window) while the driver keeps its cadence,
+  cursor, and writer mechanics above the seam.
 - **Trunk-only.** The seam composes `require_single_branch` and is
   single-branch; multi-branch playback is Stage 5.
 
@@ -508,7 +519,7 @@ any id.
 |---|---|
 | [`derivations.md`](derivations.md) | The folds the seam composes, plus the membership-state-at, end-of-tape, and truncated-tape residents it owns |
 | [`source.md`](source.md) · [`dimensional.md`](dimensional.md) | The modes tier 2 compiles; the `base_relations` compile parameter and the `last_mutation_sim_time` reserved-output-name posture |
-| [`incremental.md`](incremental.md) | The per-table-class window-membership contract tier-2 `window` promotes |
+| [`incremental.md`](incremental.md) | The horizon compile and delivery classes tier-2 `window` shares with the driver |
 | [`streaming.md`](streaming.md) | The canonical order and `seq` a single-content stream conforms to |
 | [`stream-playback.md`](stream-playback.md) | The stream-shaped head and per-event render surface — bounds, seek (snapshot-then-stream), the `r` op, and the seam's one byte-producing contract |
 | [`key-election.md`](key-election.md) | The identity-publication layer split (§ Identity publication) — why the seam projects published identity but never gates it |

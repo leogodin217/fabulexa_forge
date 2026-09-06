@@ -978,7 +978,7 @@ def test_validate_table_type2_derived_date_parse_tracked_source_passes() -> None
     )
     tbl = _scd2_derived_validate_table_decl(col)
     config = DimensionalConfig(tables=[tbl])
-    validate_table(tbl, config, sidecar, None, discard_notice_sink)  # must not raise
+    validate_table(tbl, config, sidecar, discard_notice_sink)  # must not raise
 
 
 def test_validate_table_type2_derived_slice_only_source_still_refused() -> None:
@@ -997,7 +997,7 @@ def test_validate_table_type2_derived_slice_only_source_still_refused() -> None:
     tbl = _scd2_derived_validate_table_decl(col)
     config = DimensionalConfig(tables=[tbl])
     with pytest.raises(ExportError) as exc_info:
-        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+        validate_table(tbl, config, sidecar, discard_notice_sink)
     _assert_slice_only_message(str(exc_info.value), column="prop__last_seen")
 
 
@@ -1038,7 +1038,7 @@ def test_validate_table_type2_derived_timestamp_election_no_anchor_raises() -> N
     tbl = _scd2_derived_validate_table_decl(col)
     config = DimensionalConfig(tables=[tbl])
     with pytest.raises(TemporalRenderRequiresAnchor, match="admitted_at"):
-        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+        validate_table(tbl, config, sidecar, discard_notice_sink)
 
 
 def test_validate_table_type2_derived_timestamp_unavailable_source_raises() -> None:
@@ -1052,7 +1052,7 @@ def test_validate_table_type2_derived_timestamp_unavailable_source_raises() -> N
     tbl = _scd2_derived_validate_table_decl(col)
     config = DimensionalConfig(tables=[tbl])
     with pytest.raises(ExportError, match="timestamp source 'prop__nonexistent'"):
-        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+        validate_table(tbl, config, sidecar, discard_notice_sink)
 
 
 def test_validate_table_type2_derived_date_parse_non_varchar_raises() -> None:
@@ -1070,7 +1070,7 @@ def test_validate_table_type2_derived_date_parse_non_varchar_raises() -> None:
     tbl = _scd2_derived_validate_table_decl(col)
     config = DimensionalConfig(tables=[tbl])
     with pytest.raises(DateParseSourceColumn, match="got BIGINT"):
-        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+        validate_table(tbl, config, sidecar, discard_notice_sink)
 
 
 def test_validate_table_type2_derived_date_parse_untracked_source_passes() -> None:
@@ -1087,7 +1087,7 @@ def test_validate_table_type2_derived_date_parse_untracked_source_passes() -> No
     )
     tbl = _scd2_derived_validate_table_decl(col)
     config = DimensionalConfig(tables=[tbl])
-    validate_table(tbl, config, sidecar, None, discard_notice_sink)  # must not raise
+    validate_table(tbl, config, sidecar, discard_notice_sink)  # must not raise
 
 
 def test_validate_table_type2_derived_decimal_non_double_tracked_source_raises() -> (
@@ -1105,7 +1105,7 @@ def test_validate_table_type2_derived_decimal_non_double_tracked_source_raises()
     tbl = _scd2_derived_validate_table_decl(col)
     config = DimensionalConfig(tables=[tbl])
     with pytest.raises(DecimalSourceIsDouble, match="got VARCHAR"):
-        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+        validate_table(tbl, config, sidecar, discard_notice_sink)
 
 
 def test_validate_table_type2_derived_json_precision_non_varchar_raises() -> None:
@@ -1124,7 +1124,7 @@ def test_validate_table_type2_derived_json_precision_non_varchar_raises() -> Non
     tbl = _scd2_derived_validate_table_decl(col)
     config = DimensionalConfig(tables=[tbl])
     with pytest.raises(JsonPrecisionSourceIsVarchar, match="got BIGINT"):
-        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+        validate_table(tbl, config, sidecar, discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -1143,7 +1143,7 @@ def test_validate_table_passes(tmp_path: Path) -> None:
             key=["id"],
         )
         config = DimensionalConfig(tables=[tbl])
-        src_name = validate_table(tbl, config, emit.sidecar, None, discard_notice_sink)
+        src_name = validate_table(tbl, config, emit.sidecar, discard_notice_sink)
     assert src_name == "records__entity"
 
 
@@ -1531,7 +1531,7 @@ def test_membership_source_scoping_untouched_by_slice_only_records() -> None:
         columns=[ColumnDecl(name="record_id", **{"from": "record_id"}), col],
     )
     config = DimensionalConfig(tables=[tbl])
-    validate_table(tbl, config, sidecar, None, discard_notice_sink)  # must not raise
+    validate_table(tbl, config, sidecar, discard_notice_sink)  # must not raise
 
 
 def test_history_grain_scoping_untouched_by_slice_only_records() -> None:
@@ -1552,7 +1552,7 @@ def test_history_grain_scoping_untouched_by_slice_only_records() -> None:
         ],
     )
     config = DimensionalConfig(tables=[tbl])
-    validate_table(tbl, config, sidecar, None, discard_notice_sink)  # must not raise
+    validate_table(tbl, config, sidecar, discard_notice_sink)  # must not raise
 
 
 # ---------------------------------------------------------------------------
@@ -1568,7 +1568,7 @@ def test_validate_table_refuses_slice_only_on_full_compile() -> None:
     tbl = _make_table_decl(kind="actor", columns=[col], key=["tier"])
     config = DimensionalConfig(tables=[tbl])
     with pytest.raises(ExportError) as exc_info:
-        validate_table(tbl, config, sidecar, None, discard_notice_sink)
+        validate_table(tbl, config, sidecar, discard_notice_sink)
     _assert_slice_only_message(str(exc_info.value))
 
 
@@ -1591,4 +1591,4 @@ def test_validate_table_refuses_last_mutation_sim_time_on_full_compile(
         tbl = _make_table_decl(columns=[id_col, bad_col], key=["id"])
         config = DimensionalConfig(tables=[tbl])
         with pytest.raises(ExportError, match="last_mutation_sim_time"):
-            validate_table(tbl, config, emit.sidecar, None, discard_notice_sink)
+            validate_table(tbl, config, emit.sidecar, discard_notice_sink)

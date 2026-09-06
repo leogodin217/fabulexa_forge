@@ -112,8 +112,9 @@ Every derivation — the resident and any future one — obeys six rules:
    key** (raw ns). No value on the row derives from base state later than that key,
    except sources the derivation declares temporally constant. This is the one
    shared contract that makes any derivation safe to window under a cadence driver
-   without per-mode re-analysis; the incremental driver's window-membership rules
-   are the dimensional-mode instance of it.
+   without per-mode re-analysis; the truncated tape (§ The truncated-tape surface)
+   is its whole-emit form — every relation honest at one horizon — and the
+   dimensional windowed compile runs over it rather than re-analysing per mode.
 
 Derivations are single-branch at this stage: each takes the sole branch's
 `fork_path` from `require_single_branch` and filters every base read to it.
@@ -645,6 +646,20 @@ presentation, never the physical table. A builder's read of the table it
 *presents* names the physical table (the source being truncated). This makes the
 cross-reads binding-insensitive under the seam's name-shadowing composition
 (§ The compile indirection in [`playback.md`](playback.md)).
+
+`open_truncated_tape(sidecar, fork_path, at_sim_time)` composes the surface:
+it returns a `TruncatedTape` — the truncated sidecar view, the `base_relations`
+mapping (one replacing relation per base table the physical sidecar declares,
+so any compiled read of any base table resolves truncated), and the position —
+pure data, no connection. The holder of the connection presents the sidecar
+over it (`Emit.with_sidecar`) and wraps each compiled query with the mapping
+(`exporters.base_relations.shadow_base_relations`). T at or beyond the branch's
+slice bound is the identity presentation in value (`last_mutation_sim_time`
+excepted where the producer's physical value exceeds the recorded trail); T
+below every data instant — a negative T included — is the empty tape. The
+records relation's recorded trail reads `history` only when the sidecar
+declares it; an emit with no `history` table has the trail
+`greatest(created_sim_time, deactivated_at when <= T)`.
 
 `build_truncated_sidecar(sidecar)` is a pure `Sidecar` derivation identical to
 the physical sidecar except that each `records__<kind>` entry's column list

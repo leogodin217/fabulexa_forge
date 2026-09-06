@@ -335,7 +335,10 @@ def test_export_dimensional_output_identical_recording_or_discarding(
 
 
 def test_export_window_threads_sink_to_dimensional_compile(tmp_path: Path) -> None:
-    """export_window threads notice_sink to build_query_specs for a range export."""
+    """export_window threads notice_sink to build_query_specs for a range export.
+
+    A window compiles twice — once per horizon — so the plan notice reaches
+    the sink once per horizon compiled."""
     emit_dir = _build_notice_emit(tmp_path)
     config = _config_with_filter("admin")
     out = tmp_path / "range.duckdb"
@@ -345,7 +348,7 @@ def test_export_window_threads_sink_to_dimensional_compile(tmp_path: Path) -> No
     with open_emit(emit_dir) as emit:
         export_window(emit, config, out, "duckdb", None, window, None, sink, None)
 
-    assert len(sink.notices) == 1
+    assert len(sink.notices) == 2
     assert sink.notices[0].code == "discriminator-value-unobserved"
 
 
@@ -372,7 +375,7 @@ def test_export_incremental_next_drip_reemits_notices_each_invocation(
     assert second_outcome.status == "emitted"
 
     assert first_sink.notices == second_sink.notices
-    assert len(first_sink.notices) == 1
+    assert len(first_sink.notices) == 2  # one per horizon compiled
 
 
 # ---------------------------------------------------------------------------

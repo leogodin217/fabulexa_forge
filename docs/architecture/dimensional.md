@@ -516,9 +516,10 @@ against true event order. The rendered value is monotone in its source, so order
 the raw ns source changes output only on same-microsecond ties — where raw order *is*
 the event order. This is the row-ordering doctrine ("pinned by `sim_time`, never by the
 rendered timestamp", § Determinism and ordering) applied to ordinals, and it is what
-makes the ordinal sound under windowed export, where a rendered-µs ordering could let a
-same-microsecond tie count a row that lands in the next window (see
-[`incremental.md`](incremental.md)). The amendment is implemented in
+lets an ordinal over the grain's raw time key count as horizon-invariant under
+windowed export, where a rendered-µs ordering could let a same-microsecond tie
+renumber an earlier window's row (see [`incremental.md`](incremental.md)
+§ Horizon windowing). The amendment is implemented in
 [`columns.py`](../../src/fabulexa_forge/exporters/dimensional/columns.py)
 (`_find_raw_ns_source_for_ordinal`).
 
@@ -533,10 +534,11 @@ its own rendered value, `record_id` tie-broken as any ordinary column.
 `interval`-rendered `elapsed` columns and `date_parse` columns are never
 amendment columns; they order by value, `record_id` tie-broken. An SCD-2
 `valid_to` bound stays outside the amendment under every election — it
-orders by rendered value like any other column. Under incremental export
-the windowed rule (an append-mode table's `ordinal.order_by` must name a
-window-key column) is amended the same way — see
-[`incremental.md`](incremental.md) § Window membership per table class.
+orders by rendered value like any other column. Under windowed export the
+delivery classifier reads the same amendment: an ordinal ordered by the
+grain's raw time key under a window-monotone rendering is horizon-invariant,
+a `time`-elected one is not (the table is then delivered `upsert`, never
+refused) — see [`incremental.md`](incremental.md) § Horizon windowing.
 
 A `value_map` column is **typed from its map's values**, and its generated `CASE`
 casts *every* branch — including the unmapped `→ NULL` — to that type, so the column

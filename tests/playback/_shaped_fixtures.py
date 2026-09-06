@@ -341,8 +341,9 @@ def fk_hop_shape_config() -> ExportConfig:
 def dimensional_shape_config() -> ExportConfig:
     """The dimensional shape: type-1 dim, records fact, membership fact.
 
-    dim_gadget -> snapshot; fact_shipment -> append; mem_widget_parts -> None
-    (the windowed-grain rule's rejection case, a membership grain).
+    dim_gadget -> snapshot (type-1); fact_shipment -> upsert (reads the
+    recorded trail, which advances); mem_widget_parts -> append (every
+    channel invariant on a membership grain).
     """
     return ExportConfig(
         mode="dimensional",
@@ -419,8 +420,7 @@ def source_shape_config() -> ExportConfig:
 
 def source_last_mutation_named_shape_config() -> ExportConfig:
     """A `state` table naming `last_mutation_sim_time` explicitly in
-    `columns` — the windowed-refusal counterpart of the dimensional
-    `window_delivery=None` diagnostic: opens (the full-export shape
+    `columns` — the source mode's one windowed refusal: opens (the full-export shape
     validates, `updated_at` is reconstructible for a full export), but the
     first `window()` ask raises `SourceColumnUnresolved` from the windowed
     plan build (`last_mutation_sim_time` is not reconstructible at a past

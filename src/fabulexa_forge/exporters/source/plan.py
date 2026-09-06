@@ -3387,8 +3387,7 @@ def _check_output_reserved_names(
         events: The resolved event-log unit, or None.
 
     Raises:
-        ExportError: A table name is `_export_meta` / `_export_windows` or
-            ends in `__rows`; a column is named `__valid_from_ns`; or a
+        ExportError: A table name is `_export_meta` / `_export_windows`, or a
             column is named `last_mutation_sim_time`.
     """
     for name, columns in _output_units(tables, events):

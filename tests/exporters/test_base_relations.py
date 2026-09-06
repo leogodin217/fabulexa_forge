@@ -100,10 +100,10 @@ def test_dimensional_none_byte_identical(tmp_path: Path) -> None:
         fork_path = require_single_branch(sidecar)
         table_decl = config.tables[0]
         source_table_name = validate_table(
-            table_decl, config, sidecar, None, discard_notice_sink
+            table_decl, config, sidecar, discard_notice_sink
         )
-        sql_direct, _, _, _, _ = build_grain_sql(
-            table_decl, source_table_name, sidecar, None, fork_path, config, None
+        sql_direct, _ = build_grain_sql(
+            table_decl, source_table_name, sidecar, None, fork_path, config
         )
 
     assert specs[0].sql == sql_direct

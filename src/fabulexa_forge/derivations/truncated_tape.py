@@ -22,10 +22,12 @@ stdlib. Never imports exporters.* or config.
 
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fabulexa_forge.reader.sidecar import ColumnSpec, TableSpec
 
 from fabulexa_forge._sql import _sql_literal, is_recognized_sql_type
@@ -169,6 +171,7 @@ def _build_recorded_trail(
     fork_path: str,
     kind: str,
     at_sim_time: int,
+    has_history: bool,
 ) -> tuple[str, str]:
     """Build the `last_mutation_sim_time` recorded-trail JOIN and expression.
 
@@ -176,18 +179,29 @@ def _build_recorded_trail(
     <= T across every tracked property, deactivated_at when <= T) — the last
     recorded content change at T, never the physical last_mutation_sim_time
     (whose advances need not leave history — a high-water mark only).
-    Membership activity is deliberately not a component.
+    Membership activity is deliberately not a component. An emit whose
+    sidecar declares no `history` table has no tracked history to read: the
+    trail is then greatest(created_sim_time, deactivated_at when <= T) and
+    no join is composed.
 
     Args:
         fork_path: The sole branch fork_path.
         kind: The record kind.
         at_sim_time: The inclusive truncation position T (ns).
+        has_history: Whether the sidecar declares the `history` table.
 
     Returns:
         A 2-tuple (join_sql, value_expr): the LEFT JOIN supplying the
-        record's latest at-or-before-T history sim_time, and the
-        GREATEST(...) SELECT expression.
+        record's latest at-or-before-T history sim_time (empty when there is
+        no history table), and the GREATEST(...) SELECT expression.
     """
+    deactivated_component = (
+        'CASE WHEN "_rec"."deactivated_at" IS NOT NULL'
+        f' AND "_rec"."deactivated_at" <= {at_sim_time}'
+        ' THEN "_rec"."deactivated_at" ELSE NULL END'
+    )
+    if not has_history:
+        return "", f'GREATEST("_rec"."created_sim_time", {deactivated_component})'
     fp_lit = _sql_literal(fork_path)
     kind_lit = _sql_literal(kind)
     join_sql = (
@@ -197,11 +211,6 @@ def _build_recorded_trail(
         f' AND "sim_time" <= {at_sim_time}'
         f' GROUP BY "record_id"'
         f') AS "_trail" ON "_trail"."record_id" = "_rec"."record_id"'
-    )
-    deactivated_component = (
-        'CASE WHEN "_rec"."deactivated_at" IS NOT NULL'
-        f' AND "_rec"."deactivated_at" <= {at_sim_time}'
-        ' THEN "_rec"."deactivated_at" ELSE NULL END'
     )
     value_expr = (
         'GREATEST("_rec"."created_sim_time", "_trail"."max_sim_time",'
@@ -361,7 +370,12 @@ def build_truncated_records_sql(
         elif name == "deactivated_at":
             select_parts.append(_render_deactivated_at_expr(at_sim_time))
         elif name == "last_mutation_sim_time":
-            join_sql, trail_expr = _build_recorded_trail(fork_path, kind, at_sim_time)
+            join_sql, trail_expr = _build_recorded_trail(
+                fork_path,
+                kind,
+                at_sim_time,
+                any(t.category == "fixed" for t in sidecar.tables()),
+            )
             joins.append(join_sql)
             select_parts.append(f'{trail_expr} AS "last_mutation_sim_time"')
         elif name.startswith("ref_index__"):
@@ -490,4 +504,69 @@ def build_truncated_sidecar(sidecar: Sidecar) -> Sidecar:
         ),
         # Truncation projects columns, never rows — the physical row counts still hold.
         row_census=sidecar.row_census,
+    )
+
+
+@dataclass(frozen=True)
+class TruncatedTape:
+    """The emit as a producer slice at T would have written it.
+
+    sidecar: the truncated sidecar view (`build_truncated_sidecar`), the
+        column list every compile against the tape enumerates from.
+    base_relations: physical base-table name -> replacing relation SELECT,
+        one entry per base table the physical sidecar declares — history,
+        every records__<kind>, every membership__<K>__<p> — so any compiled
+        read of any base table resolves truncated (an fk hop, lookup, or
+        elapsed correlation outside a shape's declared sources included).
+    at_sim_time: the inclusive truncation position T (ns).
+
+    Pure data: the holder of the physical connection presents `sidecar` over
+    it (the reader's `Emit` composition) and wraps each compiled query with
+    `base_relations` (`exporters.base_relations.shadow_base_relations`).
+    """
+
+    sidecar: Sidecar
+    base_relations: Mapping[str, str]
+    at_sim_time: int
+
+
+def open_truncated_tape(
+    sidecar: Sidecar, fork_path: str, at_sim_time: int
+) -> TruncatedTape:
+    """Present the sole branch's tape truncated at T (inclusive).
+
+    T at or beyond the branch's slice bound is the identity presentation in
+    value: every replacing relation then equals its physical table, except
+    that `last_mutation_sim_time` is the recorded trail (the physical value
+    only when the producer holds the trail on every record). T below every
+    data instant (a negative T included) is the empty tape: every replacing
+    relation is empty.
+
+    Args:
+        sidecar: The physical sidecar.
+        fork_path: The sole branch (`require_single_branch`).
+        at_sim_time: The inclusive truncation position (ns).
+
+    Returns:
+        The TruncatedTape.
+    """
+    mapping: dict[str, str] = {}
+    for table in sidecar.tables():
+        if table.category == "fixed":
+            mapping[table.name] = build_truncated_history_sql(fork_path, at_sim_time)
+        elif table.category == "records":
+            assert table.record_kind is not None  # C1: schema-required for records
+            mapping[table.name] = build_truncated_records_sql(
+                sidecar, fork_path, table.record_kind, at_sim_time
+            )
+        else:  # "membership"
+            assert table.record_kind is not None  # C1: schema-required
+            assert table.property is not None  # C1: schema-required
+            mapping[table.name] = build_truncated_membership_sql(
+                sidecar, fork_path, table.record_kind, table.property, at_sim_time
+            )
+    return TruncatedTape(
+        sidecar=build_truncated_sidecar(sidecar),
+        base_relations=mapping,
+        at_sim_time=at_sim_time,
     )

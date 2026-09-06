@@ -184,8 +184,6 @@ def test_build_source_query_specs_full_export_write_mode(tmp_path: Path) -> None
     for spec in specs:
         assert isinstance(spec, QuerySpec)
         assert spec.write_mode == "create"
-        assert spec.view_name is None
-        assert spec.view_sql is None
     assert {spec.table_name for spec in specs} == set(_EXPECTED_ROW_COUNTS)
 
 
@@ -248,9 +246,6 @@ def test_build_source_query_specs_windowed_write_mode_per_unit(
         "location": "replace",
         "visit_team": "append",
     }
-    for spec in specs:
-        assert spec.view_name is None
-        assert spec.view_sql is None
 
 
 def test_build_source_query_specs_windowed_event_log_appends(

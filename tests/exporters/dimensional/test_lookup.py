@@ -1391,7 +1391,7 @@ def test_validate_table_rejects_tracked_lookup_fact(tmp_path: Path) -> None:
         config = DimensionalConfig(tables=[table_decl])
         with pytest.raises(ExportError, match="temporal_class: tracked"):
             validate_table(
-                table_decl, config, emit.sidecar, None, notice_sink=discard_notice_sink
+                table_decl, config, emit.sidecar, notice_sink=discard_notice_sink
             )
 
 
@@ -1413,7 +1413,7 @@ def test_validate_table_passes_constant_lookup_fact(tmp_path: Path) -> None:
         )
         config = DimensionalConfig(tables=[table_decl])
         src_name = validate_table(
-            table_decl, config, emit.sidecar, None, notice_sink=discard_notice_sink
+            table_decl, config, emit.sidecar, notice_sink=discard_notice_sink
         )
     assert src_name == "history"
 

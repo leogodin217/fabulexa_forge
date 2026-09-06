@@ -846,12 +846,10 @@ window-dependent, and it is masking (withholding future state), never
 recomputation. A full export carries unmasked values: `left_at` is the base
 value, one row per interval.
 
-Bookkeeping reserved names (the DuckDB `_export_meta` / `_export_windows`
-tables, the `__rows` suffix, `__valid_from_ns`) are reserved for source output
-table names under the existing cross-mode rule
-(`exporters/reserved_names.py`), enforced at plan build so a full export and a
-later incremental drip on the same target agree. The SCD-2 `valid_to` view
-machinery is dimensional-only; no source render uses views.
+The bookkeeping table names (the DuckDB `_export_meta` / `_export_windows`
+tables) are reserved for source output table names under the existing
+cross-mode rule (`exporters/reserved_names.py`), enforced at plan build so a
+full export and a later incremental drip on the same target agree.
 
 ### `init --mode source` inference contract
 

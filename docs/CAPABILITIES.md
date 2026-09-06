@@ -321,13 +321,20 @@ Each mode reads the same emit and writes a different target shape.
   dimensional, source, and base modes: `--next` reads a cursor and emits the next window
   (or `--from`/`--to` runs a stateless range), one calendar period
   (`day`/`week`/`month`, anchor-resolved) or sim-time interval per window.
-  Dimensional: append-only facts and SCD-2 version rows (`valid_to` supplied by a
-  view, never materialized); full-snapshot type-1 dims. Source: per-render window
-  membership (see the source mode above). Base: every table reconstructed at the
-  window horizon — a full-table snapshot per kind per window. Any mode: a growing DuckDB warehouse
-  (cursor atomic with data) or one CSV drop directory per window. See
-  [`architecture/incremental.md`](architecture/incremental.md). *Teaches: incremental/
-  merge ETL, landing zones, building SCD-2 yourself.*
+  Dimensional: horizon windowing — every window is the unchanged full export
+  compiled over the tape truncated at the window's cutoff, delivered per table
+  by a static class: `snapshot` (type-1 dims, mutable-filter tables — replaced
+  whole), `upsert` (the keyed delta against the previous cutoff — open
+  intervals close, spells extend, length-of-stay fills in), or `append` (a
+  delta that never revises an earlier row). Any config that exports one-shot
+  drips; the one rule is that an `upsert` table's key identify the same row for
+  the whole run. Source: per-render window membership (see the source mode
+  above). Base: every table reconstructed at the window horizon — a full-table
+  snapshot per kind per window. Any mode: a growing DuckDB warehouse (cursor
+  atomic with data) or one CSV drop directory per window. See
+  [`architecture/incremental.md`](architecture/incremental.md). *Teaches:
+  incremental / merge ETL, landing zones, late-arriving data, building SCD-2
+  yourself.*
 - ✓ **Timestamp rebasing** *(Stage 2)* — map `sim_time` (ns offset) to wallclock
   through the resolved effective anchor: an author-chosen origin (`rebase.base_date` /
   `--base-date`) and zone (`rebase.timezone` / `--timezone`), falling back to the

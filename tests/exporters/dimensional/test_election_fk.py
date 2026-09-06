@@ -1251,24 +1251,6 @@ def test_guard_catches_genuine_duplicate_within_population(tmp_path: Path) -> No
             )
 
 
-def test_guard_per_window_labels_failure(tmp_path: Path) -> None:
-    """An incremental (windowed) invocation still guards the elected key,
-    labeling the failure with the window's display label."""
-    emit_dir = build_guard_emit(tmp_path, corrupt_within_alpha=True)
-    window = Window(index=0, start_ns=0, end_ns=1_000, label="w0")
-    with open_emit(emit_dir) as emit:
-        with pytest.raises(ElectedKeyDuplicate, match=r"\(w0\)"):
-            build_query_specs(
-                emit,
-                _guard_config(),
-                None,
-                window,
-                notice_sink=discard_notice_sink,
-                base_relations=None,
-                election=resolve_election(emit.sidecar, {"entity": "presentation_id"}),
-            )
-
-
 # ---------------------------------------------------------------------------
 # Threading: the incremental driver and tier-2 shaped playback
 # ---------------------------------------------------------------------------

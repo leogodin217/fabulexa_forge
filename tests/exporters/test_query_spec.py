@@ -31,16 +31,12 @@ def test_write_query_specs_duckdb_arm_lands_keyed_constraints(tmp_path: Path) ->
             table_name="dim_entity",
             sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
             write_mode="create",
-            view_name=None,
-            view_sql=None,
             keys=TableKeys(primary_key=("record_id",), unique=()),
         ),
         QuerySpec(
             table_name="dim_history",
             sql='SELECT record_id FROM "history" ORDER BY record_id',
             write_mode="create",
-            view_name=None,
-            view_sql=None,
         ),
     ]
 
@@ -65,8 +61,6 @@ def test_write_query_specs_csv_arm_ignores_keys(tmp_path: Path) -> None:
             table_name="dim_entity",
             sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
             write_mode="create",
-            view_name=None,
-            view_sql=None,
             keys=TableKeys(primary_key=("record_id",), unique=()),
         ),
     ]
@@ -99,8 +93,6 @@ def test_write_query_specs_duckdb_arm_forwards_provenance_verbatim(
         table_name="dim_entity",
         sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
         write_mode="create",
-        view_name=None,
-        view_sql=None,
         provenance=provenance,
         kind_values=kind_values,
         author_descriptions=author_descriptions,
@@ -136,8 +128,6 @@ def test_write_query_specs_csv_arm_forwards_provenance_verbatim(
         table_name="dim_entity",
         sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
         write_mode="create",
-        view_name=None,
-        view_sql=None,
         provenance=provenance,
         kind_values=kind_values,
         author_descriptions=author_descriptions,
@@ -165,8 +155,6 @@ def test_write_query_specs_duckdb_arm_forwards_table_description_verbatim(
         table_name="dim_entity",
         sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
         write_mode="create",
-        view_name=None,
-        view_sql=None,
         author_table_description="The entity dimension.",
         event_log=True,
     )
@@ -193,8 +181,6 @@ def test_write_query_specs_csv_arm_forwards_table_description_verbatim(
         table_name="dim_entity",
         sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
         write_mode="create",
-        view_name=None,
-        view_sql=None,
         author_table_description="The entity dimension.",
         event_log=True,
     )
@@ -218,8 +204,6 @@ def test_write_query_specs_forwards_empty_maps_by_default(tmp_path: Path) -> Non
         table_name="dim_entity",
         sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
         write_mode="create",
-        view_name=None,
-        view_sql=None,
     )
 
     with open_emit(emit_dir) as emit:

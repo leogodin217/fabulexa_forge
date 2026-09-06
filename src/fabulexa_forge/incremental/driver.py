@@ -39,7 +39,6 @@ from fabulexa_forge.exporters.query_spec import (
     TableReport,
     declare_keys_active,
     keys_not_declarable_csv_notice,
-    query_spec_output_name,
 )
 from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
@@ -219,11 +218,10 @@ def _build_windowed_report(
 ) -> WindowedExport:
     """Assemble a windowed invocation's `WindowedExport` from its written relations.
 
-    `written` is keyed by each spec's physical `table_name` (the writers'
-    own dict shape); a table's report entry — and its `row_counts` entry —
-    are named for its author-facing output name (the SCD-2 view name where
-    one exists). The report's `row_count` is always None — a windowed row
-    count is never a manifest fact — while `row_counts` carries the writer's
+    `written` is keyed by each spec's `table_name` (the writers' own dict
+    shape), which is also the author-facing output name. The report's
+    `row_count` is always None — a windowed row count is never a manifest
+    fact — while `row_counts` carries the writer's
     real `WrittenRelation.row_count` for CLI presentation. `keys` follows
     the CSV/DuckDB constraint-surface split `write_query_specs` uses for
     full exports: DuckDB carries the spec's declared keys, CSV always None.
@@ -233,7 +231,7 @@ def _build_windowed_report(
 
     Args:
         specs: The compiled windowed QuerySpecs, in plan iteration order.
-        written: Physical table_name -> its written relation.
+        written: table_name -> its written relation.
         include_keys: True for a DuckDB target, False for CSV.
 
     Returns:
@@ -244,7 +242,7 @@ def _build_windowed_report(
         report=ExportReport(
             tables=tuple(
                 TableReport(
-                    name=query_spec_output_name(spec),
+                    name=spec.table_name,
                     columns=written[spec.table_name].columns,
                     row_count=None,
                     keys=spec.keys if include_keys else None,
@@ -258,8 +256,7 @@ def _build_windowed_report(
             )
         ),
         row_counts={
-            query_spec_output_name(spec): written[spec.table_name].row_count
-            for spec in specs
+            spec.table_name: written[spec.table_name].row_count for spec in specs
         },
     )
 
@@ -387,7 +384,7 @@ def export_window(
         )
 
     if overlay is not None:
-        validate_overlay_tables(overlay, [query_spec_output_name(s) for s in specs])
+        validate_overlay_tables(overlay, [s.table_name for s in specs])
 
     if fmt == "csv" and declare_keys_active(config):
         notice_sink(keys_not_declarable_csv_notice())
@@ -464,10 +461,7 @@ def _write_csv_specs(
     specs: "list[QuerySpec]",
     target_dir: Path,
 ) -> dict[str, "WrittenRelation"]:
-    """Write all QuerySpecs as CSVs into target_dir.
-
-    SCD-2 __rows specs use the view_name (author name) as the CSV file stem.
-    All other specs use the table_name.
+    """Write all QuerySpecs as CSVs into target_dir, one <table_name>.csv each.
 
     Args:
         emit: The open emit.
@@ -475,7 +469,7 @@ def _write_csv_specs(
         target_dir: Directory to write CSVs into.
 
     Returns:
-        Mapping of each spec's physical table_name -> its written relation.
+        Mapping of each spec's table_name -> its written relation.
 
     Raises:
         ExportRuntimeError: Any CSV write fails.
@@ -484,8 +478,9 @@ def _write_csv_specs(
 
     written: dict[str, "WrittenRelation"] = {}
     for spec in specs:
-        author_name = query_spec_output_name(spec)
-        written[spec.table_name] = write_csv(emit, author_name, spec.sql, target_dir)
+        written[spec.table_name] = write_csv(
+            emit, spec.table_name, spec.sql, target_dir
+        )
     return written
 
 

@@ -8,10 +8,8 @@ import pytest
 from _support.notices import discard_notice_sink
 
 from fabulexa_forge.anchor import resolve_effective_anchor
-from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.election import resolve_election
-from fabulexa_forge.exporters.query_spec import query_spec_output_name
 from fabulexa_forge.exporters.source.engine import build_source_query_specs
 from fabulexa_forge.exporters.source.plan import build_source_plan
 from fabulexa_forge.incremental.windows import Window
@@ -21,7 +19,6 @@ from fabulexa_forge.reader.emit import open_emit
 
 from ._shaped_fixtures import (
     build_shaped_test_emit,
-    dimensional_shape_config,
     source_shape_config,
     windowable_dimensional_shape_config,
 )
@@ -107,14 +104,6 @@ def test_empty_window_start_equals_end_is_legal(tmp_path: "Path") -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_membership_grain_shape_rejects_naming_the_table(tmp_path: "Path") -> None:
-    emit_dir = build_shaped_test_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        head = _open_dimensional(emit, dimensional_shape_config())
-        with pytest.raises(ExportError, match="mem_widget_parts"):
-            head.window(0, 100)
-
-
 # ---------------------------------------------------------------------------
 # Promotion equality: window() content equals the incremental driver's own
 # windowed compile for the same window (dimensional and source).
@@ -129,7 +118,7 @@ def test_window_promotes_dimensional_engine_compile_verbatim(tmp_path: "Path") -
         tables = head.window(0, 12)
         expected_specs = _direct_dimensional_specs(emit, config, 0, 12)
         expected_by_name = {
-            query_spec_output_name(spec): emit.query_arrow(spec.sql, ()).to_pydict()
+            spec.table_name: emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in expected_specs
         }
         for table in tables:
@@ -144,7 +133,7 @@ def test_window_promotes_source_engine_compile_verbatim(tmp_path: "Path") -> Non
         tables = head.window(0, 12)
         expected_specs = _direct_source_specs(emit, config, 0, 12)
         expected_by_name = {
-            query_spec_output_name(spec): emit.query_arrow(spec.sql, ()).to_pydict()
+            spec.table_name: emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in expected_specs
         }
         for table in tables:
@@ -176,18 +165,6 @@ def test_history_point_fact_windows_on_sim_time(tmp_path: "Path") -> None:
         second = _tables_by_name(head.window(10, 20))["fact_widget_status"]
     assert first.table.column("sim_time").to_pylist() == [0]
     assert second.table.column("sim_time").to_pylist() == [10]
-
-
-def test_scd2_dim_physical_projection_no_valid_to(tmp_path: "Path") -> None:
-    emit_dir = build_shaped_test_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        head = _open_dimensional(emit, windowable_dimensional_shape_config())
-        table = _tables_by_name(head.window(0, 12))["dim_widget_status"]
-    assert table.delivery == "append"
-    col_names = table.table.schema.names
-    assert "__valid_from_ns" in col_names
-    assert "valid_to" not in col_names
-    assert sorted(table.table.column("__valid_from_ns").to_pylist()) == [0, 10]
 
 
 def test_type1_dim_full_every_window(tmp_path: "Path") -> None:

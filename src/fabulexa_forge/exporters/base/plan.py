@@ -1334,9 +1334,8 @@ def _check_reserved_names(specs: tuple[BaseTableSpec, ...]) -> None:
         specs: The resolved output table specs.
 
     Raises:
-        ExportError: A table name is `_export_meta` / `_export_windows` or ends
-            in `__rows`; a column is named `__valid_from_ns`; or a column is
-            named `last_mutation_sim_time`.
+        ExportError: A table name is `_export_meta` / `_export_windows`, or a
+            column is named `last_mutation_sim_time`.
     """
     for spec in specs:
         if is_reserved_table_name(spec.table_name):
@@ -1514,8 +1513,8 @@ def build_base_plan(
             reference edge's admitted target populations, contain a
             pairwise-unsafe key-space pair.
         ExportError: A resolved output name is reserved under incremental export
-            (`_export_meta`/`_export_windows`/`*__rows`, `__valid_from_ns`,
-            `last_mutation_sim_time`) — checked always-on via
+            (`_export_meta`/`_export_windows`, `last_mutation_sim_time`) —
+            checked always-on via
             `exporters.reserved_names`, as source's `_check_reserved_names` does,
             so a full export and a later incremental drip on the same target agree.
         RenderKeyResolves: A `render` key is outside its value form's key
