@@ -252,8 +252,10 @@ Each mode reads the same emit and writes a different target shape.
   stream head + render surface, which also offers (library-only, no CLI or YAML
   surface) bounded replay (`events(T1, T2)`), mid-tape join (`seek(T, end)` —
   Debezium snapshot-then-stream with `r` read events, the live phase bounded
-  or tape's-end, `end = T + 1` the snapshot alone), and per-event byte
-  rendering ([`architecture/stream-playback.md`](architecture/stream-playback.md)).
+  or tape's-end, `end = T + 1` the snapshot alone), per-event byte
+  rendering, and the run-level `(topic, table-identity)`-keyed value-schema
+  enumeration a registry-registering adapter pre-registers from
+  ([`architecture/stream-playback.md`](architecture/stream-playback.md)).
   *Gaps:* the Debezium
   value message only (no separate key message or compaction tombstone); the verb
   itself is whole-stream (bounds are library arguments, not flags). See

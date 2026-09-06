@@ -199,8 +199,20 @@ thereafter a pure per-event function:
   schema is built identically from the event itself (permissive totality —
   the message still embeds it, `route_table` the verbatim spine value), on
   every sink. `None` when `fmt = jsonl` or schemas are disabled. Total over
-  the head's events, so no unknown-key ask exists. There is deliberately no
-  run-level enumeration accessor (§ Boundaries).
+  the head's events, so no unknown-key ask exists.
+- **`value_schemas()`** — the one run-level accessor: the declared-domain
+  schema map itself, a read-only mapping keyed by the same
+  `(topic, table-identity value)` pair, so a registry-registering adapter
+  pre-registers what the messages will embed before the first event is
+  pulled. Insertion order is declaration order — streams as declared, a
+  sub-typed kind's leaves under `source_table` in the stream's declared
+  `sub_types` order (else the sidecar's domain order) — so the enumeration
+  is deterministic. Under `source_table` one topic may carry several keys
+  and one leaf may recur under several topics: the key is the pair, never
+  the topic alone. Every in-domain event's `value_schema_for` answer is the
+  enumerated entry under its own key. Empty when `fmt = jsonl` or schemas
+  are disabled (no message embeds one); a corrupted out-of-domain leaf's
+  per-event schema is outside the domain and is not enumerated.
 
 Resolution is **self-vetting**: it runs streaming's eager business-rule pass
 exactly as `open_stream_playback` does — the per-stream naming/schema state
@@ -330,10 +342,13 @@ and [`playback/stream_render.py`](../../src/fabulexa_forge/playback/stream_rende
   snapshot-then-bounded-window (release between two frontier positions).
   Both are the composed verb with its live phase bounded — `end = T + 1`
   is the degenerate empty tail — so the head's answer set stays minimal and
-  the bound follows the same half-open convention as `events`. A run-level
-  value-schema enumeration accessor (for registry-registering adapters)
-  still waits on a demonstrated consumer need (vault note
-  `stream-render-value-schema-enumeration-waits-on-a-demonstrated-consumer`).
+  the bound follows the same half-open convention as `events`.
+- **Enumeration is the map, not a second schema authority.** `value_schemas`
+  exposes the very map `value_schema_for` reads, under the same pair key —
+  a registry adapter registers ahead of delivery, and what it registers is
+  by construction what each message embeds. A by-topic projection was
+  declined: under `source_table` identity "the topic's schema" does not
+  exist, and a keyed view that flattened it would invent one.
 - **Compaction semantics for the `r` set.** A mid-tape joiner models a
   consumer attaching to a log-compacted topic: dropped keys are invisible,
   so a record whose `d` passed is absent rather than replayed-then-retired.
@@ -369,8 +384,9 @@ and [`playback/stream_render.py`](../../src/fabulexa_forge/playback/stream_rende
   batch machinery, which is a different surface).
 - **No separate snapshot verb.** The `r` phase alone is `seek(T, T + 1)`;
   the head offers no second entry point for it — § Rationale.
-- **No run-level value-schema enumeration.** Schemas resolve per event;
-  a declared-domain pre-enumeration waits on a demonstrated consumer.
+- **No by-topic schema projection.** `value_schemas` is keyed by the
+  `(topic, table-identity)` pair only; the surface offers no
+  topic → schema map, because under `source_table` identity none exists.
 - **Delivery is above the surface.** Pacing, sinks, framing, and the Kafka
   topic lifecycle are the driver's; the mixer is a sibling consumer of the
   engine, not of this surface.

@@ -6,7 +6,10 @@ render resolves with no head open, then enforces the format's own
 resolve-time gates (`debezium` requires a resolved anchor and a declared
 `debezium` block) and builds the per-stream naming/schema state once.
 `StreamRender` is thereafter a pure per-event function: `render_bytes`,
-`render_key_bytes`, `timestamp_ms`, `value_schema_for`.
+`render_key_bytes`, `timestamp_ms`, `value_schema_for` — plus the one
+run-level accessor, `value_schemas`, the declared-domain schema map itself
+(for a registry-registering adapter that pre-registers what the messages
+embed before the first event is pulled).
 
 Builds the `(topic, table-identity value)` schema map from `debezium.py`'s
 pure builders — the design doc's two declared schema-identity fixes:
@@ -23,6 +26,7 @@ never `driver`, `kafka_sink`, `pacer`.
 
 from __future__ import annotations
 
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Literal
 
 from fabulexa_forge.config.models import KindStream, MembershipStream
@@ -43,6 +47,8 @@ from fabulexa_forge.exporters.streaming.presentation import (
 from fabulexa_forge.exporters.streaming.routing import membership_route_attributes
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import DebeziumSourceIdentity, StreamConfig
     from fabulexa_forge.exporters.notices import NoticeSink
@@ -360,6 +366,27 @@ class StreamRender:
         if schema is not None:
             return schema
         return _build_event_schema(event, table, self._source_identity)
+
+    def value_schemas(self) -> "Mapping[_SchemaKey, dict[str, object]]":
+        """The run's declared-domain value schemas, keyed by
+        (topic, table-identity value) — every schema `value_schema_for` can
+        answer from the declared domain, enumerable before the first event
+        is pulled so a registry-registering adapter pre-registers what the
+        messages will embed. Insertion order is declaration order: streams
+        as declared, and under table_identity='source_table' a sub-typed
+        kind's leaves in the stream's declared sub_types order (else the
+        sidecar's domain order). Under 'source_table' one topic may carry
+        several keys and one leaf may appear under several topics — there
+        is no by-topic-alone schema. Empty when fmt='jsonl' or schemas are
+        disabled (no message embeds one). A corrupted out-of-domain leaf's
+        per-event schema is not in the domain and is not enumerated.
+
+        Returns:
+            A read-only view of the declared-domain schema map.
+        """
+        if self._schema_map is None:
+            return MappingProxyType({})
+        return MappingProxyType(self._schema_map)
 
 
 def resolve_stream_render(
