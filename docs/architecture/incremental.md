@@ -63,7 +63,7 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
 | [`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py) | `build_query_specs(…, window)` — the dimensional horizon compile: the full-export compile over the truncated tape at each of the window's two horizons, composed per delivery class |
 | [`exporters/dimensional/windowing.py`](../../src/fabulexa_forge/exporters/dimensional/windowing.py) | `window_delivery_class` (the static per-table delivery class), `check_window_key_invariant` (`WindowKeyMutable`), `check_window_key_unique` (`WindowKeyDuplicate`), `check_windowed_reserved_names`, `compose_window_delta_sql` |
 | [`derivations/truncated_tape.py`](../../src/fabulexa_forge/derivations/truncated_tape.py) | `open_truncated_tape` / `TruncatedTape` — the emit presented as a producer slice at a horizon ([`derivations.md`](derivations.md) § The truncated-tape surface) |
-| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `build_source_query_specs(…, window)` — the source windowed compile; see [`source.md`](source.md) § Incremental composition for its per-render window membership |
+| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `build_windowed_source_query_specs` — the source horizon compile (the plan and full-export renders over the truncated tape at each horizon; `state` / `junction` snapshot, event log append), `source_window_delivery` |
 | [`writers/duckdb.py`](../../src/fabulexa_forge/writers/duckdb.py) | `write_duckdb_window` — one-transaction-per-window append / replace / keyed upsert, bookkeeping tables |
 | [`errors.py`](../../src/fabulexa_forge/errors.py) | `IncrementalError` and its subclasses (config, regime, fingerprint, cursor, range) |
 
@@ -81,7 +81,7 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
   plus an `out/.fabulexa-forge-cursor.json` sidecar. An explicit range writes a standalone
   artifact with no bookkeeping tables.
 - **Wraps the pure range export.** The driver computes a window and calls the
-  active mode's windowed compile (`build_query_specs` or `build_source_query_specs`)
+  active mode's windowed compile (`build_query_specs` or `build_windowed_source_query_specs`)
   + the windowed write path; it adds no new read surface. The dimensional
   windowed compile is the mode's own full-export compile run over the truncated
   tape (§ Horizon windowing) — the mode never sees a window.
@@ -102,9 +102,9 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
 compile ([`notices.md`](notices.md)). Every driver invocation derives exactly
 one window — an explicit `--from`/`--to` range is a single range-window — and
 the sink threads through with no forwarding or dedup logic. A dimensional
-window compiles twice, once per horizon, each a full-export compile, so a
-plan notice reaches the sink once per horizon compiled (twice per window);
-source and base compile once. A `--next` drip re-emits its compile's notices
+or source window compiles twice, once per horizon, each a full-export compile,
+so a plan notice reaches the sink once per horizon compiled (twice per window);
+base compiles once. A `--next` drip re-emits its compile's notices
 each invocation; the sequence is deterministic and the repetition is the
 contract.
 
@@ -248,11 +248,13 @@ tier-2 `window()` contract for a dimensional shape ([`playback.md`](playback.md)
 `window_delivery_class`, and `window(T1, T2)` runs the same
 `build_query_specs` call this driver runs. The driver keeps its own mechanics
 (the window-boundary sequence, cursor, fingerprint, drained detection, labels,
-staging, writers) above the seam. The source mode's windowed compile keeps its
-per-render window membership ([`source.md`](source.md) § Incremental
-composition) and the base mode its per-window snapshot ([`base.md`](base.md)
-§ Three horizons); re-seaming both over the truncated tape is a separable
-later change.
+staging, writers) above the seam. The source mode runs the same horizon
+compile with its own static classes — `state` and `junction` tables
+`snapshot`, the event log `append` ([`source.md`](source.md) § Incremental
+composition); the base mode keeps its per-window snapshot at the window's
+`end_ns` through the state-at fold ([`base.md`](base.md) § Three horizons),
+which is honest at the cutoff by the same argument (a state-at reconstruction
+is a truncation).
 
 ### Drained detection and the cursor
 
@@ -373,7 +375,7 @@ a sibling `<out parent>/.tmp_<label>` and atomically renamed to `out`.
    `state(end_k − 1)` — the shape's full export over the emit sliced at the
    window's cutoff. No carve-out: a snapshot's row membership is the population
    born by the horizon; an open interval is open; a dim reads as of the cutoff.
-   (Dimensional. Source and base keep their own per-render statements.)
+   (Dimensional and source; base's per-window snapshot states the same.)
 3. **Reconciliation (DuckDB).** After each window is applied, every author-named
    dimensional table equals `state(end_k − 1)` as a multiset; after the tape drains,
    every table equals the full export under the table's deterministic `ORDER BY`
@@ -488,9 +490,9 @@ usage error on stderr, exit 1, before the emit opens).
   keyed on the FK it fails `WindowKeyMutable` (the binding is not invariant on a
   records grain). Declare it as a membership-grain fact — the binding *is* the row
   there, keyed `(record_id, joined_sim_time, …)`.
-- **Source and base keep their shipped windowed compiles.** Both are already total,
-  so re-seaming them over the truncated tape is deferred; the seam's `window()` for a
-  source shape keeps its shipped dispatch.
+- **Base keeps its state-at snapshot.** Every base table is already a per-window
+  snapshot at the window's `end_ns`; it is honest and reconciles by construction,
+  so it does not route through the two-horizon compile.
 - **Trunk-only.** The `SingleBranch` guard stands; the fingerprint includes the sole
   branch's `fork_path`, so a branch-aware cursor (Stage 5) extends the key rather than
   reworking it.
@@ -504,7 +506,7 @@ usage error on stderr, exit 1, before the emit opens).
 | Document | Why |
 |---|---|
 | [`dimensional.md`](dimensional.md) | One mode the driver wraps — grain semantics, SCD-2 `LEAD`, derived columns (incl. the ordinal amendment), the timestamp anchor |
-| [`source.md`](source.md) | The other mode the driver wraps — per-render window membership: the windowed state snapshot, the appended event log, junction extract-on-change |
+| [`source.md`](source.md) | The other mode the driver wraps through the horizon compile — `state` / `junction` snapshots, the appended event-log delta |
 | [`playback.md`](playback.md) | The seam whose tier-2 `window()` runs this driver's horizon compile and whose `state()` defines the horizons it reconciles to |
 | [`anchor.md`](anchor.md) | The single `EffectiveAnchor` calendar windows resolve through |
 | [`temporal-elections.md`](temporal-elections.md) | The election vocabulary the ordinal invariance reading is election-aware over |

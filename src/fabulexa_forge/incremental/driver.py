@@ -275,8 +275,9 @@ def export_window(
     """Run one pure windowed export (the body --next wraps; also --from/--to).
 
     The compile step dispatches on `config.mode`: `source` resolves the
-    election, builds the windowed source plan (`build_source_plan(...,
-    windowed=True, ...)`), and compiles it (`build_source_query_specs(plan,
+    election and runs the source horizon compile
+    (`build_windowed_source_query_specs` — the full plan build and compile
+    over the truncated tape at each of the window's horizons,
     window)`); `base` calls `build_base_query_specs`; `dimensional` calls
     `build_query_specs`; all three thread notice_sink to their compile — the
     mode-specific compile contributes only the QuerySpecs, the window math,
@@ -347,22 +348,15 @@ def export_window(
     if config.mode == "source":
         from fabulexa_forge.exporters.election import resolve_election
         from fabulexa_forge.exporters.source.engine import (
-            build_source_query_specs,
+            build_windowed_source_query_specs,
             require_source_anchor,
         )
-        from fabulexa_forge.exporters.source.plan import build_source_plan
 
         resolved_anchor = require_source_anchor(anchor)
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit,
-            config,
-            resolved_anchor,
-            election,
-            windowed=True,
-            notices=notice_sink,
+        specs = build_windowed_source_query_specs(
+            emit, config, resolved_anchor, election, window, notice_sink
         )
-        specs = list(build_source_query_specs(plan, window))
     elif config.mode == "base":
         from fabulexa_forge.exporters.base.engine import build_base_query_specs
 

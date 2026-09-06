@@ -39,7 +39,7 @@ source config: tables + events (declared; `init --mode source` proposes)
    │  resolve_populations — declaration → sub-type atoms (shared exporter layer)
    ▼
 build_source_plan → per-table plans + the event-log plan (all gates run here)
-   ▼  build_source_query_specs (full or windowed)
+   ▼  build_source_query_specs (full) · build_windowed_source_query_specs (per horizon)
         tables[].kind        ──▶ state render     (one current row per record)
         tables[].membership  ──▶ junction render  (one row per membership interval)
         events               ──▶ event-log render (one polymorphic audit table)
@@ -157,7 +157,7 @@ the reader's records-column taxonomy
 | `record_id` | `id` — or the table's elected surface under key election |
 | `presentation_id` | Kept unprefixed, producer-typed — unless it *is* the elected identity, in which case it renders as the identity column and is not duplicated |
 | `created_sim_time` | `created_at`, wallclock |
-| `last_mutation_sim_time` | `updated_at`, wallclock (full export; omitted under a windowed invocation — § Incremental composition) |
+| `last_mutation_sim_time` | `updated_at`, wallclock (under a window, the recorded trail at the cutoff — § Incremental composition) |
 | `active` / `deactivated_at` | Verbatim / wallclock — the soft-delete pair |
 | `prop__<p>` | `<p>`, native type; reference properties render the target population's elected surface per row |
 | `prop__<K>_type` (discriminator) | Retained as `<K>_type` when the table spans ≥ 2 populations; dropped when the table's population set is a single sub-type (constant — table identity carries it). Explicitly listing it in `columns` retains it either way |
@@ -711,9 +711,7 @@ A bare-shorthand `render` key on a declared table (`state` / `junction`)
 must name an instant-carrying structural column of the table's category,
 resolved through the reader's structural-temporal surface
 ([`reader.md`](reader.md) § The structural-temporal surface) — never a
-hardcoded list — and must name a column the render actually emits;
-`last_mutation_sim_time` is outside the key domain under a windowed
-invocation, where the render omits `updated_at`
+hardcoded list — and must name a column the render actually emits
 (`RenderKeyResolves`, [`temporal-elections.md`](temporal-elections.md)
 § Validation Rules).
 
@@ -778,73 +776,39 @@ and `defects.json` names the injected duplicate.
 `--next` / `--from` / `--to` work over source exports through the cross-mode
 driver (see [`incremental.md`](incremental.md)) — window math, cursor,
 fingerprint, drained detection, labels, empty-window emission, and staging are
-its shared mechanics. The source mode contributes its windowed compile
-(`build_source_query_specs`) and the per-render window membership below. Window
-membership tests run on raw sim-time ns, half-open `[start_ns, end_ns)`.
+its shared mechanics. The source mode contributes its horizon compile
+(`build_windowed_source_query_specs`): the plan is built and the full-export
+renders compiled over the **truncated tape** at each of the window's two
+horizons — the cutoff `end_ns − 1` and the previous cutoff `start_ns − 1`
+([`derivations.md`](derivations.md) § The truncated-tape surface,
+[`incremental.md`](incremental.md) § Horizon windowing) — and each unit is
+delivered by a static class:
 
-| Render | Window key | Behavior per window |
+| Render | Class | Window k delivers |
 |---|---|---|
-| `state` | — (snapshot class) | One full-table snapshot per window, reconstructed at the window horizon through the state-at derivation: rows with `created_sim_time < end_ns`; tracked properties as-of the horizon; `constant` properties current (the declared temporal-honesty exception); lifecycle horizon-rendered (`active` / `deactivated_at`); **no `updated_at`** — `last_mutation_sim_time` at a past horizon is not faithfully reconstructible, so the column is omitted rather than fabricated. `replace` in DuckDB, re-emitted per CSV drop |
-| event log | `event_sim_time` | Append event rows with key ∈ window, computed over the full fold — the `changes` lag's previous after-image may predate the window; window membership selects rows, never alters their content (events are immutable and final). `id` is assigned over the whole tape beneath the window predicate, so a window's rows carry the `id` values a full export of the same tape gives them; because the order is time-major, those values form a contiguous ascending block (§ `id` under incremental below) |
-| `junction` | activity (`joined_sim_time`, `left_sim_time`) | Extract-on-change, `left_at` horizon-masked (below) |
+| `state` | `snapshot` | The current-row table as a producer slice at the cutoff would have written it — records created by the cutoff, tracked properties as of it, `active` / `deactivated_at` rendered at it, `updated_at` the recorded trail — replaced whole every window |
+| `junction` | `snapshot` | Every interval joined by the cutoff, an interval still open at the cutoff carrying a NULL `left_at` — replaced whole every window |
+| event log | `append` | The log over the tape at the cutoff minus the log over the tape at the previous cutoff: exactly the events in the window, each carrying its whole-tape `id` |
 
-Row selection is window-invariant across all three renders, because the columns
-it reads are constant-gated (§ Row selection). The per-window state snapshot
-applies the same predicate at every window, so a record's presence across windows
-varies only by its lifecycle (`created_sim_time`), never by predicate
-re-evaluation. Junction extract-on-change runs over the narrowed interval set,
-with activity keys and `left_at` horizon-masking unaffected by it, so an interval's
-membership in the table never varies by window. The event log's window membership
-selects among the selection-narrowed event set, with `id` assigned over that
-whole-tape narrowed set beneath the window predicate — numbering stays dense,
-tape-anchored, and invocation-invariant.
-
-A full (non-incremental) export renders `state` as the current records read
-*with* `updated_at`; the windowed shape differs by exactly that one omitted
-column, a documented consequence of horizon honesty. An explicit `columns` /
-`rename` entry naming `last_mutation_sim_time` is therefore unsatisfiable under
-a windowed invocation and errors (`SourceColumnUnresolved`, the message naming
-the horizon-honesty omission) — never a silent drop. The refusal is plan-time:
-windowed-ness is an invocation fact, so the caller passes it to
-`build_source_plan` (`windowed`), which validates every declaration against the
-shape this invocation actually delivers. The incremental estate is the
-real-world archetype whole: nightly full extracts of app tables plus an appended
-audit log plus upsert-shaped junction activity — the no-CDC teaching shape.
+No render sees a window, so there is no windowed render shape and no
+windowed refusal: a `columns` / `rename` entry naming `last_mutation_sim_time`
+windows like any other column, its value honest at every cutoff. Row
+selection is window-invariant across all three renders because the columns it
+reads are constant-gated (§ Row selection) and verbatim under truncation. The
+incremental estate is the real-world archetype whole: nightly full extracts of
+app tables and their association tables plus an appended audit log — the
+no-CDC teaching shape.
 
 **`id` under incremental.** The log's numbering is anchored at the tape's start,
-not the window's. The number is assigned over the log's whole-tape row set and
-the window predicate applied afterward, so an event carries the same `id`
-whichever invocation exports it, and a re-run reproduces it. Successive windows
-from the tape's first event concatenate into a dense prefix `1 .. N` with no
-renumbering and no overlap; an empty window contributes no rows and consumes no
-number. A range export starting mid-tape (`--from` after the first event) begins
-above 1, and the front gap is the honest report that earlier events exist and
-were not exported — tape-anchoring is what makes the number stable, and
-window-local numbering would trade that away. The rendered SQL therefore places
-the numbering at its own query level *beneath* the window predicate: SQL
-evaluates `WHERE` before window functions, so a row-number computed beside the
-predicate would silently yield window-local numbers, a failure invisible on a
-full export where the two forms agree.
-
-**Junction extract-on-change.** A membership interval emits a row in each window
-containing membership *activity* — its join, its leave, or both:
-
-| Condition | Emission |
-|---|---|
-| `joined_sim_time` ∈ window | The interval row, with `left_at` **horizon-masked**: rendered only if `left_sim_time < end_ns`, else `NULL` (the leave is future state at this horizon) |
-| `left_sim_time` ∈ window and `joined_sim_time` in an earlier window | The interval row re-emitted, `left_at` set |
-| Both in one window | One row, `left_at` set |
-| Neither in the window | No row |
-
-A closed interval therefore appears at most twice — once open, once closed — and
-the later row supersedes the earlier under the natural merge key
-`(owner id, member fields, joined_at)`. This is the upsert-extract shape real
-source systems deliver; merging it is the teaching exercise. In the DuckDB
-warehouse both rows accumulate (append-only); in CSV each window's drop carries
-its own activity. Horizon-masking is the one place a source value is
-window-dependent, and it is masking (withholding future state), never
-recomputation. A full export carries unmasked values: `left_at` is the base
-value, one row per interval.
+not the window's: the log over the tape truncated at a cutoff is a prefix of
+the log over the whole tape (the same total order over fewer events), so an
+event carries the same `id` whichever window delivers it, and a re-run
+reproduces it. Successive windows from the tape's first event concatenate into
+a dense prefix `1 .. N` with no renumbering and no overlap; an empty window
+contributes no rows and consumes no number. A range export starting mid-tape
+(`--from` after the first event) begins above 1, and the front gap is the honest
+report that earlier events exist and were not exported — tape-anchoring is what
+makes the number stable, and window-local numbering would trade that away.
 
 The bookkeeping table names (the DuckDB `_export_meta` / `_export_windows`
 tables) are reserved for source output table names under the existing
@@ -935,10 +899,11 @@ untouched.
    later: either it is a function of the key, or the key grows to cover it. It
    is scoped to conformant emits because a corrupter's conflicting duplicate
    falsifies it by construction (§ Corrupter composition).
-9. **Windowed `state` is horizon-honest.** The per-window snapshot reconstructs
-   at the window horizon through the state-at derivation; `updated_at` is
-   omitted rather than fabricated, and a declaration naming it under a windowed
-   invocation is refused, never silently dropped.
+9. **Windowed renders are horizon-honest.** Every window is the full-export
+   render over the tape truncated at the cutoff, so every value — `updated_at`
+   included, as the recorded trail — is what a producer slice at the cutoff
+   would have written; after the tape drains the warehouse equals the one-shot
+   export (`tests/incremental/test_horizon_acceptance.py`).
 10. **Determinism.** Same emit + export config + code version → identical output
     (CLAUDE.md § Key Invariants). `init` output is likewise a pure function of
     `(emit, code version)` and always parses and plans clean. Where the log's
@@ -1000,7 +965,7 @@ for a `tables` entry, `events source #<n>` (1-based, declaration order) for an
 | `SourceWhereValueUncastable` | Every `where` element casts to its resolved column's sidecar-declared DuckDB type, constant-evaluated on every `where`-bearing unit (§ Row selection); the disjointness gate reuses these typed results | `"{owner}: where value '{element}' for '{key}' does not cast to {type}"` |
 | `discriminator-value-unobserved` (notice, per element) | For a `where` column with a declared `enum_domains` entry, each predicate element outside the domain draws one notice in config element order — never an error; a column with no entry is unchecked. Message granularity as dimensional's: a scalar, or a list no element of which is in the domain, states the unit will render no rows; a partially-covered list states only that the element contributes none | Through the [notice channel](notices.md), naming `{owner}`, `{key}`, and the element |
 | `SourceTableMembershipUnknown` | Every `membership` reference resolves to a sidecar membership table | `"{owner}: no membership table for ({kind}, {property})"` |
-| `SourceColumnUnresolved` | Every `columns` / `rename` key resolves on the table's source surface — a state table's identity column by its elected surface's contract name only, the junction owner column by its source name `record_id` whatever surface it carries, and `last_mutation_sim_time` only on a non-windowed invocation (the windowed state render omits it); every `only` / `ignore` entry names a property (element field) of its source; an events source's `rename` key names an audited property (element field) of its source, surviving `only` / `ignore` narrowing | `"{owner}: '{entry}' not a column of its source"` (the unrendered-surface, windowed-`updated_at`, and narrowed-away-rename-key cases name the election / omission / `only`-or-`ignore` entry) |
+| `SourceColumnUnresolved` | Every `columns` / `rename` key resolves on the table's source surface — a state table's identity column by its elected surface's contract name only, the junction owner column by its source name `record_id` whatever surface it carries; every `only` / `ignore` entry names a property (element field) of its source; an events source's `rename` key names an audited property (element field) of its source, surviving `only` / `ignore` narrowing | `"{owner}: '{entry}' not a column of its source"` (the unrendered-surface and narrowed-away-rename-key cases name the election / `only`-or-`ignore` entry) |
 | `SourceColumnNotAddressable` | No `columns` / `rename` entry names `fork_path` / `ref_index__*`, or `record_index` other than as the table's elected surface; no `columns` entry names the table's elected surface (identity is election-governed) — a non-elected, unrendered surface name (`record_id` under a `presentation_id` election) is `SourceColumnUnresolved` instead | `"table '{name}': '{column}' is not addressable here"`, naming why |
 | `SourceEventSourceOverlap` | `events.sources` resolve pairwise-disjoint population sets (membership sources distinct by `(kind, property)`); two sources auditing one item space are disjoint only via both-declared disjoint owner `sub_types` sets or a common predicated column with typed-value-disjoint value sets (§ The event log — selection-aware disjointness) | `"events: sources overlap on population '{population}'"`; the selection case appends `"; selections do not establish disjointness"` |
 | `SourceKindLabelUnknown` | Every `kind_labels` key has a `records__<kind>` table in the sidecar | `"kind_labels: kind '{kind}' not in this emit"` |
@@ -1016,7 +981,7 @@ for a `tables` entry, `events source #<n>` (1-based, declaration order) for an
 | `SourceNameCollision` | Output table names (the event log's included) and per-table column names unique after defaults + renames; within one events source, resolved `changes` keys are distinct after renames (a membership pair's expanded `_kind` / `_id` names included) | `"output name collision: {names}; resolve via rename"`; the `changes`-key case: `"{owner}: changes key collision: {keys}; resolve via rename"` |
 | Reserved-name check (`exporters/reserved_names.py`, raised as `ExportError`) | No output table name collides with bookkeeping names / suffixes; no output column named `last_mutation_sim_time` (§ Presentation-name posture) — checked at plan build over all output names, so a full export and a later `--next` on the same target agree | — |
 | `ElectionMixedIdentity` / `ElectionUnionUnsafe` | Identity gates per declared table; edge gates per referencing column, per event-log **resolved** item-type (over the union of its sources' addressed populations; the owner kind's for a membership item-type), and per audited reference property; no gate across item-types (polymorphic identity) | Per [`key-election.md`](key-election.md) |
-| `SourceHistoryTrackedRequired` | The sidecar carries `history_tracked` flags (the events render and the windowed state snapshot consume them) | `"source export requires per-column history_tracked flags; this emit predates them"` |
+| `SourceHistoryTrackedRequired` | The sidecar carries `history_tracked` flags (the events render consumes them) | `"source export requires per-column history_tracked flags; this emit predates them"` |
 | `TemporalClassUnavailableError` (reader-owned; see [`reader.md`](reader.md)) | Every consulted flagged column declares an in-enum `temporal_class` — audited-set resolution and the row-selection gate alike — a C13 breach surfaced on the consuming path | `"… declares history_tracked but no temporal_class; the emit is non-conformant (C13). Run \`fabulexa-forge validate\`."` |
 | Single-branch guard (`derivations/guard.py`, cross-mode) | Exactly one branch | — |
 
@@ -1058,7 +1023,7 @@ writer semantics, CSV posture, and incremental gating are owned by
 - **The gate is on the column's class, not on the horizon.** A predicate on a
   `tracked` property is ambiguous under horizon reconstruction — the
   as-of-the-horizon value and the current records value select different row
-  sets — and the mode's windowed state snapshots pose that question where
+  sets — and the mode's per-window snapshots would pose that question where
   dimensional's records grain never does. Restricting keys to `constant`-class
   properties makes the question unposable rather than picking an answer, and it
   is what buys horizon-invariant row membership (invariant 12) by construction
@@ -1175,12 +1140,14 @@ writer semantics, CSV posture, and incremental gating are owned by
 - **The anchor is required, not defaulted.** An operational dump has no natural
   "no timestamp" representation; silently emitting raw ns integers would be a
   fallback masking a missing anchor as valid output.
-- **Horizon honesty over completeness.** The windowed state snapshot omits
-  `updated_at` because `last_mutation_sim_time` at a past horizon is not
-  faithfully reconstructible — untracked property writes advance it but leave
-  no history. Omission is visible and documented; fabrication or understatement
-  would be silent infidelity. The same posture makes horizon-masking (junction
-  `left_at`) masking only, never recomputation.
+- **A window is a slice, not a filter.** Selecting rows out of the full export
+  by a per-render window key forced a windowed state shape without
+  `updated_at` (not reconstructible from the slice), a horizon-masked junction
+  `left_at`, and a refusal for any declaration naming the omitted column.
+  Rendering the unchanged full export over the truncated tape makes every
+  value honest at the cutoff by construction — `updated_at` as the recorded
+  trail ([`playback.md`](playback.md) § The recorded trail) — and leaves no
+  windowed shape to validate against.
 - **The corrupter-composition guarantee is by construction, never
   special-cased.** No corrupter-aware branch exists in the source mode; the
   guarantee that a dirty emit yields a dirty dump follows from the mode reading
@@ -1252,7 +1219,7 @@ writer semantics, CSV posture, and incremental gating are owned by
 |---|---|
 | [`reader.md`](reader.md) | The records-column taxonomy the state render classifies through; the `temporal_class` accessor the audited set resolves through |
 | [`bundle.md`](bundle.md) | The column temporal classes and the genesis guarantee behind the audited set's temporal honesty |
-| [`derivations.md`](derivations.md) | The row-state-events and membership-events folds the event log composes, and the state-at derivation the windowed state snapshot composes |
+| [`derivations.md`](derivations.md) | The row-state-events and membership-events folds the event log composes, and the truncated tape the windowed compile runs over |
 | [`dimensional.md`](dimensional.md) | The contrasting mode — reconstructed star schema vs. source's app-database shape; both compile to the mode-neutral `QuerySpec` |
 | [`streaming.md`](streaming.md) | The owner of the CDC extraction archetype — the same folds, replayed as a live event feed instead of landed as an app schema |
 | [`incremental.md`](incremental.md) | The cross-mode window/cursor/fingerprint driver source's windowed compile plugs into |

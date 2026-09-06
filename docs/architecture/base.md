@@ -525,7 +525,7 @@ gating are owned by [`declared-keys.md`](declared-keys.md).
 | Document | Why |
 |---|---|
 | [`derivations.md`](derivations.md) | The state-at and record-index residents base composes as its whole engine — values from the first, key columns from the second |
-| [`source.md`](source.md) | The windowed state snapshot (the same state-at composition), the presentation-name posture, and the `slice_only` omission shape base shares |
+| [`source.md`](source.md) | The presentation-name posture and the `slice_only` omission shape base shares |
 | [`slice-only.md`](slice-only.md) · [`notices.md`](notices.md) | The reused omission policy and the channel its notices flow through |
 | [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — declared primary-key / uniqueness constraints on base's flat tables |
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — the elective id-space value surface beside the always-on index keys, and the gates base's plan runs |

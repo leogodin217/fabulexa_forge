@@ -43,16 +43,16 @@ from fabulexa_forge.derivations.truncated_tape import open_truncated_tape
 from fabulexa_forge.exporters.base_relations import apply_base_relations
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.validation import validate_table
-from fabulexa_forge.exporters.dimensional.windowing import (
-    WindowDelivery,
-    window_delivery_class,
-)
+from fabulexa_forge.exporters.dimensional.windowing import window_delivery_class
 from fabulexa_forge.exporters.election import resolve_election
+from fabulexa_forge.exporters.horizon import WindowDelivery
 from fabulexa_forge.exporters.source.engine import (
     build_source_query_specs,
+    build_windowed_source_query_specs,
     require_source_anchor,
+    source_window_delivery,
 )
-from fabulexa_forge.exporters.source.plan import SourceStateTablePlan, build_source_plan
+from fabulexa_forge.exporters.source.plan import build_source_plan
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.reader.emit import Emit, pin_session_timezone
@@ -67,8 +67,6 @@ if TYPE_CHECKING:
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.query_spec import QuerySpec
-    from fabulexa_forge.exporters.source.events import SourceEventLogPlan
-    from fabulexa_forge.exporters.source.plan import SourceJunctionTablePlan
     from fabulexa_forge.reader.sidecar import Sidecar
 
 _SOURCE_ANCHOR_REQUIRED_MSG = (
@@ -117,38 +115,15 @@ class ShapedTableDecl:
         replaces the table with state(T2 - 1); 'upsert' delivers the rows
         of state(T2 - 1) absent from state(T1 - 1), reconciled by the
         table's declared key; 'append' is an upsert whose delta never
-        revises an earlier window's row. A source shape keeps its shipped
-        classes (state -> 'snapshot'; junction and event log -> 'append',
-        where a junction's extract-on-change rows are reconciled by the
-        class's documented consumer merge). This is the only delivery fact
+        revises an earlier window's row. A source shape
+        (`source.engine.source_window_delivery`): state and junction tables
+        'snapshot', the event log 'append'. This is the only delivery fact
         a caller needs before its first ask (sink provisioning, DDL, topic
         setup).
     """
 
     name: str
     window_delivery: WindowDelivery
-
-
-def _source_window_delivery(
-    unit: "SourceStateTablePlan | SourceJunctionTablePlan | SourceEventLogPlan",
-) -> WindowDelivery:
-    """Static window-delivery class for one source plan unit.
-
-    Mirrors the engine's windowed write_mode dispatch (the two surfaces
-    must not drift): state -> 'snapshot' (a full horizon reconstruction
-    per window, write_mode 'replace'), junction -> 'append'
-    (extract-on-change), event log -> 'append'. Never None — no source
-    render is rejected by the windowed-grain rule.
-
-    Args:
-        unit: The resolved plan unit.
-
-    Returns:
-        'append' or 'snapshot'.
-    """
-    if isinstance(unit, SourceStateTablePlan):
-        return "snapshot"
-    return "append"
 
 
 def _delivery_for_write_mode(
@@ -185,12 +160,11 @@ def _compile_window_specs(
     """Dispatch a shape's windowed compile to its mode's engine.
 
     The exact call the incremental driver's `export_window` makes for the
-    windowed compile step. A dimensional shape runs the horizon compile
-    (`build_query_specs` with the window — the truncated tape at each
-    horizon, § Shaped window); a source shape builds its windowed plan
-    (`build_source_plan(..., windowed=True, ...)`) then compiles it
-    (`build_source_query_specs(plan, window)`) — the same two-step split
-    `open_shaped_playback` already resolved `election` for.
+    windowed compile step: the horizon compile — the truncated tape at each
+    of the window's horizons, § Shaped window — through `build_query_specs`
+    with the window for a dimensional shape, or
+    `build_windowed_source_query_specs` for a source shape, with the
+    `election` `open_shaped_playback` already resolved.
 
     Args:
         emit: The open emit.
@@ -213,10 +187,9 @@ def _compile_window_specs(
     """
     if config.mode == "source":
         resolved_anchor = require_source_anchor(anchor)
-        plan = build_source_plan(
-            emit, config, resolved_anchor, election, windowed=True, notices=notice_sink
+        return build_windowed_source_query_specs(
+            emit, config, resolved_anchor, election, window, notice_sink
         )
-        return list(build_source_query_specs(plan, window))
     assert config.dimensional is not None
     return build_query_specs(
         emit,
@@ -276,7 +249,7 @@ def _compile_state_specs(
     horizon). A source shape's engine carries no `base_relations`
     parameter at all (§ 2): its plan builds against the truncated emit
     view directly (`windowed=False`), the query specs compile
-    (`build_source_query_specs(plan, None)`), and this seam applies the
+    (`build_source_query_specs(plan)`), and this seam applies the
     same rewrite itself (`_rewrite_specs_base_relations`) — so the elected-
     key uniqueness guard, having moved to plan time, executes against the
     truncated *view*'s physical tape through its shared connection: sound
@@ -312,10 +285,9 @@ def _compile_state_specs(
             config,
             resolved_anchor,
             election,
-            windowed=False,
             notices=notice_sink,
         )
-        specs = list(build_source_query_specs(plan, None))
+        specs = list(build_source_query_specs(plan))
         return _rewrite_specs_base_relations(specs, base_relations)
     assert config.dimensional is not None
     return build_query_specs(
@@ -393,7 +365,7 @@ def _open_source(
     Calls `build_source_plan(emit, config, anchor, election, windowed=False,
     notice_sink)` exactly once — the mode's complete validation surface,
     plan-time uniqueness guards included, notices emitted exactly once —
-    and maps units to `ShapedTableDecl(name, _source_window_delivery(unit))`,
+    and maps units to `ShapedTableDecl(name, source_window_delivery(unit))`,
     `tables` declaration order, event log last.
 
     Open validates the FULL-export shape. A config whose `columns` /
@@ -419,18 +391,16 @@ def _open_source(
             surface, § build_source_plan).
         TemporalClassUnavailableError: Propagated.
     """
-    plan = build_source_plan(
-        emit, config, anchor, election, windowed=False, notices=notice_sink
-    )
+    plan = build_source_plan(emit, config, anchor, election, notice_sink)
     decls = [
-        ShapedTableDecl(name=unit.name, window_delivery=_source_window_delivery(unit))
+        ShapedTableDecl(name=unit.name, window_delivery=source_window_delivery(unit))
         for unit in plan.tables
     ]
     if plan.events is not None:
         decls.append(
             ShapedTableDecl(
                 name=plan.events.name,
-                window_delivery=_source_window_delivery(plan.events),
+                window_delivery=source_window_delivery(plan.events),
             )
         )
     return tuple(decls)
@@ -480,8 +450,9 @@ class ShapedPlayback:
         the horizon compile (`build_query_specs` with the window) over the
         head's connection — per table, state(end - 1) whole for a
         'snapshot' declaration, else its delta against state(start - 1),
-        reconciled by the declared key. For a source shape: the shipped
-        windowed dispatch. This is the same compile the incremental
+        reconciled by the declared key. For a source shape: the same
+        two-horizon compile (`build_windowed_source_query_specs`). This is
+        the same compile the incremental
         driver's `export_window` runs. One ShapedTable per declared table,
         zero-row typed relations included, in tables() order.
 
@@ -497,7 +468,7 @@ class ShapedPlayback:
             ExportError: WindowKeyMutable for an 'upsert' table whose key
                 is not a stable row identity (static; first ask), or
                 WindowKeyDuplicate for one at the end horizon (dimensional);
-                a source shape's shipped windowed rules.
+                a source business rule for either horizon's plan (source).
         """
         if start_sim_time < 0 or end_sim_time < start_sim_time:
             raise PlaybackError(

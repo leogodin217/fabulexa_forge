@@ -191,10 +191,11 @@ Each mode reads the same emit and writes a different target shape.
   `record_id` → `id`) apply throughout; a name collision fails fast. Source
   *requires* a resolved wallclock anchor rather than falling back to raw
   integers. `--next` / `--from` / `--to` compose the cross-mode incremental
-  driver with per-render window membership: per-window state snapshots at the
-  window horizon (state-at derivation, `updated_at` omitted — horizon honesty),
-  the event log appended by `event_sim_time`, junction rows extract-on-change
-  (`left_at` horizon-masked) — the no-CDC nightly-extract archetype whole. A
+  driver through the horizon compile: every window is the full export over the
+  tape truncated at the cutoff — `state` and `junction` tables snapshotted
+  whole (`updated_at` the honest recorded trail, open intervals open), the event
+  log appended with exactly the window's events — the no-CDC nightly-extract
+  archetype whole. A
   source export over a corrupted emit surfaces the corrupter's declared defects
   unchanged (test-guarded, never special-cased). CSV + DuckDB output. See
   [`architecture/source.md`](architecture/source.md). *Teaches: app-database
@@ -328,8 +329,8 @@ Each mode reads the same emit and writes a different target shape.
   intervals close, spells extend, length-of-stay fills in), or `append` (a
   delta that never revises an earlier row). Any config that exports one-shot
   drips; the one rule is that an `upsert` table's key identify the same row for
-  the whole run. Source: per-render window membership (see the source mode
-  above). Base: every table reconstructed at the window horizon — a full-table
+  the whole run. Source: the same horizon compile — `state` / `junction`
+  snapshots, the event log appended. Base: every table reconstructed at the window horizon — a full-table
   snapshot per kind per window. Any mode: a growing DuckDB warehouse (cursor
   atomic with data) or one CSV drop directory per window. See
   [`architecture/incremental.md`](architecture/incremental.md). *Teaches:

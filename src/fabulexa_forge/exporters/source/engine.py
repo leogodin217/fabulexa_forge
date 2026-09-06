@@ -24,6 +24,7 @@ exporters.streaming.*.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
@@ -38,19 +39,26 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
 
+from fabulexa_forge.derivations import open_truncated_tape, require_single_branch
 from fabulexa_forge.errors import SourceAnchorRequired
+from fabulexa_forge.exporters.base_relations import shadow_base_relations
 from fabulexa_forge.exporters.companion import (
     validate_overlay_tables,
     write_companion_artifacts,
 )
-from fabulexa_forge.exporters.election import resolve_election
+from fabulexa_forge.exporters.election import Election, resolve_election
+from fabulexa_forge.exporters.horizon import WindowDelivery, compose_window_delta_sql
 from fabulexa_forge.exporters.query_spec import (
     QuerySpec,
     declare_keys_active,
     keys_not_declarable_csv_notice,
     write_query_specs,
 )
-from fabulexa_forge.exporters.source.events import build_event_log_sql
+from fabulexa_forge.exporters.source.events import (
+    EVENT_LOG_COLUMNS,
+    SourceEventLogPlan,
+    build_event_log_sql,
+)
 from fabulexa_forge.exporters.source.plan import (
     SourceJunctionTablePlan,
     SourcePlan,
@@ -96,43 +104,35 @@ def _compile_table_spec(
     fork_path: str,
     unit: "SourceStateTablePlan | SourceJunctionTablePlan",
     anchor: "EffectiveAnchor",
-    window: "Window | None",
 ) -> QuerySpec:
-    """Compile one `tables[]` plan unit to its QuerySpec.
+    """Compile one `tables[]` plan unit to its full-export QuerySpec.
 
     Args:
         sidecar: The plan's sidecar.
         fork_path: The sole branch.
         unit: The resolved state or junction table unit.
         anchor: The resolved wallclock anchor.
-        window: The incremental window, or None for a full export.
 
     Returns:
-        The compiled spec: `write_mode='create'` for a full export;
-        windowed, `'replace'` for a `state` unit (a full horizon snapshot
-        per window) or `'append'` for a `junction` unit (extract-on-change).
-        `keys` is the unit's declared keys for a `state` table (`None` when
-        `declare_keys` is off); always `None` for a `junction` table (it
-        declares no keys). `provenance`, `author_descriptions`, and
-        `author_table_description` are copied verbatim from the plan unit
-        (stamped at plan build); `kind_values` stays empty — neither table
-        shape carries a kind-name-as-value column; `event_log` stays False —
-        only the event-log spec (`build_source_query_specs`) sets it.
+        The compiled spec, `write_mode='create'`. `keys` is the unit's
+        declared keys for a `state` table (`None` when `declare_keys` is
+        off); always `None` for a `junction` table (it declares no keys).
+        `provenance`, `author_descriptions`, and `author_table_description`
+        are copied verbatim from the plan unit (stamped at plan build);
+        `kind_values` stays empty — neither table shape carries a
+        kind-name-as-value column; `event_log` stays False — only the
+        event-log spec (`build_source_query_specs`) sets it.
     """
     if isinstance(unit, SourceStateTablePlan):
-        sql = build_state_render_sql(sidecar, fork_path, unit, anchor, window)
-        write_mode: Literal["create", "append", "replace"] = (
-            "create" if window is None else "replace"
-        )
+        sql = build_state_render_sql(sidecar, fork_path, unit, anchor)
         keys = unit.keys
     else:
-        sql = build_junction_render_sql(sidecar, fork_path, unit, anchor, window)
-        write_mode = "create" if window is None else "append"
+        sql = build_junction_render_sql(sidecar, fork_path, unit, anchor)
         keys = None
     return QuerySpec(
         table_name=unit.name,
         sql=sql,
-        write_mode=write_mode,
+        write_mode="create",
         keys=keys,
         provenance=unit.provenance,
         author_descriptions=unit.author_descriptions,
@@ -140,25 +140,16 @@ def _compile_table_spec(
     )
 
 
-def build_source_query_specs(
-    plan: SourcePlan,
-    window: "Window | None",
-) -> tuple[QuerySpec, ...]:
+def build_source_query_specs(plan: SourcePlan) -> tuple[QuerySpec, ...]:
     """
-    Compile the plan to one QuerySpec per output table.
+    Compile the plan to one full-export QuerySpec per output table.
 
-    Full-export compile when `window` is None; the windowed compile applies
-    the per-render window membership (state: horizon snapshot without
-    updated_at; event log: append by event_sim_time; junction:
-    extract-on-change with left_at horizon-masking). Connection-free and
-    pure: every data-dependent guard already ran at `build_source_plan` (§
-    1), so this composes SQL only.
+    Connection-free and pure: every data-dependent guard already ran at
+    `build_source_plan`, so this composes SQL only. A windowed export runs
+    this same compile per horizon (`build_windowed_source_query_specs`).
 
     Args:
-        plan: The resolved source plan (built with the matching
-            windowed-ness: a non-None `window` pairs with a
-            `windowed=True` plan, None with `windowed=False`).
-        window: The incremental window, or None for a full export.
+        plan: The resolved source plan.
 
     Returns:
         One spec per output table, declared order; the event log last. The
@@ -170,33 +161,20 @@ def build_source_query_specs(
         `event_log` is True — the only construction site anywhere that sets
         it; its `author_table_description` stays the QuerySpec default
         (None) — no config surface exists for it.
-
-    Raises:
-        ValueError: `window` presence disagrees with the plan's
-            windowed-ness — a caller programming error, never a config
-            validation outcome. Otherwise nothing: the plan already
-            carries every validated fact, the windowed-shape checks
-            included.
     """
-    if (window is not None) != plan.windowed:
-        raise ValueError(
-            f"window presence ({window is not None}) disagrees with the"
-            f" plan's windowed-ness ({plan.windowed})"
-        )
-
     specs = [
-        _compile_table_spec(plan.sidecar, plan.fork_path, unit, plan.anchor, window)
+        _compile_table_spec(plan.sidecar, plan.fork_path, unit, plan.anchor)
         for unit in plan.tables
     ]
     if plan.events is not None:
         log_sql = build_event_log_sql(
-            plan.sidecar, plan.fork_path, plan.events, plan.anchor, window
+            plan.sidecar, plan.fork_path, plan.events, plan.anchor
         )
         specs.append(
             QuerySpec(
                 table_name=plan.events.name,
                 sql=log_sql,
-                write_mode="create" if window is None else "append",
+                write_mode="create",
                 keys=plan.events.keys,
                 provenance=plan.events.provenance,
                 kind_values=plan.events.kind_values,
@@ -204,6 +182,102 @@ def build_source_query_specs(
             )
         )
     return tuple(specs)
+
+
+def source_window_delivery(
+    unit: "SourceStateTablePlan | SourceJunctionTablePlan | SourceEventLogPlan",
+) -> WindowDelivery:
+    """The static delivery class of one source plan unit under a window.
+
+    A `state` table and a `junction` table are `snapshot`: each is the
+    end-horizon state whole (a current row per record; one row per
+    interval, an interval open at the horizon with a NULL `left_at`),
+    replaced every window. The event log is `append`: its rows never
+    change and its numbering is tape-anchored, so a window delivers exactly
+    the events in its range.
+
+    Args:
+        unit: The resolved plan unit.
+
+    Returns:
+        'snapshot' for a state or junction table, 'append' for the event log.
+    """
+    if isinstance(unit, SourceEventLogPlan):
+        return "append"
+    return "snapshot"
+
+
+def build_windowed_source_query_specs(
+    emit: "Emit",
+    config: "ExportConfig",
+    anchor: "EffectiveAnchor",
+    election: Election,
+    window: "Window",
+    notice_sink: "NoticeSink",
+) -> list[QuerySpec]:
+    """The source mode's horizon compile: one QuerySpec per output table.
+
+    Opens the truncated tape at `window.end_ns - 1` and at
+    `window.start_ns - 1` (the empty tape below the first data instant),
+    builds the plan and the full-export compile over each — the tape's
+    sidecar view for column enumeration (`Emit.with_sidecar`), its
+    `base_relations` for every base read (`shadow_base_relations`) — and
+    delivers each unit by `source_window_delivery`: a `snapshot` unit's
+    end-horizon query with write_mode 'replace'; the event log's delta
+    `end EXCEPT ALL start` ordered by its columns with write_mode 'append'.
+    Each horizon compile is the full plan build, so its plan notices reach
+    the sink once per horizon and its data-dependent guards run against
+    the physical tape through the shared connection.
+
+    Args:
+        emit: The open physical emit.
+        config: The full export config (mode: source).
+        anchor: The resolved wallclock anchor.
+        election: The resolved key-election view.
+        window: The half-open window to compile.
+        notice_sink: Receiver for plan notices.
+
+    Returns:
+        One QuerySpec per output table, declared order, the event log last.
+
+    Raises:
+        ExportError: A source business rule fails for either horizon's plan.
+    """
+    fork_path = require_single_branch(emit.sidecar)
+
+    def compile_at(at_sim_time: int) -> tuple[SourcePlan, list[QuerySpec]]:
+        tape = open_truncated_tape(emit.sidecar, fork_path, at_sim_time)
+        plan = build_source_plan(
+            emit.with_sidecar(tape.sidecar), config, anchor, election, notice_sink
+        )
+        return plan, [
+            replace(spec, sql=shadow_base_relations(spec.sql, tape.base_relations))
+            for spec in build_source_query_specs(plan)
+        ]
+
+    end_plan, end_specs = compile_at(window.end_ns - 1)
+    _, start_specs = compile_at(window.start_ns - 1)
+    units: list[SourceStateTablePlan | SourceJunctionTablePlan | SourceEventLogPlan] = (
+        list(end_plan.tables)
+    )
+    if end_plan.events is not None:
+        units.append(end_plan.events)
+
+    specs: list[QuerySpec] = []
+    for unit, end_spec, start_spec in zip(units, end_specs, start_specs, strict=True):
+        if source_window_delivery(unit) == "snapshot":
+            specs.append(replace(end_spec, write_mode="replace"))
+        else:
+            specs.append(
+                replace(
+                    end_spec,
+                    sql=compose_window_delta_sql(
+                        end_spec.sql, start_spec.sql, EVENT_LOG_COLUMNS
+                    ),
+                    write_mode="append",
+                )
+            )
+    return specs
 
 
 def export_source(
@@ -220,7 +294,7 @@ def export_source(
 
     Resolves the election (`resolve_election(sidecar, config.keys)`), builds
     the full-export source plan (`build_source_plan(..., windowed=False,
-    ...)`), compiles it (`build_source_query_specs(plan, None)`). Immediately
+    ...)`), compiles it (`build_source_query_specs(plan)`). Immediately
     after compiling — before any write — validates `overlay`'s `table:`
     slots against the compiled plan's output tables when `overlay` is
     present. Dispatches to the writer selected by fmt (mirroring
@@ -270,10 +344,8 @@ def export_source(
     resolved_anchor = require_source_anchor(anchor)
     sidecar = emit.sidecar
     election = resolve_election(sidecar, config.keys)
-    plan = build_source_plan(
-        emit, config, resolved_anchor, election, windowed=False, notices=notice_sink
-    )
-    specs = list(build_source_query_specs(plan, None))
+    plan = build_source_plan(emit, config, resolved_anchor, election, notice_sink)
+    specs = list(build_source_query_specs(plan))
     if overlay is not None:
         validate_overlay_tables(overlay, [spec.table_name for spec in specs])
     if declare_keys_active(config) and fmt == "csv":

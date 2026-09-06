@@ -63,9 +63,9 @@ def _direct_source_full_specs(emit: "Emit", config: "ExportConfig"):
     assert anchor is not None
     election = resolve_election(emit.sidecar, config.keys)
     plan = build_source_plan(
-        emit, config, anchor, election, windowed=False, notices=discard_notice_sink
+        emit, config, anchor, election, notices=discard_notice_sink
     )
-    return build_source_query_specs(plan, None)
+    return build_source_query_specs(plan)
 
 
 def _materialize_truncated_emit(

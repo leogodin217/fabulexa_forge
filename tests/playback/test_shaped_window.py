@@ -10,8 +10,7 @@ from _support.notices import discard_notice_sink
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.election import resolve_election
-from fabulexa_forge.exporters.source.engine import build_source_query_specs
-from fabulexa_forge.exporters.source.plan import build_source_plan
+from fabulexa_forge.exporters.source.engine import build_windowed_source_query_specs
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.playback.shaped import ShapedTable, open_shaped_playback
@@ -58,15 +57,14 @@ def _direct_source_specs(
     emit: "Emit", config: "ExportConfig", start_ns: int, end_ns: int
 ):
     """Compile the same window directly through the source engine's own
-    plan-then-compile split (the reference)."""
+    horizon compile (the reference)."""
     anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
     assert anchor is not None
     election = resolve_election(emit.sidecar, config.keys)
     window = Window(index=None, start_ns=start_ns, end_ns=end_ns, label="")
-    plan = build_source_plan(
-        emit, config, anchor, election, windowed=True, notices=discard_notice_sink
+    return build_windowed_source_query_specs(
+        emit, config, anchor, election, window, discard_notice_sink
     )
-    return build_source_query_specs(plan, window)
 
 
 # ---------------------------------------------------------------------------
@@ -220,22 +218,24 @@ def test_source_reference_full_every_window(tmp_path: "Path") -> None:
     assert first.table.column("id").to_pylist() == ["g1"]
 
 
-def test_source_junction_extract_on_change_left_at_masked(tmp_path: "Path") -> None:
+def test_source_junction_is_the_interval_set_at_the_horizon(tmp_path: "Path") -> None:
+    """A junction table is a snapshot: every interval joined by the window's
+    cutoff, an interval still open at the cutoff carrying a NULL `left_at`."""
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         head = _open_source(emit, source_shape_config())
-        # window [0, 6): contains bolt's join (5) and nut's join (2); nut's
-        # leave (8) is not < 6, so nut's left_at is masked NULL.
+        # cutoff 5: bolt (joined 5) and nut (joined 2) present; nut's leave at
+        # 8 is not yet known.
         window_a = _tables_by_name(head.window(0, 6))["widget_parts"]
-        # window [6, 10): contains nut's leave (8), not bolt's join (5) —
-        # bolt is absent, nut's left_at renders 8 (8 < 10).
+        # cutoff 9: the same two intervals; nut's leave (8) is now known.
         window_b = _tables_by_name(head.window(6, 10))["widget_parts"]
 
+    assert window_a.delivery == "snapshot"
     rows_a = {row["name"]: row["left_at"] for row in window_a.table.to_pylist()}
     assert rows_a == {"bolt": None, "nut": None}
 
     rows_b = {row["name"]: row["left_at"] for row in window_b.table.to_pylist()}
-    assert "bolt" not in rows_b
+    assert rows_b["bolt"] is None
     assert rows_b["nut"] is not None
 
 

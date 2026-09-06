@@ -78,7 +78,6 @@ if TYPE_CHECKING:
         SourceJunctionTablePlan,
         SourceStateTablePlan,
     )
-    from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import (
@@ -95,7 +94,6 @@ from fabulexa_forge.config.models import (
     InstantElection,
     JsonPrecisionElection,
 )
-from fabulexa_forge.derivations.state_at import build_state_at_sql
 from fabulexa_forge.exporters.election import (
     _presentation_key_sql,
     _record_index_sql,
@@ -110,10 +108,8 @@ from fabulexa_forge.exporters.source.plan import (
     _MEMBER_ID_SUFFIX,
     _MEMBER_KIND_SUFFIX,
     _MEMBER_PREFIX,
-    _column_types,
 )
 from fabulexa_forge.reader.records_columns import (
-    RECORDS_TABLE_PREFIX,
     structural_instant_columns,
 )
 from fabulexa_forge.reader.relations import (
@@ -147,7 +143,6 @@ _JUNCTION_FIXED_COLUMNS: frozenset[str] = frozenset(
 #: render wallclock (via `_RECORDS_WALLCLOCK_COLUMNS`, a superset); every
 #: other windowed column (`presentation_id`, `prop__<p>`) is codec VARCHAR
 #: and CASTs back to its sidecar type.
-_STATE_AT_VERBATIM_COLUMNS: frozenset[str] = frozenset({"record_id", "active"})
 
 
 def _shorthand_render(
@@ -251,60 +246,6 @@ def _render_elected_column(
         qualified_source, value.json_precision, src, table_name
     )
     return f'{expr} AS "{out}"'
-
-
-def _half_open_predicate(alias: str, column: str, window: "Window") -> str:
-    """Build a half-open sim-time range predicate over one aliased raw column.
-
-    Args:
-        alias: The SQL alias the render wraps its source relation in.
-        column: The raw (unrendered) sim-time column name on that relation.
-        window: The window to filter to.
-
-    Returns:
-        A bare boolean SQL fragment: `"<alias>"."<column>" >= start AND
-        "<alias>"."<column>" < end` (no leading WHERE).
-    """
-    return (
-        f'"{alias}"."{column}" >= {window.start_ns}'
-        f' AND "{alias}"."{column}" < {window.end_ns}'
-    )
-
-
-def _junction_masked_left_at_expr(
-    src: str,
-    out: str,
-    alias: str,
-    anchor: "EffectiveAnchor",
-    window: "Window",
-    render: "TemporalRender",
-) -> str:
-    """Render `left_at` horizon-masked to the window's exclusive end.
-
-    NULL while the leave has not happened yet, or lands at or after the
-    window's end_ns (still open as of this window's horizon); otherwise the
-    same wallclock rendering the full export uses. The masking wraps the raw
-    source expression fed to the shared anchor renderer — never recomputes,
-    never fabricates.
-
-    Args:
-        src: The source column name (`left_sim_time`).
-        out: The resolved output column name.
-        alias: The SQL alias of the wrapped source relation.
-        anchor: The resolved effective anchor.
-        window: The window whose end_ns is the masking horizon.
-        render: The column's elected rendering (`table.render`'s entry for
-            `left_sim_time`, or the mode-definitional default `timestamp`).
-
-    Returns:
-        A SQL SELECT-list expression fragment ending in `AS "<out>"`.
-    """
-    qualified = f'"{alias}"."{src}"'
-    masked_source = (
-        f"CASE WHEN {qualified} IS NULL OR {qualified} >= {window.end_ns}"
-        f" THEN NULL ELSE {qualified} END"
-    )
-    return render_anchor_temporal_expr(anchor, masked_source, out, render)
 
 
 # ---------------------------------------------------------------------------
@@ -458,17 +399,16 @@ def build_state_render_sql(
     fork_path: str,
     table: "SourceStateTablePlan",
     anchor: "EffectiveAnchor",
-    window: "Window | None",
 ) -> str:
     """The `state` render: one current row per record of the table's
     declared populations.
 
-    Full export (`window is None`): the faithful records read
-    (`build_records_relation_sql`), `updated_at` included. Windowed: the
-    state-at reconstruction at the window horizon
-    (`build_state_at_sql(..., horizon_ns=window.end_ns)`), no `updated_at`
-    — the plan already validated the column set against this shape, so
-    this builder never re-checks. Both shapes: discriminator filter to
+    The faithful records read (`build_records_relation_sql`), `updated_at`
+    included. A windowed export runs this same render over the truncated
+    tape at each horizon (`engine.build_windowed_source_query_specs`), where
+    the records relation presents every column honest at that horizon —
+    `updated_at` as the recorded trail — so the render never sees a
+    window. Discriminator filter to
     `table.populations` (omitted when the set is the kind's full domain — a
     no-op filter is not composed), the plan's (source -> output) projection,
     wallclock rendering of structural instants through the anchor renderer,
@@ -479,33 +419,19 @@ def build_state_render_sql(
     edge's rendered_type), NULL stays NULL. When `table.where` is
     non-empty, each entry's `render_predicate_condition` (source column,
     sidecar type, base-relation alias) AND-composes into the population
-    filter; windowed, a `where` column's value is the state-at fold's
-    current-value codec-VARCHAR after-image (constant columns render
-    current at every horizon — the mode's declared temporal-honesty
-    exception), and DuckDB's implicit VARCHAR-to-typed comparison renders
-    the identical typed predicate the full export's raw column carries, so
-    row membership is window-invariant. Total ORDER BY
+    filter. Total ORDER BY
     `(created_sim_time, record_id)` — raw keys, never rendered timestamps.
     A table with every surface at its default composes join-free SQL.
     `table.render` elects each structural instant's rendering (the
     mode-definitional default `timestamp` for an unelected one), and each
     keyed payload column's typed election through `_render_elected_column`
-    in place — the same raw (or, windowed, codec-VARCHAR) source feeds every
-    election's authority in both shapes, since `render_date_parse_expr` /
-    `render_decimal_expr` / `render_json_precision_expr` each accept the
-    codec-VARCHAR after-image directly (a VARCHAR source is unaffected; a
-    numeric source's VARCHAR text CASTs through DuckDB's implicit
-    string-to-typed conversion, identically to the `where` predicate's own
-    posture above).
+    in place.
 
     Args:
         sidecar: The plan's sidecar.
         fork_path: The sole branch.
-        table: The resolved state-table unit (from a plan whose
-            windowed-ness matches `window` presence — the engine enforces
-            the pairing; builders trust it).
+        table: The resolved state-table unit.
         anchor: The resolved wallclock anchor.
-        window: The incremental window, or None for a full export.
 
     Returns:
         The render SELECT.
@@ -513,29 +439,8 @@ def build_state_render_sql(
     kind = table.kind
     needs_filter = needs_population_filter(sidecar, kind, table.populations)
 
-    horizon_ns: int | None
-    if window is None:
-        horizon_ns = None
-        base_alias = "_rec"
-        relation_sql = build_records_relation_sql(sidecar, fork_path, kind, {})
-        col_types: dict[str, str] = {}
-    else:
-        horizon_ns = window.end_ns
-        base_alias = "_snap"
-        bare_props = frozenset(
-            src[len(_PROP_PREFIX) :]
-            for src, _ in table.columns
-            if src.startswith(_PROP_PREFIX)
-        )
-        if needs_filter:
-            bare_props = bare_props | {f"{kind}_type"}
-        bare_props = bare_props | {
-            entry.source_column[len(_PROP_PREFIX) :] for entry in table.where
-        }
-        relation_sql = build_state_at_sql(
-            sidecar, fork_path, kind, bare_props, horizon_ns
-        )
-        col_types = _column_types(sidecar, f"{RECORDS_TABLE_PREFIX}{kind}")
+    base_alias = "_rec"
+    relation_sql = build_records_relation_sql(sidecar, fork_path, kind, {})
 
     joins = [
         _self_identity_join_clause(
@@ -543,7 +448,7 @@ def build_state_render_sql(
             fork_path,
             kind,
             table.identity_surface,
-            horizon_ns,
+            None,
             f'"{base_alias}"."record_id"',
         )
     ]
@@ -577,16 +482,6 @@ def build_state_render_sql(
                     anchor,
                     table.name,
                 )
-            )
-        elif (
-            window is not None
-            and src not in _STATE_AT_VERBATIM_COLUMNS
-            and src not in _RECORDS_WALLCLOCK_COLUMNS
-        ):
-            # presentation_id (non-elected) or a prop__<p> payload column: the
-            # state-at fold's after-image is codec VARCHAR; CAST back.
-            select_parts.append(
-                f'CAST("{base_alias}"."{src}" AS {col_types[src]}) AS "{out}"'
             )
         else:
             select_parts.append(
@@ -629,7 +524,6 @@ def build_junction_render_sql(
     fork_path: str,
     table: "SourceJunctionTablePlan",
     anchor: "EffectiveAnchor",
-    window: "Window | None",
 ) -> str:
     """The `junction` render: one row per membership interval.
 
@@ -646,10 +540,10 @@ def build_junction_render_sql(
     `table.owner_populations` restricts or `table.where` is non-empty, the
     membership rows' owner `record_id` is semi-joined against
     `build_selection_spine_sql(table.owner_kind, …)` (doc § The parent
-    lookup) — no owner attribute projects, only membership. Windowed:
-    extract-on-change over interval activity, `left_at` horizon-masked at
-    `window.end_ns`; owner selection is window-invariant (constant-gated), so
-    it applies identically at every horizon. Total ORDER BY `(record_id,
+    lookup) — no owner attribute projects, only membership. A windowed
+    export runs this same render over the truncated tape at each horizon,
+    where an interval open at the horizon presents a NULL `left_sim_time`.
+    Total ORDER BY `(record_id,
     joined_sim_time, element fields in element-schema declaration order,
     VARCHAR-compared, NULLS FIRST)`. `table.render` elects each interval
     column's rendering (the masked `left_at` included) and each keyed
@@ -661,7 +555,6 @@ def build_junction_render_sql(
         fork_path: The sole branch.
         table: The resolved junction unit.
         anchor: The resolved wallclock anchor.
-        window: The incremental window, or None for a full export.
 
     Returns:
         The render SELECT.
@@ -692,12 +585,6 @@ def build_junction_render_sql(
     for src, out in table.columns:
         if src in edge_exprs:
             select_parts.append(f'{edge_exprs[src]} AS "{out}"')
-        elif src == "left_sim_time" and window is not None:
-            select_parts.append(
-                _junction_masked_left_at_expr(
-                    src, out, "_mem", anchor, window, _shorthand_render(render_map, src)
-                )
-            )
         elif src in render_map and not isinstance(render_map[src], str):
             select_parts.append(
                 _render_elected_column(
@@ -721,13 +608,6 @@ def build_junction_render_sql(
     conditions: list[str] = []
     if spine_sql is not None:
         conditions.append(f'"_mem"."record_id" IN ({spine_sql})')
-    if window is not None:
-        window_condition = (
-            f"({_half_open_predicate('_mem', 'joined_sim_time', window)})"
-            ' OR ("_mem"."left_sim_time" IS NOT NULL AND'
-            f" {_half_open_predicate('_mem', 'left_sim_time', window)})"
-        )
-        conditions.append(f"({window_condition})" if conditions else window_condition)
     where_clause = f" WHERE {' AND '.join(conditions)}" if conditions else ""
 
     element_columns = [

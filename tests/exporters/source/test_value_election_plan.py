@@ -71,9 +71,7 @@ def _open_plan(emit_dir: Path, config: ExportConfig) -> "SourcePlan":
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None, "every fixture here declares a runtime anchor"
         election = resolve_election(emit.sidecar, config.keys)
-        return build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
+        return build_source_plan(emit, config, anchor, election, discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------

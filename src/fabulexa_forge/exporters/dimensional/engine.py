@@ -61,7 +61,6 @@ from fabulexa_forge.exporters.dimensional.windowing import (
     check_window_key_invariant,
     check_window_key_unique,
     check_windowed_reserved_names,
-    compose_window_delta_sql,
     window_delivery_class,
 )
 from fabulexa_forge.exporters.election import (
@@ -69,6 +68,7 @@ from fabulexa_forge.exporters.election import (
     check_elected_key_unique,
     resolve_election,
 )
+from fabulexa_forge.exporters.horizon import compose_window_delta_sql
 from fabulexa_forge.exporters.query_spec import QuerySpec, write_query_specs
 
 __all__ = ["QuerySpec", "build_query_specs", "export_dimensional"]

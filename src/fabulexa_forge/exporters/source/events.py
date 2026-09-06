@@ -52,7 +52,6 @@ if TYPE_CHECKING:
         TableKeys,
     )
     from fabulexa_forge.exporters.source.plan import SourceEdgeSurface
-    from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import (
@@ -79,6 +78,18 @@ from fabulexa_forge.exporters.selection_spine import (
 from fabulexa_forge.exporters.source.columns import build_kind_label_expr
 
 _PROP_PREFIX = "prop__"
+
+#: The event log's pinned output column set, in order — the log's published
+#: contract (`id` is the tape-anchored 1-based event number).
+EVENT_LOG_COLUMNS: tuple[str, ...] = (
+    "id",
+    "item_type",
+    "item_id",
+    "event",
+    "occurred_at",
+    "changes",
+)
+
 
 _ELECTION_SOURCE_TYPE: "dict[type, str]" = {
     DecimalElection: "DOUBLE",
@@ -1070,7 +1081,6 @@ def build_event_log_sql(
     fork_path: str,
     log: "SourceEventLogPlan",
     anchor: "EffectiveAnchor",
-    window: "Window | None",
 ) -> str:
     """The polymorphic event-log render: one audit table, event grain.
 
@@ -1123,22 +1133,19 @@ def build_event_log_sql(
     duplicated records row) only the former keeps the emitted row order
     monotone in `id`.
 
-    Windowed: append rows with `event_sim_time` in [window.start_ns,
-    window.end_ns), computed over the full fold — the lag's previous
-    after-image may predate the window; membership selects rows, never
-    alters content. `id` is assigned at its own query level *beneath* the
-    window predicate, so an event's number is invariant across
-    invocations; SQL evaluates WHERE before window functions, so a
-    ROW_NUMBER beside the predicate in one SELECT would number only the
-    surviving rows. It sits above the arms' update suppression, so a
-    suppressed update consumes no number and `id` stays dense.
+    A windowed export runs this same render over the truncated tape at
+    each horizon (`engine.build_windowed_source_query_specs`): the tape at
+    T carries exactly the events at or before T, so the numbering is a
+    prefix of the full tape's and a window's delta is the events in its
+    range with their whole-tape `id`s. `id` sits above the arms' update
+    suppression, so a suppressed update consumes no number and `id` stays
+    dense.
 
     Args:
         sidecar: The plan's sidecar.
         fork_path: The sole branch.
         log: The resolved event-log unit.
         anchor: The resolved wallclock anchor.
-        window: The incremental window, or None for a full export.
 
     Returns:
         The render SELECT.
@@ -1166,16 +1173,5 @@ def build_event_log_sql(
         f' FROM ({union_sql}) AS "_log"'
     )
 
-    where_clause = ""
-    if window is not None:
-        where_clause = (
-            f' WHERE "_numbered"."event_sim_time" >= {window.start_ns}'
-            f' AND "_numbered"."event_sim_time" < {window.end_ns}'
-        )
-
-    return (
-        'SELECT "id", "item_type", "item_id", "event", "occurred_at", "changes"'
-        f' FROM ({numbered_sql}) AS "_numbered"'
-        f"{where_clause}"
-        ' ORDER BY "id"'
-    )
+    projection = ", ".join(f'"{c}"' for c in EVENT_LOG_COLUMNS)
+    return f'SELECT {projection} FROM ({numbered_sql}) AS "_numbered" ORDER BY "id"'

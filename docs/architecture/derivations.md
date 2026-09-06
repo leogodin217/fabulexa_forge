@@ -391,9 +391,8 @@ state strictly earlier than it, so the fold is temporally honest by the same tes
 as every other resident. Declared order: `(created_sim_time, record_id)`. Reads
 only `history` and `records__<kind>`, filtered to `fork_path`. Values are raw;
 wallclock rendering and per-source-type casts are mode-side representation — the
-source exporter's windowed state snapshot (see [`source.md`](source.md) §
-Incremental composition) is this fold's first consumer; point-in-time export
-(§ Staged roadmap, Stage 5) is a later one. Behavioral cases are exercised in
+base exporter's horizons (see [`base.md`](base.md) § Three horizons) are this
+fold's consumer. Behavioral cases are exercised in
 [`tests/derivations/test_state_at.py`](../../tests/derivations/test_state_at.py).
 
 **The end-of-tape entry point.** `build_state_at_end_sql(sidecar, fork_path,
@@ -763,8 +762,8 @@ filter on; it raises `ExportError` on zero or more than one branch.
   resolution compose the first two residents; the streaming exporter composes
   row-state-events (for `state-changes`) and membership-events (for
   `membership-events`); the source exporter composes row-state-events and
-  membership-events (its event log) and state-at (its windowed state
-  snapshot); the base exporter
+  membership-events (its event log) and, windowed, the truncated tape; the
+  base exporter
   composes state-at for its values and record-index for its identity columns; the
   playback seam
   composes state-at, membership-state-at, and the truncated-tape surface — rather
@@ -782,8 +781,7 @@ filter on; it raises `ExportError` on zero or more than one branch.
   gating; row-state-events reads that column directly for its `c` event rather than
   composing this shared primitive. Current-state reconstruction and point-in-time
   replay-to-T (feature-store rows) both compose the state-at resident above — the
-  source exporter's windowed state snapshot and the playback seam's point-in-time answers
-  are its consumers, and the `base` exporter is the consumer for which the resident
+  playback seam's point-in-time answers are its consumers, and the `base` exporter is the consumer for which the resident
   *is* the whole output, materialized at three horizons: the tape's end (via the
   horizon-free end-of-tape entry point), `slice_at: T` at horizon `T + 1`, and each
   window's end under an incremental invocation ([`base.md`](base.md)).
@@ -841,7 +839,7 @@ filter on; it raises `ExportError` on zero or more than one branch.
 | [`anchor.md`](anchor.md) | The wallclock rendering a mode applies on top of a derivation's raw `sim_time`. |
 | [`dimensional.md`](dimensional.md) | The mode that composes the versioned-intervals and reference-resolution residents; the consumer that shares the single-branch guard. |
 | [`streaming.md`](streaming.md) | The delivery driver that composes the row-state-events resident (`state-changes`) and the membership-events resident (`membership-events`) into ordered event streams. |
-| [`source.md`](source.md) | The mode that composes row-state-events and membership-events (its event log) and state-at (its windowed state snapshot) into landed operational tables. |
+| [`source.md`](source.md) | The mode that composes row-state-events and membership-events (its event log) and, windowed, the truncated tape |
 | [`base.md`](base.md) | The mode that composes state-at for its values and the record-index resident for its integer key columns. |
 | [`key-election.md`](key-election.md) | The cross-mode surface that composes the record-index and presentation-key relations to render elected identities and edges. |
 | [`row-predicates.md`](row-predicates.md) | The predicate grammar and rendering authority the membership edge narrows through and the versioned-intervals fold passes along. |

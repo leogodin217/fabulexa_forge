@@ -42,8 +42,6 @@ from ._source_fixtures import (
     build_event_tie_test_emit,
     build_events_test_emit,
     build_source_junction_selection_emit,
-    build_windowed_source_test_emit,
-    windowed_test_windows,
 )
 
 # ---------------------------------------------------------------------------
@@ -222,9 +220,7 @@ class TestRecordsSourceCreateUpdateDestroy:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(
-                emit.sidecar, fork_path, self._log(), anchor, None
-            )
+            sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
             rows = _rows(emit, sql)
 
         t001_create = _row_for(rows, "t001", "create")
@@ -253,9 +249,7 @@ class TestRecordsSourceCreateUpdateDestroy:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(
-                emit.sidecar, fork_path, self._log(), anchor, None
-            )
+            sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
             rows = _rows(emit, sql)
 
         updates = [r for r in rows if r["item_id"] == "t001" and r["event"] == "update"]
@@ -273,9 +267,7 @@ class TestRecordsSourceCreateUpdateDestroy:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(
-                emit.sidecar, fork_path, self._log(), anchor, None
-            )
+            sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
             rows = _rows(emit, sql)
 
         t002_destroy = _row_for(rows, "t002", "destroy")
@@ -301,7 +293,7 @@ class TestSubTypesNarrowedRecordsSource:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
         item_ids = {r["item_id"] for r in rows}
         assert item_ids == {"t001", "t002"}
@@ -341,7 +333,7 @@ class TestWhereNarrowedRecordsSource:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         assert {r["item_id"] for r in rows} == {"t002"}
@@ -368,7 +360,7 @@ class TestWhereNarrowedRecordsSource:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         assert {r["item_id"] for r in rows} == {"t001"}
@@ -396,7 +388,7 @@ class TestWhereNarrowedRecordsSource:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         ids = [r["id"] for r in rows]
@@ -431,7 +423,7 @@ class TestWhereNarrowedMembershipSource:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         assert {r["item_id"] for r in rows} == {"w1"}
@@ -451,7 +443,7 @@ class TestEmptyAuditedSet:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
         assert not [r for r in rows if r["event"] == "update"]
         t002_create = _row_for(rows, "t002", "create")
@@ -474,7 +466,7 @@ class TestItemIdTypeRule:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
         t001_create = _row_for(rows, 0, "create")
         assert isinstance(t001_create["item_id"], int)
@@ -500,9 +492,7 @@ class TestMembershipSource:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(
-                emit.sidecar, fork_path, self._log(), anchor, None
-            )
+            sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
             rows = _rows(emit, sql)
 
         assert {r["item_type"] for r in rows} == {"ticket.watchers"}
@@ -562,7 +552,7 @@ class TestTotalOrderTieFree:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         t002_destroy_idx = next(
@@ -602,41 +592,14 @@ class TestDeterminism:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql_a = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
-            sql_b = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql_a = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
+            sql_b = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
         assert sql_a == sql_b
 
 
 # ---------------------------------------------------------------------------
 # Windowed
 # ---------------------------------------------------------------------------
-
-
-class TestWindowed:
-    def test_window_selects_by_event_sim_time_keeping_correct_old_new(
-        self, tmp_path: Path
-    ) -> None:
-        log = SourceEventLogPlan(
-            name="versions",
-            sources=(_visit_source(),),
-            item_id_type="VARCHAR",
-            keys=None,
-        )
-        emit_dir = build_windowed_source_test_emit(tmp_path)
-        _, w1, _ = windowed_test_windows()
-        with open_emit(emit_dir) as emit:
-            fork_path = require_single_branch(emit.sidecar)
-            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-            assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, w1)
-            rows = _rows(emit, sql)
-
-        assert {(r["item_id"], r["event"]) for r in rows} == {
-            ("v001", "update"),
-            ("v002", "create"),
-        }
-        v001_update = _row_for(rows, "v001", "update")
-        assert _changes(v001_update) == {"status": ["open", "closed"]}
 
 
 # ---------------------------------------------------------------------------
@@ -661,7 +624,7 @@ class TestEventLogId:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         ids = [r["id"] for r in rows]
@@ -683,7 +646,7 @@ class TestEventLogId:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         # No no-op update survives: exactly one 'update' row for t600.
@@ -693,41 +656,6 @@ class TestEventLogId:
 
         ids = [r["id"] for r in rows]
         assert ids == list(range(1, len(rows) + 1))
-
-    def test_windowed_ids_match_full_export_as_a_contiguous_block(
-        self, tmp_path: Path
-    ) -> None:
-        """A window's rows carry the same `id` values they carry in a full
-        export — `id` is tape-anchored, never renumbered per window — and
-        those ids form one contiguous ascending block within the full
-        export's numbering."""
-        log = SourceEventLogPlan(
-            name="versions",
-            sources=(_visit_source(),),
-            item_id_type="VARCHAR",
-            keys=None,
-        )
-        emit_dir = build_windowed_source_test_emit(tmp_path)
-        _, w1, _ = windowed_test_windows()
-        with open_emit(emit_dir) as emit:
-            fork_path = require_single_branch(emit.sidecar)
-            anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-            assert anchor is not None
-            full_sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
-            full_rows = _rows(emit, full_sql)
-            window_sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, w1)
-            window_rows = _rows(emit, window_sql)
-
-        by_id = {r["id"]: (r["item_id"], r["event"]) for r in full_rows}
-        window_ids = sorted(r["id"] for r in window_rows)
-
-        # Every windowed row's id, and its (item_id, event) identity, agree
-        # with the full export's numbering for that same id — not renumbered.
-        for row in window_rows:
-            assert by_id[row["id"]] == (row["item_id"], row["event"])
-
-        # The window's ids form one contiguous ascending block.
-        assert window_ids == list(range(window_ids[0], window_ids[0] + len(window_ids)))
 
 
 # ---------------------------------------------------------------------------
@@ -765,9 +693,7 @@ class TestCoincidentUpdateAndDestroy:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(
-                emit.sidecar, fork_path, self._log(), anchor, None
-            )
+            sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
         assert 'ORDER BY "_valued"."event_sim_time", "_valued"."event_class"' in sql, (
             "the before-image LAG must carry a total order within a record"
         )
@@ -779,9 +705,7 @@ class TestCoincidentUpdateAndDestroy:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(
-                emit.sidecar, fork_path, self._log(), anchor, None
-            )
+            sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
             rows = _rows(emit, sql)
 
         assert _changes(_row_for(rows, "t900", "create")) == {"status": [None, "open"]}
@@ -799,9 +723,7 @@ class TestCoincidentUpdateAndDestroy:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(
-                emit.sidecar, fork_path, self._log(), anchor, None
-            )
+            sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
             rows = _rows(emit, sql)
 
         assert (
@@ -835,7 +757,7 @@ class TestRenamedRecordsProperty:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         t001_create = _row_for(rows, "t001", "create")
@@ -879,7 +801,7 @@ class TestRenamedMembershipField:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         creates = [r for r in rows if r["event"] == "create"]
@@ -915,7 +837,7 @@ class TestMembershipKindLabeling:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             return _rows(emit, sql)
 
     def test_labeled_kind_renders_label_in_old_and_new_halves(
@@ -964,7 +886,7 @@ class TestMembershipKindLabeling:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         urgent_create = next(
@@ -990,7 +912,7 @@ class TestNoLabelsByteIdenticalToday:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
         assert 'WHEN "_fold"."member__party__kind" = ' not in sql
 
 
@@ -1014,7 +936,7 @@ class TestResolvedItemTypeOrdering:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
         assert {r["item_type"] for r in rows} == {"issue"}
 
@@ -1047,7 +969,7 @@ class TestResolvedItemTypeOrdering:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         assert {r["item_type"] for r in rows} == {"issue"}
@@ -1077,7 +999,7 @@ class TestResolvedItemTypeOrdering:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor, None)
+            sql = build_event_log_sql(emit.sidecar, fork_path, log, anchor)
             rows = _rows(emit, sql)
 
         t002_destroy_idx = next(
@@ -1127,9 +1049,7 @@ class TestEventLogRender:
             fork_path = require_single_branch(emit.sidecar)
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
-            sql = build_event_log_sql(
-                emit.sidecar, fork_path, self._log(), anchor, None
-            )
+            sql = build_event_log_sql(emit.sidecar, fork_path, self._log(), anchor)
             rows = _rows(emit, sql)
         t001_create = _row_for(rows, "t001", "create")
         assert type(t001_create["occurred_at"]) is datetime
@@ -1146,7 +1066,7 @@ class TestEventLogRender:
             anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
             assert anchor is not None
             sql = build_event_log_sql(
-                emit.sidecar, fork_path, self._log("date"), anchor, None
+                emit.sidecar, fork_path, self._log("date"), anchor
             )
             rows = _rows(emit, sql)
         t001_create = _row_for(rows, "t001", "create")

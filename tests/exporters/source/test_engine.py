@@ -49,8 +49,6 @@ from ._source_fixtures import (
     build_empty_source_emit,
     build_source_keys_emit,
     build_source_test_emit,
-    build_windowed_source_test_emit,
-    windowed_test_windows,
 )
 
 if TYPE_CHECKING:
@@ -121,7 +119,6 @@ def _plan(
     *,
     events: "SourceEventsDecl | None" = None,
     declare_keys: bool = False,
-    windowed: bool = False,
 ) -> "Iterator[tuple[Emit, SourcePlan]]":
     """Open `emit_dir` and build a SourcePlan, resolving the anchor and
     election the way `export_source` does."""
@@ -130,9 +127,7 @@ def _plan(
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, windowed, discard_notice_sink
-        )
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
         yield emit, plan
 
 
@@ -178,7 +173,7 @@ def test_require_source_anchor_returns_narrowed_anchor(tmp_path: Path) -> None:
 def test_build_source_query_specs_full_export_write_mode(tmp_path: Path) -> None:
     """Every full-export spec is write_mode='create' with no companion view."""
     with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
-        specs = build_source_query_specs(plan, None)
+        specs = build_source_query_specs(plan)
 
     assert specs
     for spec in specs:
@@ -203,7 +198,7 @@ def test_build_source_query_specs_compile_order_event_log_last(
         emit,
         plan,
     ):
-        specs = build_source_query_specs(plan, None)
+        specs = build_source_query_specs(plan)
     assert [spec.table_name for spec in specs] == [
         "shift",
         "visit",
@@ -216,8 +211,8 @@ def test_build_source_query_specs_compile_order_event_log_last(
 def test_build_source_query_specs_determinism(tmp_path: Path) -> None:
     """Two compiles of the same plan produce identical (table, sql, mode) specs."""
     with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
-        specs_a = build_source_query_specs(plan, None)
-        specs_b = build_source_query_specs(plan, None)
+        specs_a = build_source_query_specs(plan)
+        specs_b = build_source_query_specs(plan)
     assert [(s.table_name, s.sql, s.write_mode) for s in specs_a] == [
         (s.table_name, s.sql, s.write_mode) for s in specs_b
     ]
@@ -226,66 +221,6 @@ def test_build_source_query_specs_determinism(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # build_source_query_specs: windowed compile
 # ---------------------------------------------------------------------------
-
-
-def test_build_source_query_specs_windowed_write_mode_per_unit(
-    tmp_path: Path,
-) -> None:
-    """Windowed compile tags write_mode per unit kind: state replace,
-    junction append; no unit uses a companion view."""
-    window, _, _ = windowed_test_windows()
-    with _plan(
-        build_windowed_source_test_emit(tmp_path), _WINDOWED_TABLES, windowed=True
-    ) as (emit, plan):
-        specs = build_source_query_specs(plan, window)
-
-    write_mode_by_table = {spec.table_name: spec.write_mode for spec in specs}
-    assert write_mode_by_table == {
-        "visit": "replace",
-        "order": "replace",
-        "location": "replace",
-        "visit_team": "append",
-    }
-
-
-def test_build_source_query_specs_windowed_event_log_appends(
-    tmp_path: Path,
-) -> None:
-    """A windowed compile's event-log spec is write_mode='append'."""
-    window, _, _ = windowed_test_windows()
-    events = SourceEventsDecl(
-        name="versions", sources=(SourceEventSourceDecl(kind="visit"),)
-    )
-    with _plan(
-        build_windowed_source_test_emit(tmp_path),
-        _WINDOWED_TABLES,
-        events=events,
-        windowed=True,
-    ) as (emit, plan):
-        specs = build_source_query_specs(plan, window)
-    by_table = {spec.table_name: spec for spec in specs}
-    assert by_table["versions"].write_mode == "append"
-
-
-def test_build_source_query_specs_window_presence_mismatch_raises(
-    tmp_path: Path,
-) -> None:
-    """`window` presence disagreeing with the plan's own windowed-ness raises."""
-    window, _, _ = windowed_test_windows()
-    full_dir = tmp_path / "full"
-    full_dir.mkdir()
-    windowed_dir = tmp_path / "windowed"
-    windowed_dir.mkdir()
-
-    with _plan(build_source_test_emit(full_dir), _SPANNING_TABLES) as (emit, plan):
-        with pytest.raises(ValueError, match="windowed-ness"):
-            build_source_query_specs(plan, window)
-
-    with _plan(
-        build_windowed_source_test_emit(windowed_dir), _WINDOWED_TABLES, windowed=True
-    ) as (emit, plan):
-        with pytest.raises(ValueError, match="windowed-ness"):
-            build_source_query_specs(plan, None)
 
 
 # ---------------------------------------------------------------------------
@@ -298,7 +233,7 @@ def test_build_source_query_specs_declare_keys_absent_all_unkeyed(
 ) -> None:
     """declare_keys absent -> every spec's keys is None."""
     with _plan(build_source_keys_emit(tmp_path), _KEYS_TABLES) as (emit, plan):
-        specs = build_source_query_specs(plan, None)
+        specs = build_source_query_specs(plan)
     assert specs
     assert all(spec.keys is None for spec in specs)
 
@@ -311,7 +246,7 @@ def test_build_source_query_specs_declare_keys_per_table(tmp_path: Path) -> None
         emit,
         plan,
     ):
-        specs = build_source_query_specs(plan, None)
+        specs = build_source_query_specs(plan)
     by_table = {spec.table_name: spec for spec in specs}
     assert by_table["visit"].keys is not None
     assert by_table["visit"].keys.unique == (("presentation_id",),)
@@ -320,33 +255,6 @@ def test_build_source_query_specs_declare_keys_per_table(tmp_path: Path) -> None
     assert by_table["nurse"].keys is not None
     assert by_table["nurse"].keys.unique == ()
     assert by_table["visit_team"].keys is None
-
-
-def test_build_source_query_specs_declare_keys_windowed_matches_full(
-    tmp_path: Path,
-) -> None:
-    """A windowed compile's declared keys equal the full-export declaration."""
-    window, _, _ = windowed_test_windows()
-    full_dir = tmp_path / "full"
-    full_dir.mkdir()
-    windowed_dir = tmp_path / "windowed"
-    windowed_dir.mkdir()
-
-    with _plan(build_source_keys_emit(full_dir), _KEYS_TABLES, declare_keys=True) as (
-        emit,
-        plan,
-    ):
-        full_specs = build_source_query_specs(plan, None)
-    with _plan(
-        build_source_keys_emit(windowed_dir),
-        _KEYS_TABLES,
-        declare_keys=True,
-        windowed=True,
-    ) as (emit, plan):
-        windowed_specs = build_source_query_specs(plan, window)
-    full_keys = {s.table_name: s.keys for s in full_specs}
-    windowed_keys = {s.table_name: s.keys for s in windowed_specs}
-    assert full_keys == windowed_keys
 
 
 # ---------------------------------------------------------------------------
@@ -484,11 +392,9 @@ def test_export_source_determinism(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
-        specs_a = build_source_query_specs(plan, None)
-        specs_b = build_source_query_specs(plan, None)
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
+        specs_a = build_source_query_specs(plan)
+        specs_b = build_source_query_specs(plan)
     assert [(s.table_name, s.sql, s.write_mode) for s in specs_a] == [
         (s.table_name, s.sql, s.write_mode) for s in specs_b
     ]

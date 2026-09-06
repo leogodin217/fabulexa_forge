@@ -102,7 +102,6 @@ def _open_plan(
     emit_dir: Path,
     config: ExportConfig,
     *,
-    windowed: bool = False,
     notice_sink: "NoticeSink" = discard_notice_sink,
 ) -> "SourcePlan":
     """Open `emit_dir` and build a SourcePlan against it, resolving the anchor
@@ -113,7 +112,7 @@ def _open_plan(
         )
         assert anchor is not None, "every fixture here declares a runtime block"
         election = resolve_election(emit.sidecar, config.keys)
-        return build_source_plan(emit, config, anchor, election, windowed, notice_sink)
+        return build_source_plan(emit, config, anchor, election, notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -788,25 +787,6 @@ def test_unclassified_records_column_raises(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Windowed plan: `last_mutation_sim_time` refused
 # ---------------------------------------------------------------------------
-
-
-def test_windowed_plan_refuses_last_mutation_sim_time(tmp_path: Path) -> None:
-    """Under a windowed plan the state render omits `updated_at`, so a
-    `columns` entry naming `last_mutation_sim_time` is unsatisfiable."""
-    with pytest.raises(SourceColumnUnresolved):
-        _open_plan(
-            build_source_test_emit(tmp_path),
-            _config(
-                tables=(
-                    SourceTableDecl(
-                        name="visits",
-                        kind="visit",
-                        columns=("last_mutation_sim_time",),
-                    ),
-                ),
-            ),
-            windowed=True,
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -1578,27 +1558,6 @@ def test_render_key_on_columns_omitted_column_refused(tmp_path: Path) -> None:
                     ),
                 ),
             ),
-        )
-
-
-def test_render_key_on_windowed_omitted_column_refused(tmp_path: Path) -> None:
-    """Under a windowed plan the state render omits `updated_at`
-    (`last_mutation_sim_time`), so a `render` key naming it is unsatisfiable —
-    the windowed omitted-column posture composes for free through the shared
-    two-stage gate."""
-    with pytest.raises(SourceColumnUnresolved):
-        _open_plan(
-            build_source_test_emit(tmp_path),
-            _config(
-                tables=(
-                    SourceTableDecl(
-                        name="visits",
-                        kind="visit",
-                        render={"last_mutation_sim_time": "date"},
-                    ),
-                ),
-            ),
-            windowed=True,
         )
 
 

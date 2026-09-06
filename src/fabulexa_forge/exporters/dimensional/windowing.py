@@ -17,8 +17,6 @@ two horizon compiles into one delivered window:
   sibling row the delta does not restore.
 - `check_windowed_reserved_names` — IncrementalReservedName: no author
   table named for the warehouse's bookkeeping tables.
-- `compose_window_delta_sql` — the ordered multiset difference of two
-  wrapped horizon compiles.
 
 A value channel is *horizon-invariant* when its value on a row cannot differ
 between two horizons at both of which the row exists. The reading per column
@@ -28,11 +26,9 @@ function so the two cannot drift.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
-
     from fabulexa_forge.config.models import ColumnDecl, DimensionalConfig, TableDecl
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -50,15 +46,13 @@ from fabulexa_forge.derivations.reference_resolution import (
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
 from fabulexa_forge.exporters.dimensional.validation import check_source_table_exists
+from fabulexa_forge.exporters.horizon import WindowDelivery
 from fabulexa_forge.exporters.reserved_names import RESERVED_TABLE_NAMES
 from fabulexa_forge.reader.errors import TableNotFoundError
 from fabulexa_forge.reader.records_columns import (
     REF_INDEX_PREFIX,
     records_structural_column_is_mutable,
 )
-
-WindowDelivery = Literal["append", "snapshot", "upsert"]
-"""The static per-table window delivery class."""
 
 #: Each grain's raw event-time key: the column a row's existence is
 #: prefix-monotone in under truncation, so an ordinal ordered by it never
@@ -316,38 +310,6 @@ def check_windowed_reserved_names(table_decl: "TableDecl") -> None:
             f"table '{table_decl.name}': name '{table_decl.name}' is reserved under"
             " incremental export"
         )
-
-
-def compose_window_delta_sql(
-    end_sql: str,
-    start_sql: str,
-    output_columns: "Sequence[str]",
-) -> str:
-    """The delta of one table between two wrapped horizon compiles.
-
-    `end EXCEPT ALL start` — the multiset of rows present at the end horizon
-    and not at the start horizon, under distinct semantics (NULL equals
-    NULL) — ordered by every output column in declared order, a total order
-    over distinct rows that needs no internal column. Each input is already
-    wrapped by its own name-shadowing CTE block and is treated as an opaque
-    subquery; sibling subqueries' CTE scopes do not interact.
-
-    Args:
-        end_sql: The end-horizon compiled, wrapped query.
-        start_sql: The start-horizon compiled, wrapped query.
-        output_columns: The table's output column names in declared order.
-
-    Returns:
-        A complete, deterministic SELECT.
-    """
-    cols = ", ".join(quote_identifier(c) for c in output_columns)
-    return (
-        f"SELECT {cols} FROM ("
-        f"SELECT {cols} FROM ({end_sql}) AS _end"
-        f" EXCEPT ALL "
-        f"SELECT {cols} FROM ({start_sql}) AS _start"
-        f") AS _delta ORDER BY {cols}"
-    )
 
 
 def check_window_key_unique(

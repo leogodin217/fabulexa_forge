@@ -124,14 +124,12 @@ def test_source_query_specs_matches_render_function_directly(tmp_path: Path) -> 
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
-        specs = build_source_query_specs(plan, None)
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
+        specs = build_source_query_specs(plan)
 
         location_unit = next(t for t in plan.tables if t.name == "location")
         sql_direct = build_state_render_sql(
-            plan.sidecar, plan.fork_path, location_unit, plan.anchor, None
+            plan.sidecar, plan.fork_path, location_unit, plan.anchor
         )
 
     location = next(s for s in specs if s.table_name == "location")
@@ -293,11 +291,9 @@ def test_source_changelog_read_shadowed_total(tmp_path: Path) -> None:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
 
-        specs_physical = build_source_query_specs(plan, None)
+        specs_physical = build_source_query_specs(plan)
         visit_physical = next(
             s for s in specs_physical if s.table_name == "visit_events"
         )
@@ -315,7 +311,7 @@ def test_source_changelog_read_shadowed_total(tmp_path: Path) -> None:
             )
         }
         specs_shadowed = _rewrite_specs_base_relations(
-            list(build_source_query_specs(plan, None)), base_relations
+            list(build_source_query_specs(plan)), base_relations
         )
         visit_shadowed = next(
             s for s in specs_shadowed if s.table_name == "visit_events"

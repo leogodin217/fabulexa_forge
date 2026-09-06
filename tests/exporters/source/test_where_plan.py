@@ -93,7 +93,7 @@ def _open_plan(
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None, "every fixture here declares a runtime block"
         election = resolve_election(emit.sidecar, None)
-        return build_source_plan(emit, config, anchor, election, False, notice_sink)
+        return build_source_plan(emit, config, anchor, election, notice_sink)
 
 
 def _state(plan: "SourcePlan", name: str) -> SourceStateTablePlan:

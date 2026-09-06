@@ -66,9 +66,7 @@ def _build_plan(
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None, "the fixture declares a runtime block"
         election = resolve_election(emit.sidecar, keys)
-        return build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
+        return build_source_plan(emit, config, anchor, election, discard_notice_sink)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +288,7 @@ def test_event_log_spec_stamps_empty_author_descriptions(tmp_path: Path) -> None
         name="audit", sources=(SourceEventSourceDecl(kind="visit"),)
     )
     plan = _build_plan(emit_dir, (), events=events)
-    specs = build_source_query_specs(plan, None)
+    specs = build_source_query_specs(plan)
     log_spec = next(s for s in specs if s.table_name == "audit")
 
     assert log_spec.author_descriptions == {}
@@ -313,7 +311,7 @@ def test_state_table_described_declaration_stamps_prose(tmp_path: Path) -> None:
     plan = _build_plan(emit_dir, tables)
 
     assert plan.tables[0].description == "Visit records, operationally."
-    specs = build_source_query_specs(plan, None)
+    specs = build_source_query_specs(plan)
     spec = next(s for s in specs if s.table_name == "visit")
     assert spec.author_table_description == "Visit records, operationally."
 
@@ -325,7 +323,7 @@ def test_state_table_undescribed_declaration_stamps_none(tmp_path: Path) -> None
     plan = _build_plan(emit_dir, tables)
 
     assert plan.tables[0].description is None
-    specs = build_source_query_specs(plan, None)
+    specs = build_source_query_specs(plan)
     spec = next(s for s in specs if s.table_name == "visit")
     assert spec.author_table_description is None
 
@@ -340,7 +338,7 @@ def test_event_log_spec_is_the_only_marked_spec(tmp_path: Path) -> None:
         name="audit", sources=(SourceEventSourceDecl(kind="visit"),)
     )
     plan = _build_plan(emit_dir, tables, events=events)
-    specs = build_source_query_specs(plan, None)
+    specs = build_source_query_specs(plan)
 
     marked = [spec for spec in specs if spec.event_log]
     assert len(marked) == 1
@@ -353,7 +351,7 @@ def test_plan_with_no_events_declaration_marks_nothing(tmp_path: Path) -> None:
     emit_dir = build_source_test_emit(tmp_path)
     tables = (SourceTableDecl(name="visit", kind="visit"),)
     plan = _build_plan(emit_dir, tables)
-    specs = build_source_query_specs(plan, None)
+    specs = build_source_query_specs(plan)
 
     assert all(spec.event_log is False for spec in specs)
 

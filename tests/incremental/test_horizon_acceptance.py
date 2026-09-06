@@ -1,7 +1,7 @@
-"""Acceptance: every dimensional recipe drips, honestly, to its one-shot export.
+"""Acceptance: every recipe drips, honestly, to its one-shot export.
 
-Two properties, checked over the whole dimensional recipe corpus against the
-recipe emit with a day cadence:
+Two properties, checked over the dimensional, source, and base recipe corpora
+against the recipe emit with a day cadence:
 
 1. Reconciliation — drip to drained into a DuckDB warehouse; the author-named
    tables equal the one-shot export of the same emit (`compare_datasets`).
@@ -19,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import duckdb
 import pytest
 from _support.notices import discard_notice_sink
 from _support.slice_emit import slice_emit
@@ -30,7 +31,9 @@ from fabulexa_forge.compare.engine import compare_datasets
 from fabulexa_forge.compare.render import render_comparison_text
 from fabulexa_forge.config.loader import load_export_config
 from fabulexa_forge.config.models import ExportConfig, IncrementalConfig
+from fabulexa_forge.exporters.base.engine import export_base
 from fabulexa_forge.exporters.dimensional.engine import export_dimensional
+from fabulexa_forge.exporters.source.engine import export_source
 from fabulexa_forge.incremental.driver import export_incremental_next
 from fabulexa_forge.reader.emit import open_emit
 
@@ -38,7 +41,16 @@ if TYPE_CHECKING:
     from fabulexa_forge.anchor import EffectiveAnchor
 
 _RECIPES_ROOT = Path(__file__).parent.parent.parent / "examples" / "recipes"
-_RECIPES: list[RecipeFolder] = discover_recipes(_RECIPES_ROOT)
+_RECIPES: list[RecipeFolder] = (
+    discover_recipes(_RECIPES_ROOT)
+    + discover_recipes(_RECIPES_ROOT / "source")
+    + discover_recipes(_RECIPES_ROOT / "base")
+)
+_EXPORTERS = {
+    "dimensional": export_dimensional,
+    "source": export_source,
+    "base": export_base,
+}
 
 #: The recipe emit's data spans days 1..3; a slice at the end of day 4 bounds
 #: every instant, so a drip over it drains after four day-windows.
@@ -51,6 +63,8 @@ def _dripping_config(
 ) -> ExportConfig:
     """The recipe's config with a one-day cadence in the regime its anchor selects."""
     config = load_export_config(recipe.config_path)
+    if config.base is not None and config.base.slice_at is not None:
+        pytest.skip("base.slice_at and an incremental cadence are mutually exclusive")
     cadence = (
         IncrementalConfig(period="day")
         if anchor is not None
@@ -71,7 +85,7 @@ def _one_shot(
     config: ExportConfig, emit_dir: Path, out: Path, anchor: "EffectiveAnchor | None"
 ) -> None:
     with open_emit(emit_dir) as emit:
-        export_dimensional(
+        _EXPORTERS[config.mode](
             emit, config, out, "duckdb", anchor, discard_notice_sink, None
         )
 
@@ -91,9 +105,17 @@ def _drip(
             assert outcome.status == "emitted"
 
 
-def _author_tables(config: ExportConfig) -> list[str]:
-    assert config.dimensional is not None
-    return [t.name for t in config.dimensional.tables]
+def _author_tables(db: Path) -> list[str]:
+    """The one-shot export's tables — the compare universe, bookkeeping excluded."""
+    conn = duckdb.connect(str(db), read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT table_name FROM information_schema.tables"
+            " WHERE table_type = 'BASE TABLE'"
+        ).fetchall()
+    finally:
+        conn.close()
+    return sorted(str(r[0]) for r in rows if not str(r[0]).startswith("_export"))
 
 
 @pytest.fixture(scope="module")
@@ -124,7 +146,7 @@ def test_drip_reconciles_to_one_shot(
         )
     assert drained.status == "drained"
 
-    result = compare_datasets(expected, warehouse, tables=_author_tables(config))
+    result = compare_datasets(expected, warehouse, tables=_author_tables(expected))
     assert result.equal, render_comparison_text(result)
 
 
@@ -144,5 +166,5 @@ def test_window_is_honest_at_its_cutoff(
     warehouse = tmp_path / "drip.duckdb"
     _drip(config, bounded_emit_dir, warehouse, anchor, window_index + 1)
 
-    result = compare_datasets(expected, warehouse, tables=_author_tables(config))
+    result = compare_datasets(expected, warehouse, tables=_author_tables(expected))
     assert result.equal, render_comparison_text(result)

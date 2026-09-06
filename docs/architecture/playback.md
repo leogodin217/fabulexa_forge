@@ -262,11 +262,10 @@ horizon compile, run through the same `build_query_specs` call
 deltas reconcile to `state()` at every horizon (the consistency algebra,
 extended to tier 2). The two windowed rules (`WindowKeyMutable`, static;
 `WindowKeyDuplicate`, against the data) raise on the first `window()` ask;
-`state()` is unaffected. For a source shape the answer is the mode's shipped
-per-render window membership ([`source.md`](source.md) § Incremental
-composition): `state` tables `snapshot`, junction and event log `append` —
-where a junction's extract-on-change rows are reconciled by the class's
-documented consumer merge, not by key.
+`state()` is unaffected. For a source shape the answer is the mode's own horizon
+compile ([`source.md`](source.md) § Incremental composition): `state` and
+`junction` tables `snapshot`, the event log `append` (its delta between the
+two horizons).
 
 ### Shaped state (tier 2): the truncated tape
 
@@ -411,10 +410,9 @@ untouched.
    `(tape, selection)`; bounded and unbounded heads agree.
 4. **One event-time line, across both tiers.** On a temporally-intact tape the
    tier-1 consistency algebra holds for every `(selection, T1, T2)`; tier-2
-   agreement is exact at every horizon for a dimensional shape (successive
-   `window()` deltas reconciled by key equal `state()`), and for a source shape
-   exact at the slice bound (the bridging theorem) and up to the class's
-   documented consumer merge elsewhere. A shaped
+   agreement is exact at every horizon for both shapes (a `snapshot` table is
+   `state(T2 − 1)`; successive `upsert` / `append` deltas reconciled equal
+   `state()`). A shaped
    event-log table over `[T1, T2)` and a tier-1 `events(T1, T2)` pull carry
    the same change set.
 5. **Faithful reshaping + temporal honesty, per answer.** Every delivered value
