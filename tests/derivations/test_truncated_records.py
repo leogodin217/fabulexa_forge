@@ -23,7 +23,9 @@ from _support.sidecar_builder import (
 from fabulexa_forge.derivations.truncated_tape import (
     build_truncated_records_sql,
     build_truncated_sidecar,
+    open_truncated_tape,
 )
+from fabulexa_forge.exporters.base_relations import shadow_base_relations
 from fabulexa_forge.reader.emit import open_emit
 
 FORK_PATH = "trunk"
@@ -476,3 +478,69 @@ class TestBuildTruncatedRecordsSql:
                 produced_cols = [row[0] for row in described]
                 expected_cols = [c.name for c in truncated_sidecar.columns(table_name)]
                 assert produced_cols == expected_cols
+
+
+# ---------------------------------------------------------------------------
+# A self-referencing kind under the base_relations shadow wrap
+# ---------------------------------------------------------------------------
+
+_NODE_COLS: list[dict[str, Any]] = [
+    identity_column("fork_path", "VARCHAR"),
+    identity_column("record_id", "VARCHAR"),
+    {"name": "created_sim_time", "type": "BIGINT"},
+    {"name": "active", "type": "BOOLEAN"},
+    {"name": "deactivated_at", "type": "BIGINT"},
+    {"name": "last_mutation_sim_time", "type": "BIGINT"},
+    identity_column("record_index", "BIGINT"),
+    prop_column(
+        "prop__parent",
+        "VARCHAR",
+        history_tracked=False,
+        temporal_class="constant",
+        references="node",
+    ),
+    identity_column("ref_index__parent", "BIGINT"),
+]
+
+#: n1 (root, day 10) <- n2 (day 20) <- n3 (day 300, after T)
+_NODE_ROWS: list[tuple[Any, ...]] = [
+    (FORK_PATH, "n1", 10, True, None, 10, 0, None, None),
+    (FORK_PATH, "n2", 20, True, None, 20, 1, "n1", 0),
+    (FORK_PATH, "n3", 300, True, None, 300, 2, "n2", 1),
+]
+
+
+def _build_self_reference_emit(tmp_path: Path) -> Path:
+    """A kind whose reference property points at its own kind."""
+    db_path = tmp_path / "run.duckdb"
+    conn = duckdb.connect(str(db_path))
+    conn.execute(_ddl("records__node", _NODE_COLS))
+    ph = ", ".join("?" for _ in _NODE_COLS)
+    for row in _NODE_ROWS:
+        conn.execute(f'INSERT INTO "records__node" VALUES ({ph})', list(row))
+    conn.close()
+    write_emit(
+        tmp_path,
+        tables=[_table_spec("records__node", _NODE_COLS, len(_NODE_ROWS), "node")],
+    )
+    return tmp_path
+
+
+class TestSelfReferencingKind:
+    def test_ref_index_self_read_binds_physical_under_shadow_wrap(
+        self, tmp_path: Path
+    ) -> None:
+        """The ref_index__ re-derivation of a self-referencing kind reads the
+        physical spine, so the truncated relation compiles inside the CTE
+        that replaces the kind's own table (no circular reference) and the
+        index re-derives against the truncated world."""
+        emit_dir = _build_self_reference_emit(tmp_path)
+        with open_emit(emit_dir) as emit:
+            tape = open_truncated_tape(emit.sidecar, FORK_PATH, AT_SIM_TIME)
+            sql = shadow_base_relations(
+                'SELECT "record_id", "prop__parent", "ref_index__parent"'
+                ' FROM "records__node" ORDER BY "record_id"',
+                tape.base_relations,
+            )
+            rows = emit.query(sql, ())
+        assert rows == [("n1", None, None), ("n2", "n1", 0)]

@@ -643,9 +643,12 @@ reconstruction reads `history`; its `ref_index__` re-derivation reads the target
 kind's spine — the read carries truncated-world semantics via an inline
 truncation predicate, so its result equals a read of that table's truncated
 presentation, never the physical table. A builder's read of the table it
-*presents* names the physical table (the source being truncated). This makes the
-cross-reads binding-insensitive under the seam's name-shadowing composition
-(§ The compile indirection in [`playback.md`](playback.md)).
+*presents* names the physical table (the source being truncated) — the records
+builder's `ref_index__` re-derivation included when the reference targets the
+presented kind itself (a self-referencing kind), which must bind physical like
+every other self-read or the shadow wrap would read the CTE it is defining. This
+makes the cross-reads binding-insensitive under the seam's name-shadowing
+composition (§ The compile indirection in [`playback.md`](playback.md)).
 
 `open_truncated_tape(sidecar, fork_path, at_sim_time)` composes the surface:
 it returns a `TruncatedTape` — the truncated sidecar view, the `base_relations`

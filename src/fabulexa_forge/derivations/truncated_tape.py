@@ -254,6 +254,7 @@ def _build_ref_index_join(
     prop: str,
     value_expr: str,
     at_sim_time: int,
+    self_read: bool,
 ) -> tuple[str, str]:
     """Build the `ref_index__<prop>` re-derivation JOIN and expression.
 
@@ -268,6 +269,13 @@ def _build_ref_index_join(
     has already verified records__<target_kind> is present in the sidecar;
     on absence it projects a typed NULL instead of calling here.
 
+    When the target kind is the presented kind (a self-referencing kind),
+    the read is a self-read and binds the physical table
+    (`main."records__<kind>"`) like every other self-read — under the
+    base_relations shadow wrap an unqualified read would be a circular
+    reference to the CTE this relation defines. The inline predicate makes
+    the physical read equal to the truncated one.
+
     Args:
         fork_path: The sole branch fork_path.
         target_kind: The referenced record kind (the sibling prop__<prop>
@@ -277,6 +285,7 @@ def _build_ref_index_join(
         value_expr: The reconstructed prop__<prop> SQL expression (the
             reference's as-of record_id, or NULL).
         at_sim_time: The inclusive truncation position T (ns).
+        self_read: Whether target_kind is the kind this relation presents.
 
     Returns:
         A 2-tuple (join_sql, ref_expr): the LEFT JOIN clause and the
@@ -285,8 +294,11 @@ def _build_ref_index_join(
     """
     fp_lit = _sql_literal(fork_path)
     alias = f"_ref_{prop}"
+    target = f'"records__{target_kind}"'
+    if self_read:
+        target = f"main.{target}"
     join_sql = (
-        f' LEFT JOIN "records__{target_kind}" AS "{alias}"'
+        f' LEFT JOIN {target} AS "{alias}"'
         f' ON "{alias}"."record_id" = {value_expr}'
         f' AND "{alias}"."fork_path" = {fp_lit}'
         f' AND "{alias}"."created_sim_time" <= {at_sim_time}'
@@ -390,7 +402,12 @@ def build_truncated_records_sql(
                 select_parts.append(f'{_try_cast_expr("NULL", col.type)} AS "{name}"')
             else:
                 join_sql, ref_expr = _build_ref_index_join(
-                    fork_path, target_kind, prop, prop_value_exprs[prop], at_sim_time
+                    fork_path,
+                    target_kind,
+                    prop,
+                    prop_value_exprs[prop],
+                    at_sim_time,
+                    self_read=target_kind == kind,
                 )
                 joins.append(join_sql)
                 select_parts.append(f'{ref_expr} AS "{name}"')
