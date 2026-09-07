@@ -19,8 +19,12 @@
 #
 #   TWO "COMPANIES"  as in dimensional.yaml: actor.company (CRM/sales-stage,
 #            `companies`) and entity.company_hub (billing/workspace tenant,
-#            `accounts`) carry no structural reference to each other. Kept
-#            as two separate tables — no join fabricated between them.
+#            `accounts`) are two business concepts the sidecar references to
+#            each other in both directions (`prop__company` on each, all 541
+#            hubs populated). Kept as two tables; the hub -> company side is
+#            carried as accounts.company_id, rendered as companies.id
+#            (CMP-#####) per the reference-column rule under POLYMORPHIC
+#            below. Nothing is fabricated: it is the sidecar's own reference.
 #   POLYMORPHIC lifecycle_instances.owner_id (from journey_instance's
 #            `prop__actor`) resolves per-row to whichever population the
 #            referenced actor record belongs to (source.md § Identity and
@@ -125,8 +129,10 @@ source:
       sub_types: [company_hub]
       columns:
         [
+          prop__company,
           prop__plan,
           prop__seat_price,
+          prop__pct_of_list_rate,
           prop__churn_flag,
           prop__engagement_score,
           prop__name,
@@ -136,6 +142,8 @@ source:
           deactivated_at,
           last_mutation_sim_time,
         ]
+      rename:
+        prop__company: company_id
       # engagement_score is a 1-100 score carrying raw float64 noise (15
       # fraction digits) in records AND history. DECIMAL(5,2) out; the
       # elected form also reaches this kind's `versions` audit entries.
@@ -144,6 +152,8 @@ source:
       description: One row per account, the commercial record of a company's plan, pricing, churn status, and engagement score.
       descriptions:
         presentation_id: Unique account identifier (ACC-#####).
+        prop__company: companies.id of the CRM company this account belongs to.
+        prop__pct_of_list_rate: Percent of each SKU's standard_rate this account pays for usage; 100 until an enterprise renewal negotiates it down. Renegotiations land in `versions`.
         prop__name: Account display name.
         created_sim_time: When the account was created.
         active: "Soft-delete flag: FALSE once the row has been deleted."
@@ -153,10 +163,11 @@ source:
     - name: skus
       kind: entity
       sub_types: [sku]
-      columns: [prop__popularity, prop__name, created_sim_time, active, deactivated_at, last_mutation_sim_time]
+      columns: [prop__popularity, prop__standard_rate, prop__name, created_sim_time, active, deactivated_at, last_mutation_sim_time]
       description: One row per product line in the catalogue, the feature a usage session is attributed to.
       descriptions:
         presentation_id: Unique SKU identifier (SKU-###).
+        prop__standard_rate: List price per unit of usage volume; an account is billed standard_rate * accounts.pct_of_list_rate / 100 per unit.
         prop__name: SKU display name (Core, Analytics, API).
         created_sim_time: When the SKU was added to the catalogue.
         active: "Soft-delete flag: FALSE once the row has been deleted."

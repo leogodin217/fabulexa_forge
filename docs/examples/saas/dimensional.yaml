@@ -9,16 +9,18 @@
 #
 #   TWO "COMPANIES"  actor.company (541 rows, presentation prefix CMP-) and
 #            entity.company_hub (541 rows, prefix ACC-) are BOTH "the
-#            company" in plain English but carry no structural reference to
-#            each other anywhere in the sidecar (`sub_type_columns` shows
-#            actor.company has no `prop__company_hub`/ref column, and
-#            entity carries no reference columns at all). Read as two
-#            distinct business concepts rather than invented as one:
-#            actor.company is the CRM/sales-stage record (onboarding ->
-#            active -> churned, dim_company below); entity.company_hub is
-#            the billing/workspace tenant (plan, seat price, engagement
-#            metrics, dim_account below). No join is fabricated between
-#            them — consumers who need both correlate by their own means.
+#            company" in plain English. The sidecar DOES reference them to
+#            each other, in both directions: `sub_type_columns` lists
+#            `prop__company` (+ `ref_index__company`) on entity.company_hub
+#            (`references: actor`) and on actor.company (`references:
+#            entity`), populated on all 541 hubs. They are still two
+#            distinct business concepts: actor.company is the CRM/sales-
+#            stage record (onboarding -> active -> churned, dim_company
+#            below); entity.company_hub is the billing/workspace tenant
+#            (plan, pricing, engagement metrics, dim_account below). The
+#            hub -> company reference is carried as dim_account.company_id
+#            (fk via reference on prop__company), which is what forces the
+#            dim_account SPLIT below — a type2 table refuses `fk`.
 #   DROPPED  journey_instance's company_lifecycle slice as a standalone
 #            table. Its current_state history (1,399 rows over 541
 #            instances) exactly mirrors actor.company.status's own history
@@ -74,9 +76,10 @@
 #            inside it (e.g. `volume`) are this scenario's own authoring,
 #            not a base-format vocabulary — do not assume they generalize.
 #   ELECTED  entity.prop__engagement_score (a 1-100 score) carries the same
-#            float64 noise, so dim_account elects `derived: decimal` [5, 2] —
-#            the same DECIMAL(5,2) the source config's state table elects for
-#            this kind (per-kind agreement). dim_account is `scd: type2` and
+#            float64 noise, so dim_account_terms elects `derived: decimal`
+#            [5, 2] — the same DECIMAL(5,2) the source config's state table
+#            elects for this kind (per-kind agreement). dim_account_terms is
+#            `scd: type2` and
 #            the score is tracked, so the rendering is evaluated per version
 #            off the versioned reconstruction's value (see
 #            architecture/dimensional.md § SCD-2 wide reconstruction).
@@ -89,12 +92,17 @@
 #            fact_usage_event: output names are the domain's, never the
 #            engine ontology's.
 #   SPLIT    dim_user -> dim_user (Type-1 identity: name/email/account FK)
-#            + dim_user_status (SCD-2 satellite: status only). A `scd: type2`
+#            + dim_user_status (SCD-2 satellite: status only), and likewise
+#            dim_account -> dim_account (Type-1 identity: name/domain/plan/
+#            company FK) + dim_account_terms (SCD-2 satellite: seat_price,
+#            pct_of_list_rate, churn_flag, engagement_score). A `scd: type2`
 #            table refuses `fk` — a cross-row read the type2 build does not
-#            define — so dim_user's account_id cannot live on the same table
-#            as the tracked `status` column. This is a real engine
-#            constraint, not a style choice; the split is the standard
-#            mini-dimension/satellite pattern, not a fidelity loss.
+#            define — so neither FK can live on the same table as the
+#            tracked columns. This is a real engine constraint, not a style
+#            choice; the split is the standard mini-dimension/satellite
+#            pattern, not a fidelity loss. name/domain/plan are
+#            `temporal_class: constant` in the sidecar, so the Type-1 side
+#            loses no history.
 #   ELECTED  dim_company and dim_account carry `created_at`, a `derived:
 #            timestamp` off the structural `created_sim_time`. A structural
 #            column is untracked, so its rendering reads per record from the
@@ -108,7 +116,7 @@
 #            milestones (onboarding -> active -> churned; provisioned ->
 #            active -> using -> offboarded) — status-change dates a
 #            warehouse reports on, not intraday-sensitive moments.
-#            dim_account's own valid_from/valid_to stay the default
+#            dim_account_terms's valid_from/valid_to stay the default
 #            TIMESTAMP: its versions mix a daily engagement-score batch
 #            recompute with genuine same-day pricing changes (544 collision
 #            days measured), so collapsing to date grain would blend a
@@ -158,11 +166,44 @@ dimensional:
             scd_window: {bound: valid_to, as: date}
           description: Date this version was superseded; NULL on the current version.
 
-    # --- dim_account: billing/workspace tenant (entity.company_hub) ---
+    # --- dim_account: billing/workspace tenant, Type-1 identity (entity.company_hub) ---
     - name: dim_account
-      description: One row per account, the commercial record of a company's plan, pricing, churn status, and engagement score.
+      description: One row per account, the billing/workspace tenant a company provisions; its plan, identity, and the company it belongs to. The tracked commercial terms live on dim_account_terms.
       role: dim
-      scd: type2  # seat_price / churn_flag / engagement_score are tracked
+      scd: type1  # identity + FK; the tracked terms live on dim_account_terms
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: company_hub}
+      key: [account_id]
+      columns:
+        - name: account_id
+          from: presentation_id
+          description: Unique account identifier (ACC-#####).
+        - name: company_id
+          fk:
+            to: dim_company
+            via: reference
+            path: [prop__company]
+          description: dim_company.company_id of the CRM company this account belongs to.
+        - name: name
+          from: prop__name
+          description: Account display name.
+        - name: domain
+          from: prop__domain
+        - name: plan
+          from: prop__plan
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: When the account was created.
+
+    # --- dim_account_terms: SCD-2 satellite of the account's commercial terms ---
+    - name: dim_account_terms
+      description: One row per version of an account's commercial terms — seat price, negotiated usage discount, churn status, and engagement score — bounded by the interval each version was current for.
+      role: dim
+      scd: type2  # seat_price / pct_of_list_rate / churn_flag / engagement_score are tracked
       source:
         grain: records
         kind: entity
@@ -171,26 +212,17 @@ dimensional:
       columns:
         - name: account_id
           from: presentation_id
-          description: Unique account identifier (ACC-#####).
-        - name: name
-          from: prop__name
-          description: Account display name.
-        - name: domain
-          from: prop__domain
-        - name: plan
-          from: prop__plan
+          description: dim_account.account_id of the account these terms belong to.
         - name: seat_price
           from: prop__seat_price
+        - name: pct_of_list_rate
+          from: prop__pct_of_list_rate
+          description: Percent of each SKU's standard_rate this account pays for usage; 100 until an enterprise renewal negotiates it down, with an SCD-2 trail of every renegotiation.
         - name: churn_flag
           from: prop__churn_flag
         - name: engagement_score
           derived:
             decimal: {from: prop__engagement_score, as: [5, 2]}
-        - name: created_at
-          derived:
-            timestamp:
-              source: created_sim_time
-          description: When the account was created.
         - name: valid_from
           derived:
             scd_window: valid_from
@@ -219,6 +251,9 @@ dimensional:
           description: SKU display name (Core, Analytics, API).
         - name: popularity
           from: prop__popularity
+        - name: standard_rate
+          from: prop__standard_rate
+          description: List price per unit of usage volume; an account is billed standard_rate * pct_of_list_rate / 100 per unit.
         - name: created_at
           derived:
             timestamp:
