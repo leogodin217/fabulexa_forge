@@ -516,9 +516,10 @@ against true event order. The rendered value is monotone in its source, so order
 the raw ns source changes output only on same-microsecond ties — where raw order *is*
 the event order. This is the row-ordering doctrine ("pinned by `sim_time`, never by the
 rendered timestamp", § Determinism and ordering) applied to ordinals, and it is what
-makes the ordinal sound under windowed export, where a rendered-µs ordering could let a
-same-microsecond tie count a row that lands in the next window (see
-[`incremental.md`](incremental.md)). The amendment is implemented in
+lets an ordinal over the grain's raw time key count as horizon-invariant under
+windowed export, where a rendered-µs ordering could let a same-microsecond tie
+renumber an earlier window's row (see [`incremental.md`](incremental.md)
+§ Horizon windowing). The amendment is implemented in
 [`columns.py`](../../src/fabulexa_forge/exporters/dimensional/columns.py)
 (`_find_raw_ns_source_for_ordinal`).
 
@@ -533,10 +534,11 @@ its own rendered value, `record_id` tie-broken as any ordinary column.
 `interval`-rendered `elapsed` columns and `date_parse` columns are never
 amendment columns; they order by value, `record_id` tie-broken. An SCD-2
 `valid_to` bound stays outside the amendment under every election — it
-orders by rendered value like any other column. Under incremental export
-the windowed rule (an append-mode table's `ordinal.order_by` must name a
-window-key column) is amended the same way — see
-[`incremental.md`](incremental.md) § Window membership per table class.
+orders by rendered value like any other column. Under windowed export the
+delivery classifier reads the same amendment: an ordinal ordered by the
+grain's raw time key under a window-monotone rendering is horizon-invariant,
+a `time`-elected one is not (the table is then delivered `upsert`, never
+refused) — see [`incremental.md`](incremental.md) § Horizon windowing.
 
 A `value_map` column is **typed from its map's values**, and its generated `CASE`
 casts *every* branch — including the unmapped `→ NULL` — to that type, so the column
@@ -911,6 +913,10 @@ as a clear stderr message with a non-zero exit.
     output is byte-identical whether the value was read per-record or per-version —
     an election has one semantics; the source class only selects which rows supply
     values.
+15. **Key identity.** On every table of every config that loads, the declared `key`
+    is a stable row identity — a row keeps its key at every horizon at which it
+    exists (`KeyColumnsStable`). A load-time fact of every mode entry (`export`, the
+    incremental driver, the shaped playback head), independent of delivery class.
 
 ## Validation Rules
 
@@ -963,6 +969,8 @@ error message. The remaining business rules run against the sidecar in
 | `ExcludedKindNotSourced` | No declared table sources an `exclude.kinds` kind |
 | `ExcludedTableNotSourced` | No declared table's source resolves to an `exclude.tables` sidecar table name |
 | `check_reserved_presentation_name` | No author-named output column is `last_mutation_sim_time` — a reserved output name (the presentation-name posture; § Output naming). The shared check in [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py); the value channels freely under any other name |
+| `ReservedTableName` | No declared table is named `_export_meta` / `_export_windows` — the incremental driver's bookkeeping tables. Always-on, full export included, through the shared predicate in [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py) (the source mode's posture at every plan build), so a one-shot export and a later drip on the same target agree by construction; runs immediately after `check_reserved_presentation_name` |
+| `KeyColumnsStable` | Every `key` column of every table is a horizon-invariant value channel under the windowing module's one reading ([`incremental.md`](incremental.md) § Horizon windowing — horizon-invariant value channels): a row keeps its key at every horizon at which it exists. Always-on, every delivery class, full export included — the declared `key` is the table's row identity and recorded warehouse PK, and an identity that changes is wrong one-shot exactly as under a window. Conservative: a channel whose constancy the sidecar cannot establish (a producer-added column outside the structural set, an undeclared `prop__` column, a `via: reference` fk on an emit without `history_tracked` flags) is refused, not admitted, with the unknown constancy named as the varying source. Runs last among the per-table rules, after every rule the reading presumes (`KeyColumnsDeclared`, `ProjectionColumnExists`, `OrdinalRefsSiblings`, `FkTargetIsDim`, `ReferencePathResolvable`, `MembershipEdgeResolvable`, `LookupColumnSafety`), so those refuse under their own identities first — the position the delivery classifier occupies, reading the same function. The first varying channel in `key` order refuses, naming the table, the column, and the varying source. Stability, not uniqueness (§ Boundaries). Implementation: [`windowing.py`](../../src/fabulexa_forge/exporters/dimensional/windowing.py) `check_key_columns_stable` |
 
 The engine does not validate author `role` against `record_roles`: role is
 author-authoritative (Principle #7), and the registry informs only `init`'s proposal.
@@ -1082,6 +1090,23 @@ always receives a validated `Literal["csv","duckdb"]`.
   from `history` contents, because a `lookup` false negative would admit the very
   temporal paradox the gate prevents.
 
+- **A key is an identity, not a delivery detail.** The declared `key` is the table's
+  documented grain and recorded warehouse PK. A column whose value the run changes
+  does not identify a row; a table keyed on one has a wrong key on a one-shot export
+  too — the windowed reconciliation is merely where the wrongness first has a
+  consequence. Checking it once, at load, on every table, is cheaper to reason about
+  than a windowed rule with a class-dependent scope, and it is the posture the mode
+  takes for silently-broken joins (the dim-key agreement gate refuses statically
+  before any data is read). The alternative — deliver an unstable-key table whole and
+  notify — keeps a wrong key working and slows the windowed path silently; refusing
+  at load says what to fix. It is also what lets the shaped playback head's `tables()`
+  be the complete windowability surface with no seam-side gate
+  ([`playback.md`](playback.md) § Shaped window).
+- **Reserved table names are config errors.** A table named for an incremental
+  bookkeeping table is wrong whether or not this invocation drips; refusing it at
+  every load, as the source mode does at every plan build, makes a one-shot export and
+  a later `--next` on the same target agree by construction.
+
 ## Boundaries
 
 What the dimensional exporter deliberately does not own:
@@ -1094,6 +1119,11 @@ What the dimensional exporter deliberately does not own:
   (the DuckDB `TIMESTAMP` / interval limit); a sub-microsecond `sim_time` tail is
   truncated. Anchor *resolution* (origin/zone precedence, DST, ambiguity) is owned by
   the effective-anchor surface, not here — see [`anchor.md`](anchor.md).
+- **Key uniqueness one-shot.** `KeyColumnsStable` is about stability, not uniqueness:
+  a faithful-but-duplicate key still exports one-shot (Principle #6), and the declared
+  `key` is a validated logical key, never a materialized constraint. `WindowKeyDuplicate`
+  under a windowed compile is the one data-level key refusal
+  ([`incremental.md`](incremental.md) § Validation Rules).
 - **`firings`-as-facts.** The sanitised subset carries no `firings` table, and rule-firing
   fact tables are not a grain source; the fact backbone is the four grains above.
 - **Provenance columns.** The sanitised subset carries no `created_by_*` / `written_by_*`

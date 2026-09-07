@@ -203,7 +203,13 @@ def test_discriminator_unobserved_emits_one_notice_no_warning(tmp_path: Path) ->
         warnings.simplefilter("error")
         with open_emit(emit_dir) as emit:
             build_query_specs(
-                emit, config.dimensional, None, None, sink, base_relations=None
+                emit,
+                config.dimensional,
+                None,
+                None,
+                sink,
+                base_relations=None,
+                tables=None,
             )
 
     assert len(sink.notices) == 1
@@ -221,7 +227,7 @@ def test_discriminator_observed_emits_zero_notices(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         build_query_specs(
-            emit, config.dimensional, None, None, sink, base_relations=None
+            emit, config.dimensional, None, None, sink, base_relations=None, tables=None
         )
 
     assert sink.notices == []
@@ -240,7 +246,7 @@ def test_discriminator_list_wholly_unobserved_emits_one_notice_per_element(
 
     with open_emit(emit_dir) as emit:
         build_query_specs(
-            emit, config.dimensional, None, None, sink, base_relations=None
+            emit, config.dimensional, None, None, sink, base_relations=None, tables=None
         )
 
     assert [n.code for n in sink.notices] == ["discriminator-value-unobserved"] * 2
@@ -266,7 +272,7 @@ def test_discriminator_list_partially_observed_emits_weaker_wording(
 
     with open_emit(emit_dir) as emit:
         build_query_specs(
-            emit, config.dimensional, None, None, sink, base_relations=None
+            emit, config.dimensional, None, None, sink, base_relations=None, tables=None
         )
 
     assert len(sink.notices) == 1
@@ -287,10 +293,22 @@ def test_build_query_specs_notice_sequence_deterministic(tmp_path: Path) -> None
     second_sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         build_query_specs(
-            emit, config.dimensional, None, None, first_sink, base_relations=None
+            emit,
+            config.dimensional,
+            None,
+            None,
+            first_sink,
+            base_relations=None,
+            tables=None,
         )
         build_query_specs(
-            emit, config.dimensional, None, None, second_sink, base_relations=None
+            emit,
+            config.dimensional,
+            None,
+            None,
+            second_sink,
+            base_relations=None,
+            tables=None,
         )
 
     assert first_sink.notices == second_sink.notices
@@ -335,7 +353,11 @@ def test_export_dimensional_output_identical_recording_or_discarding(
 
 
 def test_export_window_threads_sink_to_dimensional_compile(tmp_path: Path) -> None:
-    """export_window threads notice_sink to build_query_specs for a range export."""
+    """export_window threads notice_sink to build_query_specs for a range export.
+
+    The sole table (`dim_entity`, a type-1 dim) is 'snapshot'-class, so the
+    horizon compile opens only the end horizon — the plan notice reaches the
+    sink once."""
     emit_dir = _build_notice_emit(tmp_path)
     config = _config_with_filter("admin")
     out = tmp_path / "range.duckdb"
@@ -372,7 +394,9 @@ def test_export_incremental_next_drip_reemits_notices_each_invocation(
     assert second_outcome.status == "emitted"
 
     assert first_sink.notices == second_sink.notices
-    assert len(first_sink.notices) == 1
+    assert (
+        len(first_sink.notices) == 1
+    )  # 'dim_entity' is snapshot-class: end horizon only
 
 
 # ---------------------------------------------------------------------------

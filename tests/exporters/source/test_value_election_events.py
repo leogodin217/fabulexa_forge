@@ -73,7 +73,7 @@ def _plan_over(
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(emit, config, anchor, election, False, _discard)
+        plan = build_source_plan(emit, config, anchor, election, _discard)
         yield emit, plan
 
 
@@ -83,7 +83,7 @@ def _rows_over(emit_dir: Path, config: ExportConfig) -> list[dict[str, object]]:
     with _plan_over(emit_dir, config) as (emit, plan):
         assert plan.events is not None, "every scenario here declares an events block"
         sql = build_event_log_sql(
-            emit.sidecar, plan.fork_path, plan.events, plan.anchor, None
+            emit.sidecar, plan.fork_path, plan.events, plan.anchor
         )
         return event_log_rows(emit, sql)
 
@@ -361,13 +361,13 @@ class TestElectedRendering:
             state_table = next(t for t in plan.tables if t.name == "widget_a")
             assert isinstance(state_table, SourceStateTablePlan)
             table_sql = build_state_render_sql(
-                plan.sidecar, plan.fork_path, state_table, plan.anchor, None
+                plan.sidecar, plan.fork_path, state_table, plan.anchor
             )
             cols = [out for _, out in state_table.columns]
             table_row = dict(zip(cols, next(iter(emit.query(table_sql, ())))))
             assert plan.events is not None
             log_sql = build_event_log_sql(
-                plan.sidecar, plan.fork_path, plan.events, plan.anchor, None
+                plan.sidecar, plan.fork_path, plan.events, plan.anchor
             )
             log_rows = event_log_rows(emit, log_sql)
 

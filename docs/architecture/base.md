@@ -378,8 +378,8 @@ outside every corrupter cell operation's eligible population.
 8. **`slice_at` ⊕ `incremental`.** A base config carries at most one temporal selector;
    the two together are a load-time error.
 9. **Reserved names are enforced always-on.** No resolved output table name is a
-   bookkeeping name or reserved suffix (`_export_meta` / `_export_windows` / `*__rows`),
-   and no output column name is `__valid_from_ns` or `last_mutation_sim_time` — checked
+   bookkeeping name (`_export_meta` / `_export_windows`), and no output column name
+   is `last_mutation_sim_time` — checked
    at plan build over every export (full included), so a full export and a later
    `--next` on the same target agree.
 10. **Both encodings or neither, when resolvable.** A surviving reference property whose
@@ -433,7 +433,7 @@ each raises an `ExportError` subclass surfaced through the CLI's existing error 
 | `BaseRenameUnresolved` | Every `rename` entry's `table` resolves to a surviving `records__<kind>`, and every `columns` key names an identity the kind actually emits in this emit — a state-at column identity, `record_index`, or a `ref_index__<p>` whose edge yields a key column. A `ref_index__<p>` for a non-reference property, or for one whose target kind has no records table here, is not in that set, so the rule falls out of the same check |
 | `BaseRenameSliceOnly` | No `rename` `columns` key names a non-exempt `slice_only` column or its `ref_index__` shadow — the column is policy-omitted, so the rename is unsatisfiable |
 | `BaseNameCollision` | All output table names are unique, and within each table all output column names are unique, after presentation defaults and `rename` — the key identities participating in the same domain as the state-at ones |
-| Reserved-name check (`ExportError`) | No resolved output table name is `_export_meta` / `_export_windows` / `*__rows`, and no output column name — key columns included — is `__valid_from_ns` or `last_mutation_sim_time` — enforced always-on via `exporters/reserved_names.py` |
+| Reserved-name check (`ExportError`) | No resolved output table name is `_export_meta` / `_export_windows`, and no output column name — key columns included — is `last_mutation_sim_time` — enforced always-on via `exporters/reserved_names.py` |
 | Reference target resolvable | Each surviving reference property's target kind has a records table in the sidecar. Present: the edge key is emitted. Absent: the edge key is omitted and one `reference-key-target-absent` notice is emitted — a notice, not an error |
 | `RenderKeyResolves` | Every `render`-map key resolves in its value form's domain: a bare-shorthand key names an instant-carrying structural column of the `records` category the render emits (reader-sourced, never a private list; `last_mutation_sim_time` outside the domain, the mode's existing `rename` exclusion); a typed-form key names a `prop__<p>` payload column ([`temporal-elections.md`](temporal-elections.md); [`value-rendering-elections.md`](value-rendering-elections.md)) |
 | `DateParseSourceColumn` | Every `{date_parse: …}` key names a declared VARCHAR `prop__<p>` column, read from the sidecar type directly, and not `slice_only` ([`temporal-elections.md`](temporal-elections.md)) |
@@ -525,7 +525,7 @@ gating are owned by [`declared-keys.md`](declared-keys.md).
 | Document | Why |
 |---|---|
 | [`derivations.md`](derivations.md) | The state-at and record-index residents base composes as its whole engine — values from the first, key columns from the second |
-| [`source.md`](source.md) | The windowed state snapshot (the same state-at composition), the presentation-name posture, and the `slice_only` omission shape base shares |
+| [`source.md`](source.md) | The presentation-name posture and the `slice_only` omission shape base shares |
 | [`slice-only.md`](slice-only.md) · [`notices.md`](notices.md) | The reused omission policy and the channel its notices flow through |
 | [`declared-keys.md`](declared-keys.md) | The opt-in `declare_keys` capability — declared primary-key / uniqueness constraints on base's flat tables |
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — the elective id-space value surface beside the always-on index keys, and the gates base's plan runs |

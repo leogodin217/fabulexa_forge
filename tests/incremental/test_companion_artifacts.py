@@ -440,31 +440,3 @@ def test_duckdb_windowed_writes_db_stem_siblings_and_rewrites(tmp_path: Path) ->
 # ---------------------------------------------------------------------------
 # SCD-2 dim under incremental: one manifest entry under the view name
 # ---------------------------------------------------------------------------
-
-
-def test_scd2_windowed_manifest_entry_uses_view_name_and_physical_columns(
-    tmp_path: Path,
-) -> None:
-    emit_dir = _build_scd2_emit(tmp_path)
-    config = _scd2_config(sim_period_ns=15)
-    db_path = tmp_path / "wh.duckdb"
-
-    with open_emit(emit_dir) as emit:
-        outcome = export_incremental_next(
-            emit, config, db_path, "duckdb", None, discard_notice_sink, overlay=None
-        )
-
-    assert outcome.status == "emitted"
-    assert outcome.report is not None
-    assert {t.name for t in outcome.report.tables} == {"dim_actor"}
-
-    manifest = _read_json(tmp_path / "wh-dimensional-manifest.json")
-    entries = manifest["tables"]
-    assert isinstance(entries, list)
-    assert len(entries) == 1
-    entry = entries[0]
-    assert entry["name"] == "dim_actor"
-    column_names = {c["name"] for c in entry["columns"]}
-    assert "__valid_from_ns" in column_names
-    assert "valid_to" not in column_names
-    assert entry["row_count"] is None

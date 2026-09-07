@@ -299,8 +299,6 @@ def build_base_query_specs(
                 table_name=table_spec.table_name,
                 sql=sql,
                 write_mode=write_mode,
-                view_name=None,
-                view_sql=None,
                 keys=(
                     resolve_base_table_keys(sidecar, table_spec)
                     if declare_keys

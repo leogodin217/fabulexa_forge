@@ -608,15 +608,6 @@ def test_rename_producing_reserved_table_name_raises_export_error() -> None:
         build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
 
 
-def test_rename_producing_reserved_rows_suffix_raises_export_error() -> None:
-    """A rename producing a `*__rows` output table name raises ExportError."""
-    config = BaseConfig(
-        rename=[RenameEntry(table="records__doctor", name="doctor__rows")]
-    )
-    with pytest.raises(ExportError):
-        build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
-
-
 def test_rename_producing_reserved_presentation_column_raises_export_error() -> None:
     """A rename producing the reserved `last_mutation_sim_time` output column
     name raises ExportError, naming the sim-internal presentation posture."""
@@ -634,24 +625,6 @@ def test_rename_producing_reserved_presentation_column_raises_export_error() -> 
         "table 'doctor': column 'last_mutation_sim_time' names the reserved"
         " last_mutation_sim_time column — it is sim-internal bookkeeping and"
         " is never emitted by base"
-    )
-
-
-def test_rename_producing_reserved_column_name_raises_export_error() -> None:
-    """A rename producing the reserved `__valid_from_ns` output column name
-    raises ExportError, naming the incremental bookkeeping collision."""
-    config = BaseConfig(
-        rename=[
-            RenameEntry(
-                table="records__doctor",
-                columns={"active": "__valid_from_ns"},
-            )
-        ]
-    )
-    with pytest.raises(ExportError) as exc_info:
-        build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
-    assert str(exc_info.value) == (
-        "table 'doctor': column '__valid_from_ns' is reserved under incremental export"
     )
 
 
@@ -804,20 +777,6 @@ def test_rename_colliding_with_resolved_key_name_raises_collision() -> None:
         ]
     )
     with pytest.raises(BaseNameCollision):
-        build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
-
-
-def test_rename_record_index_to_reserved_name_raises_export_error() -> None:
-    """Renaming record_index to a reserved name raises ExportError."""
-    config = BaseConfig(
-        rename=[
-            RenameEntry(
-                table="records__doctor",
-                columns={"record_index": "__valid_from_ns"},
-            )
-        ]
-    )
-    with pytest.raises(ExportError):
         build_base_plan(_spanning_sidecar(), config, discard_notice_sink)
 
 

@@ -697,6 +697,7 @@ def test_history_interval_zero_hop_lookup_execution(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         spec = next(s for s in specs if s.table_name == "fact_actor_status")
 
@@ -770,6 +771,7 @@ def test_history_interval_zero_hop_lookup_row_count_matches_baseline(
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         specs_baseline = build_query_specs(
             emit,
@@ -778,6 +780,7 @@ def test_history_interval_zero_hop_lookup_row_count_matches_baseline(
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
 
         spec_l = next(s for s in specs_lookup if s.table_name == "fact_actor_status")
@@ -1391,7 +1394,7 @@ def test_validate_table_rejects_tracked_lookup_fact(tmp_path: Path) -> None:
         config = DimensionalConfig(tables=[table_decl])
         with pytest.raises(ExportError, match="temporal_class: tracked"):
             validate_table(
-                table_decl, config, emit.sidecar, None, notice_sink=discard_notice_sink
+                table_decl, config, emit.sidecar, notice_sink=discard_notice_sink
             )
 
 
@@ -1413,7 +1416,7 @@ def test_validate_table_passes_constant_lookup_fact(tmp_path: Path) -> None:
         )
         config = DimensionalConfig(tables=[table_decl])
         src_name = validate_table(
-            table_decl, config, emit.sidecar, None, notice_sink=discard_notice_sink
+            table_decl, config, emit.sidecar, notice_sink=discard_notice_sink
         )
     assert src_name == "history"
 
@@ -1450,6 +1453,7 @@ def test_build_query_specs_raises_for_tracked_lookup_fact(tmp_path: Path) -> Non
                 None,
                 notice_sink=discard_notice_sink,
                 base_relations=None,
+                tables=None,
             )
 
 
@@ -1583,6 +1587,7 @@ def test_mixed_fk_and_two_lookups_share_hop_chain_no_collision(
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey")
 
@@ -1625,6 +1630,7 @@ def test_build_query_specs_deterministic_sql_lookup(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         specs2 = build_query_specs(
             emit,
@@ -1633,6 +1639,7 @@ def test_build_query_specs_deterministic_sql_lookup(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
 
     sql1 = next(s.sql for s in specs1 if s.table_name == "fact_actor_status")

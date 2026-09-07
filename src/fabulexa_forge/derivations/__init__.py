@@ -27,6 +27,7 @@ Public surface:
     build_membership_events_sql — membership join/leave event stream SQL builder
     MEMBERSHIP_STATE_AT_COLUMNS — canonical membership-state-at column prefix
     build_membership_state_at_sql — membership containment-at-horizon SQL builder
+    TruncatedTape / open_truncated_tape — the emit presented as a producer slice at T
 """
 
 from fabulexa_forge.derivations.guard import require_single_branch
@@ -53,6 +54,10 @@ from fabulexa_forge.derivations.row_state_events import (
     ROW_STATE_EVENT_COLUMNS,
     build_row_state_events_sql,
 )
+from fabulexa_forge.derivations.truncated_tape import (
+    TruncatedTape,
+    open_truncated_tape,
+)
 from fabulexa_forge.derivations.versioned_intervals import (
     VERSIONED_INTERVAL_COLUMNS,
     build_versioned_intervals_sql,
@@ -77,4 +82,6 @@ __all__ = [
     "build_membership_events_sql",
     "MEMBERSHIP_STATE_AT_COLUMNS",
     "build_membership_state_at_sql",
+    "TruncatedTape",
+    "open_truncated_tape",
 ]

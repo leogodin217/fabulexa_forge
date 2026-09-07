@@ -22,10 +22,11 @@ edge resolved (§ `_guard_dim_side_legs`) — before any writer runs.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Collection, Mapping
     from pathlib import Path
 
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -40,7 +41,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge.config.models import DimensionalConfig
-from fabulexa_forge.derivations import require_single_branch
+from fabulexa_forge.derivations import open_truncated_tape, require_single_branch
 from fabulexa_forge.exporters.base_relations import apply_base_relations
 from fabulexa_forge.exporters.companion import (
     validate_overlay_tables,
@@ -56,11 +57,16 @@ from fabulexa_forge.exporters.dimensional.populations import (
     resolve_fk_surface,
 )
 from fabulexa_forge.exporters.dimensional.validation import validate_table
+from fabulexa_forge.exporters.dimensional.windowing import (
+    check_window_key_unique,
+    window_delivery_class,
+)
 from fabulexa_forge.exporters.election import (
     build_population_spine_sql,
     check_elected_key_unique,
     resolve_election,
 )
+from fabulexa_forge.exporters.horizon import compose_window_delta_sql
 from fabulexa_forge.exporters.query_spec import QuerySpec, write_query_specs
 
 __all__ = ["QuerySpec", "build_query_specs", "export_dimensional"]
@@ -71,20 +77,6 @@ _GUARD_SURFACES: tuple[Literal["record_index", "presentation_id"], ...] = (
     "record_index",
     "presentation_id",
 )
-
-
-def _guard_context_label(base_label: str, window: "Window | None") -> str:
-    """Suffix a guard's context label with the window display label, if any.
-
-    Args:
-        base_label: The table/edge identity (e.g. `"fact_ride.driver_id"`).
-        window: The active window, or None for a full/sliced export.
-
-    Returns:
-        `base_label`, suffixed `" (<window.label>)"` under an incremental
-        invocation.
-    """
-    return base_label if window is None else f"{base_label} ({window.label})"
 
 
 def _guard_fk_relation(
@@ -134,7 +126,6 @@ def _guard_fk_columns(
     table_decl: "TableDecl",
     config: DimensionalConfig,
     election: "Election",
-    window: "Window | None",
     dim_decls: "dict[str, TableDecl]",
     dim_surfaces: "dict[str, set[Literal['record_index', 'presentation_id']]]",
 ) -> None:
@@ -156,7 +147,6 @@ def _guard_fk_columns(
         table_decl: The output table declaration whose fk columns to guard.
         config: The dimensional config.
         election: The resolved election.
-        window: The active window, or None for a full/sliced export.
         dim_decls: Accumulator: dim table name -> its TableDecl.
         dim_surfaces: Accumulator: dim table name -> the surfaces ≥ 1 inbound
             edge resolved that the dim's declared key also projects.
@@ -185,7 +175,7 @@ def _guard_fk_columns(
             fork_path,
             dim_populations,
             resolved_surface,
-            _guard_context_label(edge_name, window),
+            edge_name,
         )
         if dim_key_projects_surface(target_table_decl, resolved_surface):
             dim_decls[target_table_decl.name] = target_table_decl
@@ -198,7 +188,6 @@ def _guard_dim_side_legs(
     fork_path: str,
     dim_decls: "dict[str, TableDecl]",
     dim_surfaces: "dict[str, set[Literal['record_index', 'presentation_id']]]",
-    window: "Window | None",
 ) -> None:
     """Guard the dim-side leg: each dim whose key an inbound edge's surface projects.
 
@@ -214,7 +203,6 @@ def _guard_dim_side_legs(
         fork_path: The sole branch, from `require_single_branch`.
         dim_decls: dim table name -> its TableDecl, from `_guard_fk_columns`.
         dim_surfaces: dim table name -> the surfaces to guard.
-        window: The active window, or None for a full/sliced export.
 
     Raises:
         ElectedKeyDuplicate: A guarded dim relation is not a bijection on
@@ -225,7 +213,7 @@ def _guard_dim_side_legs(
         dim_populations = resolve_dim_source_populations(
             sidecar, dim_table_decl.source.kind, dim_table_decl.source.filter
         )
-        label = _guard_context_label(f"{dim_name} (dim-side leg)", window)
+        label = f"{dim_name} (dim-side leg)"
         for surface in _GUARD_SURFACES:
             if surface not in surfaces:
                 continue
@@ -256,6 +244,28 @@ def _table_author_descriptions(table_decl: "TableDecl") -> "Mapping[str, str]":
     }
 
 
+def _selected_table_decls(
+    config: DimensionalConfig, tables: "Collection[str] | None"
+) -> "list[TableDecl]":
+    """The declared tables `tables` selects, in declaration order.
+
+    Shared by `build_query_specs`' full-export loop and
+    `_build_windowed_query_specs`' delivery-class classification, so the two
+    can never disagree on which declarations a selection compiles.
+
+    Args:
+        config: The dimensional config.
+        tables: The caller's selection, or None for every declared table.
+
+    Returns:
+        `config.tables` filtered to the selection, declaration order
+        preserved; every declared table when `tables` is None.
+    """
+    if tables is None:
+        return list(config.tables)
+    return [table_decl for table_decl in config.tables if table_decl.name in tables]
+
+
 def build_query_specs(
     emit: "Emit",
     config: DimensionalConfig,
@@ -265,21 +275,37 @@ def build_query_specs(
     base_relations: "Mapping[str, str] | None",
     *,
     election: "Election | None" = None,
+    tables: "Collection[str] | None",
 ) -> list[QuerySpec]:
-    """Compile table declarations; optionally windowed.
+    """Compile table declarations; optionally windowed; optionally a selection.
 
-    window=None is the existing full-export contract, unchanged (no
-    parameter default — full-export call sites pass None explicitly). With a
-    window: the per-class membership predicate (design doc § Window
-    membership: records grain on last_mutation_sim_time, history_point on
-    sim_time, half-open on raw ns) is applied as the outermost WHERE over
-    the full-export SELECT (after window functions and derived columns, so
-    every emitted value equals its full-export value); SCD-2 dims with a
-    valid_to column compile to a '<name>__rows' spec without the valid_to
-    slots, with the trailing __valid_from_ns ordering key, plus the
-    companion view; type-1 dims compile to their full snapshot (no
-    predicate); write modes are tagged append (facts, SCD-2 rows) / replace
-    (type-1 dims). Windowed business rules run before any SQL is emitted.
+    window=None is the full-export contract (no parameter default —
+    full-export call sites pass None explicitly). With a window: the horizon
+    compile. Opens the truncated tape at `window.end_ns - 1` and at
+    `window.start_ns - 1` (the empty tape below the first data instant),
+    runs this same full-export compile over each — the tape's sidecar view
+    for column enumeration, its `base_relations` for every base read — and
+    returns, per compiled table in declaration order, one QuerySpec by the
+    table's static delivery class (`windowing.window_delivery_class`): a
+    'snapshot' table's end-horizon query with write_mode 'replace';
+    otherwise the multiset difference `end EXCEPT ALL start`, ordered by
+    every projected column, with write_mode 'append' or 'upsert' and, for
+    'upsert', the table's key as `upsert_key`. `KeyColumnsStable` and
+    `ReservedTableName` are always-on rules run by `validate_table` inside
+    every full-export compile — every horizon and the one-shot path alike —
+    not windowed-only gates; before returning, the WindowKeyDuplicate guard
+    runs over every compiled 'upsert' table's end-horizon relation. Each
+    horizon compile is the full-export compile, so a plan notice reaches the
+    sink once per horizon compiled. `base_relations` must be None under a
+    window — the tape supplies the mapping.
+
+    `tables` narrows the compile to the named declarations: per-table
+    compile, WindowKeyDuplicate, the fk-edge guard, and the dim-side leg
+    guard (over the dims the selected tables' edges reach) run for selected
+    tables only; every declaration remains visible to resolution. None
+    compiles every declared table — the full-export and incremental-driver
+    contract. No parameter default: every caller states its selection (the
+    two whole-shape callers pass None).
 
     New behavior: SliceOnlyColumnRefused runs always-on over every
     config-referenced source-column resolution; LookupColumnSafety keys on
@@ -297,7 +323,7 @@ def build_query_specs(
         emit: The open emit (trunk-only; sole branch).
         config: The validated dimensional config.
         anchor: The resolved EffectiveAnchor, or None for raw sim_time.
-        window: The window to filter to, or None for the full export.
+        window: The half-open window to compile, or None for the full export.
         notice_sink: Receiver for plan notices.
         base_relations: Physical base-table name -> replacing relation (a complete
             SELECT). When given, every base-table read in the compiled plan
@@ -305,17 +331,19 @@ def build_query_specs(
             name wrapped around each compiled query (never a textual prefix — a
             compiled query may already open with its own WITH); unmapped names
             fall back to the physical table. None compiles byte-identically to
-            the pre-parameter surface; the full-export and windowed callers pass
-            None explicitly.
+            the pre-parameter surface. Must be None under a window.
         election: The resolved election, or None to resolve the all-default
             election internally (every population elects record_id — the
             caller has no `keys` block to thread, or is an election-free
             internal/test caller). Callers that hold `ExportConfig.keys`
             (`export_dimensional`, the incremental driver, tier-2 shaped
             playback) resolve and pass it.
+        tables: The declared names to compile, or None for every table.
+            Every name must be declared — an undeclared name is a
+            programming error, not an author-config refusal.
 
     Returns:
-        One QuerySpec per declared table, in declaration order. Each spec's
+        One QuerySpec per compiled table, in declaration order. Each spec's
         `provenance` is `build_grain_sql`'s fifth element, stamped
         verbatim; `kind_values` stays empty — dimensional has no
         kind-name-as-value output column. `author_descriptions` is stamped
@@ -323,12 +351,12 @@ def build_query_specs(
         keyed by each entry's own output name.
 
     Raises:
-        ExportError: The existing rules; plus, when window is not None:
-            IncrementalGrainUnsupported, IncrementalElapsedUnsupported,
-            IncrementalFkMembershipUnsupported, IncrementalFkMutableHop,
-            IncrementalOrdinalOrderBy, IncrementalSliceColumnMutable,
-            IncrementalFilterColumnMutable, IncrementalScd2IdentityKey,
-            IncrementalScd2ValidFromUnique, IncrementalReservedName.
+        ExportError: An always-on business rule fails (including
+            `KeyColumnsStable` and `ReservedTableName`, run by
+            `validate_table` for every horizon and the one-shot path
+            alike); or, under a window, WindowKeyDuplicate
+            (`windowing.py`). No other windowed-only refusal exists.
+        ValueError: window is set and base_relations is not None.
         ElectedKeyDuplicate: A corrupted elected key fails the uniqueness
             guard on some fk relation or the dim-side leg.
         ElectionInheritanceAmbiguous: An fk column's `target_key` is absent
@@ -349,29 +377,38 @@ def build_query_specs(
     resolved_election = (
         election if election is not None else resolve_election(sidecar, None)
     )
+    if tables is not None:
+        declared = {table_decl.name for table_decl in config.tables}
+        assert declared.issuperset(tables), (
+            f"tables selects undeclared name(s): {sorted(set(tables) - declared)}"
+        )
+    if window is not None:
+        if base_relations is not None:
+            raise ValueError("base_relations must be None under a window")
+        return _build_windowed_query_specs(
+            emit, config, anchor, window, notice_sink, resolved_election, tables
+        )
 
     specs: list[QuerySpec] = []
     dim_decls: "dict[str, TableDecl]" = {}
     dim_surfaces: "dict[str, set[Literal['record_index', 'presentation_id']]]" = {}
 
-    for table_decl in config.tables:
+    for table_decl in _selected_table_decls(config, tables):
         source_table_name = validate_table(
             table_decl,
             config,
             sidecar,
-            window,
             notice_sink,
             anchor=anchor,
             election=resolved_election,
         )
-        sql, write_mode, view_name, view_sql, provenance = build_grain_sql(
+        sql, provenance = build_grain_sql(
             table_decl,
             source_table_name,
             sidecar,
             anchor,
             fork_path,
             config,
-            window,
             election=resolved_election,
         )
         sql = apply_base_relations(sql, base_relations)
@@ -382,31 +419,114 @@ def build_query_specs(
             table_decl,
             config,
             resolved_election,
-            window,
             dim_decls,
             dim_surfaces,
         )
-        # For SCD-2 dims with valid_to under a window, view_name = author name
-        # and the physical table is <name>__rows.
-        if view_name is not None:
-            phys_table_name = f"{table_decl.name}__rows"
-        else:
-            phys_table_name = table_decl.name
         specs.append(
             QuerySpec(
-                table_name=phys_table_name,
+                table_name=table_decl.name,
                 sql=sql,
-                write_mode=write_mode,
-                view_name=view_name,
-                view_sql=view_sql,
+                write_mode="create",
                 provenance=provenance,
                 author_descriptions=_table_author_descriptions(table_decl),
                 author_table_description=table_decl.description,
             )
         )
 
-    _guard_dim_side_legs(emit, sidecar, fork_path, dim_decls, dim_surfaces, window)
+    _guard_dim_side_legs(emit, sidecar, fork_path, dim_decls, dim_surfaces)
 
+    return specs
+
+
+def _build_windowed_query_specs(
+    emit: "Emit",
+    config: DimensionalConfig,
+    anchor: "EffectiveAnchor | None",
+    window: "Window",
+    notice_sink: "NoticeSink",
+    election: "Election",
+    tables: "Collection[str] | None",
+) -> list[QuerySpec]:
+    """The horizon compile (§ `build_query_specs`, window set), over a selection.
+
+    Classifies the compiled tables only (`window_delivery_class` over the
+    declarations `tables` selects, declaration order). Opens the end horizon
+    (`window.end_ns - 1`) always, through `build_query_specs(..., None, ...,
+    tables=tables)` over the truncated tape; opens the start horizon
+    (`window.start_ns - 1`) only when some compiled table's class is 'upsert'
+    or 'append'. Pairs end (and start) specs with the compiled declarations
+    positionally. No static rule runs here: `check_key_columns_stable` and
+    `check_reserved_table_name` are `validate_table`'s, run by every
+    horizon's full-export compile.
+
+    Args:
+        emit: The open physical emit.
+        config: The validated dimensional config.
+        anchor: The resolved EffectiveAnchor, or None.
+        window: The half-open window to compile.
+        notice_sink: Receiver for plan notices, once per horizon opened.
+        election: The resolved election.
+        tables: The declared names to compile, or None for every table
+            (already validated by the caller — `build_query_specs` asserts).
+
+    Returns:
+        One QuerySpec per compiled table, declaration order; 'snapshot'
+        tables carry the end-horizon query with write_mode 'replace', every
+        other the `end EXCEPT ALL start` delta with write_mode 'append' /
+        'upsert' (+ `upsert_key`), guarded by WindowKeyDuplicate.
+
+    Raises:
+        ExportError: WindowKeyDuplicate on a compiled 'upsert' table; any
+            refusal the horizon compiles raise.
+    """
+    sidecar = emit.sidecar
+    fork_path = require_single_branch(sidecar)
+    compiled_decls = _selected_table_decls(config, tables)
+    classes = [
+        window_delivery_class(table_decl, config, sidecar)
+        for table_decl in compiled_decls
+    ]
+    delta_bearing = any(delivery in ("upsert", "append") for delivery in classes)
+
+    def compile_at(at_sim_time: int) -> list[QuerySpec]:
+        tape = open_truncated_tape(sidecar, fork_path, at_sim_time)
+        return build_query_specs(
+            emit.with_sidecar(tape.sidecar),
+            config,
+            anchor,
+            None,
+            notice_sink,
+            tape.base_relations,
+            election=election,
+            tables=tables,
+        )
+
+    end_specs = compile_at(window.end_ns - 1)
+    start_specs = compile_at(window.start_ns - 1) if delta_bearing else None
+
+    specs: list[QuerySpec] = []
+    for index, (table_decl, delivery, end_spec) in enumerate(
+        zip(compiled_decls, classes, end_specs, strict=True)
+    ):
+        if delivery == "snapshot":
+            specs.append(replace(end_spec, write_mode="replace"))
+            continue
+        assert start_specs is not None
+        start_spec = start_specs[index]
+        if delivery == "upsert":
+            check_window_key_unique(emit, table_decl, end_spec.sql)
+        specs.append(
+            replace(
+                end_spec,
+                sql=compose_window_delta_sql(
+                    end_spec.sql,
+                    start_spec.sql,
+                    [col.name for col in table_decl.columns],
+                ),
+                write_mode=delivery,
+                upsert_key=tuple(table_decl.key) if delivery == "upsert" else None,
+            )
+        )
     return specs
 
 
@@ -469,6 +589,7 @@ def export_dimensional(
         notice_sink,
         base_relations=None,
         election=election,
+        tables=None,
     )
     if overlay is not None:
         validate_overlay_tables(overlay, [spec.table_name for spec in specs])

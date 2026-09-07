@@ -145,12 +145,15 @@ class ExportReport:
 
 @dataclass(frozen=True)
 class QuerySpec:
-    """A compiled output table: name, SELECT, write mode, optional view pair.
+    """A compiled output table: its author-facing name, SELECT, and write mode.
 
-    Full export compiles every table with write_mode='create' and no view —
-    the existing shape. A windowed compile tags facts and SCD-2 version
-    tables 'append', type-1 dims 'replace', and carries the companion view
-    (name + DDL SELECT body) for SCD-2 dims that declare a valid_to column.
+    Full export compiles every table with write_mode='create'. A windowed
+    compile tags each table by its delivery class: 'append' (insert the
+    relation), 'replace' (replace the table with the relation), or 'upsert'
+    (delete every target row whose `upsert_key` columns equal a relation
+    row's — NULL equal to NULL — then insert the relation). `upsert_key` is
+    the reconciling key, in declared key order, present iff write_mode is
+    'upsert'. `table_name` is always the author-facing output name.
 
     `provenance`, `kind_values`, and `author_descriptions` are keyed by
     output column name (post-rename). Empty means nothing stamped; every
@@ -165,10 +168,9 @@ class QuerySpec:
 
     table_name: str
     sql: str
-    write_mode: Literal["create", "append", "replace"]
-    view_name: str | None
-    view_sql: str | None
+    write_mode: Literal["create", "append", "replace", "upsert"]
     keys: TableKeys | None = None
+    upsert_key: tuple[str, ...] | None = None
     provenance: "Mapping[str, ColumnProvenance]" = field(default_factory=dict)
     kind_values: "Mapping[str, tuple[KindValueEntry, ...]]" = field(
         default_factory=dict
@@ -226,25 +228,6 @@ def declare_keys_active(config: "ExportConfig") -> bool:
     return False
 
 
-def query_spec_output_name(spec: QuerySpec) -> str:
-    """The spec's author-facing output-table name.
-
-    An SCD-2 dim windowed with a `valid_to` column compiles to a physical
-    `<name>__rows` spec plus a companion view named the author's declared
-    table name (`view_name`); every other spec carries no view, so its
-    `table_name` already is the author name. Shared by the incremental
-    driver's CSV writer and tier-2 `ShapedPlayback.window()` so the two
-    surfaces name a windowed SCD-2 dim's output identically.
-
-    Args:
-        spec: A compiled QuerySpec.
-
-    Returns:
-        `spec.view_name` when present, else `spec.table_name`.
-    """
-    return spec.view_name if spec.view_name is not None else spec.table_name
-
-
 def write_query_specs(
     emit: "Emit",
     specs: list[QuerySpec],
@@ -256,8 +239,7 @@ def write_query_specs(
     Every mode's full-export path (dimensional, source, base) compiles to
     this one shape and shares this dispatch: flattens to name -> SQL and
     hands off to `writers.duckdb.write_duckdb`, or one `writers.csv.write_csv`
-    call per table. Every full-export spec is `write_mode='create'` with no
-    view, so a spec's `table_name` is already its author-facing output name.
+    call per table. Every full-export spec is `write_mode='create'`.
 
     Args:
         emit: The open emit.

@@ -8,7 +8,9 @@ oracle for every op the shipped formats emit today — 'r' is new this sprint
 and has no shipped oracle, so it is exercised in `test_jsonl.py` /
 `test_debezium.py` instead), key-bytes and timestamp parity,
 `value_schema_for`'s table-identity cases including the two declared
-schema-identity fixes, the resolve-time gates (self-vetting, anchor/config
+schema-identity fixes, `value_schemas`' run-level enumeration (the declared
+domain, in declaration order, agreeing key-for-key with the per-event
+answer), the resolve-time gates (self-vetting, anchor/config
 requirements), and render purity.
 """
 
@@ -404,6 +406,188 @@ class TestValueSchemaFor:
             head = open_stream_playback(emit, config, anchor, discard_notice_sink)
             event = next(iter(head.events(None, None)))
         assert render.value_schema_for(event) is None
+
+
+# ---------------------------------------------------------------------------
+# value_schemas — the run-level declared-domain enumeration
+# ---------------------------------------------------------------------------
+
+
+class TestValueSchemas:
+    def test_source_table_identity_enumerates_declared_leaves_in_order(
+        self, tmp_path: "Path"
+    ) -> None:
+        """Streams in declaration order; a sub-typed kind contributes one
+        key per declared leaf under its topic, so one topic carries several
+        keys and there is no by-topic-alone schema."""
+        emit_dir = build_full_scenario(tmp_path)
+        config = StreamConfig(
+            content="state-changes",
+            streams=[
+                kind_stream("widgets", "widget", ["label"]),
+                kind_stream("patients", "patient", ["status"]),
+            ],
+            debezium=_debezium_config(),
+        )
+        with open_emit(emit_dir) as emit:
+            render = resolve_stream_render(
+                emit, config, "debezium", make_anchor(), discard_notice_sink
+            )
+            patient_leaves = emit.sidecar.subtype_values("patient")
+        schemas = render.value_schemas()
+        assert list(schemas) == [
+            ("widgets", "widget"),
+            *(("patients", leaf) for leaf in patient_leaves),
+        ]
+        for (_, leaf), schema in schemas.items():
+            assert schema["name"] == f"fabulexa.{leaf}.Envelope"
+
+    def test_sub_types_scope_narrows_the_enumerated_leaves(
+        self, tmp_path: "Path"
+    ) -> None:
+        emit_dir = build_full_scenario(tmp_path)
+        with open_emit(emit_dir) as emit:
+            domain = emit.sidecar.subtype_values("patient")
+            chosen = [domain[-1], domain[0]]
+            config = StreamConfig(
+                content="state-changes",
+                streams=[
+                    kind_stream("patients", "patient", ["status"], sub_types=chosen)
+                ],
+                debezium=_debezium_config(),
+            )
+            render = resolve_stream_render(
+                emit, config, "debezium", make_anchor(), discard_notice_sink
+            )
+        assert list(render.value_schemas()) == [("patients", leaf) for leaf in chosen]
+
+    def test_topic_identity_degenerate_keys(self, tmp_path: "Path") -> None:
+        emit_dir = build_full_scenario(tmp_path)
+        config = StreamConfig(
+            content="state-changes",
+            streams=[
+                kind_stream("patients", "patient", ["status"]),
+                kind_stream("widgets", "widget", ["label"]),
+            ],
+            debezium=_debezium_config(table_identity="topic"),
+        )
+        with open_emit(emit_dir) as emit:
+            render = resolve_stream_render(
+                emit, config, "debezium", make_anchor(), discard_notice_sink
+            )
+        assert list(render.value_schemas()) == [
+            ("patients", "patients"),
+            ("widgets", "widgets"),
+        ]
+
+    def test_overlapping_streams_sharing_leaf_enumerate_distinct_keys(
+        self, tmp_path: "Path"
+    ) -> None:
+        emit_dir = build_full_scenario(tmp_path)
+        config = StreamConfig(
+            content="state-changes",
+            streams=[
+                kind_stream("by_label", "widget", ["label"]),
+                kind_stream("by_count", "widget", ["count"]),
+            ],
+            debezium=_debezium_config(),
+        )
+        with open_emit(emit_dir) as emit:
+            render = resolve_stream_render(
+                emit, config, "debezium", make_anchor(), discard_notice_sink
+            )
+        schemas = render.value_schemas()
+        assert list(schemas) == [("by_label", "widget"), ("by_count", "widget")]
+        assert schemas[("by_label", "widget")] != schemas[("by_count", "widget")]
+
+    def test_membership_content_enumerates_one_key_per_stream(
+        self, tmp_path: "Path"
+    ) -> None:
+        emit_dir = build_full_scenario(tmp_path)
+        config = StreamConfig(
+            content="membership-events",
+            streams=[
+                membership_stream("team_events", "patient", "team", ["role"]),
+                membership_stream("tag_events", "widget", "tags", ["tag"]),
+            ],
+            debezium=_debezium_config(),
+        )
+        with open_emit(emit_dir) as emit:
+            render = resolve_stream_render(
+                emit, config, "debezium", make_anchor(), discard_notice_sink
+            )
+            head = open_stream_playback(
+                emit, config, make_anchor(), discard_notice_sink
+            )
+            leaves = {e.topic: e.route_table for e in head.events(None, None)}
+        assert list(render.value_schemas()) == [
+            ("team_events", leaves["team_events"]),
+            ("tag_events", leaves["tag_events"]),
+        ]
+
+    def test_enumeration_agrees_with_per_event_answer(self, tmp_path: "Path") -> None:
+        """Every in-domain event's value_schema_for is the enumerated entry
+        under its own (topic, table-identity) key, by identity."""
+        emit_dir = build_full_scenario(tmp_path)
+        config = _state_config()
+        anchor = make_anchor()
+        with open_emit(emit_dir) as emit:
+            render = resolve_stream_render(
+                emit, config, "debezium", anchor, discard_notice_sink
+            )
+            head = open_stream_playback(emit, config, anchor, discard_notice_sink)
+            events = list(head.events(None, None))
+        schemas = render.value_schemas()
+        assert events
+        for event in events:
+            assert (
+                render.value_schema_for(event)
+                is schemas[(event.topic, event.route_table)]
+            )
+
+    def test_out_of_domain_leaf_is_not_enumerated(self, tmp_path: "Path") -> None:
+        emit_dir = build_full_scenario(tmp_path)
+        config = StreamConfig(
+            content="state-changes",
+            streams=[kind_stream("patients", "patient", ["status"])],
+            debezium=_debezium_config(),
+        )
+        with open_emit(emit_dir) as emit:
+            render = resolve_stream_render(
+                emit, config, "debezium", make_anchor(), discard_notice_sink
+            )
+        assert ("patients", "ghost_leaf") not in render.value_schemas()
+
+    def test_read_only_view(self, tmp_path: "Path") -> None:
+        emit_dir = build_full_scenario(tmp_path)
+        with open_emit(emit_dir) as emit:
+            render = resolve_stream_render(
+                emit, _state_config(), "debezium", make_anchor(), discard_notice_sink
+            )
+        schemas = render.value_schemas()
+        with pytest.raises(TypeError):
+            schemas[("x", "y")] = {}  # type: ignore[index]
+
+    def test_empty_for_jsonl(self, tmp_path: "Path") -> None:
+        emit_dir = build_full_scenario(tmp_path)
+        with open_emit(emit_dir) as emit:
+            render = resolve_stream_render(
+                emit, _state_config(), "jsonl", None, discard_notice_sink
+            )
+        assert dict(render.value_schemas()) == {}
+
+    def test_empty_for_schemas_disabled(self, tmp_path: "Path") -> None:
+        emit_dir = build_full_scenario(tmp_path)
+        config = StreamConfig(
+            content="state-changes",
+            streams=[kind_stream("patients", "patient", ["status"])],
+            debezium=_debezium_config(schemas_enable=False),
+        )
+        with open_emit(emit_dir) as emit:
+            render = resolve_stream_render(
+                emit, config, "debezium", make_anchor(), discard_notice_sink
+            )
+        assert dict(render.value_schemas()) == {}
 
 
 # ---------------------------------------------------------------------------

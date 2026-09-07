@@ -112,8 +112,9 @@ Every derivation — the resident and any future one — obeys six rules:
    key** (raw ns). No value on the row derives from base state later than that key,
    except sources the derivation declares temporally constant. This is the one
    shared contract that makes any derivation safe to window under a cadence driver
-   without per-mode re-analysis; the incremental driver's window-membership rules
-   are the dimensional-mode instance of it.
+   without per-mode re-analysis; the truncated tape (§ The truncated-tape surface)
+   is its whole-emit form — every relation honest at one horizon — and the
+   dimensional windowed compile runs over it rather than re-analysing per mode.
 
 Derivations are single-branch at this stage: each takes the sole branch's
 `fork_path` from `require_single_branch` and filters every base read to it.
@@ -390,9 +391,8 @@ state strictly earlier than it, so the fold is temporally honest by the same tes
 as every other resident. Declared order: `(created_sim_time, record_id)`. Reads
 only `history` and `records__<kind>`, filtered to `fork_path`. Values are raw;
 wallclock rendering and per-source-type casts are mode-side representation — the
-source exporter's windowed state snapshot (see [`source.md`](source.md) §
-Incremental composition) is this fold's first consumer; point-in-time export
-(§ Staged roadmap, Stage 5) is a later one. Behavioral cases are exercised in
+base exporter's horizons (see [`base.md`](base.md) § Three horizons) are this
+fold's consumer. Behavioral cases are exercised in
 [`tests/derivations/test_state_at.py`](../../tests/derivations/test_state_at.py).
 
 **The end-of-tape entry point.** `build_state_at_end_sql(sidecar, fork_path,
@@ -642,9 +642,26 @@ reconstruction reads `history`; its `ref_index__` re-derivation reads the target
 kind's spine — the read carries truncated-world semantics via an inline
 truncation predicate, so its result equals a read of that table's truncated
 presentation, never the physical table. A builder's read of the table it
-*presents* names the physical table (the source being truncated). This makes the
-cross-reads binding-insensitive under the seam's name-shadowing composition
-(§ The compile indirection in [`playback.md`](playback.md)).
+*presents* names the physical table (the source being truncated) — the records
+builder's `ref_index__` re-derivation included when the reference targets the
+presented kind itself (a self-referencing kind), which must bind physical like
+every other self-read or the shadow wrap would read the CTE it is defining. This
+makes the cross-reads binding-insensitive under the seam's name-shadowing
+composition (§ The compile indirection in [`playback.md`](playback.md)).
+
+`open_truncated_tape(sidecar, fork_path, at_sim_time)` composes the surface:
+it returns a `TruncatedTape` — the truncated sidecar view, the `base_relations`
+mapping (one replacing relation per base table the physical sidecar declares,
+so any compiled read of any base table resolves truncated), and the position —
+pure data, no connection. The holder of the connection presents the sidecar
+over it (`Emit.with_sidecar`) and wraps each compiled query with the mapping
+(`exporters.base_relations.shadow_base_relations`). T at or beyond the branch's
+slice bound is the identity presentation in value (`last_mutation_sim_time`
+excepted where the producer's physical value exceeds the recorded trail); T
+below every data instant — a negative T included — is the empty tape. The
+records relation's recorded trail reads `history` only when the sidecar
+declares it; an emit with no `history` table has the trail
+`greatest(created_sim_time, deactivated_at when <= T)`.
 
 `build_truncated_sidecar(sidecar)` is a pure `Sidecar` derivation identical to
 the physical sidecar except that each `records__<kind>` entry's column list
@@ -745,8 +762,8 @@ filter on; it raises `ExportError` on zero or more than one branch.
   resolution compose the first two residents; the streaming exporter composes
   row-state-events (for `state-changes`) and membership-events (for
   `membership-events`); the source exporter composes row-state-events and
-  membership-events (its event log) and state-at (its windowed state
-  snapshot); the base exporter
+  membership-events (its event log) and, windowed, the truncated tape; the
+  base exporter
   composes state-at for its values and record-index for its identity columns; the
   playback seam
   composes state-at, membership-state-at, and the truncated-tape surface — rather
@@ -764,8 +781,7 @@ filter on; it raises `ExportError` on zero or more than one branch.
   gating; row-state-events reads that column directly for its `c` event rather than
   composing this shared primitive. Current-state reconstruction and point-in-time
   replay-to-T (feature-store rows) both compose the state-at resident above — the
-  source exporter's windowed state snapshot and the playback seam's point-in-time answers
-  are its consumers, and the `base` exporter is the consumer for which the resident
+  playback seam's point-in-time answers are its consumers, and the `base` exporter is the consumer for which the resident
   *is* the whole output, materialized at three horizons: the tape's end (via the
   horizon-free end-of-tape entry point), `slice_at: T` at horizon `T + 1`, and each
   window's end under an incremental invocation ([`base.md`](base.md)).
@@ -823,7 +839,7 @@ filter on; it raises `ExportError` on zero or more than one branch.
 | [`anchor.md`](anchor.md) | The wallclock rendering a mode applies on top of a derivation's raw `sim_time`. |
 | [`dimensional.md`](dimensional.md) | The mode that composes the versioned-intervals and reference-resolution residents; the consumer that shares the single-branch guard. |
 | [`streaming.md`](streaming.md) | The delivery driver that composes the row-state-events resident (`state-changes`) and the membership-events resident (`membership-events`) into ordered event streams. |
-| [`source.md`](source.md) | The mode that composes row-state-events and membership-events (its event log) and state-at (its windowed state snapshot) into landed operational tables. |
+| [`source.md`](source.md) | The mode that composes row-state-events and membership-events (its event log) and, windowed, the truncated tape |
 | [`base.md`](base.md) | The mode that composes state-at for its values and the record-index resident for its integer key columns. |
 | [`key-election.md`](key-election.md) | The cross-mode surface that composes the record-index and presentation-key relations to render elected identities and edges. |
 | [`row-predicates.md`](row-predicates.md) | The predicate grammar and rendering authority the membership edge narrows through and the versioned-intervals fold passes along. |

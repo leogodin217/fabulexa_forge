@@ -94,16 +94,17 @@ def test_dimensional_none_byte_identical(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
 
         sidecar = emit.sidecar
         fork_path = require_single_branch(sidecar)
         table_decl = config.tables[0]
         source_table_name = validate_table(
-            table_decl, config, sidecar, None, discard_notice_sink
+            table_decl, config, sidecar, discard_notice_sink
         )
-        sql_direct, _, _, _, _ = build_grain_sql(
-            table_decl, source_table_name, sidecar, None, fork_path, config, None
+        sql_direct, _ = build_grain_sql(
+            table_decl, source_table_name, sidecar, None, fork_path, config
         )
 
     assert specs[0].sql == sql_direct
@@ -124,14 +125,12 @@ def test_source_query_specs_matches_render_function_directly(tmp_path: Path) -> 
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
-        specs = build_source_query_specs(plan, None)
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
+        specs = build_source_query_specs(plan)
 
         location_unit = next(t for t in plan.tables if t.name == "location")
         sql_direct = build_state_render_sql(
-            plan.sidecar, plan.fork_path, location_unit, plan.anchor, None
+            plan.sidecar, plan.fork_path, location_unit, plan.anchor
         )
 
     location = next(s for s in specs if s.table_name == "location")
@@ -255,6 +254,7 @@ def test_dimensional_fk_hop_shadowed_total(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=base_relations,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -293,11 +293,9 @@ def test_source_changelog_read_shadowed_total(tmp_path: Path) -> None:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
 
-        specs_physical = build_source_query_specs(plan, None)
+        specs_physical = build_source_query_specs(plan)
         visit_physical = next(
             s for s in specs_physical if s.table_name == "visit_events"
         )
@@ -315,7 +313,7 @@ def test_source_changelog_read_shadowed_total(tmp_path: Path) -> None:
             )
         }
         specs_shadowed = _rewrite_specs_base_relations(
-            list(build_source_query_specs(plan, None)), base_relations
+            list(build_source_query_specs(plan)), base_relations
         )
         visit_shadowed = next(
             s for s in specs_shadowed if s.table_name == "visit_events"

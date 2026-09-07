@@ -69,9 +69,7 @@ def _plan(
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
         yield emit, plan
 
 
@@ -114,9 +112,7 @@ def test_state_render_decimal_composes_authority_expr(tmp_path: Path) -> None:
     )
     with _plan(build_source_test_emit(tmp_path), tables) as (emit, plan):
         table = _state(plan, "orders")
-        sql = build_state_render_sql(
-            plan.sidecar, plan.fork_path, table, plan.anchor, None
-        )
+        sql = build_state_render_sql(plan.sidecar, plan.fork_path, table, plan.anchor)
         rows = _mapped_rows(emit, table, sql)
     expected = (
         render_decimal_expr('"_rec"."prop__amount"', 6, 2, "prop__amount", "orders")
@@ -141,9 +137,7 @@ def test_state_render_decimal_composes_with_rename(tmp_path: Path) -> None:
     with _plan(build_source_test_emit(tmp_path), tables) as (emit, plan):
         table = _state(plan, "orders")
         assert table.render == (("prop__amount", DecimalElection(decimal=(6, 2))),)
-        sql = build_state_render_sql(
-            plan.sidecar, plan.fork_path, table, plan.anchor, None
-        )
+        sql = build_state_render_sql(plan.sidecar, plan.fork_path, table, plan.anchor)
         rows = _mapped_rows(emit, table, sql)
     assert rows[0]["total"] == Decimal("250.50")
 
@@ -170,9 +164,7 @@ def test_state_render_json_precision_composes_authority_expr(tmp_path: Path) -> 
     )
     with _plan(build_value_election_source_emit(tmp_path), tables) as (emit, plan):
         table = _state(plan, "widgets")
-        sql = build_state_render_sql(
-            plan.sidecar, plan.fork_path, table, plan.anchor, None
-        )
+        sql = build_state_render_sql(plan.sidecar, plan.fork_path, table, plan.anchor)
         rows = _mapped_rows(emit, table, sql)
     expected = (
         render_json_precision_expr(
@@ -205,9 +197,7 @@ def test_state_render_instant_renders_identically_to_structural_instant(
     )
     with _plan(build_value_election_source_emit(tmp_path), tables) as (emit, plan):
         table = _state(plan, "widgets")
-        sql = build_state_render_sql(
-            plan.sidecar, plan.fork_path, table, plan.anchor, None
-        )
+        sql = build_state_render_sql(plan.sidecar, plan.fork_path, table, plan.anchor)
         rows = _mapped_rows(emit, table, sql)
     expected = render_anchor_temporal_expr(
         plan.anchor,
@@ -230,9 +220,7 @@ def test_state_render_no_election_byte_identical_to_default(tmp_path: Path) -> N
     tables = (SourceTableDecl(name="orders", kind="order"),)
     with _plan(build_source_test_emit(tmp_path), tables) as (emit, plan):
         table = _state(plan, "orders")
-        sql = build_state_render_sql(
-            plan.sidecar, plan.fork_path, table, plan.anchor, None
-        )
+        sql = build_state_render_sql(plan.sidecar, plan.fork_path, table, plan.anchor)
     assert '"_rec"."prop__amount" AS "amount"' in sql
     assert "DECIMAL(" not in sql
     assert "forge_json_precision(" not in sql
@@ -259,7 +247,7 @@ def test_junction_render_json_precision_composes_authority_expr_on_elem_field(
     with _plan(build_source_test_emit(tmp_path), tables) as (emit, plan):
         table = _junction(plan, "visit_team")
         sql = build_junction_render_sql(
-            plan.sidecar, plan.fork_path, table, plan.anchor, None
+            plan.sidecar, plan.fork_path, table, plan.anchor
         )
     expected = (
         render_json_precision_expr(

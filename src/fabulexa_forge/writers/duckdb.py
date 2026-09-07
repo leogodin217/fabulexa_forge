@@ -216,6 +216,37 @@ def _replace_table_from_arrow(
     return WrittenRelation(row_count=int(arrow_table.num_rows), columns=columns)
 
 
+def _upsert_rows_from_arrow(
+    conn: "duckdb_mod.DuckDBPyConnection",
+    emit: "Emit",
+    table_name: str,
+    sql: str,
+    key: tuple[str, ...],
+) -> WrittenRelation:
+    """Reconcile existing *table_name* by *key* with the Arrow result of *sql*.
+
+    Deletes every existing row whose key columns equal a relation row's —
+    column-wise `IS NOT DISTINCT FROM`, so a NULL key component matches a
+    NULL, the same identity the compile's multiset difference uses — then
+    inserts the relation. The table must already exist (created on the
+    first window). The returned row_count is the inserted relation's.
+    """
+    arrow_table = emit.query_arrow(sql, ())
+    conn.register("_arrow_src", arrow_table)
+    match = " AND ".join(
+        f"t.{quote_identifier(c)} IS NOT DISTINCT FROM s.{quote_identifier(c)}"
+        for c in key
+    )
+    conn.execute(
+        f"DELETE FROM {quote_identifier(table_name)} AS t"
+        f" USING _arrow_src AS s WHERE {match}"
+    )
+    conn.execute(f"INSERT INTO {quote_identifier(table_name)} SELECT * FROM _arrow_src")
+    columns = describe_arrow_columns(conn, "_arrow_src")
+    conn.unregister("_arrow_src")
+    return WrittenRelation(row_count=int(arrow_table.num_rows), columns=columns)
+
+
 def _apply_spec(
     conn: "duckdb_mod.DuckDBPyConnection",
     emit: "Emit",
@@ -224,7 +255,8 @@ def _apply_spec(
     """Apply one QuerySpec to the warehouse connection within the active transaction.
 
     The written relation's row_count is rows written this window (for
-    'replace', the full snapshot count).
+    'replace', the full snapshot count; for 'upsert', the inserted delta —
+    rows deleted by key are not reported).
     """
     exists = _table_exists(conn, spec.table_name)
 
@@ -236,17 +268,13 @@ def _apply_spec(
         return _create_table_from_arrow(conn, emit, spec.table_name, spec.sql)
     if spec.write_mode == "append":
         return _append_rows_from_arrow(conn, emit, spec.table_name, spec.sql)
+    if spec.write_mode == "upsert":
+        assert spec.upsert_key is not None
+        return _upsert_rows_from_arrow(
+            conn, emit, spec.table_name, spec.sql, spec.upsert_key
+        )
     # write_mode == "replace"
     return _replace_table_from_arrow(conn, emit, spec.table_name, spec.sql)
-
-
-def _install_view(
-    conn: "duckdb_mod.DuckDBPyConnection",
-    view_name: str,
-    view_sql: str,
-) -> None:
-    """Install (or replace) a view by name with *view_sql* as its SELECT body."""
-    conn.execute(f"CREATE OR REPLACE VIEW {quote_identifier(view_name)} AS {view_sql}")
 
 
 def write_duckdb_window(
@@ -258,13 +286,12 @@ def write_duckdb_window(
 ) -> dict[str, WrittenRelation]:
     """Apply one window to the warehouse file in a single transaction.
 
-    Create-if-missing: a fresh file gets each table created per its spec,
-    every view installed, and _export_meta written (cursor_format_version,
-    fingerprint). Every invocation, in one transaction: append/replace each
-    spec per write_mode, CREATE OR REPLACE each view, insert the window's
-    _export_windows row (window_index, label, start_ns, end_ns). Commit or
-    roll back atomically — a failed window leaves the warehouse exactly as
-    before.
+    Create-if-missing: a fresh file gets each table created per its spec
+    and _export_meta written (cursor_format_version, fingerprint). Every
+    invocation, in one transaction: append / replace / upsert each spec per
+    write_mode, insert the window's _export_windows row (window_index,
+    label, start_ns, end_ns). Commit or roll back atomically — a failed
+    window leaves the warehouse exactly as before.
 
     fingerprint=None is the explicit-range path: the file is a pure
     rendering — no _export_meta, no _export_windows row (the driver has
@@ -281,8 +308,8 @@ def write_duckdb_window(
             bookkeeping tables are written.
 
     Returns:
-        Mapping of every spec's physical table_name -> its written relation
-        (rows written this window, and its column types).
+        Mapping of every spec's table_name -> its written relation (rows
+        written this window, and its column types).
 
     Raises:
         ExportRuntimeError: Connection, write, or commit failure (after
@@ -312,8 +339,6 @@ def write_duckdb_window(
 
             for spec in specs:
                 written_relations[spec.table_name] = _apply_spec(conn, emit, spec)
-                if spec.view_name is not None and spec.view_sql is not None:
-                    _install_view(conn, spec.view_name, spec.view_sql)
 
             if fingerprint is not None:
                 conn.execute(

@@ -11,7 +11,12 @@ re-exported here — later phases within the package import it directly.
 Phase 10 adds tier-2 shaped playback: `ShapedTable`, `ShapedTableDecl`,
 `open_shaped_playback`, and the `ShapedPlayback` head. The stream-playback
 sprint adds tier-2 stream playback: `StreamPlayback`, `open_stream_playback`,
-and the render surface: `StreamRender`, `resolve_stream_render`.
+and the render surface: `StreamRender`, `resolve_stream_render`. The package
+also re-exports what a downstream needs to reach a head from two files and a
+config — `open_emit` / `Emit`, `load_export_config` / `load_stream_config`,
+`resolve_effective_anchor` / `EffectiveAnchor`, and `StreamEvent` (the
+element type of `StreamPlayback`'s streams) — so `fabulexa_forge.playback`
+is one import surface; the names are the owning modules' own, not copies.
 
 Layer-direction invariant: tier 1 (`types`, `errors`, `selection`, `events`,
 `head`, `snapshot`, `stamp`) imports no `exporters.*` / `config` name. Tier 2
@@ -23,6 +28,9 @@ surfaces rather than reimplementing their business rules; see `shaped.py`'s,
 
 from __future__ import annotations
 
+from fabulexa_forge.anchor import EffectiveAnchor, resolve_effective_anchor
+from fabulexa_forge.config.loader import load_export_config, load_stream_config
+from fabulexa_forge.exporters.streaming.types import StreamEvent
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.playback.events import PlaybackEvent
 from fabulexa_forge.playback.head import Playback, open_playback
@@ -42,8 +50,11 @@ from fabulexa_forge.playback.types import (
     RecordAtom,
     RecordAtomSelection,
 )
+from fabulexa_forge.reader.emit import Emit, open_emit
 
 __all__ = [
+    "EffectiveAnchor",
+    "Emit",
     "MembershipAtom",
     "MembershipAtomSelection",
     "Playback",
@@ -57,10 +68,15 @@ __all__ = [
     "ShapedPlayback",
     "ShapedTable",
     "ShapedTableDecl",
+    "StreamEvent",
     "StreamPlayback",
     "StreamRender",
+    "load_export_config",
+    "load_stream_config",
+    "open_emit",
     "open_playback",
     "open_shaped_playback",
     "open_stream_playback",
+    "resolve_effective_anchor",
     "resolve_stream_render",
 ]

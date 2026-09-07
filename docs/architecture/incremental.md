@@ -33,16 +33,17 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
  fabulexa-forge export … --next         fabulexa-forge export … --from V --to V
    │  read cursor → derive next       │  parse range (no cursor)
    ▼  window → range export           ▼  window → range export
-       build_query_specs(…, window) → one QuerySpec per table
-         fact (records | history_point) → append rows with key ∈ window
-         dim  scd: type2                → append version rows (no valid_to) + view
-         dim  scd: type1                → full snapshot (replace / re-emit per drop)
+       build_query_specs(…, window) → one QuerySpec per table (dimensional):
+         the full-export compile over the truncated tape at end − 1 and start − 1
+           snapshot (type-1 dim, mutable filter) → state(end − 1) whole   → replace
+           upsert   (a value channel can change)  → state(end−1) ∖ state(start−1) → delete-by-key, insert
+           append   (every channel invariant)     → the same delta         → insert
                      │
    ┌─────────────────┴───────────────────┐
    ▼ fmt=duckdb                           ▼ fmt=csv
  warehouse.duckdb (grows in place,      out/ one drop dir per window
    one txn/window)                        w00000_2020-03-01/  dim_*.csv fact_*.csv
-   dim_* fact_* + SCD-2 views            w00001_2020-03-02/  …
+   dim_* fact_*                          w00001_2020-03-02/  …
    _export_meta _export_windows          .fabulexa-forge-cursor.json
    (cursor atomic with data)            (cursor sidecar; re-run overwrites a drop)
 ```
@@ -58,11 +59,12 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
 | [`incremental/cursor.py`](../../src/fabulexa_forge/incremental/cursor.py) | `Cursor`, `read_cursor`, `write_csv_cursor` — the cursor of record per `fmt` and the fresh/lost classification |
 | [`incremental/fingerprint.py`](../../src/fabulexa_forge/incremental/fingerprint.py) | `compute_fingerprint` — the SHA-256 drip-identity digest |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `IncrementalConfig` — the cross-mode `incremental` cadence block (sibling of `mode` and `rebase`) and its parse-time validator |
-| [`exporters/query_spec.py`](../../src/fabulexa_forge/exporters/query_spec.py) | `QuerySpec` (`write_mode` / `view_name` / `view_sql`) and `write_query_specs` — the mode-neutral compiled-table shape and full-export write dispatch every mode's windowed compile produces and this driver consumes |
-| [`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py) | `build_query_specs(…, window)` — the dimensional windowed compile |
-| [`exporters/dimensional/validation.py`](../../src/fabulexa_forge/exporters/dimensional/validation.py) | The ten window-gated business rules, run only when a `window` is present |
-| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `build_source_query_specs(…, window)` — the source windowed compile; see [`source.md`](source.md) § Incremental composition for its per-render window membership |
-| [`writers/duckdb.py`](../../src/fabulexa_forge/writers/duckdb.py) | `write_duckdb_window` — one-transaction-per-window append/replace, view installs, bookkeeping tables |
+| [`exporters/query_spec.py`](../../src/fabulexa_forge/exporters/query_spec.py) | `QuerySpec` (`write_mode` / `upsert_key`) and `write_query_specs` — the mode-neutral compiled-table shape and full-export write dispatch every mode's windowed compile produces and this driver consumes |
+| [`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py) | `build_query_specs(…, window)` — the dimensional horizon compile: the full-export compile over the truncated tape at each of the window's two horizons, composed per delivery class |
+| [`exporters/dimensional/windowing.py`](../../src/fabulexa_forge/exporters/dimensional/windowing.py) | `window_delivery_class` (the static per-table delivery class) and `check_key_columns_stable` (`KeyColumnsStable`, the always-on key rule `validate_table` runs — [`dimensional.md`](dimensional.md) § Validation Rules), both over the one horizon-invariance reading `_channel_variance`; `check_window_key_unique` (`WindowKeyDuplicate`); `compose_window_delta_sql` |
+| [`derivations/truncated_tape.py`](../../src/fabulexa_forge/derivations/truncated_tape.py) | `open_truncated_tape` / `TruncatedTape` — the emit presented as a producer slice at a horizon ([`derivations.md`](derivations.md) § The truncated-tape surface) |
+| [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `build_windowed_source_query_specs` — the source horizon compile (the plan and full-export renders over the truncated tape at each horizon; `state` / `junction` snapshot, event log append), `source_window_delivery` |
+| [`writers/duckdb.py`](../../src/fabulexa_forge/writers/duckdb.py) | `write_duckdb_window` — one-transaction-per-window append / replace / keyed upsert, bookkeeping tables |
 | [`errors.py`](../../src/fabulexa_forge/errors.py) | `IncrementalError` and its subclasses (config, regime, fingerprint, cursor, range) |
 
 ## Boundary
@@ -79,9 +81,10 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
   plus an `out/.fabulexa-forge-cursor.json` sidecar. An explicit range writes a standalone
   artifact with no bookkeeping tables.
 - **Wraps the pure range export.** The driver computes a window and calls the
-  active mode's windowed compile (`build_query_specs` or `build_source_query_specs`)
-  + the windowed write path; it adds no new read surface and recomputes no emit
-  value.
+  active mode's windowed compile (`build_query_specs` or `build_windowed_source_query_specs`)
+  + the windowed write path; it adds no new read surface. The dimensional
+  windowed compile is the mode's own full-export compile run over the truncated
+  tape (§ Horizon windowing) — the mode never sees a window.
 - **Anchor, consumed.** Calendar windows resolve through the single `EffectiveAnchor`
   the invocation already resolves (see [`anchor.md`](anchor.md)); the driver adds no
   second origin/zone precedence chain.
@@ -96,15 +99,14 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
 
 `export_window` and `export_incremental_next` take the same required
 `notice_sink` as the full-export entry points and thread it to the mode's
-compile ([`notices.md`](notices.md)). Every driver invocation compiles exactly
-once — an explicit `--from`/`--to` range is a single range-window, and a
-`--next` drip derives one window — so the sink threads through with no
-forwarding or dedup logic; a `--next` drip re-emits its compile's notices each
-invocation. The window-gated rules themselves never consult `temporal_class`:
-`slice_only` reads are refused always-on before any gate runs
-([`slice-only.md`](slice-only.md)), so every `history_tracked: false` column
-that survives to a window gate is either `constant` or the exempt
-discriminator — whose admission is the carve-out working as intended.
+compile ([`notices.md`](notices.md)). Every driver invocation derives exactly
+one window — an explicit `--from`/`--to` range is a single range-window — and
+the sink threads through with no forwarding or dedup logic. A dimensional
+or source window compiles twice, once per horizon, each a full-export compile,
+so a plan notice reaches the sink once per horizon compiled (twice per window);
+base compiles once. A `--next` drip re-emits its compile's notices
+each invocation; the sequence is deterministic and the repetition is the
+contract.
 
 ### Two regimes, one window sequence
 
@@ -134,52 +136,136 @@ always resolve, so they resolve narrowly rather than fail — distinct from auth
 All window-membership tests run on **raw sim-time ns**, never on rendered timestamps,
 so DST cannot perturb membership.
 
-### Window membership per table class
+### Horizon windowing (dimensional)
 
-The window predicate is applied as the **outermost filter over the full-export
-relation** — after window functions, derived columns, and FK resolution. Every value
-on an emitted row is therefore its full-export value (ordinals count the full-run
-partition; value maps, FKs, and timestamps carry their full-export values); the window
-selects rows, never recomputes them. The window key is grain-definitional (the grain's event time), not
-configuration — no author-facing window-key knob exists.
+A window horizon is a slice end. Window k's content for every dimensional
+table is the mode's **unchanged full-export compile over the truncated tape**
+(`open_truncated_tape`, [`derivations.md`](derivations.md) § The truncated-tape
+surface) at the window's two horizons — the end horizon `h = end_ns − 1` and
+the start horizon `h' = start_ns − 1`, both inclusive positions on the one
+event-time line the playback seam's `state()` uses. A value emitted at `h` is
+honest at `h` by construction, so no window-gated column rule exists. Each
+table is delivered by a **class** derived statically from its declaration
+(`window_delivery_class`):
 
-| Table class | Window key (ns) | Behavior per window |
-|---|---|---|
-| Fact, `records` grain | `last_mutation_sim_time` | Append rows with key ∈ window. The row lands when its content stops changing — exactly creation time for write-once kinds — so an appended row is final, never revised |
-| Fact, `history_point` grain | `sim_time` | Append rows with key ∈ window |
-| Dim, `scd: type2` | the version's `valid_from` change point | Append version rows born in the window, **without** any `scd_window: valid_to` column; the view supplies `valid_to` |
-| Dim, `scd: type1` | — (snapshot class) | Full current-state table every window: `replace` in DuckDB, re-emitted in every CSV drop. Columns are gated temporally constant, so every **value** is horizon-exact at every window; the **row set** is the end-of-run population (carve-out below) |
-| Fact or dim, `history_interval` / `membership` grain | — | Rejected: `IncrementalGrainUnsupported` |
+| Class | Window k delivers | DuckDB write | CSV drop `<name>.csv` | Which tables |
+|---|---|---|---|---|
+| `snapshot` | `state(h)` whole | replace the table | the whole relation, every window | type-1 dims; any table whose records `filter` reads a mutable column (its row set can shrink) |
+| `upsert` | `state(h) EXCEPT ALL state(h')` — the multiset of rows present at `h` and not at `h'`, reconciled by the declared `key`; a changed row and a new row are both in it, undistinguished | delete every target row whose key equals a delta row's key, then insert the delta | the delta | every other table |
+| `append` | the same delta, which for this class contains only new keys | insert the delta | the delta | an `upsert` table every one of whose value channels is horizon-invariant |
 
-Membership is half-open (`start_ns <= key < end_ns`): a key exactly on a boundary
-belongs to the later window.
+| Condition | Result |
+|---|---|
+| `start_ns = 0` (window 0, or a range from the tape's start) | The start horizon is the empty tape; the delta is `state(h)` whole |
+| `end_ns − 1 ≥ slice_at` (the tail window, or a range past the tape) | Truncation at or beyond the slice bound is the identity presentation, so `state(h)` is the full export (under the recorded-trail condition, below) |
+| Both horizons past `slice_at` (a trailing empty window) | Every delta is empty; every snapshot equals the full export |
+| Explicit `--from` / `--to` range | The same two horizons; a pure rendering with no cursor |
 
-Selecting-not-recomputing is temporally honest only if no full-export value derives
-from data past the row's window. The windowed business rules (§ Validation Rules)
-restrict the config until that holds — `fk` paths traverse only immutable hops,
-`ordinal.order_by` resolves to the raw window key, slice-read columns are temporally
-constant, dim `filter` predicates read only constant discriminators. Invariant 4 then
-holds for every emitted **value**, with one carve-out.
+All positions are raw sim-time ns; the calendar regime converts civil
+boundaries to physical ns before any horizon is taken.
 
-**Election-aware window-key membership.** A column whose declared source is
-the window's raw-ns column counts as a window key only if its rendering is
-also window-monotone. `date` / `timestamptz` elections (and the unelected
-default) remain monotone in the window's raw-ns source and satisfy the rule
-exactly as `timestamp` does today; a `time`-elected column is excluded from
-the window-key set — time-of-day is not monotone in the window — so an
-append-mode `ordinal.order_by` naming a `time`-elected column is refused
-([`temporal-elections.md`](temporal-elections.md) § Per-mode attach points,
-[`dimensional.md`](dimensional.md) § Derived columns for the amendment this
-rule composes with).
+**Horizon-invariant value channels.** A value channel is horizon-invariant
+when its value on a row cannot differ between two horizons at both of which
+the row exists. The reading per column form (`windowing._channel_variance`,
+read by the classifier and the key gate alike so the two cannot drift):
 
-**The type-1 snapshot row-membership carve-out.** A type-1 snapshot's row set is the
-end-of-run population, so a record first created in window 50 appears in window 0's
-snapshot. Filtering rows to "born by `end_k`" is unsound from the slice alone:
-`last_mutation_sim_time` stops being the creation time the moment any property mutates,
-and creation time is otherwise opt-in provenance an emit may not carry. The full
-snapshot is therefore the deliberate choice — every column value is still horizon-exact
-(the gate admits only temporally constant sources), so the snapshot is wider than a
-real nightly extract, never wrong, and FK-safe at every horizon.
+| Column form | Horizon-invariant iff |
+|---|---|
+| `from:` / `correlation:` / `value_map.from` / `decimal.from` / `date_parse.from` / `json_precision.from` / `derived: timestamp` `source` | The source column is constant: an identity column, `created_sim_time`, `sim_time`, `joined_sim_time`, `value` / `property` on a history grain, an element field, a `history_tracked: false` property or its `ref_index__` sibling — or, on an `scd: type2` dim, any property (a version row carries its version's value). Not: `active`, `deactivated_at`, `last_mutation_sim_time` (the recorded trail advances), a tracked property on a non-versioned table, `lead_sim_time`, `left_sim_time` |
+| `derived: scd_window: valid_from` | Always (a version's start is its identity) |
+| `derived: scd_window: valid_to` | Never (the successor closes it) |
+| `derived: elapsed` | Never (the counterpart row may land later) |
+| `derived: ordinal` | `order_by` resolves to the grain's raw time key under a window-monotone rendering (`created_sim_time` on a records grain, `sim_time` on a history grain, `joined_sim_time` on a membership grain; not a `time` election — the election-aware ordinal amendment, [`dimensional.md`](dimensional.md) § Derived columns) **and** `partition_by` is horizon-invariant. Later rows then never renumber earlier ones |
+| `fk via: reference` | Every hop column on the resolved path is `history_tracked: false` (the terminal `record_id` is identity) |
+| `fk via: membership` | On a membership grain without `as_of` — the FK is the row's own `member__<f>__id`. Never on a records grain (the binding may join later) and never for the point-in-time `as_of` form (its instant may be an interval end) |
+| `lookup` | Always (`LookupColumnSafety` admits only `temporal_class: constant` reads) |
+| `null` | Always |
+
+The classifier is conservative by construction: `upsert` is correct for every
+table, and `append` is admitted only where the invariance argument is total. A
+`role: dim` with no `scd` is classified by its channels like any other table.
+
+**The key.** Two facts about a table's `key` are all the mechanism needs, and
+both are checked:
+
+| Condition | Result |
+|---|---|
+| Any table; a `key` column is not a horizon-invariant channel | Refused when the config loads, by the dimensional mode's always-on `KeyColumnsStable` rule ([`dimensional.md`](dimensional.md) § Validation Rules) — one-shot export, this driver, and the shaped playback head alike, naming the table, the column, and the varying source — so no config with an unstable key reaches a windowed compile. Without it the drip silently diverges: a row keyed `(A, NULL)` at `h'` re-keys to `(A, 588)` at `h`; delete-by-key removes nothing and no later delta carries `(A, NULL)`, so the open row persists in the warehouse while the full export closes it |
+| `upsert` table; `key` unique in `state(h)` | Reconciles: after every window is applied the target equals `state(h)` as a multiset |
+| `upsert` table; `key` **not** unique in `state(h)` | Refused at that window's compile before any write — `WindowKeyDuplicate`, naming the table and the number of duplicated key values (delete-by-key would remove a sibling row the delta does not restore). A rendered key (a µs-truncated `derived: timestamp`) collides when two ticks share a microsecond; key on the raw `from: sim_time` instead |
+| `append` / `snapshot` table | The uniqueness guard does not run — an insert-only write reconciles regardless of the key; a replace ignores it. The stability rule holds regardless of class: the key is the table's declared row identity |
+
+Uniqueness is evaluated over `state(h)` only: uniqueness at every end horizon
+implies uniqueness at every start horizon the drip has used. Key identity —
+in the guard's count, the writer's delete (`IS NOT DISTINCT FROM`), and the
+`EXCEPT ALL` difference — is DuckDB's distinct semantics: `NULL` equals
+`NULL`.
+
+**The two-horizon compile.** Each horizon compile is the shipped full-export
+compile run against the truncated emit view (`Emit.with_sidecar` over the
+tape's sidecar) with the tape's `base_relations` mapping — one entry per
+sidecar base table, so an fk hop, lookup, or elapsed correlation outside the
+shape's declared sources truncates too; the mode never sees a horizon. Each
+compiled query is wrapped by the name-shadowing realization
+([`playback.md`](playback.md) § The compile indirection) and the two are
+composed as `end EXCEPT ALL start` over the two wrapped subqueries, projected
+under the full export's column list in declared order and **ordered by every
+projected column** — a total order over distinct rows that needs no internal
+column (byte-identical duplicates, which the contract allows and the multiset
+difference preserves, are the only ties and are indistinguishable). A
+`snapshot` table's spec is the end-horizon query alone. The delta relation is
+schema-identical to the one-shot table.
+
+**The compile over a selection.** `build_query_specs` (and the source mode's
+`build_windowed_source_query_specs`) takes a required `tables` argument — a
+collection of declared table names, or `None` for every declared table; every
+caller states its selection, and this driver passes `None`. A selection is a
+projection over the whole-shape compile: every declaration remains visible to
+resolution (fk targets, the election, sub-type domains), while the per-table
+loop — `validate_table`, the SQL compile, `WindowKeyDuplicate`, the fk-edge
+elected-key guard, and plan notices — runs for the selected tables only, and
+the dim-side leg guard runs for exactly the dims a selected table's guarded
+edge reaches. An undeclared name is a programming error (an `assert`), never
+an `ExportError`: the caller validates names first (the shaped head's
+selection gates, [`playback.md`](playback.md) § Shaped window), and a
+selection presumes the caller has run the always-on rules over the whole
+shape — unselected declarations are resolved against, never validated. The
+source engine's plan is whole-config at every horizon it opens — the plan
+is that mode's unit of validation, its data-dependent guards plan-scoped, not
+per output table — and `tables` decides only which units' specs are returned
+and whether the start horizon opens ([`source.md`](source.md) § Incremental
+composition).
+
+**Horizon economy.** The end horizon is always opened; the start horizon is
+opened only when the compiled selection is **delta-bearing** — some compiled
+table's class is `upsert` or `append` (dimensional), or the event log is among
+the compiled units (source). A delta-free compile — a whole shape of
+`snapshot` tables, a source shape with no event log, or a shaped-head ask
+selecting only `snapshot` tables — opens one horizon: no start-horizon
+compile, guard, or notice. The delivered content is the same either way (a
+`snapshot` spec is the end-horizon query in both cases), and no verdict is
+lost: dimensional elected-key uniqueness is monotone under row-subsetting (a
+creation-constant surface unique over the rows at `h` is unique over the
+subset at `h'`) and `WindowKeyDuplicate` is defined over `state(h)` alone; the
+source plan-time uniqueness guard runs against the physical tape through the
+shared connection whichever truncated view the plan builds over (conservatively
+strict — a collision among rows the truncation drops still refuses), so the
+start-horizon plan's verdict is the end-horizon plan's.
+
+**The recorded-trail condition.** The truncated tape presents
+`last_mutation_sim_time` as the recorded trail, honest at every horizon and
+advancing across windows (an `upsert` channel). The full export reads the
+physical value. The two agree — and the drained warehouse equals the full
+export on an lmst-sourced column — exactly when the producer holds the trail on
+every record ([`playback.md`](playback.md) § The recorded trail); the reference
+producer does.
+
+| Edge | Result |
+|---|---|
+| Empty window | Header-only delta drops; snapshot tables re-emitted whole; a zero-row DuckDB transaction logging the window row |
+| Author table named `_export_meta` / `_export_windows` | Refused when the config loads — the dimensional mode's always-on `ReservedTableName` rule ([`dimensional.md`](dimensional.md) § Validation Rules), the source mode's plan-build rule — so a full export and a later drip on the same target agree by construction |
+| Semantically defective data (a corrupted emit) | Total: the horizon compile is the full-export compile, which already tolerates it; the only data-level refusal is `WindowKeyDuplicate` |
+| An emit whose sidecar declares no `history` table | The trail is `greatest(created_sim_time, deactivated_at when ≤ T)`; a tracked property implies a `history` table by contract |
 
 Under `declare_keys` (base and source), the windowed compile resolves declared
 keys exactly as the full export does and sets them on each window's `QuerySpec`;
@@ -192,41 +278,20 @@ invocation like any compile notice. The per-regime table and rationale are
 [`declared-keys.md`](declared-keys.md) § Incremental interplay; `declare_keys`
 participates in the config fingerprint exactly as any other config field does.
 
-This per-table-class window-membership contract — the window keys, the per-class
-behavior, the type-1 row-membership carve-out, and the windowed-grain rejection —
-is also the playback seam's tier-2 `window` contract, promoted verbatim from
-driver-internal to seam-owned ([`playback.md`](playback.md) § Shaped window). The
-driver keeps its own mechanics (the window-boundary sequence, cursor, fingerprint,
-drained detection, labels, staging, writers); those remain above the seam, and the
-driver re-seams over tier 2's `window` when it is next materially touched (the
-`stream` verb is already delivered over the seam's stream head —
-[`stream-playback.md`](stream-playback.md)).
-
-### The SCD-2 view
-
-`valid_to` is redundant: version N's `valid_to` **is** version N+1's `valid_from`.
-Incremental output never materializes it; the information arrives implicitly inside the
-successor row and is recovered at read time by a view.
-
-| Condition | Result |
-|---|---|
-| SCD-2 dim declares ≥ 1 `scd_window: valid_to` column | Physical table `<name>__rows` holds all declared columns **except** the `valid_to` slots, in declared order, plus a trailing bookkeeping column `__valid_from_ns` (the version's raw sim-time change point, ns); view `<name>` projects the declared column list — not `__valid_from_ns` — with each `valid_to` slot computed as `LEAD(<valid_from column>) OVER (PARTITION BY <identity columns> ORDER BY __valid_from_ns)` |
-| SCD-2 dim declares no `valid_to` column | Plain table `<name>`, `append` mode, no view |
-| Identity columns | The table's `key` entries minus its `scd_window` columns, in key order. Non-empty (`IncrementalScd2IdentityKey`) |
-| `valid_from` multiplicity | A table declaring a `valid_to` column declares **exactly one** `scd_window: valid_from` column (`IncrementalScd2ValidFromUnique`) — the view's `LEAD` source is unambiguous |
-| Mid-drip currentness | The latest loaded version of each entity has `LEAD = NULL` → `valid_to IS NULL` finds the current row at every horizon |
-| A later window appends the successor version | The view closes the prior version automatically — append-only physical, always-consistent logical |
-| CSV drops | `<name>.csv` carries the `__rows` projection (declared columns minus `valid_to` slots, plus the trailing `__valid_from_ns`). Closing versions downstream is the consumer's merge job, deterministic because two versions inside one rendered microsecond still order by the raw key |
-
-The `LEAD` is **ordered by `__valid_from_ns`, the raw ns change point — never by the
-rendered `valid_from`**. Rendered timestamps truncate to microseconds
-([`dimensional.md`](dimensional.md) § Timestamp source and the runtime anchor), so two
-versions of one record inside the same microsecond render to equal `valid_from` values
-and a rendered-order `LEAD` would be nondeterministic. Version boundaries are distinct
-change `sim_time`s per record, so `(identity, __valid_from_ns)` is unique and the view
-is total. The *projected* `valid_to` value is still the successor's rendered
-`valid_from`, equal to full export's `valid_to` by construction; no anchor logic is
-needed in the view.
+The delivery classes and the two-horizon compile are also the playback seam's
+tier-2 `window()` contract for a dimensional shape ([`playback.md`](playback.md)
+§ Shaped window): `ShapedTableDecl.window_delivery` is the same
+`window_delivery_class`, and `window(T1, T2, tables=S)` runs the same
+`build_query_specs` call this driver runs, over the caller's selection (this
+driver passes `None`). The driver keeps its own mechanics
+(the window-boundary sequence, cursor, fingerprint, drained detection, labels,
+staging, writers) above the seam. The source mode runs the same horizon
+compile with its own static classes — `state` and `junction` tables
+`snapshot`, the event log `append` ([`source.md`](source.md) § Incremental
+composition); the base mode keeps its per-window snapshot at the window's
+`end_ns` through the state-at fold ([`base.md`](base.md) § Three horizons),
+which is honest at the cutoff by the same argument (a state-at reconstruction
+is a truncation).
 
 ### Drained detection and the cursor
 
@@ -302,9 +367,9 @@ writing rules, and the accepted last-window staleness wart are owned by
 | Explicit range, sim-time | `r_ns{start_ns}_ns{end_ns}` |
 
 Zero-padded indices keep drops sortable; the suffix keeps them human-readable. DuckDB
-records the same label in `_export_windows`. Author table names must not end in
-`__rows` or collide with the bookkeeping tables, and no author column may be named
-`__valid_from_ns` (`IncrementalReservedName`).
+records the same label in `_export_windows`. Author table names must not collide
+with the bookkeeping tables (the modes' always-on reserved table-name rules,
+§ Horizon windowing).
 
 ### Empty windows
 
@@ -317,8 +382,9 @@ handling is itself a downstream exercise worth exercising.
 ### Explicit ranges (`--from` / `--to`)
 
 A range is a **standalone, stateless** one-shot export of a half-open window — the same
-per-class semantics and `__rows` + view shape as a drip window, snapshot dims included,
-but with no cursor read or written and no bookkeeping tables. An `incremental` block is
+per-class semantics as a drip window (an `upsert` / `append` table's delta between the
+range's two horizons, a `snapshot` table whole at its end), but with no cursor read or
+written and no bookkeeping tables. An `incremental` block is
 not required (cadence is only for `--next`).
 
 | Condition | Result |
@@ -343,41 +409,50 @@ a sibling `<out parent>/.tmp_<label>` and atomically renamed to `out`.
 
 1. **Window purity.** Each window's content is a pure function of `(emit, config, code
    version, range)`. The cursor only chooses *which* range runs next.
-2. **Drip ≡ one-shot (DuckDB).** After draining, every author-named relation in the
-   incremental warehouse returns rows identical to the full-export warehouse's same
-   relation under the table's deterministic `ORDER BY` (physical insertion order may
-   differ; a view is indistinguishable from a table at the SELECT surface — the drained
-   view's open `valid_to` is exactly the full export's `NULL`).
-3. **Concatenation (CSV).** Ordered concatenation of a table's drop files equals the
-   full export of that relation **as a multiset of rows** — exactly for point-fact
-   tables; as the `__rows` projection (no `valid_to` slots, trailing `__valid_from_ns`)
-   for SCD-2 dims. Concatenation is window-major while the full export uses its own
-   `ORDER BY`, so equality holds after re-sorting both sides by that `ORDER BY`, not
-   row-for-row as written. Each drop's snapshot-dim copy equals the full-export table
-   row-for-row.
-4. **No forward references within the drip frame, modulo the type-1 row-membership
-   carve-out.** Every **value** emitted in window k derives from `sim_time < end_k` or
-   from temporally constant state: `valid_to` is unmaterialized; `last_mutation` keys
-   land records-grain rows only once final; ordinals order by the raw-ns window key;
-   `fk` paths traverse only immutable hops; slice-read and dim-`filter` columns are
-   temporally constant. The carve-out is row membership of type-1 snapshots — their
-   rows for later-born entities carry only constant, hence horizon-exact, values
-   (§ Window membership).
-5. **Determinism.** Same emit + config + code version → byte-identical CSV drops,
+2. **Horizon honesty.** Every value delivered in window k equals its value in
+   `state(end_k − 1)` — the shape's full export over the emit sliced at the
+   window's cutoff. No carve-out: a snapshot's row membership is the population
+   born by the horizon; an open interval is open; a dim reads as of the cutoff.
+   (Dimensional and source; base's per-window snapshot states the same.)
+3. **Reconciliation (DuckDB).** After each window is applied, every author-named
+   dimensional table equals `state(end_k − 1)` as a multiset; after the tape drains,
+   every table equals the full export under the table's deterministic `ORDER BY`
+   (physical insertion order may differ; the recorded-trail condition on
+   lmst-sourced columns).
+4. **Concatenation (CSV).** Per class: `append` — the ordered concatenation of a
+   table's drops equals the full export as a multiset; `upsert` — the concatenation
+   reduced by latest-drop-wins per key equals the full export as a multiset;
+   `snapshot` — the last drop equals the full export row-for-row.
+5. **Class soundness.** An `append`-classified table's delta never contains a key
+   present in the start-horizon state. A violation is a classifier defect, never an
+   author error; the acceptance suite (`tests/incremental/test_horizon_acceptance.py`)
+   detects it as a reconciliation failure.
+6. **Totality.** Every dimensional config that compiles as a full export compiles as a
+   window: the static facts a window relies on — every `key` a stable row identity
+   (`KeyColumnsStable`), no table named for a bookkeeping table — are always-on
+   load-time rules of the mode, so no static windowed-only refusal exists; the only
+   data-level refusal is `WindowKeyDuplicate`.
+7. **Determinism.** Same emit + config + code version → byte-identical CSV drops,
    identical labels and cursor contents, identical warehouse query results (DuckDB file
    bytes excluded, per the repo-wide stance).
 
 **Relied on (upstream guarantees).** The sole branch's `slice_at` bounds all data
-`sim_time`s; SCD-2 version boundaries are distinct per record; a record's first version
-`valid_from` is ≤ any fact referencing it (upstream causal consistency — what makes
-append-by-`valid_from` FK-safe at every horizon); the run-level `runtime` anchor is
-never altered by resume/fork. Records-grain windowing additionally relies on
-`last_mutation_sim_time` bounding **every** content change to its record, deactivation
-included (an `active` / `deactivated_at` flip bumps it) — this is
-what makes a records-grain row final at landing and lets those facts project
-deactivation columns ungated. The producer upholds this; the dependency is on the
-vendored contract ([`base-format.md`](../../contract/base-format.md)), which this driver
-reads but does not redefine.
+`sim_time`s; the run-level `runtime` anchor is never altered by resume/fork; the
+truncated tape's honesty and the bridging theorem
+([`playback.md`](playback.md) § Shaped state); **start-horizon guard verdicts
+implied by end-horizon verdicts** (§ Horizon windowing — horizon economy), which is
+what lets a delta-free compile open one horizon; and **row-set monotonicity under
+truncation** — for every table not filtered on a mutable column, the keys present
+at an earlier horizon are present at every later one: `history` is append-only, the
+records spine (`created_sim_time ≤ T`), the membership intervals (`joined_sim_time
+≤ T`), and the SCD-2 version set (change instants ≤ T) are prefix-monotone in T, every
+other row-selecting predicate (`source.where`, `source.value`, `fk.where`,
+`elapsed.other_where`) reads columns verbatim under truncation, and a membership-FK
+fan-out only adds rows. Only a records `filter` can read a mutable column, which is
+exactly the `snapshot` condition — this is what makes delete-by-key-then-insert
+reproduce `state(h)`. The dependency is on the vendored contract
+([`base-format.md`](../../contract/base-format.md)), which this driver reads but does
+not redefine.
 
 ## Validation Rules
 
@@ -390,24 +465,18 @@ rejected and *when*.
 **Parse-time (Pydantic).** `IncrementalConfig` sets **exactly one** of `period` /
 `sim_period_ns`; `sim_period_ns`, when set, is ≥ 1 (`exactly_one_cadence`).
 
-**Window-gated business rules.** These run in the existing business-rule pass **only
-when `build_query_specs` receives a window** — a full export is untouched. Each rejects
-a config that would let a window's value derive from data past the window. Several
-gates require the emit to carry `history_tracked` and refuse outright when it does not,
-because constancy is otherwise unverifiable (the same stance as `LookupColumnSafety`).
+**Windowed business rule (dimensional).** One rule runs **only when
+`build_query_specs` receives a window** — a full export is untouched — and lives in
+[`windowing.py`](../../src/fabulexa_forge/exporters/dimensional/windowing.py).
+Every always-on rule of the full export applies to each horizon compile at the
+same point it applies to the one-shot path; `KeyColumnsStable` (every `key` column
+of every table a horizon-invariant channel, whatever its delivery class) and
+`ReservedTableName` are among them ([`dimensional.md`](dimensional.md) § Validation
+Rules), so no static windowed-only refusal exists.
 
-| Rule | Rejects |
-|---|---|
-| `IncrementalGrainUnsupported` | Any `history_interval` or `membership` grain (an interval is two point events; model journeys as `history_point` facts) |
-| `IncrementalElapsedUnsupported` | Any `derived: elapsed` column (its counterpart row may postdate the window) |
-| `IncrementalFkMembershipUnsupported` | Any `fk` with `via: membership` (a binding is interval data — the bound member may join after the window) |
-| `IncrementalFkMutableHop` | An `fk via: reference` path with a hop column not `history_tracked: false` (a mutable hop would stamp a re-pointed key into a past window); the terminal `record_id` is identity, always constant |
-| `IncrementalOrdinalOrderBy` | On an append-mode table, an `ordinal.order_by` that does not resolve to the table's raw-ns window key **under a window-monotone rendering** (a rendered-µs ordering would let same-microsecond ties straddle a boundary; a `time` election is never window-monotone regardless of source — the election-aware window-key rule, § Window membership per table class). Snapshot-class tables are exempt — their inputs are gated constant |
-| `IncrementalSliceColumnMutable` | A slice-read column — any column of a `scd: type1` dim, every *static* column of a `scd: type2` dim — reading a mutable source: a structural column the reader's structural-temporal surface marks mutable ([`reader.md`](reader.md) § The structural-temporal surface — `active`, `deactivated_at`, `last_mutation_sim_time`), or a `history_tracked: true` property. Records-grain facts are exempt: keyed on `last_mutation_sim_time`, their content is final at landing |
-| `IncrementalFilterColumnMutable` | A dim `filter` discriminator that is not `history_tracked: false` (a mutable discriminator makes window-k membership derive from a future reclassification, outside the carve-out) |
-| `IncrementalScd2IdentityKey` | A `scd: type2` `key` with no non-`scd_window` column (the view's partition identity) |
-| `IncrementalScd2ValidFromUnique` | A `scd: type2` table declaring a `valid_to` column without exactly one `scd_window: valid_from` column (the view's `LEAD` source) |
-| `IncrementalReservedName` | An author table name ending in `__rows` or equal to `_export_meta` / `_export_windows`, or an author column named `__valid_from_ns` |
+| Rule | Rejects | Error message |
+|---|---|---|
+| `WindowKeyDuplicate` | Against the data, `upsert` tables only: the declared `key` is not unique in the end-horizon relation | `"table '{table}': key {key} is not unique at the window horizon ({n} duplicated key values); an upsert-delivered table reconciles by key, so declare a key that identifies one row"` |
 
 **Invocation rules (driver).** Regime match (`period` ⇒ anchor resolved;
 `sim_period_ns` ⇒ no anchor); fingerprint stored == computed before any window is
@@ -423,46 +492,49 @@ usage error on stderr, exit 1, before the emit opens).
   commit the cursor inside the data transaction and lets CSV re-derive an identical
   window after a crash — cursor/data drift cannot produce a wrong window, only a
   repeated one.
-- **`valid_to` is never materialized.** It is exactly the successor version's
-  `valid_from`; materializing it into an appended row would require either a future
-  value (a forward reference) or a correction row when the successor lands. The view
-  recovers it from the successor row, so the physical feed is literal append-only and
-  the logical table is always consistent at every horizon.
-- **The view's `LEAD` orders by the raw ns key, not the rendered `valid_from`.**
-  Rendered timestamps truncate to microseconds, so two versions inside one microsecond
-  would tie at the rendered value and make a rendered-order `LEAD` nondeterministic.
-  `__valid_from_ns` carries the untruncated key so `(identity, __valid_from_ns)` is
-  total. This is the same doctrine the dimensional exporter already states for row
-  ordering — pinned by `sim_time`, never by the rendered timestamp.
+- **A window horizon is a slice end.** The alternative — selecting rows out of the
+  un-truncated full export by a per-grain window key — has to refuse every column form
+  through which a value could depend on data past the window, an open-ended rule set
+  (ten at its peak, each rejecting a config that exports fine one-shot), plus a type-1
+  snapshot whose population was the end of the run and an SCD-2 regime that needed a
+  physical `__rows` table, a bookkeeping column, and a view to stay append-only.
+  Compiling the unchanged full export over the truncated tape makes every value honest
+  at its horizon by construction, so drip ≡ one-shot rests on the bridging theorem plus
+  reconciliation by key, and the only rule left is that an `upsert` table's key be a
+  stable row identity. A horizon compile costs a fraction of a second on a
+  half-million-row bundle; the design was established empirically over every
+  dimensional recipe before it was built, and the acceptance suite that drove it
+  (drip-then-`compare` against the one-shot export; window k against a test-side
+  producer slice at the cutoff) is the regression gate.
+- **`upsert` by default, `append` only where total.** Delete-by-key-then-insert is
+  correct for every table with a stable unique key; insert-only is an optimization
+  admitted only where every channel is provably invariant, because a wrong `append`
+  leaves a stale row the reconciliation test catches but a consumer would not.
 - **The ordinal amendment is regime-uniform.** An `ordinal.order_by` naming a
   rendered-time column orders by its raw-ns source in **both** full and windowed export
-  (see [`dimensional.md`](dimensional.md) § Derived columns). An incremental-only
-  rewrite would break Invariant 2 on exactly the same-microsecond tie pair; making the
-  rule uniform changes full-export output only where raw order *is* the event order.
+  (see [`dimensional.md`](dimensional.md) § Derived columns); it is what lets an
+  ordinal over the grain's raw time key count as horizon-invariant.
 - **Period boundaries resolve narrowly; author input fails fast.** A `base_date` or a
   range bound is author input interpreted narrowly — a DST gap/fold is rejected. Period
   boundaries are derived calendar structure that must always exist, so they resolve to
   the earliest valid instant at or after the civil time. "The period starts at the
   earliest instant of its first civil moment" is a canonical reading, not an invented
   value.
-- **The type-1 snapshot is the end-of-run population.** Filtering its rows to
-  "born by `end_k`" is unsound from the slice alone — `last_mutation_sim_time` is not
-  creation time once a property mutates, and creation time is opt-in provenance an emit
-  may lack. Every snapshot value is constant and horizon-exact, so the full population
-  is wider than a real nightly extract but never wrong, and FK-safe at every horizon
-  (the one carve-out in Invariant 4).
 - **A range never appends.** All drip state lives in the output target; a range is
   stateless by definition, so it writes its own fresh target rather than splicing into
   drip state. Re-driving one past window is a range to a fresh path.
 
 ## Boundaries
 
-- **Interval grains are not windowable.** `history_interval` and `membership` grains
-  are an interval = two point events; their second event may postdate the window. They
-  are rejected, not deferred — authors model journeys as `history_point` facts and
-  derive intervals downstream (which is the pedagogical point).
-- **`derived: elapsed` and membership/mutable FK edges are not windowable** for the
-  same forward-reference reason (the gates above).
+- **A fanning membership FK on a records grain has no stable row identity.** A
+  records-grain fact whose `fk via: membership` `where` selects more than one binding
+  fans one record into several rows; keyed on the record it fails `WindowKeyDuplicate`,
+  keyed on the FK it fails `KeyColumnsStable` at load (the binding is not invariant on
+  a records grain). Declare it as a membership-grain fact — the binding *is* the row
+  there, keyed `(record_id, joined_sim_time, …)`.
+- **Base keeps its state-at snapshot.** Every base table is already a per-window
+  snapshot at the window's `end_ns`; it is honest and reconciles by construction,
+  so it does not route through the two-horizon compile.
 - **Trunk-only.** The `SingleBranch` guard stands; the fingerprint includes the sole
   branch's `fork_path`, so a branch-aware cursor (Stage 5) extends the key rather than
   reworking it.
@@ -476,11 +548,12 @@ usage error on stderr, exit 1, before the emit opens).
 | Document | Why |
 |---|---|
 | [`dimensional.md`](dimensional.md) | One mode the driver wraps — grain semantics, SCD-2 `LEAD`, derived columns (incl. the ordinal amendment), the timestamp anchor |
-| [`source.md`](source.md) | The other mode the driver wraps — per-render window membership: the windowed state snapshot, the appended event log, junction extract-on-change |
-| [`playback.md`](playback.md) | The seam that promotes this driver's per-table-class window-membership rules to its tier-2 `window` contract |
+| [`source.md`](source.md) | The other mode the driver wraps through the horizon compile — `state` / `junction` snapshots, the appended event-log delta |
+| [`playback.md`](playback.md) | The seam whose tier-2 `window()` runs this driver's horizon compile and whose `state()` defines the horizons it reconciles to |
 | [`anchor.md`](anchor.md) | The single `EffectiveAnchor` calendar windows resolve through |
-| [`temporal-elections.md`](temporal-elections.md) | The election vocabulary the append-mode window-key rule is election-aware over |
+| [`temporal-elections.md`](temporal-elections.md) | The election vocabulary the ordinal invariance reading is election-aware over |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability and its per-write-regime window gating |
 | [`companion-artifacts.md`](companion-artifacts.md) | The README + manifest pair each emitting invocation rewrites whole-state; the census and fingerprint exclusions it motivates |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface the driver reads through |
-| [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored contract carrying the relied-on `last_mutation_sim_time` / `slice_at` guarantees |
+| [`derivations.md`](derivations.md) | The truncated tape every horizon compile runs over |
+| [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored contract carrying the relied-on `slice_at` and row-order guarantees |

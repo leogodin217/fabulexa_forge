@@ -90,7 +90,7 @@ def _assert_round_trip_plans_clean(
             emit.sidecar.runtime(), config.rebase, None, None
         )
         election = resolve_election(emit.sidecar, config.keys)
-        build_source_plan(emit, config, anchor, election, False, discard_notice_sink)
+        build_source_plan(emit, config, anchor, election, discard_notice_sink)
 
 
 def _flat_records_emit(

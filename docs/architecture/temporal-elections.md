@@ -238,10 +238,10 @@ time, the modes' existing posture for declarations naming omitted columns.
 Row ordering never derives from an elected rendering — every table's total
 order is over raw sim-time keys and identity. The dimensional mode's ordinal
 amendment (substituting a rendered-time `order_by` column for its raw-ns
-source) and the incremental driver's window-key rule are both
-election-aware; each is documented with its owning mechanism in
+source) and the windowed delivery classifier's ordinal-invariance reading
+are both election-aware; each is documented with its owning mechanism in
 [`dimensional.md`](dimensional.md) § Derived columns and
-[`incremental.md`](incremental.md) § Window membership per table class.
+[`incremental.md`](incremental.md) § Horizon windowing.
 
 An elected `date` on `scd_window` renders a date-grained validity window — a
 standard warehouse shape. Same-day versions collapse to `valid_from =
@@ -287,7 +287,7 @@ version ordering is unaffected); the open interval's `NULL` `valid_to` stays
 | `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering (dimensional `as`, `scd_window` object form, source/base `render` entries — payload `instant` elections included, [`value-rendering-elections.md`](value-rendering-elections.md)) has a resolved effective anchor. The source mode's global anchor requirement subsumes its entries; the rule still names the offending column | `"column '{column}': temporal rendering '{render}' requires a resolved anchor; this emit declares no runtime calendar and none was supplied"` |
 | `DateParseSourceColumn` | Each declared parse source resolves per its mode's addressing convention and carries a declared VARCHAR type, and is not `slice_only` | `"date_parse column '{column}' on '{table}': source must be an existing VARCHAR column (got {type})"` |
 | `RenderKeyResolves` | A declared-table or base-entry `render` key resolves in its value form's domain. The bare-shorthand form names an instant-carrying structural column of the table's category (reader-sourced, never hardcoded); the event log's one legal key, `event_sim_time`, is mode-definitional. A key must also name a column the render emits. The typed forms' domains are the value elections' ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) | `"render key '{column}' on '{table}': not an instant-carrying structural column of this table"` (shorthand form; per-form shapes for the typed forms) |
-| Incremental append-mode `order_by` (amended) | Window-key membership is election-aware: a column whose declared source is the window's raw-ns column counts as a window key only if its rendering is also window-monotone. A `time`-elected column over the window's raw-ns source is excluded | The existing rule's message, naming the column and the table's window key ([`incremental.md`](incremental.md)) |
+| Windowed ordinal invariance (amended) | The delivery classifier's reading is election-aware: an `ordinal.order_by` over the grain's raw time key counts as horizon-invariant only if its rendering is also window-monotone; a `time`-elected column is excluded, so the table is delivered `upsert` rather than `append` — never refused ([`incremental.md`](incremental.md) § Horizon windowing) | — (a classification, not a refusal) |
 
 Each rule's exact resolution mechanics (grain-projection resolution on
 dimensional vs. direct sidecar-type reads on source/base) are documented
@@ -376,7 +376,7 @@ byte-identically for the same election.
 | [`source.md`](source.md) | The source mode's unified `render` map on declared tables and the event log. |
 | [`value-rendering-elections.md`](value-rendering-elections.md) | The value-election siblings sharing the unified `render` map — the payload `instant` election that reuses this family's vocabulary and anchor rules, and the event-log reach of parsed and elected temporal text. |
 | [`base.md`](base.md) | The base mode's per-table render declaration list. |
-| [`incremental.md`](incremental.md) | The election-aware append-mode window-key rule. |
+| [`incremental.md`](incremental.md) | The election-aware ordinal-invariance reading of the windowed delivery classifier. |
 | [`playback.md`](playback.md) | Tier-2 shaped playback's reuse of the modes' own compile and validation surfaces, session-zone pin included. |
 | [`slice-only.md`](slice-only.md) | The refusal surface a `date_parse` source column joins. |
 | [`key-election.md`](key-election.md) | A sibling cross-mode election surface: one vocabulary, per-mode attach points. |

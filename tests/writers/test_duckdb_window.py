@@ -1,10 +1,10 @@
 """Tests for write_duckdb_window.
 
 Verifies:
-- Fresh file: tables created, views installed, _export_meta written, _export_windows row
-- Second window: facts append; type-1 dim replaced; SCD-2 __rows appends; view closes prior version
+- Fresh file: tables created, _export_meta written, _export_windows row
+- Second window: facts append; type-1 dim replaced
 - Atomicity: failing spec mid-window rolls back; ExportRuntimeError raised
-- fingerprint=None (range path): no _export_meta, no _export_windows; author tables + views only
+- fingerprint=None (range path): no _export_meta, no _export_windows; author tables only
 - Empty window: zero-row appends, snapshot replace, window row still logged
 - Returned row counts: per-table rows written this window; snapshot dims report full snapshot count
 """
@@ -156,6 +156,15 @@ def _build_fact_emit(tmp_path: Path) -> Path:
                 status,
             ],
         )
+    # prop__status is history-tracked, so each record carries its genesis
+    # history row at creation (the contract's unconditional creation seed).
+    hist_ddl = ", ".join(f'"{c["name"]}" {c["type"]}' for c in _HISTORY_COLUMNS)
+    conn.execute(f'CREATE TABLE "history" ({hist_ddl})')
+    for rec_id, sim_time in [("e001", 10), ("e002", 20), ("e003", 30)]:
+        conn.execute(
+            'INSERT INTO "history" VALUES (?, ?, ?, ?, ?, ?)',
+            ["trunk", "entity", rec_id, "status", sim_time, "active"],
+        )
     conn.close()
 
     write_emit(
@@ -167,6 +176,12 @@ def _build_fact_emit(tmp_path: Path) -> Path:
                 "columns": _ENTITY_COLUMNS,
                 "rows": 3,
                 "record_kind": "entity",
+            },
+            {
+                "name": "history",
+                "category": "fixed",
+                "columns": _HISTORY_COLUMNS,
+                "rows": 3,
             },
         ],
         branches=[{"fork_path": "trunk", "parent": None, "slice_at": 100}],
@@ -258,15 +273,6 @@ def _table_exists_in_db(db_path: Path, table: str) -> bool:
     return bool(rows and rows[0] > 0)
 
 
-def _view_exists_in_db(db_path: Path, view: str) -> bool:
-    conn = duckdb.connect(str(db_path), read_only=True)
-    rows = conn.execute(
-        "SELECT COUNT(*) FROM information_schema.views WHERE table_name = ?", [view]
-    ).fetchone()
-    conn.close()
-    return bool(rows and rows[0] > 0)
-
-
 def _row_count(db_path: Path, table: str) -> int:
     conn = duckdb.connect(str(db_path), read_only=True)
     rows = conn.execute(f'SELECT COUNT(*) FROM "{table}"').fetchone()
@@ -293,6 +299,7 @@ def test_fresh_file_creates_tables_and_meta(tmp_path: Path) -> None:
             window,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
@@ -317,6 +324,7 @@ def test_fresh_file_export_windows_row_written(tmp_path: Path) -> None:
             window,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
@@ -327,27 +335,6 @@ def test_fresh_file_export_windows_row_written(tmp_path: Path) -> None:
     assert row[1] == "w0"  # label
     assert row[2] == 0  # start_ns
     assert row[3] == 15  # end_ns
-
-
-def test_fresh_file_views_installed(tmp_path: Path) -> None:
-    """Fresh file: companion views are installed for SCD-2 dims."""
-    emit_dir = _build_scd2_emit(tmp_path)
-    out_path = tmp_path / "warehouse.duckdb"
-    window = _make_window(0, 15, index=0)
-
-    with open_emit(emit_dir) as emit:
-        specs = build_query_specs(
-            emit,
-            _scd2_config(),
-            None,
-            window,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-        write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
-
-    assert _view_exists_in_db(out_path, "dim_actor")
-    assert _table_exists_in_db(out_path, "dim_actor__rows")
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +357,7 @@ def test_second_window_facts_append(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
@@ -379,6 +367,7 @@ def test_second_window_facts_append(tmp_path: Path) -> None:
             w1,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -401,6 +390,7 @@ def test_second_window_export_windows_gains_row(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
@@ -410,81 +400,12 @@ def test_second_window_export_windows_gains_row(tmp_path: Path) -> None:
             w1,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
     windows_rows = _read_table(out_path, "_export_windows")
     assert len(windows_rows) == 2
-
-
-def test_second_window_scd2_rows_append(tmp_path: Path) -> None:
-    """SCD-2 __rows table appends across windows."""
-    emit_dir = _build_scd2_emit(tmp_path)
-    out_path = tmp_path / "warehouse.duckdb"
-    w0 = _make_window(0, 15, index=0)
-    w1 = _make_window(15, 35, index=1)
-
-    with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(
-            emit,
-            _scd2_config(),
-            None,
-            w0,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-        result0 = write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(
-            emit,
-            _scd2_config(),
-            None,
-            w1,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-        result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
-
-    # w0 [0,15) catches change at sim_time=10 → 1 row
-    assert result0["dim_actor__rows"].row_count == 1
-    # w1 [15,35) catches changes at sim_time=20,30 → 2 rows
-    assert result1["dim_actor__rows"].row_count == 2
-    # total accumulated in table
-    assert _row_count(out_path, "dim_actor__rows") == 3
-
-
-def test_second_window_scd2_view_latest_version_null_valid_to(tmp_path: Path) -> None:
-    """After two windows the SCD-2 view's latest version has valid_to IS NULL."""
-    emit_dir = _build_scd2_emit(tmp_path)
-    out_path = tmp_path / "warehouse.duckdb"
-    w0 = _make_window(0, 15, index=0)
-    w1 = _make_window(15, 35, index=1)
-
-    with open_emit(emit_dir) as emit:
-        specs0 = build_query_specs(
-            emit,
-            _scd2_config(),
-            None,
-            w0,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-        write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
-        specs1 = build_query_specs(
-            emit,
-            _scd2_config(),
-            None,
-            w1,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-        write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
-
-    conn = duckdb.connect(str(out_path), read_only=True)
-    open_rows = conn.execute(
-        'SELECT COUNT(*) FROM "dim_actor" WHERE valid_to IS NULL'
-    ).fetchone()
-    conn.close()
-    assert open_rows is not None and open_rows[0] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -506,6 +427,7 @@ def test_atomicity_bad_sql_rolls_back(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, w0, fingerprint="fp")
 
@@ -518,8 +440,6 @@ def test_atomicity_bad_sql_rolls_back(tmp_path: Path) -> None:
         table_name="dim_entity",
         sql="SELECT * FROM nonexistent_table_xyz",
         write_mode="append",
-        view_name=None,
-        view_sql=None,
     )
     w1 = _make_window(15, 35, index=1)
 
@@ -548,6 +468,7 @@ def test_connect_failure_raises_export_runtime_error(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         with pytest.raises(ExportRuntimeError, match="failed to open warehouse DuckDB"):
             write_duckdb_window(emit, specs, bad_path, w0, fingerprint="fp")
@@ -574,6 +495,7 @@ def test_range_path_no_meta_no_windows(tmp_path: Path) -> None:
             window,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
@@ -596,11 +518,11 @@ def test_range_path_author_tables_present(tmp_path: Path) -> None:
             window,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
-    assert _table_exists_in_db(out_path, "dim_actor__rows")
-    assert _view_exists_in_db(out_path, "dim_actor")
+    assert _table_exists_in_db(out_path, "dim_actor")
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +547,7 @@ def test_empty_window_still_logs_window_row(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
@@ -634,6 +557,7 @@ def test_empty_window_still_logs_window_row(tmp_path: Path) -> None:
             w1,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -663,6 +587,7 @@ def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
@@ -672,6 +597,7 @@ def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:
             w1,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -704,6 +630,7 @@ def test_keyed_first_window_creates_constraints_second_window_preserves(
                 w0,
                 notice_sink=discard_notice_sink,
                 base_relations=None,
+                tables=None,
             ),
             "dim_entity",
             keys,
@@ -719,6 +646,7 @@ def test_keyed_first_window_creates_constraints_second_window_preserves(
                 w1,
                 notice_sink=discard_notice_sink,
                 base_relations=None,
+                tables=None,
             ),
             "dim_entity",
             keys,
@@ -740,8 +668,6 @@ def test_keyed_first_window_violation_rolls_back(tmp_path: Path) -> None:
         table_name="dim_entity",
         sql="SELECT 'x' AS id, 'dup1' AS name UNION ALL SELECT 'x' AS id, 'dup2' AS name",
         write_mode="replace",
-        view_name=None,
-        view_sql=None,
         keys=TableKeys(primary_key=("id",), unique=()),
     )
 

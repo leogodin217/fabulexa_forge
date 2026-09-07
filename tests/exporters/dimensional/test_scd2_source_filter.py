@@ -1,8 +1,7 @@
 """Regression tests for three dimensional-exporter fixes.
 
 1. SCD-2 builders honor table_decl.source.filter: a discriminator-split
-   scd: type2 dim contains only the filtered sub-type's rows (full export and
-   windowed __rows).
+   scd: type2 dim contains only the filtered sub-type's rows.
 2. Scd2ColumnModeSupported: validate_table rejects column modes the type2
    build does not define (fk, correlation, derived: ordinal / elapsed)
    instead of rendering them as silent NULLs, while admitting the pure
@@ -42,7 +41,6 @@ from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.validation import (
     check_scd2_column_mode_supported,
 )
-from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.reader.emit import open_emit
 
 # ---------------------------------------------------------------------------
@@ -213,6 +211,7 @@ def test_scd2_full_export_honors_source_filter(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -236,36 +235,13 @@ def test_scd2_full_export_without_filter_keeps_all_subtypes(tmp_path: Path) -> N
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
     rows = result.to_pydict()
     assert result.num_rows == 3
     assert set(rows["id"]) == {"a001", "s001"}
-
-
-def test_scd2_windowed_rows_honor_source_filter(tmp_path: Path) -> None:
-    """The windowed __rows SELECT also restricts to the filtered sub-type."""
-    emit_dir = _build_split_emit(tmp_path)
-    config = DimensionalConfig(
-        tables=[_make_scd2_decl({"prop__actor_type": "patient"})]
-    )
-    window = Window(index=0, start_ns=0, end_ns=100, label="w0")
-    with open_emit(emit_dir) as emit:
-        specs = build_query_specs(
-            emit,
-            config,
-            None,
-            window,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-        assert specs[0].table_name == "dim_patient__rows"
-        result = emit.query_arrow(specs[0].sql, ())
-
-    rows = result.to_pydict()
-    assert result.num_rows == 2
-    assert set(rows["id"]) == {"a001"}
 
 
 def test_scd2_full_export_honors_list_filter(tmp_path: Path) -> None:
@@ -286,6 +262,7 @@ def test_scd2_full_export_honors_list_filter(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -449,107 +426,10 @@ def test_scd2_unsupported_mode_rejected_via_build_query_specs(tmp_path: Path) ->
                 None,
                 notice_sink=discard_notice_sink,
                 base_relations=None,
+                tables=None,
             )
 
 
 # ---------------------------------------------------------------------------
 # Windowed fact: missing window-key projection fails fast
 # ---------------------------------------------------------------------------
-
-
-def test_windowed_records_fact_missing_window_key_raises(tmp_path: Path) -> None:
-    """No output column projects last_mutation_sim_time → pre-flight ExportError."""
-    emit_dir = _build_split_emit(tmp_path)
-    config = DimensionalConfig(
-        tables=[
-            TableDecl(
-                name="fact_actor",
-                role="fact",
-                source=SourceDecl(grain="records", kind="actor"),
-                key=["id"],
-                columns=[
-                    ColumnDecl(name="id", **{"from": "record_id"}),
-                    ColumnDecl(name="name", **{"from": "prop__name"}),
-                ],
-            )
-        ]
-    )
-    window = Window(index=0, start_ns=0, end_ns=100, label="w0")
-    with open_emit(emit_dir) as emit:
-        with pytest.raises(ExportError, match="window key 'last_mutation_sim_time'"):
-            build_query_specs(
-                emit,
-                config,
-                None,
-                window,
-                notice_sink=discard_notice_sink,
-                base_relations=None,
-            )
-
-
-def test_windowed_history_point_fact_missing_window_key_raises(
-    tmp_path: Path,
-) -> None:
-    """No output column projects sim_time → pre-flight ExportError."""
-    emit_dir = _build_split_emit(tmp_path)
-    config = DimensionalConfig(
-        tables=[
-            TableDecl(
-                name="fact_status",
-                role="fact",
-                source=SourceDecl(
-                    grain="history_point", kind="actor", property="status"
-                ),
-                key=["record_id"],
-                columns=[
-                    ColumnDecl(name="record_id", **{"from": "record_id"}),
-                    ColumnDecl(name="val", **{"from": "value"}),
-                ],
-            )
-        ]
-    )
-    window = Window(index=0, start_ns=0, end_ns=100, label="w0")
-    with open_emit(emit_dir) as emit:
-        with pytest.raises(ExportError, match="window key 'sim_time'"):
-            build_query_specs(
-                emit,
-                config,
-                None,
-                window,
-                notice_sink=discard_notice_sink,
-                base_relations=None,
-            )
-
-
-def test_windowed_records_fact_with_window_key_passes(tmp_path: Path) -> None:
-    """Projecting the window key (from:) keeps windowed export working."""
-    emit_dir = _build_split_emit(tmp_path)
-    config = DimensionalConfig(
-        tables=[
-            TableDecl(
-                name="fact_actor",
-                role="fact",
-                source=SourceDecl(grain="records", kind="actor"),
-                key=["id"],
-                columns=[
-                    ColumnDecl(name="id", **{"from": "record_id"}),
-                    ColumnDecl(name="mutated_at", **{"from": "last_mutation_sim_time"}),
-                ],
-            )
-        ]
-    )
-    window = Window(index=0, start_ns=0, end_ns=18, label="w0")
-    with open_emit(emit_dir) as emit:
-        specs = build_query_specs(
-            emit,
-            config,
-            None,
-            window,
-            notice_sink=discard_notice_sink,
-            base_relations=None,
-        )
-        result = emit.query_arrow(specs[0].sql, ())
-
-    # Window [0, 18): only s001 (last_mutation_sim_time=15) lands in it.
-    rows = result.to_pydict()
-    assert rows["id"] == ["s001"]

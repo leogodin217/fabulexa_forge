@@ -2095,6 +2095,7 @@ def test_windowed_and_full_dimensional_provenance_stamping_identical(
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
 
     full_provenance = next(
@@ -2137,6 +2138,7 @@ def test_windowed_and_full_author_descriptions_forwarding_identical(
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
 
     full_descriptions = next(
@@ -2186,6 +2188,7 @@ def test_windowed_and_full_table_description_forwarding_identical(
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
 
     full_spec = next(spec for spec in full_specs if spec.table_name == "dim_entity")

@@ -60,8 +60,6 @@ def test_build_base_query_specs_full_export_write_mode(tmp_path: Path) -> None:
     for spec in specs:
         assert isinstance(spec, QuerySpec)
         assert spec.write_mode == "create"
-        assert spec.view_name is None
-        assert spec.view_sql is None
 
 
 def test_export_base_anchor_none_succeeds(tmp_path: Path) -> None:

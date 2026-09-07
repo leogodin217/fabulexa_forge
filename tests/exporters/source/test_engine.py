@@ -22,6 +22,7 @@ import pytest
 from _support.duckdb_introspect import constraint_types
 from _support.notices import RecordingNoticeSink, discard_notice_sink
 
+from exporters.source.test_where_plan import _write_sensor_emit
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
     ExportConfig,
@@ -39,10 +40,12 @@ from fabulexa_forge.exporters.query_spec import (
 )
 from fabulexa_forge.exporters.source.engine import (
     build_source_query_specs,
+    build_windowed_source_query_specs,
     export_source,
     require_source_anchor,
 )
 from fabulexa_forge.exporters.source.plan import SourcePlan, build_source_plan
+from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
@@ -54,6 +57,9 @@ from ._source_fixtures import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit
 
 # ---------------------------------------------------------------------------
@@ -121,7 +127,6 @@ def _plan(
     *,
     events: "SourceEventsDecl | None" = None,
     declare_keys: bool = False,
-    windowed: bool = False,
 ) -> "Iterator[tuple[Emit, SourcePlan]]":
     """Open `emit_dir` and build a SourcePlan, resolving the anchor and
     election the way `export_source` does."""
@@ -130,9 +135,7 @@ def _plan(
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, windowed, discard_notice_sink
-        )
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
         yield emit, plan
 
 
@@ -178,14 +181,12 @@ def test_require_source_anchor_returns_narrowed_anchor(tmp_path: Path) -> None:
 def test_build_source_query_specs_full_export_write_mode(tmp_path: Path) -> None:
     """Every full-export spec is write_mode='create' with no companion view."""
     with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
-        specs = build_source_query_specs(plan, None)
+        specs = build_source_query_specs(plan)
 
     assert specs
     for spec in specs:
         assert isinstance(spec, QuerySpec)
         assert spec.write_mode == "create"
-        assert spec.view_name is None
-        assert spec.view_sql is None
     assert {spec.table_name for spec in specs} == set(_EXPECTED_ROW_COUNTS)
 
 
@@ -205,7 +206,7 @@ def test_build_source_query_specs_compile_order_event_log_last(
         emit,
         plan,
     ):
-        specs = build_source_query_specs(plan, None)
+        specs = build_source_query_specs(plan)
     assert [spec.table_name for spec in specs] == [
         "shift",
         "visit",
@@ -218,79 +219,132 @@ def test_build_source_query_specs_compile_order_event_log_last(
 def test_build_source_query_specs_determinism(tmp_path: Path) -> None:
     """Two compiles of the same plan produce identical (table, sql, mode) specs."""
     with _plan(build_source_test_emit(tmp_path), _SPANNING_TABLES) as (emit, plan):
-        specs_a = build_source_query_specs(plan, None)
-        specs_b = build_source_query_specs(plan, None)
+        specs_a = build_source_query_specs(plan)
+        specs_b = build_source_query_specs(plan)
     assert [(s.table_name, s.sql, s.write_mode) for s in specs_a] == [
         (s.table_name, s.sql, s.write_mode) for s in specs_b
     ]
 
 
 # ---------------------------------------------------------------------------
-# build_source_query_specs: windowed compile
+# build_windowed_source_query_specs: tables=None, selection, notices, the
+# undeclared-name assertion.
 # ---------------------------------------------------------------------------
 
 
-def test_build_source_query_specs_windowed_write_mode_per_unit(
+def _windowed_specs(
+    emit_dir: Path,
+    config: ExportConfig,
+    window: Window,
+    *,
+    notice_sink: "NoticeSink" = discard_notice_sink,
+    tables: "Collection[str] | None",
+) -> list[QuerySpec]:
+    """Open `emit_dir` and run `build_windowed_source_query_specs` the way
+    the shaped seam does: resolve the anchor and election, then the horizon
+    compile, optionally a selection."""
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        assert anchor is not None
+        election = resolve_election(emit.sidecar, config.keys)
+        return build_windowed_source_query_specs(
+            emit, config, anchor, election, window, notice_sink, tables=tables
+        )
+
+
+def test_windowed_query_specs_tables_none_returns_every_unit_event_log_last(
     tmp_path: Path,
 ) -> None:
-    """Windowed compile tags write_mode per unit kind: state replace,
-    junction append; no unit uses a companion view."""
-    window, _, _ = windowed_test_windows()
-    with _plan(
-        build_windowed_source_test_emit(tmp_path), _WINDOWED_TABLES, windowed=True
-    ) as (emit, plan):
-        specs = build_source_query_specs(plan, window)
-
-    write_mode_by_table = {spec.table_name: spec.write_mode for spec in specs}
-    assert write_mode_by_table == {
-        "visit": "replace",
-        "order": "replace",
-        "location": "replace",
-        "visit_team": "append",
-    }
-    for spec in specs:
-        assert spec.view_name is None
-        assert spec.view_sql is None
-
-
-def test_build_source_query_specs_windowed_event_log_appends(
-    tmp_path: Path,
-) -> None:
-    """A windowed compile's event-log spec is write_mode='append'."""
-    window, _, _ = windowed_test_windows()
     events = SourceEventsDecl(
-        name="versions", sources=(SourceEventSourceDecl(kind="visit"),)
+        name="visit_versions", sources=(SourceEventSourceDecl(kind="visit"),)
     )
-    with _plan(
-        build_windowed_source_test_emit(tmp_path),
-        _WINDOWED_TABLES,
-        events=events,
-        windowed=True,
-    ) as (emit, plan):
-        specs = build_source_query_specs(plan, window)
-    by_table = {spec.table_name: spec for spec in specs}
-    assert by_table["versions"].write_mode == "append"
+    config = _config(_WINDOWED_TABLES, events=events)
+    window = windowed_test_windows()[0]
+    specs = _windowed_specs(
+        build_windowed_source_test_emit(tmp_path), config, window, tables=None
+    )
+    assert [s.table_name for s in specs] == [
+        "visit",
+        "order",
+        "location",
+        "visit_team",
+        "visit_versions",
+    ]
+    assert specs[-1].write_mode == "append"
 
 
-def test_build_source_query_specs_window_presence_mismatch_raises(
+_SENSOR_STATE_TABLE = SourceTableDecl(
+    name="sensor_state", kind="sensor", where={"prop__category": "underground"}
+)
+_SENSOR_EVENTS = SourceEventsDecl(
+    name="sensor_versions", sources=(SourceEventSourceDecl(kind="sensor"),)
+)
+_SENSOR_WINDOW = Window(index=None, start_ns=0, end_ns=100, label="")
+
+
+def test_windowed_query_specs_state_only_selection_replace_notice_once(
     tmp_path: Path,
 ) -> None:
-    """`window` presence disagreeing with the plan's own windowed-ness raises."""
-    window, _, _ = windowed_test_windows()
-    full_dir = tmp_path / "full"
-    full_dir.mkdir()
-    windowed_dir = tmp_path / "windowed"
-    windowed_dir.mkdir()
+    """A state-table-only selection returns that unit's spec (write_mode
+    'replace') and emits its plan notice once (only the end horizon opens)."""
+    config = _config((_SENSOR_STATE_TABLE,), events=_SENSOR_EVENTS)
+    sink = RecordingNoticeSink()
+    specs = _windowed_specs(
+        _write_sensor_emit(tmp_path),
+        config,
+        _SENSOR_WINDOW,
+        notice_sink=sink,
+        tables={"sensor_state"},
+    )
+    assert [s.table_name for s in specs] == ["sensor_state"]
+    assert specs[0].write_mode == "replace"
+    assert len(sink.notices) == 1
 
-    with _plan(build_source_test_emit(full_dir), _SPANNING_TABLES) as (emit, plan):
-        with pytest.raises(ValueError, match="windowed-ness"):
-            build_source_query_specs(plan, window)
 
-    with _plan(
-        build_windowed_source_test_emit(windowed_dir), _WINDOWED_TABLES, windowed=True
-    ) as (emit, plan):
-        with pytest.raises(ValueError, match="windowed-ness"):
-            build_source_query_specs(plan, None)
+def test_windowed_query_specs_event_log_selection_append_last_notice_twice(
+    tmp_path: Path,
+) -> None:
+    """A selection including the event log returns it last with write_mode
+    'append' and emits each plan notice twice (both horizons open)."""
+    config = _config((_SENSOR_STATE_TABLE,), events=_SENSOR_EVENTS)
+    sink = RecordingNoticeSink()
+    specs = _windowed_specs(
+        _write_sensor_emit(tmp_path),
+        config,
+        _SENSOR_WINDOW,
+        notice_sink=sink,
+        tables={"sensor_state", "sensor_versions"},
+    )
+    assert [s.table_name for s in specs] == ["sensor_state", "sensor_versions"]
+    assert specs[-1].write_mode == "append"
+    assert len(sink.notices) == 2
+
+
+def test_windowed_query_specs_selected_spec_equals_tables_none_spec(
+    tmp_path: Path,
+) -> None:
+    """The selected spec equals the same unit's spec under tables=None."""
+    config = _config((_SENSOR_STATE_TABLE,))
+    emit_dir = _write_sensor_emit(tmp_path)
+    whole = _windowed_specs(emit_dir, config, _SENSOR_WINDOW, tables=None)
+    selected = _windowed_specs(
+        emit_dir, config, _SENSOR_WINDOW, tables={"sensor_state"}
+    )
+    assert len(whole) == 1
+    assert len(selected) == 1
+    assert selected[0].sql == whole[0].sql
+    assert selected[0].write_mode == whole[0].write_mode
+
+
+def test_windowed_query_specs_unknown_name_asserts(tmp_path: Path) -> None:
+    config = _config((_SENSOR_STATE_TABLE,))
+    with pytest.raises(AssertionError):
+        _windowed_specs(
+            _write_sensor_emit(tmp_path),
+            config,
+            _SENSOR_WINDOW,
+            tables={"nonexistent_table"},
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +357,7 @@ def test_build_source_query_specs_declare_keys_absent_all_unkeyed(
 ) -> None:
     """declare_keys absent -> every spec's keys is None."""
     with _plan(build_source_keys_emit(tmp_path), _KEYS_TABLES) as (emit, plan):
-        specs = build_source_query_specs(plan, None)
+        specs = build_source_query_specs(plan)
     assert specs
     assert all(spec.keys is None for spec in specs)
 
@@ -316,7 +370,7 @@ def test_build_source_query_specs_declare_keys_per_table(tmp_path: Path) -> None
         emit,
         plan,
     ):
-        specs = build_source_query_specs(plan, None)
+        specs = build_source_query_specs(plan)
     by_table = {spec.table_name: spec for spec in specs}
     assert by_table["visit"].keys is not None
     assert by_table["visit"].keys.unique == (("presentation_id",),)
@@ -325,33 +379,6 @@ def test_build_source_query_specs_declare_keys_per_table(tmp_path: Path) -> None
     assert by_table["nurse"].keys is not None
     assert by_table["nurse"].keys.unique == ()
     assert by_table["visit_team"].keys is None
-
-
-def test_build_source_query_specs_declare_keys_windowed_matches_full(
-    tmp_path: Path,
-) -> None:
-    """A windowed compile's declared keys equal the full-export declaration."""
-    window, _, _ = windowed_test_windows()
-    full_dir = tmp_path / "full"
-    full_dir.mkdir()
-    windowed_dir = tmp_path / "windowed"
-    windowed_dir.mkdir()
-
-    with _plan(build_source_keys_emit(full_dir), _KEYS_TABLES, declare_keys=True) as (
-        emit,
-        plan,
-    ):
-        full_specs = build_source_query_specs(plan, None)
-    with _plan(
-        build_source_keys_emit(windowed_dir),
-        _KEYS_TABLES,
-        declare_keys=True,
-        windowed=True,
-    ) as (emit, plan):
-        windowed_specs = build_source_query_specs(plan, window)
-    full_keys = {s.table_name: s.keys for s in full_specs}
-    windowed_keys = {s.table_name: s.keys for s in windowed_specs}
-    assert full_keys == windowed_keys
 
 
 # ---------------------------------------------------------------------------
@@ -489,11 +516,9 @@ def test_export_source_determinism(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         election = resolve_election(emit.sidecar, config.keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
-        specs_a = build_source_query_specs(plan, None)
-        specs_b = build_source_query_specs(plan, None)
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
+        specs_a = build_source_query_specs(plan)
+        specs_b = build_source_query_specs(plan)
     assert [(s.table_name, s.sql, s.write_mode) for s in specs_a] == [
         (s.table_name, s.sql, s.write_mode) for s in specs_b
     ]

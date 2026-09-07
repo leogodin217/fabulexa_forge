@@ -358,14 +358,16 @@ class SourceJunctionTablePlan:
 
 @dataclass(frozen=True)
 class SourcePlan:
-    """The resolved source plan: everything `build_source_query_specs(plan,
-    window)` composes from, and nothing else.
+    """The resolved source plan: everything `build_source_query_specs(plan)`
+    composes from, and nothing else.
 
-    Carries `sidecar` / `fork_path` / `anchor` (the renders' pure inputs)
-    and `windowed` (the shape the plan validated against); carries no Emit
-    and no Election — data-dependent guards ran at plan build, election
-    facts are baked into the units as resolved surfaces. Compile is
-    therefore a pure function of (plan, window).
+    Carries `sidecar` / `fork_path` / `anchor` (the renders' pure inputs);
+    carries no Emit and no Election — data-dependent guards ran at plan
+    build, election facts are baked into the units as resolved surfaces.
+    Compile is therefore a pure function of the plan. A windowed export
+    builds one plan per horizon against the truncated tape's sidecar view
+    (`engine.build_windowed_source_query_specs`); the plan itself never
+    knows a window.
     """
 
     sidecar: "Sidecar"
@@ -375,9 +377,6 @@ class SourcePlan:
     """The sole branch, resolved once via require_single_branch."""
     anchor: "EffectiveAnchor"
     """The resolved wallclock anchor (source requires one)."""
-    windowed: bool
-    """Which state-render shape the plan validated against; must agree
-    with `window` presence at compile (ValueError otherwise)."""
     tables: "tuple[SourceStateTablePlan | SourceJunctionTablePlan, ...]"
     """One unit per `tables` declaration, declaration order."""
     events: "SourceEventLogPlan | None"
@@ -766,7 +765,6 @@ def _state_table_candidate_columns(
     sidecar: "Sidecar",
     kind: str,
     identity_surface: "KeySurface",
-    windowed: bool,
     table_name: str,
     notice_sink: "NoticeSink",
 ) -> tuple[tuple[str, str], ...]:
@@ -778,9 +776,8 @@ def _state_table_candidate_columns(
     (wherever `record_id` sits in sidecar order) always does, carrying
     `identity_surface` as its source name and `_IDENTITY_DEFAULT_OUTPUT` as
     its output; a standalone `presentation_id` payload column is absorbed
-    when it *is* the elected surface; `last_mutation_sim_time` is absent
-    under a windowed plan (horizon honesty); non-exempt slice_only columns
-    are omitted with one notice each. The discriminator's single-population
+    when it *is* the elected surface; non-exempt slice_only columns are
+    omitted with one notice each. The discriminator's single-population
     drop rule is deferred to the `columns`-selection step (it is a default a
     `columns` entry can override).
 
@@ -788,7 +785,6 @@ def _state_table_candidate_columns(
         sidecar: The open emit's sidecar.
         kind: The table's record kind.
         identity_surface: The table's gated elected identity surface.
-        windowed: Whether the invocation is windowed.
         table_name: The table's output name, for errors/notices.
         notice_sink: Receiver for slice-only-column-omitted notices.
 
@@ -819,8 +815,6 @@ def _state_table_candidate_columns(
             pairs.append((name, name))
             continue
         if role == "lifecycle":
-            if name == RESERVED_PRESENTATION_COLUMN_NAME and windowed:
-                continue
             pairs.append((name, _LIFECYCLE_RENAMES.get(name, name)))
             continue
         # role == "payload"
@@ -834,7 +828,6 @@ def _state_table_candidate_columns(
 def _check_state_column_name(
     name: str,
     identity_surface: "KeySurface",
-    windowed: bool,
     all_source_columns: frozenset[str],
     sidecar: "Sidecar",
     kind: str,
@@ -847,7 +840,6 @@ def _check_state_column_name(
     Args:
         name: The entry's source-column name.
         identity_surface: The table's gated elected identity surface.
-        windowed: Whether the invocation is windowed.
         all_source_columns: Every real column name of the kind's records
             table.
         sidecar: The open emit's sidecar.
@@ -858,9 +850,8 @@ def _check_state_column_name(
             is election-governed, never selection-governed).
 
     Raises:
-        SourceColumnUnresolved: `name` is not a real column; is `record_id`
-            under a non-record_id election; or is `last_mutation_sim_time`
-            under a windowed plan.
+        SourceColumnUnresolved: `name` is not a real column, or is
+            `record_id` under a non-record_id election.
         SourceColumnNotAddressable: `name` is a mechanism column
             (`fork_path`, `ref_index__*`, `record_index` when not the
             elected surface), or names the elected identity surface while
@@ -894,12 +885,6 @@ def _check_state_column_name(
             f"table '{table_name}': 'record_id' is not rendered — this table"
             f" elects '{identity_surface}'"
         )
-    if name == RESERVED_PRESENTATION_COLUMN_NAME and windowed:
-        raise SourceColumnUnresolved(
-            f"table '{table_name}': '{RESERVED_PRESENTATION_COLUMN_NAME}' is"
-            " omitted under a windowed export (updated_at is not"
-            " reconstructible at a past horizon)"
-        )
     if is_non_exempt_slice_only(sidecar, kind, name):
         raise SourceSliceOnlyRead(
             slice_only_refusal_message(table_name, name, "column", kind, name)
@@ -910,7 +895,6 @@ def _apply_state_table_columns_decl(
     candidate: tuple[tuple[str, str], ...],
     decl_columns: "tuple[str, ...] | None",
     identity_surface: "KeySurface",
-    windowed: bool,
     sidecar: "Sidecar",
     kind: str,
     populations: "tuple[Population, ...]",
@@ -928,7 +912,6 @@ def _apply_state_table_columns_decl(
         candidate: The table's maximal default (source, output) pairs.
         decl_columns: The `tables[].columns` entry, or None.
         identity_surface: The table's gated elected identity surface.
-        windowed: Whether the invocation is windowed.
         sidecar: The open emit's sidecar.
         kind: The table's record kind.
         populations: The table's resolved population set.
@@ -951,7 +934,6 @@ def _apply_state_table_columns_decl(
             _check_state_column_name(
                 name,
                 identity_surface,
-                windowed,
                 all_source_columns,
                 sidecar,
                 kind,
@@ -978,7 +960,6 @@ def _apply_state_table_rename(
     columns: tuple[tuple[str, str], ...],
     rename: "dict[str, str] | None",
     identity_surface: "KeySurface",
-    windowed: bool,
     sidecar: "Sidecar",
     kind: str,
     table_name: str,
@@ -997,7 +978,6 @@ def _apply_state_table_rename(
         columns: The table's (source, output) pairs after `columns` selection.
         rename: The `tables[].rename` map, or None.
         identity_surface: The table's gated elected identity surface.
-        windowed: Whether the invocation is windowed.
         sidecar: The open emit's sidecar.
         kind: The table's record kind.
         table_name: The table's output name, for errors.
@@ -1020,7 +1000,6 @@ def _apply_state_table_rename(
         _check_state_column_name(
             key,
             identity_surface,
-            windowed,
             all_source_columns,
             sidecar,
             kind,
@@ -1037,7 +1016,6 @@ def _resolve_state_table_descriptions(
     columns: tuple[tuple[str, str], ...],
     descriptions: "dict[str, str] | None",
     identity_surface: "KeySurface",
-    windowed: bool,
     sidecar: "Sidecar",
     kind: str,
     table_name: str,
@@ -1057,7 +1035,6 @@ def _resolve_state_table_descriptions(
             `rename`.
         descriptions: The `tables[].descriptions` entry, or None.
         identity_surface: The table's gated elected identity surface.
-        windowed: Whether the invocation is windowed.
         sidecar: The open emit's sidecar.
         kind: The table's record kind.
         table_name: The table's output name, for errors.
@@ -1080,7 +1057,6 @@ def _resolve_state_table_descriptions(
         lambda key: _check_state_column_name(
             key,
             identity_surface,
-            windowed,
             all_source_columns,
             sidecar,
             kind,
@@ -1325,7 +1301,6 @@ def _resolve_state_table_render(
     columns: tuple[tuple[str, str], ...],
     render: "dict[str, RenderElection] | None",
     identity_surface: "KeySurface",
-    windowed: bool,
     sidecar: "Sidecar",
     kind: str,
     table_name: str,
@@ -1340,7 +1315,6 @@ def _resolve_state_table_render(
             `rename`.
         render: The `tables[].render` entry, or None.
         identity_surface: The table's gated elected identity surface.
-        windowed: Whether the invocation is windowed.
         sidecar: The open emit's sidecar.
         kind: The table's record kind.
         table_name: The table's output name, for errors.
@@ -1366,7 +1340,6 @@ def _resolve_state_table_render(
         lambda key: _check_state_column_name(
             key,
             identity_surface,
-            windowed,
             all_source_columns,
             sidecar,
             kind,
@@ -1793,7 +1766,6 @@ def _build_state_table_plan(
     election: Election,
     known_kinds: "tuple[str, ...]",
     decl: "SourceTableDecl",
-    windowed: bool,
     declare_keys: bool,
     notice_sink: "NoticeSink",
 ) -> SourceStateTablePlan:
@@ -1804,7 +1776,6 @@ def _build_state_table_plan(
         election: The resolved election.
         known_kinds: Every kind with a declared records table in the emit.
         decl: The declaration (`decl.kind` is not None).
-        windowed: Whether the invocation is windowed.
         declare_keys: Whether to resolve `keys` via `resolve_state_table_keys`.
         notice_sink: Receiver for slice-only-column-omitted notices.
 
@@ -1839,7 +1810,7 @@ def _build_state_table_plan(
     )
 
     candidate = _state_table_candidate_columns(
-        sidecar, kind, identity_surface, windowed, decl.name, notice_sink
+        sidecar, kind, identity_surface, decl.name, notice_sink
     )
     source_table = f"{RECORDS_TABLE_PREFIX}{kind}"
     all_source_columns = frozenset(col.name for col in sidecar.columns(source_table))
@@ -1851,7 +1822,6 @@ def _build_state_table_plan(
         candidate,
         decl.columns,
         identity_surface,
-        windowed,
         sidecar,
         kind,
         populations,
@@ -1863,7 +1833,6 @@ def _build_state_table_plan(
         columns,
         decl.rename,
         identity_surface,
-        windowed,
         sidecar,
         kind,
         decl.name,
@@ -1873,7 +1842,6 @@ def _build_state_table_plan(
         columns,
         decl.descriptions,
         identity_surface,
-        windowed,
         sidecar,
         kind,
         decl.name,
@@ -1884,7 +1852,6 @@ def _build_state_table_plan(
         columns,
         decl.render,
         identity_surface,
-        windowed,
         sidecar,
         kind,
         decl.name,
@@ -3387,8 +3354,7 @@ def _check_output_reserved_names(
         events: The resolved event-log unit, or None.
 
     Raises:
-        ExportError: A table name is `_export_meta` / `_export_windows` or
-            ends in `__rows`; a column is named `__valid_from_ns`; or a
+        ExportError: A table name is `_export_meta` / `_export_windows`, or a
             column is named `last_mutation_sim_time`.
     """
     for name, columns in _output_units(tables, events):
@@ -3730,7 +3696,6 @@ def build_source_plan(
     config: "ExportConfig",
     anchor: "EffectiveAnchor",
     election: Election,
-    windowed: bool,
     notices: "NoticeSink",
 ) -> SourcePlan:
     """
@@ -3744,11 +3709,7 @@ def build_source_plan(
     the audited property set per events source, runs the collision and
     reserved-name checks over all resolved output names, and guards every
     elected relation against the physical tape (the plan-time uniqueness
-    guard, conservatively strict under a windowed ask — § SourcePlan).
-    Validation is against the shape the invocation delivers: under
-    `windowed=True` the state render omits `updated_at`, so a `columns` /
-    `rename` entry naming `last_mutation_sim_time` is unsatisfiable and
-    refused.
+    guard, conservatively strict under a truncated-tape ask — § SourcePlan).
 
     Args:
         emit: The open emit.
@@ -3756,9 +3717,6 @@ def build_source_plan(
         anchor: The resolved wallclock anchor (source requires one; the
             caller has already refused a None resolution).
         election: The resolved key-election view.
-        windowed: Whether the invocation is windowed (`--next` /
-            `--from`/`--to`) — an invocation fact, supplied by the caller,
-            selecting which state-render shape the plan validates against.
         notices: Sink for slice_only omissions and other compile notices.
 
     Returns:
@@ -3830,7 +3788,6 @@ def build_source_plan(
                     election,
                     known_kinds,
                     decl,
-                    windowed,
                     declare_keys,
                     notices,
                 )
@@ -3865,7 +3822,6 @@ def build_source_plan(
         sidecar=sidecar,
         fork_path=fork_path,
         anchor=anchor,
-        windowed=windowed,
         tables=tables_t,
         events=events_plan,
     )

@@ -42,7 +42,7 @@ creating your own bundles.
 
 Start in docs/examples. You'll see four datasets minus the actual data. The data is in DuckDB and attached
 as artifacts. Copy the duckdb into the same directory as the example configs. /examples shows various recipes
-for configuration. CLI download for datasets is coming in the future.
+for configuration, or fetch a pack with `fabulexa-forge datasets get <name>` (see § Commands).
 
 ### Streaming Demo
 
@@ -77,25 +77,172 @@ uv sync                 # resolve this project's own venv
 uv run fabulexa-forge --help
 ```
 
-`fabulexa-forge` is the only entry point. It takes one base-layer emit (`run.duckdb` +
-`base.json`) and either reshapes it (exporters) or breaks it realistically
-(corrupters):
+## Commands
+
+`fabulexa-forge` is the only entry point. Every verb below takes `<emit_dir>` — a
+directory holding `run.duckdb` + `base.json` — except `compare` and `datasets`.
+`fabulexa-forge <verb> --help` prints each verb's usage.
 
 | Verb | What it does |
 |---|---|
-| `validate` | Run C1–C12 conformance checks against an emit. |
-| `export`   | Reshape an emit per an export config (`dimensional` / `source`). |
-| `init`     | Propose a candidate dimensional config from the sidecar. |
-| `stream`   | Replay the base layer as a CDC event stream. |
-| `mixer`    | Replay the base layer as a live, operator-mixable Kafka feed. |
-| `corrupt`  | Inject realistic data-quality defects, with a ground-truth manifest. |
+| `validate` | Run C1–C15 conformance checks against an emit. |
+| `export`   | Reshape an emit per an export config (`mode: dimensional` / `source` / `base`) to CSV or DuckDB. |
+| `init`     | Propose a candidate config (dimensional, source, or streaming) from the sidecar. |
+| `stream`   | Replay the base layer as a CDC event stream to stdout, files, or Kafka. |
+| `mixer`    | Replay the base layer as a live, operator-mixable Kafka feed with a control API. |
+| `corrupt`  | Inject realistic data-quality defects, with a ground-truth `defects.json` manifest. |
+| `compare`  | Compare two materialized datasets for exact equality. |
+| `datasets` | List or download the published example dataset packs. |
 
 Example — validate an emit, then export it to a DuckDB star schema:
 
 ```bash
 uv run fabulexa-forge validate path/to/emit
-uv run fabulexa-forge export path/to/emit config.yaml out/ --fmt duckdb
+uv run fabulexa-forge export path/to/emit config.yaml out.duckdb --fmt duckdb
 ```
+
+**Exit codes.** `0` success · `1` error (usage, reader, config, or export failure) ·
+`3` drained (`export --next` found no more windows). Two verbs carry their own contract:
+`compare` returns `0` equal · `1` not equal · `2` input error; `datasets` returns `0`
+success · `1` failure · `2` usage error.
+
+**Shared anchor options** (`export`, `stream`, `mixer`). Both are optional; each wins
+over the config's `rebase` block, which wins over the sidecar:
+
+| Option | Meaning |
+|---|---|
+| `--base-date DATETIME` | ISO datetime the run's origin is shifted to (time rebasing). Precedence: flag → `rebase.base_date` → keep the sidecar origin. |
+| `--timezone ZONE` | IANA zone wallclock columns render in. Precedence: flag → `rebase.timezone` → sidecar `runtime.timezone`. |
+
+### `validate`
+
+```bash
+fabulexa-forge validate <emit_dir>
+```
+
+No options. Reports each failing check; exit `1` on any failure.
+
+### `export`
+
+```bash
+fabulexa-forge export <emit_dir> <config.yaml> <out> --fmt csv|duckdb \
+    [--base-date DATETIME] [--timezone ZONE] \
+    [--next | --from START --to END]
+```
+
+The export mode comes from the config's `mode:` key. `<out>` is an output directory
+for `--fmt csv` or a `.duckdb` file path for `--fmt duckdb`.
+
+| Option | Meaning |
+|---|---|
+| `--fmt csv\|duckdb` | Required. Output format. |
+| `--next` | Incremental export: emit the next window per the config's `incremental` cadence block, advancing the cursor stored in `<out>`. Exit `3` once the tape is drained. |
+| `--from START --to END` | One-shot export of the half-open window `[START, END)`, no cursor. When an anchor resolves, bounds are naive civil datetimes in the anchor timezone (a bare date is midnight); with no anchor they are integer sim-time nanoseconds. `<out>` must not already exist. Not combinable with `--next`. |
+
+### `init`
+
+```bash
+fabulexa-forge init <emit_dir> [out_path] [--mode dimensional|source|streaming]
+```
+
+Writes a candidate config to `out_path`, or to stdout when omitted. `--mode` defaults
+to `dimensional`. The proposal is a starting point — every population and key election
+is annotated with YAML comments for you to edit.
+
+### `stream`
+
+```bash
+fabulexa-forge stream <emit_dir> <stream.yaml> --fmt jsonl|debezium --sink stdout|file|kafka \
+    [--out DIR] [--bootstrap-servers HOST:PORT] \
+    [--speed S] [--idle-cap SECONDS] [--fast] \
+    [--base-date DATETIME] [--timezone ZONE]
+```
+
+| Option | Meaning |
+|---|---|
+| `--fmt jsonl\|debezium` | Required. Message format: plain JSON lines, or Debezium-envelope CDC. |
+| `--sink stdout\|file\|kafka` | Required. `file` writes one file per topic and requires `--out DIR`; `stdout` and `kafka` reject `--out`. |
+| `--out DIR` | Output directory for `--sink file`. |
+| `--bootstrap-servers HOST:PORT` | Kafka brokers for `--sink kafka`; falls back to the `FABEXPORT_KAFKA_BOOTSTRAP` env var. |
+| `--speed S` | Pace delivery in real time at `S`× sim-time speed. Overrides the config's `clock.speed`. |
+| `--idle-cap SECONDS` | Cap the wallclock wait between consecutive events. Overrides the config's cap; needs a speed from `--speed` or the config. |
+| `--fast` | Deliver unpaced (as fast as possible). Not combinable with `--speed` / `--idle-cap`. |
+
+With none of the pacing flags and no `clock` block in the config, delivery is unpaced.
+
+### `mixer`
+
+```bash
+fabulexa-forge mixer <emit_dir> <stream.yaml> --fmt jsonl|debezium \
+    [--bootstrap-servers HOST:PORT] [--host 127.0.0.1] [--port 8765] \
+    [--speed 1.0] [--play | --paused] [--tick 0.05] \
+    [--base-date DATETIME] [--timezone ZONE] \
+    [--consumer [--window MS ...] [--join FACT:DIM ...] \
+                [--consumer-group ID] [--consumer-offset earliest|latest]]
+```
+
+Kafka-only (there is no `--sink`); requires the `[mixer]` install extra. Serves the
+FabulMixer control API over HTTP so the board can play / pause / re-speed the feed and
+lag, rate-limit, or mute each topic mid-run. See the streaming demo above.
+
+| Option | Meaning |
+|---|---|
+| `--fmt jsonl\|debezium` | Required. Message format. |
+| `--bootstrap-servers HOST:PORT` | Kafka brokers; falls back to `FABEXPORT_KAFKA_BOOTSTRAP`. |
+| `--host` / `--port` | Control-API bind address. Defaults `127.0.0.1` / `8765`. |
+| `--speed S` | Launch transport speed, `0.1`–`1000`. Default `1.0`. |
+| `--play` / `--paused` | Launch transport state. Default paused. |
+| `--tick SECONDS` | Scheduler tick interval. Default `0.05`. |
+| `--consumer` | Also run the consumer-side instrument, which subscribes to the produced topics and reports watermark, window, and join health. The four options below require it. |
+| `--window MS` | Tumbling-window size in event-time milliseconds; repeatable. |
+| `--join FACT:DIM` | A fact/dimension topic pairing whose enrichment-join null rate is metered; repeatable. |
+| `--consumer-group ID` | Kafka consumer group id. |
+| `--consumer-offset earliest\|latest` | Initial consumer offset. Default `earliest`. |
+
+### `corrupt`
+
+```bash
+fabulexa-forge corrupt <emit_dir> --config <corrupt.yaml> --out <out_dir>
+```
+
+| Option | Meaning |
+|---|---|
+| `--config PATH` | Required. Corrupter config YAML. |
+| `--out DIR` | Required. Receives the broken `run.duckdb` + regenerated `base.json` plus `defects.json`, the ground-truth manifest naming every injected defect. Always written. |
+
+The output is itself an emit — point `export` or `stream` at it.
+
+### `compare`
+
+```bash
+fabulexa-forge compare <expected> <actual> [--tables NAME ...] [--max-row-diffs N] [--format text|json]
+```
+
+`<expected>` is a DuckDB file (an authoritative forge render); `<actual>` is a DuckDB
+file or a directory of CSVs.
+
+| Option | Meaning |
+|---|---|
+| `--tables NAME ...` | Compare only these tables. Default: every table in `expected`. |
+| `--max-row-diffs N` | Cap on differing rows reported per table. Default `10`. |
+| `--format text\|json` | Report rendering. Default `text`. |
+
+### `datasets`
+
+```bash
+fabulexa-forge datasets list [--format text|json]
+fabulexa-forge datasets get <name> [--dir DIR] [--force]
+```
+
+`list` is offline — it reads the catalog baked into the package. `get` downloads a
+pack from GitHub Releases, verifies its checksum and size, extracts it, and prints
+ready-to-run example commands.
+
+| Option | Meaning |
+|---|---|
+| `--format text\|json` | `list` output rendering. Default `text`. |
+| `--dir DIR` | `get` extraction directory. Default `./<name>`. |
+| `--force` | `get` into a non-empty directory. Without it, an occupied target is refused. |
 
 Export and corrupter targets are described in YAML — no Python. Learn each feature from
 a minimal, test-guarded [recipe](docs/recipes/README.md).

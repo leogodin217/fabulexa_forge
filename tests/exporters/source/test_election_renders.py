@@ -78,9 +78,7 @@ def _open_plan(
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, keys)
-        return build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
+        return build_source_plan(emit, config, anchor, election, discard_notice_sink)
 
 
 def _col_map(
@@ -97,16 +95,14 @@ def _rows_for(emit_dir: Path, config: ExportConfig, keys: "dict[str, object] | N
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, keys)
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
         table = plan.tables[0]
         builder = (
             build_junction_render_sql
             if isinstance(table, SourceJunctionTablePlan)
             else build_state_render_sql
         )
-        sql = builder(plan.sidecar, plan.fork_path, table, plan.anchor, None)
+        sql = builder(plan.sidecar, plan.fork_path, table, plan.anchor)
         rows = [_col_map(table, row) for row in emit.query(sql, ())]
     return table, rows
 
@@ -273,14 +269,10 @@ def test_event_log_item_id_renders_elected_presentation_id(tmp_path: Path) -> No
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, {"device": "presentation_id"})
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
         assert plan.events is not None
         assert plan.events.item_id_type == "VARCHAR"
-        sql = build_event_log_sql(
-            plan.sidecar, fork_path, plan.events, plan.anchor, None
-        )
+        sql = build_event_log_sql(plan.sidecar, fork_path, plan.events, plan.anchor)
         rows = emit.query(sql, ())
     item_ids = {row[2] for row in rows}
     assert item_ids == {"DAY_001", "NIGHT_001"}
@@ -301,14 +293,10 @@ def test_event_log_item_id_renders_elected_record_index_cast(tmp_path: Path) -> 
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         assert anchor is not None
         election = resolve_election(emit.sidecar, {"device": "record_index"})
-        plan = build_source_plan(
-            emit, config, anchor, election, False, discard_notice_sink
-        )
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
         assert plan.events is not None
         assert plan.events.item_id_type == "BIGINT"
-        sql = build_event_log_sql(
-            plan.sidecar, fork_path, plan.events, plan.anchor, None
-        )
+        sql = build_event_log_sql(plan.sidecar, fork_path, plan.events, plan.anchor)
         rows = emit.query(sql, ())
     item_ids = {row[2] for row in rows}
     assert item_ids == {0, 1}

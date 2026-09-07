@@ -8,12 +8,9 @@ import pytest
 from _support.notices import discard_notice_sink
 
 from fabulexa_forge.anchor import resolve_effective_anchor
-from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.election import resolve_election
-from fabulexa_forge.exporters.query_spec import query_spec_output_name
-from fabulexa_forge.exporters.source.engine import build_source_query_specs
-from fabulexa_forge.exporters.source.plan import build_source_plan
+from fabulexa_forge.exporters.source.engine import build_windowed_source_query_specs
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.playback.shaped import ShapedTable, open_shaped_playback
@@ -21,7 +18,6 @@ from fabulexa_forge.reader.emit import open_emit
 
 from ._shaped_fixtures import (
     build_shaped_test_emit,
-    dimensional_shape_config,
     source_shape_config,
     windowable_dimensional_shape_config,
 )
@@ -53,7 +49,13 @@ def _direct_dimensional_specs(
     assert config.dimensional is not None
     window = Window(index=None, start_ns=start_ns, end_ns=end_ns, label="")
     return build_query_specs(
-        emit, config.dimensional, None, window, discard_notice_sink, base_relations=None
+        emit,
+        config.dimensional,
+        None,
+        window,
+        discard_notice_sink,
+        base_relations=None,
+        tables=None,
     )
 
 
@@ -61,15 +63,14 @@ def _direct_source_specs(
     emit: "Emit", config: "ExportConfig", start_ns: int, end_ns: int
 ):
     """Compile the same window directly through the source engine's own
-    plan-then-compile split (the reference)."""
+    horizon compile (the reference)."""
     anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
     assert anchor is not None
     election = resolve_election(emit.sidecar, config.keys)
     window = Window(index=None, start_ns=start_ns, end_ns=end_ns, label="")
-    plan = build_source_plan(
-        emit, config, anchor, election, windowed=True, notices=discard_notice_sink
+    return build_windowed_source_query_specs(
+        emit, config, anchor, election, window, discard_notice_sink, tables=None
     )
-    return build_source_query_specs(plan, window)
 
 
 # ---------------------------------------------------------------------------
@@ -107,14 +108,6 @@ def test_empty_window_start_equals_end_is_legal(tmp_path: "Path") -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_membership_grain_shape_rejects_naming_the_table(tmp_path: "Path") -> None:
-    emit_dir = build_shaped_test_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        head = _open_dimensional(emit, dimensional_shape_config())
-        with pytest.raises(ExportError, match="mem_widget_parts"):
-            head.window(0, 100)
-
-
 # ---------------------------------------------------------------------------
 # Promotion equality: window() content equals the incremental driver's own
 # windowed compile for the same window (dimensional and source).
@@ -129,7 +122,7 @@ def test_window_promotes_dimensional_engine_compile_verbatim(tmp_path: "Path") -
         tables = head.window(0, 12)
         expected_specs = _direct_dimensional_specs(emit, config, 0, 12)
         expected_by_name = {
-            query_spec_output_name(spec): emit.query_arrow(spec.sql, ()).to_pydict()
+            spec.table_name: emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in expected_specs
         }
         for table in tables:
@@ -144,7 +137,7 @@ def test_window_promotes_source_engine_compile_verbatim(tmp_path: "Path") -> Non
         tables = head.window(0, 12)
         expected_specs = _direct_source_specs(emit, config, 0, 12)
         expected_by_name = {
-            query_spec_output_name(spec): emit.query_arrow(spec.sql, ()).to_pydict()
+            spec.table_name: emit.query_arrow(spec.sql, ()).to_pydict()
             for spec in expected_specs
         }
         for table in tables:
@@ -176,18 +169,6 @@ def test_history_point_fact_windows_on_sim_time(tmp_path: "Path") -> None:
         second = _tables_by_name(head.window(10, 20))["fact_widget_status"]
     assert first.table.column("sim_time").to_pylist() == [0]
     assert second.table.column("sim_time").to_pylist() == [10]
-
-
-def test_scd2_dim_physical_projection_no_valid_to(tmp_path: "Path") -> None:
-    emit_dir = build_shaped_test_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        head = _open_dimensional(emit, windowable_dimensional_shape_config())
-        table = _tables_by_name(head.window(0, 12))["dim_widget_status"]
-    assert table.delivery == "append"
-    col_names = table.table.schema.names
-    assert "__valid_from_ns" in col_names
-    assert "valid_to" not in col_names
-    assert sorted(table.table.column("__valid_from_ns").to_pylist()) == [0, 10]
 
 
 def test_type1_dim_full_every_window(tmp_path: "Path") -> None:
@@ -243,22 +224,24 @@ def test_source_reference_full_every_window(tmp_path: "Path") -> None:
     assert first.table.column("id").to_pylist() == ["g1"]
 
 
-def test_source_junction_extract_on_change_left_at_masked(tmp_path: "Path") -> None:
+def test_source_junction_is_the_interval_set_at_the_horizon(tmp_path: "Path") -> None:
+    """A junction table is a snapshot: every interval joined by the window's
+    cutoff, an interval still open at the cutoff carrying a NULL `left_at`."""
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         head = _open_source(emit, source_shape_config())
-        # window [0, 6): contains bolt's join (5) and nut's join (2); nut's
-        # leave (8) is not < 6, so nut's left_at is masked NULL.
+        # cutoff 5: bolt (joined 5) and nut (joined 2) present; nut's leave at
+        # 8 is not yet known.
         window_a = _tables_by_name(head.window(0, 6))["widget_parts"]
-        # window [6, 10): contains nut's leave (8), not bolt's join (5) —
-        # bolt is absent, nut's left_at renders 8 (8 < 10).
+        # cutoff 9: the same two intervals; nut's leave (8) is now known.
         window_b = _tables_by_name(head.window(6, 10))["widget_parts"]
 
+    assert window_a.delivery == "snapshot"
     rows_a = {row["name"]: row["left_at"] for row in window_a.table.to_pylist()}
     assert rows_a == {"bolt": None, "nut": None}
 
     rows_b = {row["name"]: row["left_at"] for row in window_b.table.to_pylist()}
-    assert "bolt" not in rows_b
+    assert rows_b["bolt"] is None
     assert rows_b["nut"] is not None
 
 
@@ -298,6 +281,7 @@ def test_window_values_equal_full_export_values(tmp_path: "Path") -> None:
             None,
             discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
     full_spec = next(s for s in full_specs if s.table_name == "fact_shipment")
     with open_emit(emit_dir) as emit:

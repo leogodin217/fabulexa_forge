@@ -187,6 +187,21 @@ class Emit:
             raise RunDatabaseError(f"query_arrow failed: {exc}") from exc
         return cast("_pyarrow.Table", table)
 
+    def with_sidecar(self, sidecar: Sidecar) -> "Emit":
+        """Present `sidecar` over this emit's open connection.
+
+        The reader's one composition for a derived sidecar view (the
+        derivations layer's truncated tape): the view shares this emit's
+        connection and lifetime — read from, never closed by its holder.
+
+        Args:
+            sidecar: The sidecar the view presents.
+
+        Returns:
+            An Emit over the same connection with `sidecar` as its sidecar.
+        """
+        return Emit(sidecar=sidecar, emit_dir=self._emit_dir, conn=self._conn)
+
     def close(self) -> None:
         """Close the DuckDB connection. Idempotent."""
         if not self._closed:

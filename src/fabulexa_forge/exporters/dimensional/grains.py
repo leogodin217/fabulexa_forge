@@ -9,7 +9,7 @@ All functions are module-level for independent testability.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -18,10 +18,8 @@ if TYPE_CHECKING:
     from fabulexa_forge.config.models import DimensionalConfig, TableDecl
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.query_spec import ColumnProvenance
-    from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.sidecar import Sidecar
 
-from fabulexa_forge.config.models import scd_window_bound
 from fabulexa_forge.derivations.versioned_intervals import (
     build_versioned_intervals_sql,
 )
@@ -30,11 +28,7 @@ from fabulexa_forge.exporters.dimensional.columns import (
     build_column_expr,
     build_table_provenance,
 )
-from fabulexa_forge.exporters.dimensional.scd import (
-    build_scd2_rows_sql,
-    build_scd2_sql,
-    build_scd2_view_sql,
-)
+from fabulexa_forge.exporters.dimensional.scd import build_scd2_sql
 from fabulexa_forge.reader.errors import TableNotFoundError
 from fabulexa_forge.reader.relations import (
     build_history_relation_sql,
@@ -464,133 +458,6 @@ def build_membership_sql(
     )
 
 
-def _wrap_with_window_predicate(
-    inner_sql: str,
-    window_key_col: str,
-    window_start_ns: int,
-    window_end_ns: int,
-    exclude_key: bool = False,
-) -> str:
-    """Wrap a full-export SELECT with a half-open window predicate.
-
-    Applies the predicate as the outermost WHERE over the full-export relation —
-    after window functions and derived columns, so every emitted value equals
-    its full-export value.
-
-    Args:
-        inner_sql: The full-export SELECT SQL.
-        window_key_col: The column name to filter on (from the inner SELECT).
-        window_start_ns: Inclusive start (ns).
-        window_end_ns: Exclusive end (ns).
-        exclude_key: When True, `window_key_col` is an internal raw-ns helper
-            column (not an author-declared output column); project everything
-            except it via `SELECT * EXCLUDE` so it never reaches the output.
-
-    Returns:
-        The wrapped SELECT SQL with outer WHERE predicate.
-    """
-    projection = f'* EXCLUDE ("{window_key_col}")' if exclude_key else "*"
-    return (
-        f"SELECT {projection} FROM ({inner_sql}) AS _windowed"
-        f' WHERE "_windowed"."{window_key_col}" >= {window_start_ns}'
-        f' AND "_windowed"."{window_key_col}" < {window_end_ns}'
-    )
-
-
-# Internal raw-ns helper column injected into a fact grain's projection so the
-# window predicate can compare in raw-ns space when the only window-key output
-# column renders time (derived: timestamp under an anchor → TIMESTAMP, which
-# cannot be compared to raw-ns bounds). Excluded from the emitted output.
-_WINDOW_KEY_NS_HELPER = "__fabulexa_window_key_ns"
-
-
-def _window_key_output_is_rendered(
-    table_decl: "TableDecl",
-    key_col: str,
-) -> bool:
-    """Report whether the window-key output column renders time rather than
-    projecting the raw-ns value directly.
-
-    A `derived: timestamp` output column renders to a TIMESTAMP under an anchor
-    (raw sim_time // 1000 → wallclock), so a raw-ns window bound cannot bind
-    against it. A plain `from_: <raw_key>` column projects the raw ns value and
-    compares directly.
-
-    Args:
-        table_decl: The output table declaration.
-        key_col: The resolved window-key output column name.
-
-    Returns:
-        True when key_col is a `derived: timestamp` column; False otherwise.
-    """
-    for col in table_decl.columns:
-        if col.name == key_col:
-            return col.derived is not None and col.derived.timestamp is not None
-    return False
-
-
-def _find_window_key_output_col(
-    table_decl: "TableDecl",
-    raw_key: str,
-) -> str | None:
-    """Find the output column name that sources the raw window-key column.
-
-    Returns the first output column that uses from_=raw_key or
-    derived.timestamp.source=raw_key, or None when none is found.
-
-    Args:
-        table_decl: The output table declaration.
-        raw_key: The grain's raw window-key column name.
-
-    Returns:
-        The output column name, or None.
-    """
-    for col_decl in table_decl.columns:
-        if col_decl.from_ == raw_key:
-            return col_decl.name
-        if (
-            col_decl.derived is not None
-            and col_decl.derived.timestamp is not None
-            and col_decl.derived.timestamp.source == raw_key
-        ):
-            return col_decl.name
-    return None
-
-
-def _require_window_key_output_col(
-    table_decl: "TableDecl",
-    raw_key: str,
-) -> str:
-    """Resolve the output column projecting the grain's raw window key, or fail.
-
-    Windowed fact export filters on the output column that projects the grain's
-    raw window key. When no declared column projects it, fail fast with a clear
-    pre-flight error: falling back to the raw key name would either hit an
-    opaque DuckDB binder error (the outer WHERE referencing a column absent from
-    the projection) or silently window on an unrelated output column that
-    happens to carry the raw key's name.
-
-    Args:
-        table_decl: The output table declaration.
-        raw_key: The grain's raw window-key column name.
-
-    Returns:
-        The output column name that projects raw_key.
-
-    Raises:
-        ExportError: No declared column projects raw_key.
-    """
-    key_col = _find_window_key_output_col(table_decl, raw_key)
-    if key_col is None:
-        raise ExportError(
-            f"table '{table_decl.name}': windowed export requires an output"
-            f" column projecting the grain's window key '{raw_key}'"
-            f" (from: {raw_key}, or derived: timestamp with source: {raw_key});"
-            " declare one so the window predicate can bind to it"
-        )
-    return key_col
-
-
 def build_grain_sql(
     table_decl: "TableDecl",
     source_table_name: str,
@@ -598,37 +465,20 @@ def build_grain_sql(
     anchor: "EffectiveAnchor | None",
     fork_path: str,
     config: "DimensionalConfig | None" = None,
-    window: "Window | None" = None,
     election: "Election | None" = None,
-) -> tuple[
-    str,
-    Literal["create", "append", "replace"],
-    str | None,
-    str | None,
-    "Mapping[str, ColumnProvenance]",
-]:
+) -> tuple[str, "Mapping[str, ColumnProvenance]"]:
     """Dispatch a table declaration to the appropriate grain SQL builder.
 
-    Returns the SQL, write mode, optional view name and view SQL, and the
-    per-output-column provenance map — one entry per faithfully carried
-    column (projection, rename, cast-back, temporal/value rendering
-    election, `lookup`), keyed by output column name. Computed columns
-    (derived measures, elapsed, ordinal, SCD-2 valid_from / valid_to,
-    re-derived fk identity surfaces) get no entry. Uniform across every
-    grain and scd: type2 — source_table_name is already the grain's
-    resolved DuckDB source table (`validate_table`'s return), the same
-    identity provenance stamps against.
-
-    Full export (window=None): returns (sql, 'create', None, None,
-    provenance) — the existing shape unchanged plus provenance.
-
-    Windowed (window not None):
-    - Records fact: append with half-open window predicate on last_mutation_sim_time.
-    - history_point fact: append with predicate on sim_time.
-    - SCD-2 dim with valid_to: append __rows SELECT + companion view; table_name
-      becomes '<name>__rows' in the caller.
-    - SCD-2 dim without valid_to: append, plain table name, no view.
-    - Type-1 dim: replace, full snapshot (no predicate).
+    Returns the full-export SQL and the per-output-column provenance map —
+    one entry per faithfully carried column (projection, rename, cast-back,
+    temporal/value rendering election, `lookup`), keyed by output column
+    name. Computed columns (derived measures, elapsed, ordinal, SCD-2
+    valid_from / valid_to, re-derived fk identity surfaces) get no entry.
+    Uniform across every grain and scd: type2 — source_table_name is already
+    the grain's resolved DuckDB source table (`validate_table`'s return), the
+    same identity provenance stamps against. A window is never seen here: a
+    windowed export runs this same compile over the truncated tape
+    (`engine.build_query_specs`).
 
     Args:
         table_decl: The output table declaration.
@@ -638,168 +488,45 @@ def build_grain_sql(
         fork_path: The sole branch fork_path; grain builders compose the reader
             relation instead of naming base tables directly.
         config: The dimensional config (for fk resolution), or None.
-        window: The window to filter to, or None for full export.
         election: The resolved election (for fk columns), or None to resolve
             the all-default election internally.
 
     Returns:
-        (sql, write_mode, view_name, view_sql, provenance)
+        (sql, provenance)
     """
     provenance = build_table_provenance(
         table_decl, source_table_name, table_decl.source.kind
     )
-
-    if window is None:
-        # Full export — existing behavior, write_mode='create', no views
-        if table_decl.scd == "type2":
-            sql = build_scd2_sql(
-                table_decl, source_table_name, sidecar, anchor, fork_path
-            )
-        else:
-            grain = table_decl.source.grain
-            if grain == "records":
-                sql = build_records_sql(
-                    table_decl,
-                    source_table_name,
-                    anchor,
-                    fork_path,
-                    config,
-                    sidecar,
-                    election=election,
-                )
-            elif grain == "history_point":
-                sql = build_history_point_sql(
-                    table_decl, anchor, fork_path, config, sidecar, election=election
-                )
-            elif grain == "history_interval":
-                sql = build_history_interval_sql(
-                    table_decl, anchor, fork_path, config, sidecar, election=election
-                )
-            else:
-                sql = build_membership_sql(
-                    table_decl,
-                    source_table_name,
-                    sidecar,
-                    anchor,
-                    fork_path,
-                    config,
-                    election=election,
-                )
-        return sql, "create", None, None, provenance
-
-    # Windowed dispatch
-    grain = table_decl.source.grain
-
-    # Type-1 dim: full snapshot, replace mode, no predicate
-    if table_decl.role == "dim" and table_decl.scd == "type1":
-        sql = build_records_sql(
-            table_decl,
-            source_table_name,
-            anchor,
-            fork_path,
-            config,
-            sidecar,
-            election=election,
-        )
-        return sql, "replace", None, None, provenance
-
-    # SCD-2 dim
     if table_decl.scd == "type2":
-        has_valid_to = any(
-            col.derived is not None
-            and scd_window_bound(col.derived.scd_window) == "valid_to"
-            for col in table_decl.columns
-        )
-
-        if has_valid_to:
-            # Rows table: windowed rows without valid_to, plus __valid_from_ns
-            rows_sql = build_scd2_rows_sql(
+        sql = build_scd2_sql(table_decl, source_table_name, sidecar, anchor, fork_path)
+    else:
+        grain = table_decl.source.grain
+        if grain == "records":
+            sql = build_records_sql(
                 table_decl,
                 source_table_name,
-                sidecar,
                 anchor,
-                window.start_ns,
-                window.end_ns,
                 fork_path,
+                config,
+                sidecar,
+                election=election,
             )
-            rows_table_name = f"{table_decl.name}__rows"
-            view_sql = build_scd2_view_sql(table_decl, rows_table_name)
-            return rows_sql, "append", table_decl.name, view_sql, provenance
+        elif grain == "history_point":
+            sql = build_history_point_sql(
+                table_decl, anchor, fork_path, config, sidecar, election=election
+            )
+        elif grain == "history_interval":
+            sql = build_history_interval_sql(
+                table_decl, anchor, fork_path, config, sidecar, election=election
+            )
         else:
-            # No valid_to: plain append, no view
-            sql = build_scd2_rows_sql(
+            sql = build_membership_sql(
                 table_decl,
                 source_table_name,
                 sidecar,
                 anchor,
-                window.start_ns,
-                window.end_ns,
                 fork_path,
+                config,
+                election=election,
             )
-            return sql, "append", None, None, provenance
-
-    # Facts (records and history_point grains)
-    if grain == "records":
-        raw_key = "last_mutation_sim_time"
-        key_col = _require_window_key_output_col(table_decl, raw_key)
-        # When the window key's ONLY projection renders time (derived: timestamp
-        # under an anchor → TIMESTAMP), the raw-ns bounds cannot bind against it.
-        # Inject the raw-ns source as an internal helper and window in raw-ns
-        # space, mirroring the ordinal amendment (columns.py).
-        redirect = anchor is not None and _window_key_output_is_rendered(
-            table_decl, key_col
-        )
-        extra = (
-            [f'"_grain"."{raw_key}" AS "{_WINDOW_KEY_NS_HELPER}"'] if redirect else None
-        )
-        full_sql = build_records_sql(
-            table_decl,
-            source_table_name,
-            anchor,
-            fork_path,
-            config,
-            sidecar,
-            extra_col_exprs=extra,
-            election=election,
-        )
-        windowed_sql = _wrap_with_window_predicate(
-            full_sql,
-            _WINDOW_KEY_NS_HELPER if redirect else key_col,
-            window.start_ns,
-            window.end_ns,
-            exclude_key=redirect,
-        )
-        return windowed_sql, "append", None, None, provenance
-
-    if grain == "history_point":
-        raw_key = "sim_time"
-        key_col = _require_window_key_output_col(table_decl, raw_key)
-        redirect = anchor is not None and _window_key_output_is_rendered(
-            table_decl, key_col
-        )
-        extra = (
-            [f'"_grain"."{raw_key}" AS "{_WINDOW_KEY_NS_HELPER}"'] if redirect else None
-        )
-        full_sql = build_history_point_sql(
-            table_decl,
-            anchor,
-            fork_path,
-            config,
-            sidecar,
-            extra_col_exprs=extra,
-            election=election,
-        )
-        windowed_sql = _wrap_with_window_predicate(
-            full_sql,
-            _WINDOW_KEY_NS_HELPER if redirect else key_col,
-            window.start_ns,
-            window.end_ns,
-            exclude_key=redirect,
-        )
-        return windowed_sql, "append", None, None, provenance
-
-    # Unreachable: validate_table guards history_interval/membership
-    raise ExportError(
-        f"table '{table_decl.name}': grain '{grain}' is not supported with"
-        " windowed export"
-    )
+    return sql, provenance

@@ -1786,7 +1786,6 @@ def _assert_proposal_passes_its_own_gates(out_path: Path, emit_dir: Path) -> Non
                 table_decl,
                 config.dimensional,
                 emit.sidecar,
-                None,
                 discard_notice_sink,
                 election=election,
             )

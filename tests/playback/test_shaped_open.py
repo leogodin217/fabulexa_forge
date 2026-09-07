@@ -21,6 +21,7 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.populations import Population
+from fabulexa_forge.exporters.source.engine import source_window_delivery
 from fabulexa_forge.exporters.source.events import SourceEventLogPlan
 from fabulexa_forge.exporters.source.plan import (
     SourceJunctionTablePlan,
@@ -29,8 +30,6 @@ from fabulexa_forge.exporters.source.plan import (
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.playback.shaped import (
     ShapedTableDecl,
-    _dimensional_window_delivery,
-    _source_window_delivery,
     open_shaped_playback,
 )
 from fabulexa_forge.reader.emit import open_emit
@@ -109,46 +108,16 @@ def _make_event_log_unit() -> SourceEventLogPlan:
 # ---------------------------------------------------------------------------
 
 
-def test_dimensional_records_fact_appends() -> None:
-    decl = _make_table_decl(role="fact", grain="records")
-    assert _dimensional_window_delivery(decl) == "append"
-
-
-def test_dimensional_history_point_fact_appends() -> None:
-    decl = _make_table_decl(role="fact", grain="history_point", property_name="state")
-    assert _dimensional_window_delivery(decl) == "append"
-
-
-def test_dimensional_scd2_dim_appends() -> None:
-    decl = _make_table_decl(role="dim", grain="records", scd="type2")
-    assert _dimensional_window_delivery(decl) == "append"
-
-
-def test_dimensional_type1_dim_snapshots() -> None:
-    decl = _make_table_decl(role="dim", grain="records", scd="type1")
-    assert _dimensional_window_delivery(decl) == "snapshot"
-
-
-def test_dimensional_history_interval_grain_is_none() -> None:
-    decl = _make_table_decl(role="fact", grain="history_interval", property_name="s")
-    assert _dimensional_window_delivery(decl) is None
-
-
-def test_dimensional_membership_grain_is_none() -> None:
-    decl = _make_table_decl(role="fact", grain="membership", property_name="p")
-    assert _dimensional_window_delivery(decl) is None
-
-
 def test_source_state_table_snapshots() -> None:
-    assert _source_window_delivery(_make_state_unit()) == "snapshot"
+    assert source_window_delivery(_make_state_unit()) == "snapshot"
 
 
 def test_source_junction_table_appends() -> None:
-    assert _source_window_delivery(_make_junction_unit()) == "append"
+    assert source_window_delivery(_make_junction_unit()) == "snapshot"
 
 
 def test_source_event_log_appends() -> None:
-    assert _source_window_delivery(_make_event_log_unit()) == "append"
+    assert source_window_delivery(_make_event_log_unit()) == "append"
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +133,8 @@ def test_dimensional_opens_with_anchor_none(tmp_path: "Path") -> None:
         )
         assert head.tables() == (
             ShapedTableDecl(name="dim_gadget", window_delivery="snapshot"),
-            ShapedTableDecl(name="fact_shipment", window_delivery="append"),
-            ShapedTableDecl(name="mem_widget_parts", window_delivery=None),
+            ShapedTableDecl(name="fact_shipment", window_delivery="upsert"),
+            ShapedTableDecl(name="mem_widget_parts", window_delivery="append"),
         )
 
 
@@ -199,18 +168,15 @@ def test_source_shape_opens_with_resolved_anchor_and_enumerates_tables_then_log(
             ShapedTableDecl(name="gadget", window_delivery="snapshot"),
             ShapedTableDecl(name="shipment", window_delivery="snapshot"),
             ShapedTableDecl(name="widget", window_delivery="snapshot"),
-            ShapedTableDecl(name="widget_parts", window_delivery="append"),
+            ShapedTableDecl(name="widget_parts", window_delivery="snapshot"),
             ShapedTableDecl(name="widget_versions", window_delivery="append"),
         )
 
 
-def test_source_shape_last_mutation_sim_time_opens_but_window_refuses(
-    tmp_path: "Path",
-) -> None:
-    """A `columns` entry naming `last_mutation_sim_time` validates against
-    the full-export shape at open — `updated_at` is reconstructible for a
-    full export — but the first `window()` ask rebuilds the plan against
-    the windowed shape and refuses."""
+def test_source_shape_last_mutation_sim_time_windows(tmp_path: "Path") -> None:
+    """A `columns` entry naming `last_mutation_sim_time` windows: the
+    horizon compile presents `updated_at` as the recorded trail, honest at
+    every cutoff, so no source declaration is refused under a window."""
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
@@ -220,8 +186,8 @@ def test_source_shape_last_mutation_sim_time_opens_but_window_refuses(
         assert head.tables() == (
             ShapedTableDecl(name="widget", window_delivery="snapshot"),
         )
-        with pytest.raises(ExportError):
-            head.window(0, 100)
+        (table,) = head.window(0, 100)
+    assert "updated_at" in table.table.schema.names
 
 
 def test_reserved_presentation_name_refused_at_open(tmp_path: "Path") -> None:
@@ -242,6 +208,48 @@ def test_reserved_presentation_name_refused_at_open(tmp_path: "Path") -> None:
     )
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="last_mutation_sim_time"):
+            open_shaped_playback(emit, config, None, discard_notice_sink)
+
+
+def test_unstable_key_refused_at_open(tmp_path: "Path") -> None:
+    """KeyColumnsStable refuses an unstable key on a snapshot (type-1) table
+    at open — not deferred to the first `window()` call."""
+    emit_dir = build_shaped_test_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_widget",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="widget"),
+        key=["status"],
+        columns=[
+            _from_col("id", "record_id"),
+            _from_col("status", "prop__status"),
+        ],
+    )
+    config = ExportConfig(
+        mode="dimensional", dimensional=DimensionalConfig(tables=[table_decl])
+    )
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(ExportError, match="tracked property 'status'"):
+            open_shaped_playback(emit, config, None, discard_notice_sink)
+
+
+def test_reserved_table_name_refused_at_open(tmp_path: "Path") -> None:
+    """The reserved table-name rule refuses `_export_meta` at open."""
+    emit_dir = build_shaped_test_emit(tmp_path)
+    table_decl = TableDecl(
+        name="_export_meta",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="gadget"),
+        key=["id"],
+        columns=[_from_col("id", "record_id")],
+    )
+    config = ExportConfig(
+        mode="dimensional", dimensional=DimensionalConfig(tables=[table_decl])
+    )
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(ExportError, match="reserved under incremental export"):
             open_shaped_playback(emit, config, None, discard_notice_sink)
 
 

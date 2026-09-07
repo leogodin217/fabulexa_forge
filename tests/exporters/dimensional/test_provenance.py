@@ -290,6 +290,7 @@ def _compile_specs(emit: "Emit", config: DimensionalConfig) -> "dict[str, QueryS
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
     }
 
