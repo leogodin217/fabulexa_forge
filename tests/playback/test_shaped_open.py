@@ -211,6 +211,48 @@ def test_reserved_presentation_name_refused_at_open(tmp_path: "Path") -> None:
             open_shaped_playback(emit, config, None, discard_notice_sink)
 
 
+def test_unstable_key_refused_at_open(tmp_path: "Path") -> None:
+    """KeyColumnsStable refuses an unstable key on a snapshot (type-1) table
+    at open — not deferred to the first `window()` call."""
+    emit_dir = build_shaped_test_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_widget",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="widget"),
+        key=["status"],
+        columns=[
+            _from_col("id", "record_id"),
+            _from_col("status", "prop__status"),
+        ],
+    )
+    config = ExportConfig(
+        mode="dimensional", dimensional=DimensionalConfig(tables=[table_decl])
+    )
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(ExportError, match="tracked property 'status'"):
+            open_shaped_playback(emit, config, None, discard_notice_sink)
+
+
+def test_reserved_table_name_refused_at_open(tmp_path: "Path") -> None:
+    """The reserved table-name rule refuses `_export_meta` at open."""
+    emit_dir = build_shaped_test_emit(tmp_path)
+    table_decl = TableDecl(
+        name="_export_meta",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="gadget"),
+        key=["id"],
+        columns=[_from_col("id", "record_id")],
+    )
+    config = ExportConfig(
+        mode="dimensional", dimensional=DimensionalConfig(tables=[table_decl])
+    )
+    with open_emit(emit_dir) as emit:
+        with pytest.raises(ExportError, match="reserved under incremental export"):
+            open_shaped_playback(emit, config, None, discard_notice_sink)
+
+
 def test_invalid_dimensional_config_export_error_passes_through(
     tmp_path: "Path",
 ) -> None:

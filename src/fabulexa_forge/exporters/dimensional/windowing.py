@@ -9,14 +9,9 @@ two horizon compiles into one delivered window:
   of the end-horizon state absent from the start-horizon state, reconciled
   by the declared key), or 'append' (an upsert whose delta never revises an
   earlier window's row — every value channel horizon-invariant).
-- `check_window_key_invariant` — WindowKeyMutable: an 'upsert' table's key
-  must be a stable row identity (every key column a horizon-invariant
-  channel), or delete-by-key silently leaks re-keyed rows.
 - `check_window_key_unique` — WindowKeyDuplicate: an 'upsert' table's key
   must be unique in the end-horizon state, or delete-by-key removes a
   sibling row the delta does not restore.
-- `check_windowed_reserved_names` — IncrementalReservedName: no author
-  table named for the warehouse's bookkeeping tables.
 
 A value channel is *horizon-invariant* when its value on a row cannot differ
 between two horizons at both of which the row exists. The reading per column
@@ -47,7 +42,6 @@ from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
 from fabulexa_forge.exporters.dimensional.validation import check_source_table_exists
 from fabulexa_forge.exporters.horizon import WindowDelivery
-from fabulexa_forge.exporters.reserved_names import RESERVED_TABLE_NAMES
 from fabulexa_forge.reader.errors import TableNotFoundError
 from fabulexa_forge.reader.records_columns import (
     REF_INDEX_PREFIX,
@@ -266,12 +260,25 @@ def window_delivery_class(
     return "upsert"
 
 
-def check_window_key_invariant(
+def check_key_columns_stable(
     table_decl: "TableDecl",
     config: "DimensionalConfig",
     sidecar: "Sidecar",
 ) -> None:
-    """Enforce WindowKeyMutable on an 'upsert' table: its key is a stable row identity.
+    """Enforce KeyColumnsStable: every `key` column is a stable row identity.
+
+    An always-on business rule of the dimensional mode, run by
+    `validate_table` on every table regardless of delivery class — the
+    one-shot export, the incremental driver, and the shaped head alike —
+    and run last among the per-table rules, after every rule the reading
+    presumes (declared key columns, resolvable projections, ordinal
+    sibling refs, fk targets and paths, membership edges, lookup safety),
+    so those refuse under their own identities first. A pure function of
+    declaration and sidecar; never reads data. Each key column's value
+    channel is classified by `_channel_variance` — conservative: a channel
+    of unknown constancy (a producer column outside the structural set, a
+    reference fk on an emit without `history_tracked` flags) is refused,
+    not admitted. The first varying channel in `key` order refuses.
 
     Args:
         table_decl: The output table declaration (its key and columns).
@@ -279,11 +286,11 @@ def check_window_key_invariant(
         sidecar: The open emit's sidecar.
 
     Raises:
-        ExportError: A key column's value can change between windows; the
-            message names the table, the column, and the varying source.
+        ExportError: A key column's value can change over the run. Message:
+            "table '{name}' key column '{key_col}': its value can change
+            over the run ({variance}); a key identifies the row for the
+            whole run".
     """
-    if window_delivery_class(table_decl, config, sidecar) != "upsert":
-        return
     source_table_name = check_source_table_exists(table_decl.source, sidecar)
     columns = {c.name: c for c in table_decl.columns}
     for key_col in table_decl.key:
@@ -293,23 +300,9 @@ def check_window_key_invariant(
         if variance is not None:
             raise ExportError(
                 f"table '{table_decl.name}' key column '{key_col}': its value can"
-                f" change between windows ({variance}); an upsert-delivered table"
-                " reconciles by key, so key on columns that identify the row for"
+                f" change over the run ({variance}); a key identifies the row for"
                 " the whole run"
             )
-
-
-def check_windowed_reserved_names(table_decl: "TableDecl") -> None:
-    """Enforce IncrementalReservedName: no author table named for a bookkeeping table.
-
-    Raises:
-        ExportError: The table is named `_export_meta` / `_export_windows`.
-    """
-    if table_decl.name in RESERVED_TABLE_NAMES:
-        raise ExportError(
-            f"table '{table_decl.name}': name '{table_decl.name}' is reserved under"
-            " incremental export"
-        )
 
 
 def check_window_key_unique(

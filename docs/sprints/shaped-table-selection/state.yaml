@@ -2,7 +2,7 @@ sprint: shaped-table-selection
 parent_branch: final_loom_asks
 baseline_sha: d10139d3e98eb244b4ee663547c902cf78377239
 started: 2026-09-07
-current_phase: 1
+current_phase: 2
 capabilities:
   - playback-seam: [tier-2 table selection, projection invariance, horizon economy]
   - dimensional-exporter: [always-on KeyColumnsStable + reserved table name, engine selection]
@@ -13,7 +13,7 @@ gates:
     - "make test"
 phases:
   1:
-    status: pending
+    status: complete
     name: "Always-on key-stability and reserved-table-name rules"
     demo: "docs/sprints/shaped-table-selection/demos/phase_1_always_on_key_rules.py"
   2:

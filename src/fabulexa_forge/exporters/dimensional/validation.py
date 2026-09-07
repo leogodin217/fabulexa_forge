@@ -7,12 +7,15 @@ ExcludedKindNotSourced, ExcludedTableNotSourced, FkTargetIsDim,
 ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
 Scd2ColumnModeSupported, SliceOnlyColumnRefused
 (filter keys, column reads, and fk hops), ReservedPresentationName
-(last_mutation_sim_time — always-on, full export included).
+(last_mutation_sim_time — always-on, full export included),
+ReservedTableName (`_export_meta` / `_export_windows` — always-on, full
+export included), KeyColumnsStable (every `key` column a stable row
+identity over the whole run — always-on, run last).
 
 The SingleBranch rule is enforced by derivations.require_single_branch (the
-stage-wide guard); dimensional calls it but does not own it. The windowed
-rules (WindowKeyMutable, WindowKeyDuplicate, IncrementalReservedName) live in
-`windowing.py`; every rule here is always-on.
+stage-wide guard); dimensional calls it but does not own it. The only
+non-always-on rule is WindowKeyDuplicate (`windowing.py`), a data guard
+that reads the compiled relation.
 
 Each rule is a module-level function taking only what it needs, so each is
 independently testable.
@@ -59,6 +62,7 @@ from fabulexa_forge.exporters.election import check_edge_union_safety, resolve_e
 from fabulexa_forge.exporters.notices import Notice
 from fabulexa_forge.exporters.reserved_names import (
     RESERVED_PRESENTATION_COLUMN_NAME,
+    is_reserved_table_name,
 )
 from fabulexa_forge.exporters.slice_only import (
     is_non_exempt_slice_only,
@@ -996,6 +1000,30 @@ def check_reserved_presentation_name(table_decl: "TableDecl") -> None:
             )
 
 
+def check_reserved_table_name(table_decl: "TableDecl") -> None:
+    """Enforce the reserved table-name rule: no author table named for an
+    incremental bookkeeping table.
+
+    Always-on, full export included — beside `check_reserved_presentation_name`
+    — so a full export and a later `--next` drip on the same target agree by
+    construction (the source mode's posture, now both modes'). Reads the
+    shared `exporters.reserved_names.is_reserved_table_name` predicate.
+
+    Args:
+        table_decl: The output table declaration.
+
+    Raises:
+        ExportError: The table is named `_export_meta` / `_export_windows`.
+            Message (unchanged from today's windowed rule): "table '{name}':
+            name '{name}' is reserved under incremental export".
+    """
+    if is_reserved_table_name(table_decl.name):
+        raise ExportError(
+            f"table '{table_decl.name}': name '{table_decl.name}' is reserved under"
+            " incremental export"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Dim-key agreement (key election)
 # ---------------------------------------------------------------------------
@@ -1071,7 +1099,10 @@ def validate_table(
     (filter keys, column reads including date_parse.from / decimal.from /
     json_precision.from, fk hops),
     ReservedPresentationName (last_mutation_sim_time — always-on, full
-    export included). Per fk column: resolves the destination dim's source
+    export included), ReservedTableName (run immediately after
+    ReservedPresentationName), and KeyColumnsStable (run last, after the
+    per-column loop, so every other rule refuses under its own identity
+    first). Per fk column: resolves the destination dim's source
     population set (`resolve_dim_source_populations`), the edge's one
     resolved surface (`resolve_fk_surface` — inherited or the explicit
     `target_key`), `check_edge_union_safety` over that set with the
@@ -1126,6 +1157,9 @@ def validate_table(
     from fabulexa_forge.exporters.dimensional.lookup import (
         check_lookup_temporal_safety,
     )
+    from fabulexa_forge.exporters.dimensional.windowing import (
+        check_key_columns_stable,
+    )
 
     resolved_election = (
         election if election is not None else resolve_election(sidecar, None)
@@ -1140,6 +1174,7 @@ def validate_table(
     check_discriminator_value_observed(source, sidecar, notice_sink)
     check_slice_only_filter_keys(source, table_decl, source_table_name, sidecar)
     check_reserved_presentation_name(table_decl)
+    check_reserved_table_name(table_decl)
 
     if table_decl.scd == "type2":
         check_scd2_needs_history(table_decl, source_table_name, sidecar)
@@ -1208,5 +1243,7 @@ def validate_table(
                 source_grain=source.grain,
                 sidecar=sidecar,
             )
+
+    check_key_columns_stable(table_decl, config, sidecar)
 
     return source_table_name

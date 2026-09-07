@@ -2,14 +2,14 @@
 reservations: incremental bookkeeping collisions, and the presentation-name
 posture.
 
-Both the dimensional exporter's `check_windowed_reserved_names` (in
-`dimensional/windowing.py`) and the source exporter's `_check_reserved_names`
-(in `source/plan.py`) enforce that no author-resolved output table name
-collides with the incremental writer's own bookkeeping tables
-(`writers/duckdb.py`) — so a full export and a later incremental drip on the
-same target agree. The reserved-name *set* is identical across modes; only the
-shape of what is being checked (a dimensional `TableDecl` vs. a tuple of
-resolved source `SourceTableSpec`s) differs, so each mode keeps its own
+Both the dimensional exporter's `check_reserved_table_name` (in
+`dimensional/validation.py`, always-on) and the source exporter's
+`_check_reserved_names` (in `source/plan.py`) enforce that no author-resolved
+output table name collides with the incremental writer's own bookkeeping
+tables (`writers/duckdb.py`) — so a full export and a later incremental drip
+on the same target agree. The reserved-name *set* is identical across modes;
+only the shape of what is being checked (a dimensional `TableDecl` vs. a tuple
+of resolved source `SourceTableSpec`s) differs, so each mode keeps its own
 iteration and imports these predicates rather than sharing a single check
 function (mirroring the mode-neutral home `exporters/query_spec.py`
 establishes for `QuerySpec`).

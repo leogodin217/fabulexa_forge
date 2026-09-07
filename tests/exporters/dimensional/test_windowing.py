@@ -1,10 +1,9 @@
 """Unit tests for exporters/dimensional/windowing.py.
 
-The delivery classifier per column form, the two windowed rules
-(WindowKeyMutable, WindowKeyDuplicate), the reserved-name rule, and the
-delta composer — each against the recipe emit's sidecar (tracked / constant
-/ reference / slice_only columns, membership and history tables) or a
-literal relation. The end-to-end properties (drip ≡ one-shot, honesty at a
+The delivery classifier per column form, KeyColumnsStable, WindowKeyDuplicate,
+and the delta composer — each against the recipe emit's sidecar (tracked /
+constant / reference / slice_only columns, membership and history tables) or
+a literal relation. The end-to-end properties (drip ≡ one-shot, honesty at a
 cutoff) are tests/incremental/test_horizon_acceptance.py.
 """
 
@@ -26,9 +25,8 @@ from fabulexa_forge.config.models import (
 )
 from fabulexa_forge.errors import ExportError
 from fabulexa_forge.exporters.dimensional.windowing import (
-    check_window_key_invariant,
+    check_key_columns_stable,
     check_window_key_unique,
-    check_windowed_reserved_names,
     window_delivery_class,
 )
 from fabulexa_forge.exporters.horizon import compose_window_delta_sql
@@ -303,7 +301,7 @@ def test_scd2_dim_tracked_read_is_invariant_valid_to_is_not(sidecar: Sidecar) ->
 
 
 # ---------------------------------------------------------------------------
-# WindowKeyMutable
+# KeyColumnsStable
 # ---------------------------------------------------------------------------
 
 
@@ -312,7 +310,7 @@ def test_key_on_interval_end_refused(sidecar: Sidecar) -> None:
     with pytest.raises(
         ExportError, match=r"key column 'left'.*interval end left_sim_time"
     ):
-        check_window_key_invariant(table, _config(table), sidecar)
+        check_key_columns_stable(table, _config(table), sidecar)
 
 
 def test_key_on_tracked_property_refused(sidecar: Sidecar) -> None:
@@ -320,26 +318,30 @@ def test_key_on_tracked_property_refused(sidecar: Sidecar) -> None:
     with pytest.raises(
         ExportError, match=r"key column 'status'.*tracked property 'status'"
     ):
-        check_window_key_invariant(table, _config(table), sidecar)
+        check_key_columns_stable(table, _config(table), sidecar)
 
 
 def test_stable_key_passes(sidecar: Sidecar) -> None:
     table = _membership_fact(_from("left", "left_sim_time"))
-    check_window_key_invariant(table, _config(table), sidecar)
+    check_key_columns_stable(table, _config(table), sidecar)
 
 
-def test_snapshot_table_key_not_checked(sidecar: Sidecar) -> None:
-    """A replace ignores the key, so a mutable key on a snapshot table is fine."""
+def test_snapshot_table_unstable_key_refused(sidecar: Sidecar) -> None:
+    """KeyColumnsStable is always-on: a snapshot table keyed on a mutable
+    column refuses too — the delivery class no longer gates the rule."""
     table = _records_fact(
         _from("status", "prop__status"),
         key=["status"],
         filter={"prop__status": "active"},
     )
-    check_window_key_invariant(table, _config(table), sidecar)
+    with pytest.raises(
+        ExportError, match=r"key column 'status'.*tracked property 'status'"
+    ):
+        check_key_columns_stable(table, _config(table), sidecar)
 
 
 # ---------------------------------------------------------------------------
-# WindowKeyDuplicate, the reserved-name rule, the delta composer
+# WindowKeyDuplicate, the delta composer
 # ---------------------------------------------------------------------------
 
 
@@ -368,13 +370,6 @@ def test_unique_key_passes(emit: Emit) -> None:
     check_window_key_unique(
         emit, _records_fact(), _literal("('a'), ('b')", "patient_id")
     )
-
-
-def test_reserved_table_name_refused() -> None:
-    table = _records_fact().model_copy(update={"name": "_export_meta"})
-    with pytest.raises(ExportError, match="reserved under incremental export"):
-        check_windowed_reserved_names(table)
-    check_windowed_reserved_names(_records_fact())
 
 
 def test_delta_is_ordered_multiset_difference(emit: Emit) -> None:

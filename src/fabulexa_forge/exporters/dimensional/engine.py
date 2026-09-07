@@ -58,9 +58,7 @@ from fabulexa_forge.exporters.dimensional.populations import (
 )
 from fabulexa_forge.exporters.dimensional.validation import validate_table
 from fabulexa_forge.exporters.dimensional.windowing import (
-    check_window_key_invariant,
     check_window_key_unique,
-    check_windowed_reserved_names,
     window_delivery_class,
 )
 from fabulexa_forge.exporters.election import (
@@ -269,11 +267,12 @@ def build_query_specs(
     'snapshot' table's end-horizon query with write_mode 'replace';
     otherwise the multiset difference `end EXCEPT ALL start`, ordered by
     every projected column, with write_mode 'append' or 'upsert' and, for
-    'upsert', the table's key as `upsert_key`. Before any horizon compile
-    the WindowKeyMutable gate runs over every 'upsert' table's key and the
-    reserved-name rule over every table; before returning, the
-    WindowKeyDuplicate guard runs over every 'upsert' table's end-horizon
-    relation. Each horizon compile is the full-export compile, so a plan
+    'upsert', the table's key as `upsert_key`. `KeyColumnsStable` and
+    `ReservedTableName` are always-on rules run by `validate_table` inside
+    every full-export compile — every horizon and the one-shot path alike —
+    not windowed-only gates; before returning, the WindowKeyDuplicate guard
+    runs over every 'upsert' table's end-horizon relation. Each horizon compile
+    is the full-export compile, so a plan
     notice reaches the sink once per horizon compiled. `base_relations` must
     be None under a window — the tape supplies the mapping.
 
@@ -318,9 +317,11 @@ def build_query_specs(
         keyed by each entry's own output name.
 
     Raises:
-        ExportError: An always-on business rule fails; or, under a window,
-            WindowKeyMutable, WindowKeyDuplicate, or IncrementalReservedName
-            (`windowing.py`). No other windowed refusal exists.
+        ExportError: An always-on business rule fails (including
+            `KeyColumnsStable` and `ReservedTableName`, run by
+            `validate_table` for every horizon and the one-shot path
+            alike); or, under a window, WindowKeyDuplicate
+            (`windowing.py`). No other windowed-only refusal exists.
         ValueError: window is set and base_relations is not None.
         ElectedKeyDuplicate: A corrupted elected key fails the uniqueness
             guard on some fk relation or the dim-side leg.
@@ -406,12 +407,14 @@ def _build_windowed_query_specs(
     notice_sink: "NoticeSink",
     election: "Election",
 ) -> list[QuerySpec]:
-    """The horizon compile (§ `build_query_specs`, window set)."""
+    """The horizon compile (§ `build_query_specs`, window set).
+
+    No static rule runs here: `check_key_columns_stable` and
+    `check_reserved_table_name` are `validate_table`'s, run by every
+    horizon's full-export compile.
+    """
     sidecar = emit.sidecar
     fork_path = require_single_branch(sidecar)
-    for table_decl in config.tables:
-        check_windowed_reserved_names(table_decl)
-        check_window_key_invariant(table_decl, config, sidecar)
     classes = [
         window_delivery_class(table_decl, config, sidecar)
         for table_decl in config.tables

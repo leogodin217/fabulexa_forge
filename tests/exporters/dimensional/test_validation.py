@@ -22,6 +22,7 @@ from fabulexa_forge.config.models import (
     DerivedSpec,
     DimensionalConfig,
     ElapsedSpec,
+    FkClause,
     JsonPrecisionSpec,
     OrdinalSpec,
     ScdWindowSpec,
@@ -46,6 +47,7 @@ from fabulexa_forge.exporters.dimensional.validation import (
     check_key_columns_declared,
     check_ordinal_refs_siblings,
     check_projection_column_exists,
+    check_reserved_table_name,
     check_scd2_needs_history,
     check_slice_only_column_reads,
     check_slice_only_filter_keys,
@@ -1145,6 +1147,105 @@ def test_validate_table_passes(tmp_path: Path) -> None:
         config = DimensionalConfig(tables=[tbl])
         src_name = validate_table(tbl, config, emit.sidecar, discard_notice_sink)
     assert src_name == "records__entity"
+
+
+# ---------------------------------------------------------------------------
+# ReservedTableName — always-on, full export included
+# ---------------------------------------------------------------------------
+
+
+def test_reserved_table_name_refused() -> None:
+    table = _make_table_decl(name="_export_meta")
+    with pytest.raises(ExportError, match="reserved under incremental export"):
+        check_reserved_table_name(table)
+    check_reserved_table_name(_make_table_decl())  # must not raise
+
+
+def test_validate_table_refuses_reserved_table_name(tmp_path: Path) -> None:
+    """validate_table refuses a table named for an incremental bookkeeping table."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        tbl = _make_table_decl(name="_export_meta", kind="entity")
+        config = DimensionalConfig(tables=[tbl])
+        with pytest.raises(ExportError, match="reserved under incremental export"):
+            validate_table(tbl, config, emit.sidecar, discard_notice_sink)
+
+
+# ---------------------------------------------------------------------------
+# KeyColumnsStable — always-on, run last, every delivery class
+# ---------------------------------------------------------------------------
+
+
+def test_validate_table_refuses_type1_dim_keyed_on_tracked_property() -> None:
+    """A type-1 dim keyed on a tracked property is refused — the 'snapshot'
+    delivery class no longer gates the rule."""
+    sidecar = _scd2_derived_source_sidecar()
+    tbl = _make_table_decl(
+        kind="actor",
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="status", **{"from": "prop__status"}),
+        ],
+        key=["status"],
+    )
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(ExportError) as exc_info:
+        validate_table(tbl, config, sidecar, discard_notice_sink)
+    message = str(exc_info.value)
+    assert "table 't'" in message
+    assert "key column 'status'" in message
+    assert "reads tracked property 'status'" in message
+
+
+def test_validate_table_refuses_key_of_unknown_constancy() -> None:
+    """A key column reading a producer column outside the structural set is
+    refused as of unknown constancy — conservative, not admitted."""
+    sidecar = _slice_only_actor_sidecar(
+        extra_columns=[{"name": "custom_code", "type": "VARCHAR"}]
+    )
+    tbl = _make_table_decl(
+        kind="actor",
+        columns=[
+            ColumnDecl(name="id", **{"from": "record_id"}),
+            ColumnDecl(name="code", **{"from": "custom_code"}),
+        ],
+        key=["code"],
+    )
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(ExportError, match="of unknown constancy"):
+        validate_table(tbl, config, sidecar, discard_notice_sink)
+
+
+def test_validate_table_key_fk_undeclared_target_refuses_as_fk_target_is_dim() -> None:
+    """A key column that is an fk with an undeclared target refuses under
+    FkTargetIsDim's identity — the per-column fk block runs before
+    KeyColumnsStable, so the stability rule never sees the column."""
+    sidecar = _scd2_derived_source_sidecar()
+    tbl = _make_table_decl(
+        kind="actor",
+        columns=[
+            ColumnDecl(
+                name="doctor_key",
+                fk=FkClause(to="dim_missing", via="reference"),
+            )
+        ],
+        key=["doctor_key"],
+    )
+    config = DimensionalConfig(tables=[tbl])
+    with pytest.raises(ExportError, match="is not a declared dimension"):
+        validate_table(tbl, config, sidecar, discard_notice_sink)
+
+
+def test_validate_table_stable_key_passes() -> None:
+    """A table keyed on an invariant channel passes KeyColumnsStable."""
+    sidecar = _scd2_derived_source_sidecar()
+    tbl = _make_table_decl(
+        kind="actor",
+        columns=[ColumnDecl(name="id", **{"from": "record_id"})],
+        key=["id"],
+    )
+    config = DimensionalConfig(tables=[tbl])
+    validate_table(tbl, config, sidecar, discard_notice_sink)  # must not raise
 
 
 # ---------------------------------------------------------------------------
