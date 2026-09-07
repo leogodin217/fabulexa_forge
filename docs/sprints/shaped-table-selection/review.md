@@ -50,3 +50,10 @@
 Gate 4, both minor test-quality notes on `tests/playback/test_shaped_selection.py`).
 Mergeable as-is; fix-vs-accept on the two observations is the user's call at
 the ACCEPT/FIX checkpoint.
+
+
+## Post-review fixes (user-directed FIX)
+
+- Observation 1 (weak `assert tables` in the two state-delivery tests): FIXED — now pins the exact selected table names.
+- Observation 2 (four bare-str gate tests): FIXED — collapsed into one parametrized test over window/state × dimensional/source.
+- Gate after fixes: 5823 passed, 23 skipped, 0 failed. Pre-commit: PASS.

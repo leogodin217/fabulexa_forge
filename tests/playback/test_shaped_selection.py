@@ -17,7 +17,7 @@ the source side, rather than duplicating that scaffolding here.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import pytest
 from _support.notices import RecordingNoticeSink, discard_notice_sink
@@ -45,6 +45,7 @@ from ._shaped_fixtures import (
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from fabulexa_forge.playback.shaped import ShapedPlayback
     from fabulexa_forge.reader.emit import Emit
 
 
@@ -92,43 +93,46 @@ def _sensor_config() -> "ExportConfig":
 # ---------------------------------------------------------------------------
 
 
-def test_window_tables_bare_str_raises_playback_error_dimensional(
+@pytest.mark.parametrize(
+    ("open_head", "shape_config", "call"),
+    [
+        pytest.param(
+            _open_dimensional,
+            windowable_dimensional_shape_config,
+            lambda head: head.window(0, 10, tables="booking"),
+            id="window-dimensional",
+        ),
+        pytest.param(
+            _open_dimensional,
+            windowable_dimensional_shape_config,
+            lambda head: head.state(0, tables="booking"),
+            id="state-dimensional",
+        ),
+        pytest.param(
+            _open_source,
+            source_shape_config,
+            lambda head: head.window(0, 10, tables="booking"),
+            id="window-source",
+        ),
+        pytest.param(
+            _open_source,
+            source_shape_config,
+            lambda head: head.state(0, tables="booking"),
+            id="state-source",
+        ),
+    ],
+)
+def test_tables_bare_str_raises_playback_error(
     tmp_path: "Path",
+    open_head: "Callable[[Emit, ExportConfig], ShapedPlayback]",
+    shape_config: "Callable[[], ExportConfig]",
+    call: "Callable[[ShapedPlayback], object]",
 ) -> None:
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
-        head = _open_dimensional(emit, windowable_dimensional_shape_config())
+        head = open_head(emit, shape_config())
         with pytest.raises(PlaybackError, match="not a str") as exc_info:
-            head.window(0, 10, tables="booking")
-    assert "booking" in str(exc_info.value)
-
-
-def test_state_tables_bare_str_raises_playback_error_dimensional(
-    tmp_path: "Path",
-) -> None:
-    emit_dir = build_shaped_test_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        head = _open_dimensional(emit, windowable_dimensional_shape_config())
-        with pytest.raises(PlaybackError, match="not a str") as exc_info:
-            head.state(0, tables="booking")
-    assert "booking" in str(exc_info.value)
-
-
-def test_window_tables_bare_str_raises_playback_error_source(tmp_path: "Path") -> None:
-    emit_dir = build_shaped_test_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        head = _open_source(emit, source_shape_config())
-        with pytest.raises(PlaybackError, match="not a str") as exc_info:
-            head.window(0, 10, tables="booking")
-    assert "booking" in str(exc_info.value)
-
-
-def test_state_tables_bare_str_raises_playback_error_source(tmp_path: "Path") -> None:
-    emit_dir = build_shaped_test_emit(tmp_path)
-    with open_emit(emit_dir) as emit:
-        head = _open_source(emit, source_shape_config())
-        with pytest.raises(PlaybackError, match="not a str") as exc_info:
-            head.state(0, tables="booking")
+            call(head)
     assert "booking" in str(exc_info.value)
 
 
@@ -404,7 +408,7 @@ def test_state_delivery_is_snapshot_on_every_selected_table_dimensional(
     with open_emit(emit_dir) as emit:
         head = _open_dimensional(emit, windowable_dimensional_shape_config())
         tables = head.state(12, tables={"dim_gadget", "fact_shipment"})
-    assert tables
+    assert {t.name for t in tables} == {"dim_gadget", "fact_shipment"}
     assert all(t.delivery == "snapshot" for t in tables)
 
 
@@ -415,5 +419,5 @@ def test_state_delivery_is_snapshot_on_every_selected_table_source(
     with open_emit(emit_dir) as emit:
         head = _open_source(emit, source_shape_config())
         tables = head.state(12, tables={"widget_parts", "widget_versions"})
-    assert tables
+    assert {t.name for t in tables} == {"widget_parts", "widget_versions"}
     assert all(t.delivery == "snapshot" for t in tables)
