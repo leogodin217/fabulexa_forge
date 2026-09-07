@@ -22,6 +22,7 @@ import pytest
 from _support.duckdb_introspect import constraint_types
 from _support.notices import RecordingNoticeSink, discard_notice_sink
 
+from exporters.source.test_where_plan import _write_sensor_emit
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.models import (
     ExportConfig,
@@ -39,19 +40,26 @@ from fabulexa_forge.exporters.query_spec import (
 )
 from fabulexa_forge.exporters.source.engine import (
     build_source_query_specs,
+    build_windowed_source_query_specs,
     export_source,
     require_source_anchor,
 )
 from fabulexa_forge.exporters.source.plan import SourcePlan, build_source_plan
+from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.reader.emit import open_emit
 
 from ._source_fixtures import (
     build_empty_source_emit,
     build_source_keys_emit,
     build_source_test_emit,
+    build_windowed_source_test_emit,
+    windowed_test_windows,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
+
+    from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.reader.emit import Emit
 
 # ---------------------------------------------------------------------------
@@ -219,8 +227,124 @@ def test_build_source_query_specs_determinism(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# build_source_query_specs: windowed compile
+# build_windowed_source_query_specs: tables=None, selection, notices, the
+# undeclared-name assertion.
 # ---------------------------------------------------------------------------
+
+
+def _windowed_specs(
+    emit_dir: Path,
+    config: ExportConfig,
+    window: Window,
+    *,
+    notice_sink: "NoticeSink" = discard_notice_sink,
+    tables: "Collection[str] | None",
+) -> list[QuerySpec]:
+    """Open `emit_dir` and run `build_windowed_source_query_specs` the way
+    the shaped seam does: resolve the anchor and election, then the horizon
+    compile, optionally a selection."""
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        assert anchor is not None
+        election = resolve_election(emit.sidecar, config.keys)
+        return build_windowed_source_query_specs(
+            emit, config, anchor, election, window, notice_sink, tables=tables
+        )
+
+
+def test_windowed_query_specs_tables_none_returns_every_unit_event_log_last(
+    tmp_path: Path,
+) -> None:
+    events = SourceEventsDecl(
+        name="visit_versions", sources=(SourceEventSourceDecl(kind="visit"),)
+    )
+    config = _config(_WINDOWED_TABLES, events=events)
+    window = windowed_test_windows()[0]
+    specs = _windowed_specs(
+        build_windowed_source_test_emit(tmp_path), config, window, tables=None
+    )
+    assert [s.table_name for s in specs] == [
+        "visit",
+        "order",
+        "location",
+        "visit_team",
+        "visit_versions",
+    ]
+    assert specs[-1].write_mode == "append"
+
+
+_SENSOR_STATE_TABLE = SourceTableDecl(
+    name="sensor_state", kind="sensor", where={"prop__category": "underground"}
+)
+_SENSOR_EVENTS = SourceEventsDecl(
+    name="sensor_versions", sources=(SourceEventSourceDecl(kind="sensor"),)
+)
+_SENSOR_WINDOW = Window(index=None, start_ns=0, end_ns=100, label="")
+
+
+def test_windowed_query_specs_state_only_selection_replace_notice_once(
+    tmp_path: Path,
+) -> None:
+    """A state-table-only selection returns that unit's spec (write_mode
+    'replace') and emits its plan notice once (only the end horizon opens)."""
+    config = _config((_SENSOR_STATE_TABLE,), events=_SENSOR_EVENTS)
+    sink = RecordingNoticeSink()
+    specs = _windowed_specs(
+        _write_sensor_emit(tmp_path),
+        config,
+        _SENSOR_WINDOW,
+        notice_sink=sink,
+        tables={"sensor_state"},
+    )
+    assert [s.table_name for s in specs] == ["sensor_state"]
+    assert specs[0].write_mode == "replace"
+    assert len(sink.notices) == 1
+
+
+def test_windowed_query_specs_event_log_selection_append_last_notice_twice(
+    tmp_path: Path,
+) -> None:
+    """A selection including the event log returns it last with write_mode
+    'append' and emits each plan notice twice (both horizons open)."""
+    config = _config((_SENSOR_STATE_TABLE,), events=_SENSOR_EVENTS)
+    sink = RecordingNoticeSink()
+    specs = _windowed_specs(
+        _write_sensor_emit(tmp_path),
+        config,
+        _SENSOR_WINDOW,
+        notice_sink=sink,
+        tables={"sensor_state", "sensor_versions"},
+    )
+    assert [s.table_name for s in specs] == ["sensor_state", "sensor_versions"]
+    assert specs[-1].write_mode == "append"
+    assert len(sink.notices) == 2
+
+
+def test_windowed_query_specs_selected_spec_equals_tables_none_spec(
+    tmp_path: Path,
+) -> None:
+    """The selected spec equals the same unit's spec under tables=None."""
+    config = _config((_SENSOR_STATE_TABLE,))
+    emit_dir = _write_sensor_emit(tmp_path)
+    whole = _windowed_specs(emit_dir, config, _SENSOR_WINDOW, tables=None)
+    selected = _windowed_specs(
+        emit_dir, config, _SENSOR_WINDOW, tables={"sensor_state"}
+    )
+    assert len(whole) == 1
+    assert len(selected) == 1
+    assert selected[0].sql == whole[0].sql
+    assert selected[0].write_mode == whole[0].write_mode
+
+
+def test_windowed_query_specs_unknown_name_asserts(tmp_path: Path) -> None:
+    config = _config((_SENSOR_STATE_TABLE,))
+    with pytest.raises(AssertionError):
+        _windowed_specs(
+            _write_sensor_emit(tmp_path),
+            config,
+            _SENSOR_WINDOW,
+            tables={"nonexistent_table"},
+        )
 
 
 # ---------------------------------------------------------------------------

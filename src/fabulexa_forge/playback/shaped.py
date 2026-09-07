@@ -9,9 +9,9 @@ tables and their static per-class/per-genre window-delivery class.
 `ShapedPlayback.window()` promotes the incremental driver's own windowed
 compile verbatim — the same `build_query_specs` / `build_source_query_specs`
 call the driver's `export_window` makes, executed against the head's emit
-connection instead of written to a file — so window content and the windowed
-business rules (ask-scoped, validated on the first `window()` call) are the
-shipped ones, never reimplemented. `ShapedPlayback.state()` runs the same
+connection instead of written to a file, optionally narrowed to a `tables`
+selection (`_resolve_selection`) — so window content is the shipped compile's,
+never reimplemented. `ShapedPlayback.state()` runs the same
 mode's full-export compile (window=None) against the truncated tape: the
 compile indirection's `base_relations` mapping (one entry per sidecar base
 table, built from the derivations-owned truncated-tape builders) plus the
@@ -58,7 +58,7 @@ from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.reader.emit import Emit, pin_session_timezone
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Collection, Mapping
 
     import pyarrow as pa
 
@@ -82,6 +82,14 @@ _WINDOW_BOUNDS_INVALID_MSG = (
 
 _STATE_TIME_INVALID_MSG = (
     "invalid state position: at_sim_time={at_sim_time} must be >= 0"
+)
+
+_SELECTION_IS_STR_MSG = (
+    "tables must be a collection of table names, not a str: {value!r}"
+)
+_SELECTION_EMPTY_MSG = "tables must name at least one declared table"
+_SELECTION_UNKNOWN_MSG = (
+    "tables names no declared output table: {unknown}; declared: {names}"
 )
 
 
@@ -149,6 +157,48 @@ def _delivery_for_write_mode(
     )
 
 
+def _resolve_selection(
+    tables: "Collection[str] | None",
+    table_decls: tuple[ShapedTableDecl, ...],
+) -> frozenset[str] | None:
+    """Run the three selection gates; return the selected name set.
+
+    Gate order: a bare `str` (refused before any name is read — a str is a
+    Collection of its characters), empty, unknown name. Set semantics: a
+    repeated name selects its table once.
+
+    Args:
+        tables: The caller's selection, or None for the whole shape.
+        table_decls: The head's `tables()`.
+
+    Returns:
+        The selected names as a frozenset, or None when `tables` is None.
+
+    Raises:
+        PlaybackError: `_SELECTION_IS_STR_MSG` with the value;
+            `_SELECTION_EMPTY_MSG`; `_SELECTION_UNKNOWN_MSG` with `unknown`
+            the unknown names sorted and comma-joined and `names` the
+            declared names in tables() order, comma-joined.
+    """
+    if tables is None:
+        return None
+    if isinstance(tables, str):
+        raise PlaybackError(_SELECTION_IS_STR_MSG.format(value=tables))
+    selected = frozenset(tables)
+    if not selected:
+        raise PlaybackError(_SELECTION_EMPTY_MSG)
+    declared_names = tuple(table_decl.name for table_decl in table_decls)
+    unknown = selected - frozenset(declared_names)
+    if unknown:
+        raise PlaybackError(
+            _SELECTION_UNKNOWN_MSG.format(
+                unknown=", ".join(sorted(unknown)),
+                names=", ".join(declared_names),
+            )
+        )
+    return selected
+
+
 def _compile_window_specs(
     emit: "Emit",
     config: "ExportConfig",
@@ -156,15 +206,14 @@ def _compile_window_specs(
     window: Window,
     notice_sink: "NoticeSink",
     election: "Election",
+    tables: frozenset[str] | None,
 ) -> "list[QuerySpec]":
-    """Dispatch a shape's windowed compile to its mode's engine.
+    """Dispatch a shape's windowed compile to its mode's engine, over a selection.
 
-    The exact call the incremental driver's `export_window` makes for the
-    windowed compile step: the horizon compile — the truncated tape at each
-    of the window's horizons, § Shaped window — through `build_query_specs`
-    with the window for a dimensional shape, or
-    `build_windowed_source_query_specs` for a source shape, with the
-    `election` `open_shaped_playback` already resolved.
+    As today, threading `tables` to the mode engine's horizon compile
+    (`build_query_specs(..., tables=tables)` /
+    `build_windowed_source_query_specs(..., tables=tables)`). Returns the
+    selected tables' specs in the mode's compile order.
 
     Args:
         emit: The open emit.
@@ -173,13 +222,15 @@ def _compile_window_specs(
         window: The half-open window to compile.
         notice_sink: Receiver for plan notices.
         election: The resolved election, threaded to both modes' engines.
+        tables: The already-validated selected names, or None for every
+            declared table.
 
     Returns:
-        One QuerySpec per declared output table, in the mode's deterministic
+        One QuerySpec per selected table, in the mode's deterministic
         compile order.
 
     Raises:
-        ExportError: A windowed business rule fails for the shape (naming the
+        ExportError: A business rule fails for the shape (naming the
             offending table).
         SourceAnchorRequired: A source shape's anchor is None.
         TemporalClassUnavailableError: A consulted column's temporal pair is
@@ -188,7 +239,7 @@ def _compile_window_specs(
     if config.mode == "source":
         resolved_anchor = require_source_anchor(anchor)
         return build_windowed_source_query_specs(
-            emit, config, resolved_anchor, election, window, notice_sink
+            emit, config, resolved_anchor, election, window, notice_sink, tables=tables
         )
     assert config.dimensional is not None
     return build_query_specs(
@@ -199,7 +250,7 @@ def _compile_window_specs(
         notice_sink,
         base_relations=None,
         election=election,
-        tables=None,
+        tables=tables,
     )
 
 
@@ -239,25 +290,29 @@ def _compile_state_specs(
     notice_sink: "NoticeSink",
     base_relations: "Mapping[str, str]",
     election: "Election",
+    tables: frozenset[str] | None,
 ) -> "list[QuerySpec]":
-    """Dispatch a shape's state(T) compile to its mode's full-export engine.
+    """Dispatch a shape's state(T) compile to its mode's full-export engine,
+    over a selection.
 
     The mode's full-export compile (window=None — write_mode='create' on
     every spec, the full-export tag both modes already emit) against the
     truncated emit view. Dimensional keeps its own `base_relations`
     parameter (mapping every sidecar base table to its truncated-at-T
     replacement, § The compile indirection — the mode never sees a
-    horizon). A source shape's engine carries no `base_relations`
-    parameter at all (§ 2): its plan builds against the truncated emit
-    view directly (`windowed=False`), the query specs compile
-    (`build_source_query_specs(plan)`), and this seam applies the
-    same rewrite itself (`_rewrite_specs_base_relations`) — so the elected-
-    key uniqueness guard, having moved to plan time, executes against the
-    truncated *view*'s physical tape through its shared connection: sound
-    (uniqueness of a creation-constant surface is monotone under
-    row-subsetting) but conservatively strict — a collision existing only
-    among rows the truncation drops would still refuse. A state-only shape
-    never runs the windowed rules (WindowKeyMutable / WindowKeyDuplicate):
+    horizon); the engine compiles the selected tables only. A source
+    shape's engine carries no `base_relations` parameter at all (§ 2) and
+    no selection: its plan builds whole-config against the truncated emit
+    view directly (`windowed=False`), the full compile runs
+    (`build_source_query_specs(plan)`), and this seam keeps the specs
+    whose `table_name` is in `tables` (every spec when None) before
+    applying the same rewrite itself (`_rewrite_specs_base_relations`) —
+    so the elected-key uniqueness guard, having moved to plan time,
+    executes against the truncated *view*'s physical tape through its
+    shared connection: sound (uniqueness of a creation-constant surface is
+    monotone under row-subsetting) but conservatively strict — a collision
+    existing only among rows the truncation drops would still refuse. A
+    state-only shape never runs the windowed rules (WindowKeyDuplicate):
     window=None is the full-export compile.
 
     Args:
@@ -268,9 +323,11 @@ def _compile_state_specs(
         base_relations: Physical base-table name -> replacing relation SELECT,
             one entry per sidecar base table.
         election: The resolved election, threaded to both modes' engines.
+        tables: The already-validated selected names, or None for every
+            declared table.
 
     Returns:
-        One QuerySpec per declared output table, in the mode's deterministic
+        One QuerySpec per selected table, in the mode's deterministic
         compile order.
 
     Raises:
@@ -289,6 +346,12 @@ def _compile_state_specs(
             notices=notice_sink,
         )
         specs = list(build_source_query_specs(plan))
+        if tables is not None:
+            declared = {spec.table_name for spec in specs}
+            assert declared.issuperset(tables), (
+                f"tables selects undeclared name(s): {sorted(set(tables) - declared)}"
+            )
+            specs = [spec for spec in specs if spec.table_name in tables]
         return _rewrite_specs_base_relations(specs, base_relations)
     assert config.dimensional is not None
     return build_query_specs(
@@ -299,7 +362,7 @@ def _compile_state_specs(
         notice_sink,
         base_relations=base_relations,
         election=election,
-        tables=None,
+        tables=tables,
     )
 
 
@@ -445,32 +508,40 @@ class ShapedPlayback:
         self,
         start_sim_time: int,
         end_sim_time: int,
+        tables: "Collection[str] | None" = None,
     ) -> tuple[ShapedTable, ...]:
-        """The shape's tables for the half-open window [start, end).
+        """The selected tables for the half-open window [start, end).
 
-        Stateless: the caller owns the frontier. For a dimensional shape:
-        the horizon compile (`build_query_specs` with the window) over the
-        head's connection — per table, state(end - 1) whole for a
-        'snapshot' declaration, else its delta against state(start - 1),
-        reconciled by the declared key. For a source shape: the same
-        two-horizon compile (`build_windowed_source_query_specs`). This is
-        the same compile the incremental
-        driver's `export_window` runs. One ShapedTable per declared table,
-        zero-row typed relations included, in tables() order.
+        Stateless: the caller owns the frontier and the grouping. The
+        horizon compile runs for the selected tables only — per-table
+        compile, data guards, and materialization — while every declaration
+        still resolves against the full config. The start horizon is opened
+        only when the selection is delta-bearing (some selected table's
+        class is 'upsert' or 'append'; the source event log). The answer for
+        a table is identical whichever selection it is asked in (projection
+        invariance).
 
         Args:
             start_sim_time: Inclusive lower bound (ns); >= 0.
             end_sim_time: Exclusive upper bound (ns); >= start_sim_time.
+            tables: The declared names to answer, set semantics, or None
+                for every declared table. Answered in tables() order.
 
         Returns:
-            One ShapedTable per declared output table.
+            One ShapedTable per selected table, tables() order, zero-row
+            typed relations included.
 
         Raises:
-            PlaybackError: Negative bounds or start > end.
-            ExportError: WindowKeyMutable for an 'upsert' table whose key
-                is not a stable row identity (static; first ask), or
-                WindowKeyDuplicate for one at the end horizon (dimensional);
-                a source business rule for either horizon's plan (source).
+            PlaybackError: Negative bounds or start > end; `tables` a bare
+                str, or empty; a name tables() does not report. All before
+                any compile.
+            ExportError: WindowKeyDuplicate for a selected 'upsert' table at
+                the end horizon; ElectedKeyDuplicate on a selected table's
+                guarded edge or a dim it reaches (dimensional); a source
+                business rule for a plan at an opened horizon (source). The
+                ask is atomic: any of these refuses every selected table.
+            TemporalClassUnavailableError: A consulted column's temporal pair
+                is absent or out of enum (non-conformant emit).
         """
         if start_sim_time < 0 or end_sim_time < start_sim_time:
             raise PlaybackError(
@@ -478,6 +549,7 @@ class ShapedPlayback:
                     start=start_sim_time, end=end_sim_time
                 )
             )
+        selection = _resolve_selection(tables, self._table_decls)
 
         window = Window(
             index=None, start_ns=start_sim_time, end_ns=end_sim_time, label=""
@@ -489,6 +561,7 @@ class ShapedPlayback:
             window,
             self._notice_sink,
             self._election,
+            selection,
         )
         return tuple(
             ShapedTable(
@@ -499,30 +572,45 @@ class ShapedPlayback:
             for spec in specs
         )
 
-    def state(self, at_sim_time: int) -> tuple[ShapedTable, ...]:
-        """The shape's tables as if the emit's slice ended at T (inclusive).
+    def state(
+        self,
+        at_sim_time: int,
+        tables: "Collection[str] | None" = None,
+    ) -> tuple[ShapedTable, ...]:
+        """The selected tables as if the emit's slice ended at T (inclusive).
 
-        The mode's full-export compile over the truncated tape (§ Shaped
-        state); delivery is 'snapshot' on every table. state(T_slice) is
-        value-identical to the shape's full export (the bridging theorem).
+        The mode's full-export compile over the truncated tape, for the
+        selected tables only; delivery is 'snapshot' on every table.
+        state(T_slice, tables=S) equals the full export restricted to S (the
+        bridging theorem under projection).
 
         Args:
             at_sim_time: The inclusive position T (ns); >= 0.
+            tables: The declared names to answer, set semantics, or None
+                for every declared table. Answered in tables() order.
 
         Returns:
-            One ShapedTable per declared output table, in tables() order.
+            One ShapedTable per selected table, tables() order.
 
         Raises:
-            PlaybackError: at_sim_time < 0. No slice_only gate exists
+            PlaybackError: at_sim_time < 0; `tables` a bare str, or empty;
+                a name tables() does not report. No slice_only gate exists
                 here: a plan projecting or value-reading a slice_only
                 column cannot open (the modes' always-on refusal at
                 open_shaped_playback — the slice_only precondition), so
                 every openable plan binds against the truncated tape.
                 last_mutation_sim_time reads bind against the recorded
                 trail the view presents, honest at T.
+            ExportError: ElectedKeyDuplicate on a selected table's guarded
+                edge or a dim it reaches (dimensional); a source business
+                rule for the plan over the truncated view (source). The ask
+                is atomic: any of these refuses every selected table.
+            TemporalClassUnavailableError: A consulted column's temporal pair
+                is absent or out of enum (non-conformant emit).
         """
         if at_sim_time < 0:
             raise PlaybackError(_STATE_TIME_INVALID_MSG.format(at_sim_time=at_sim_time))
+        selection = _resolve_selection(tables, self._table_decls)
 
         sidecar = self._emit.sidecar
         fork_path = require_single_branch(sidecar)
@@ -534,6 +622,7 @@ class ShapedPlayback:
             self._notice_sink,
             tape.base_relations,
             self._election,
+            selection,
         )
         return tuple(
             ShapedTable(
@@ -564,9 +653,10 @@ def open_shaped_playback(
     is refused here by the mode's own always-on rules (the export-wide
     policy, inherited as a precondition), and an output column named
     last_mutation_sim_time by the mode's reserved output-name check (the
-    presentation-name posture). The windowed business rules are ask-scoped —
-    validated on the first window() call — so a shape legal for state()
-    but not window() still opens. The shape is the config's mode + mode
+    presentation-name posture). After open, the only ask-time refusals are
+    the data guards (WindowKeyDuplicate, ElectedKeyDuplicate, a source
+    business rule) and the selection gates (`PlaybackError`). The shape is
+    the config's mode + mode
     section + shared exporter features; the config's rebase block is not
     read (the caller resolves the anchor) and its incremental block is not
     read (cadence-boundary sequences are the caller's job — the seam speaks

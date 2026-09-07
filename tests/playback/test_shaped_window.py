@@ -69,7 +69,7 @@ def _direct_source_specs(
     election = resolve_election(emit.sidecar, config.keys)
     window = Window(index=None, start_ns=start_ns, end_ns=end_ns, label="")
     return build_windowed_source_query_specs(
-        emit, config, anchor, election, window, discard_notice_sink
+        emit, config, anchor, election, window, discard_notice_sink, tables=None
     )
 
 

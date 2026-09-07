@@ -355,7 +355,7 @@ def export_window(
         resolved_anchor = require_source_anchor(anchor)
         election = resolve_election(emit.sidecar, config.keys)
         specs = build_windowed_source_query_specs(
-            emit, config, resolved_anchor, election, window, notice_sink
+            emit, config, resolved_anchor, election, window, notice_sink, tables=None
         )
     elif config.mode == "base":
         from fabulexa_forge.exporters.base.engine import build_base_query_specs

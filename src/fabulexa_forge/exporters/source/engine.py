@@ -28,6 +28,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from collections.abc import Collection
     from pathlib import Path
 
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -214,19 +215,25 @@ def build_windowed_source_query_specs(
     election: Election,
     window: "Window",
     notice_sink: "NoticeSink",
+    *,
+    tables: "Collection[str] | None",
 ) -> list[QuerySpec]:
-    """The source mode's horizon compile: one QuerySpec per output table.
+    """The source mode's horizon compile, optionally a selection.
 
-    Opens the truncated tape at `window.end_ns - 1` and at
-    `window.start_ns - 1` (the empty tape below the first data instant),
-    builds the plan and the full-export compile over each — the tape's
-    sidecar view for column enumeration (`Emit.with_sidecar`), its
-    `base_relations` for every base read (`shadow_base_relations`) — and
-    delivers each unit by `source_window_delivery`: a `snapshot` unit's
-    end-horizon query with write_mode 'replace'; the event log's delta
-    `end EXCEPT ALL start` ordered by its columns with write_mode 'append'.
-    Each horizon compile is the full plan build, so its plan notices reach
-    the sink once per horizon and its data-dependent guards run against
+    The plan builds whole-config at every horizon opened — the plan is the
+    mode's unit of validation, and its data-dependent guards and notices
+    are plan-scoped, not per output table. Opens the truncated tape at
+    `window.end_ns - 1` always; opens `window.start_ns - 1` (the empty tape
+    below the first data instant) only when the event log is among the
+    selected units (or `tables` is None and the plan declares one) — the
+    tape's sidecar view for column enumeration (`Emit.with_sidecar`), its
+    `base_relations` for every base read (`shadow_base_relations`). `tables`
+    decides two things only: which units' specs are returned, and whether
+    the start horizon opens. A `state` / `junction` unit's spec is its
+    end-horizon query with write_mode 'replace'; the event log's is `end
+    EXCEPT ALL start` ordered by its columns with write_mode 'append'. Each
+    horizon compile is the full plan build, so its plan notices reach the
+    sink once per horizon opened and its data-dependent guards run against
     the physical tape through the shared connection.
 
     Args:
@@ -235,13 +242,18 @@ def build_windowed_source_query_specs(
         anchor: The resolved wallclock anchor.
         election: The resolved key-election view.
         window: The half-open window to compile.
-        notice_sink: Receiver for plan notices.
+        notice_sink: Receiver for plan notices, once per horizon opened.
+        tables: The output table names to return, set semantics, or None
+            for every unit. Every name must be an output table of the
+            plan — the seam validates this before calling; an unknown name
+            fails an `assert`.
 
     Returns:
-        One QuerySpec per output table, declared order, the event log last.
+        One QuerySpec per selected unit, declared order, the event log last.
 
     Raises:
-        ExportError: A source business rule fails for either horizon's plan.
+        ExportError: A source business rule fails for a plan at an opened
+            horizon.
     """
     fork_path = require_single_branch(emit.sidecar)
 
@@ -256,23 +268,37 @@ def build_windowed_source_query_specs(
         ]
 
     end_plan, end_specs = compile_at(window.end_ns - 1)
-    _, start_specs = compile_at(window.start_ns - 1)
     units: list[SourceStateTablePlan | SourceJunctionTablePlan | SourceEventLogPlan] = (
         list(end_plan.tables)
     )
     if end_plan.events is not None:
         units.append(end_plan.events)
 
+    if tables is not None:
+        declared = {unit.name for unit in units}
+        assert declared.issuperset(tables), (
+            f"tables selects undeclared name(s): {sorted(set(tables) - declared)}"
+        )
+
+    event_log_selected = end_plan.events is not None and (
+        tables is None or end_plan.events.name in tables
+    )
+    start_specs = compile_at(window.start_ns - 1)[1] if event_log_selected else None
+
     specs: list[QuerySpec] = []
-    for unit, end_spec, start_spec in zip(units, end_specs, start_specs, strict=True):
+    for index, unit in enumerate(units):
+        if tables is not None and unit.name not in tables:
+            continue
+        end_spec = end_specs[index]
         if source_window_delivery(unit) == "snapshot":
             specs.append(replace(end_spec, write_mode="replace"))
         else:
+            assert start_specs is not None
             specs.append(
                 replace(
                     end_spec,
                     sql=compose_window_delta_sql(
-                        end_spec.sql, start_spec.sql, EVENT_LOG_COLUMNS
+                        end_spec.sql, start_specs[index].sql, EVENT_LOG_COLUMNS
                     ),
                     write_mode="append",
                 )

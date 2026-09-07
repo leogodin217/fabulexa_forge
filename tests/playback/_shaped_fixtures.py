@@ -733,9 +733,10 @@ def state_dimensional_shape_config() -> ExportConfig:
 
 def state_junction_shape_config() -> ExportConfig:
     """The membership-grain class over build_state_test_emit, isolated in its
-    own shape (window() would reject it wholesale — the windowed-grain rule
-    — so it is never mixed into state_dimensional_shape_config()); projects
-    left_at for the leave-after-T masking assertion."""
+    own shape (window() would refuse it wholesale with WindowKeyDuplicate —
+    record_id is not unique on a membership grain, a data guard — so it is
+    never mixed into state_dimensional_shape_config()); projects left_at for
+    the leave-after-T masking assertion."""
     return ExportConfig(
         mode="dimensional",
         dimensional=DimensionalConfig(

@@ -391,8 +391,9 @@ def test_junction_left_at_present_when_leave_at_or_before_t(tmp_path: "Path") ->
 
 
 def test_state_only_shape_never_runs_windowed_business_rules(tmp_path: "Path") -> None:
-    """The membership grain — window()'s windowed-grain rule always rejects it
-    — still answers state() cleanly."""
+    """The membership grain — window() always refuses it with
+    WindowKeyDuplicate (record_id is not unique on a membership grain, a
+    data guard, not a static rule) — still answers state() cleanly."""
     emit_dir = build_state_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         head = _open_dimensional(emit, state_junction_shape_config())

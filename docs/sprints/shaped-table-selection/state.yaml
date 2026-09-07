@@ -47,7 +47,7 @@ phases:
         files:
           - "tests/exporters/dimensional/test_selection.py"
   3:
-    status: pending
+    status: complete
     name: "Source engine selection and the seam's tables asks"
     demo: "docs/sprints/shaped-table-selection/demos/phase_3_shaped_table_selection.py"
     steps:
