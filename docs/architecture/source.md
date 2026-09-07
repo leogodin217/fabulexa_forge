@@ -777,11 +777,12 @@ and `defects.json` names the injected duplicate.
 driver (see [`incremental.md`](incremental.md)) — window math, cursor,
 fingerprint, drained detection, labels, empty-window emission, and staging are
 its shared mechanics. The source mode contributes its horizon compile
-(`build_windowed_source_query_specs`): the plan is built and the full-export
-renders compiled over the **truncated tape** at each of the window's two
-horizons — the cutoff `end_ns − 1` and the previous cutoff `start_ns − 1`
+(`build_windowed_source_query_specs`): the plan is built whole-config and the
+full-export renders compiled over the **truncated tape** at the cutoff
+`end_ns − 1` and — when the event log is among the delivered units — at the
+previous cutoff `start_ns − 1` as well
 ([`derivations.md`](derivations.md) § The truncated-tape surface,
-[`incremental.md`](incremental.md) § Horizon windowing) — and each unit is
+[`incremental.md`](incremental.md) § Horizon windowing); each unit is
 delivered by a static class:
 
 | Render | Class | Window k delivers |
@@ -789,6 +790,20 @@ delivered by a static class:
 | `state` | `snapshot` | The current-row table as a producer slice at the cutoff would have written it — records created by the cutoff, tracked properties as of it, `active` / `deactivated_at` rendered at it, `updated_at` the recorded trail — replaced whole every window |
 | `junction` | `snapshot` | Every interval joined by the cutoff, an interval still open at the cutoff carrying a NULL `left_at` — replaced whole every window |
 | event log | `append` | The log over the tape at the cutoff minus the log over the tape at the previous cutoff: exactly the events in the window, each carrying its whole-tape `id` |
+
+The plan is the mode's unit of validation, and its data-dependent guards and
+notices are plan-scoped, not per output table, so the horizon compile builds
+the whole plan at every horizon it opens. Its `tables` selection — the shaped
+playback head's per-ask projection ([`playback.md`](playback.md) § Shaped
+window); the incremental driver passes `None` — decides only which units'
+specs are returned and whether the start horizon opens: it opens exactly when
+the event log is selected (or every unit is, and the plan declares one). A
+shape with no event log, or an ask selecting only `state` / `junction` tables,
+compiles one horizon; its snapshots are the same relations either way. The
+floor of a source horizon compile is therefore one whole-config plan build per
+horizon opened, and the start-horizon plan's verdict is the end-horizon plan's
+(the plan-time uniqueness guard runs against the physical tape whichever
+truncated view the plan builds over), so opening one horizon loses no verdict.
 
 No render sees a window, so there is no windowed render shape and no
 windowed refusal: a `columns` / `rename` entry naming `last_mutation_sim_time`

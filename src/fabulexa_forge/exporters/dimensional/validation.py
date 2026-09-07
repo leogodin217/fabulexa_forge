@@ -977,12 +977,12 @@ def check_reserved_presentation_name(table_decl: "TableDecl") -> None:
     """Enforce the presentation-name posture: no output column named
     last_mutation_sim_time.
 
-    Always-on, full export included — unlike IncrementalReservedName's
-    table-name check (`windowing.py`), which applies under incremental
-    export only. `last_mutation_sim_time` is a sim-internal
-    bookkeeping column: every value channel that reads it (the `from:` /
-    `correlation:` / `derived: timestamp` sources, `ordinal.order_by`) stays
-    untouched — only delivering it under its own output name is refused.
+    Always-on, full export included — the same posture as the reserved
+    table-name check (`check_reserved_table_name`) that runs beside it.
+    `last_mutation_sim_time` is a sim-internal bookkeeping column: every
+    value channel that reads it (the `from:` / `correlation:` /
+    `derived: timestamp` sources, `ordinal.order_by`) stays untouched —
+    only delivering it under its own output name is refused.
 
     Args:
         table_decl: The output table declaration.

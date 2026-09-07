@@ -61,7 +61,7 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | `IncrementalConfig` — the cross-mode `incremental` cadence block (sibling of `mode` and `rebase`) and its parse-time validator |
 | [`exporters/query_spec.py`](../../src/fabulexa_forge/exporters/query_spec.py) | `QuerySpec` (`write_mode` / `upsert_key`) and `write_query_specs` — the mode-neutral compiled-table shape and full-export write dispatch every mode's windowed compile produces and this driver consumes |
 | [`exporters/dimensional/engine.py`](../../src/fabulexa_forge/exporters/dimensional/engine.py) | `build_query_specs(…, window)` — the dimensional horizon compile: the full-export compile over the truncated tape at each of the window's two horizons, composed per delivery class |
-| [`exporters/dimensional/windowing.py`](../../src/fabulexa_forge/exporters/dimensional/windowing.py) | `window_delivery_class` (the static per-table delivery class), `check_window_key_invariant` (`WindowKeyMutable`), `check_window_key_unique` (`WindowKeyDuplicate`), `check_windowed_reserved_names`, `compose_window_delta_sql` |
+| [`exporters/dimensional/windowing.py`](../../src/fabulexa_forge/exporters/dimensional/windowing.py) | `window_delivery_class` (the static per-table delivery class) and `check_key_columns_stable` (`KeyColumnsStable`, the always-on key rule `validate_table` runs — [`dimensional.md`](dimensional.md) § Validation Rules), both over the one horizon-invariance reading `_channel_variance`; `check_window_key_unique` (`WindowKeyDuplicate`); `compose_window_delta_sql` |
 | [`derivations/truncated_tape.py`](../../src/fabulexa_forge/derivations/truncated_tape.py) | `open_truncated_tape` / `TruncatedTape` — the emit presented as a producer slice at a horizon ([`derivations.md`](derivations.md) § The truncated-tape surface) |
 | [`exporters/source/engine.py`](../../src/fabulexa_forge/exporters/source/engine.py) | `build_windowed_source_query_specs` — the source horizon compile (the plan and full-export renders over the truncated tape at each horizon; `state` / `junction` snapshot, event log append), `source_window_delivery` |
 | [`writers/duckdb.py`](../../src/fabulexa_forge/writers/duckdb.py) | `write_duckdb_window` — one-transaction-per-window append / replace / keyed upsert, bookkeeping tables |
@@ -185,15 +185,15 @@ The classifier is conservative by construction: `upsert` is correct for every
 table, and `append` is admitted only where the invariance argument is total. A
 `role: dim` with no `scd` is classified by its channels like any other table.
 
-**The key.** Two facts about an `upsert` table's `key` are all the mechanism
-needs, and both are checked:
+**The key.** Two facts about a table's `key` are all the mechanism needs, and
+both are checked:
 
 | Condition | Result |
 |---|---|
-| `upsert` table; a `key` column is not a horizon-invariant channel | Refused statically at the windowed compile — `WindowKeyMutable`, naming the table, the column, and the varying source. Without it the drip silently diverges: a row keyed `(A, NULL)` at `h'` re-keys to `(A, 588)` at `h`; delete-by-key removes nothing and no later delta carries `(A, NULL)`, so the open row persists in the warehouse while the full export closes it |
+| Any table; a `key` column is not a horizon-invariant channel | Refused when the config loads, by the dimensional mode's always-on `KeyColumnsStable` rule ([`dimensional.md`](dimensional.md) § Validation Rules) — one-shot export, this driver, and the shaped playback head alike, naming the table, the column, and the varying source — so no config with an unstable key reaches a windowed compile. Without it the drip silently diverges: a row keyed `(A, NULL)` at `h'` re-keys to `(A, 588)` at `h`; delete-by-key removes nothing and no later delta carries `(A, NULL)`, so the open row persists in the warehouse while the full export closes it |
 | `upsert` table; `key` unique in `state(h)` | Reconciles: after every window is applied the target equals `state(h)` as a multiset |
 | `upsert` table; `key` **not** unique in `state(h)` | Refused at that window's compile before any write — `WindowKeyDuplicate`, naming the table and the number of duplicated key values (delete-by-key would remove a sibling row the delta does not restore). A rendered key (a µs-truncated `derived: timestamp`) collides when two ticks share a microsecond; key on the raw `from: sim_time` instead |
-| `append` / `snapshot` table | Neither check runs — an insert-only write reconciles regardless of the key; a replace ignores it |
+| `append` / `snapshot` table | The uniqueness guard does not run — an insert-only write reconciles regardless of the key; a replace ignores it. The stability rule holds regardless of class: the key is the table's declared row identity |
 
 Uniqueness is evaluated over `state(h)` only: uniqueness at every end horizon
 implies uniqueness at every start horizon the drip has used. Key identity —
@@ -216,6 +216,42 @@ difference preserves, are the only ties and are indistinguishable). A
 `snapshot` table's spec is the end-horizon query alone. The delta relation is
 schema-identical to the one-shot table.
 
+**The compile over a selection.** `build_query_specs` (and the source mode's
+`build_windowed_source_query_specs`) takes a required `tables` argument — a
+collection of declared table names, or `None` for every declared table; every
+caller states its selection, and this driver passes `None`. A selection is a
+projection over the whole-shape compile: every declaration remains visible to
+resolution (fk targets, the election, sub-type domains), while the per-table
+loop — `validate_table`, the SQL compile, `WindowKeyDuplicate`, the fk-edge
+elected-key guard, and plan notices — runs for the selected tables only, and
+the dim-side leg guard runs for exactly the dims a selected table's guarded
+edge reaches. An undeclared name is a programming error (an `assert`), never
+an `ExportError`: the caller validates names first (the shaped head's
+selection gates, [`playback.md`](playback.md) § Shaped window), and a
+selection presumes the caller has run the always-on rules over the whole
+shape — unselected declarations are resolved against, never validated. The
+source engine's plan is whole-config at every horizon it opens — the plan
+is that mode's unit of validation, its data-dependent guards plan-scoped, not
+per output table — and `tables` decides only which units' specs are returned
+and whether the start horizon opens ([`source.md`](source.md) § Incremental
+composition).
+
+**Horizon economy.** The end horizon is always opened; the start horizon is
+opened only when the compiled selection is **delta-bearing** — some compiled
+table's class is `upsert` or `append` (dimensional), or the event log is among
+the compiled units (source). A delta-free compile — a whole shape of
+`snapshot` tables, a source shape with no event log, or a shaped-head ask
+selecting only `snapshot` tables — opens one horizon: no start-horizon
+compile, guard, or notice. The delivered content is the same either way (a
+`snapshot` spec is the end-horizon query in both cases), and no verdict is
+lost: dimensional elected-key uniqueness is monotone under row-subsetting (a
+creation-constant surface unique over the rows at `h` is unique over the
+subset at `h'`) and `WindowKeyDuplicate` is defined over `state(h)` alone; the
+source plan-time uniqueness guard runs against the physical tape through the
+shared connection whichever truncated view the plan builds over (conservatively
+strict — a collision among rows the truncation drops still refuses), so the
+start-horizon plan's verdict is the end-horizon plan's.
+
 **The recorded-trail condition.** The truncated tape presents
 `last_mutation_sim_time` as the recorded trail, honest at every horizon and
 advancing across windows (an `upsert` channel). The full export reads the
@@ -227,7 +263,7 @@ producer does.
 | Edge | Result |
 |---|---|
 | Empty window | Header-only delta drops; snapshot tables re-emitted whole; a zero-row DuckDB transaction logging the window row |
-| Author table named `_export_meta` / `_export_windows` | Refused under a windowed invocation (`IncrementalReservedName`) |
+| Author table named `_export_meta` / `_export_windows` | Refused when the config loads — the dimensional mode's always-on `ReservedTableName` rule ([`dimensional.md`](dimensional.md) § Validation Rules), the source mode's plan-build rule — so a full export and a later drip on the same target agree by construction |
 | Semantically defective data (a corrupted emit) | Total: the horizon compile is the full-export compile, which already tolerates it; the only data-level refusal is `WindowKeyDuplicate` |
 | An emit whose sidecar declares no `history` table | The trail is `greatest(created_sim_time, deactivated_at when ≤ T)`; a tracked property implies a `history` table by contract |
 
@@ -245,8 +281,9 @@ participates in the config fingerprint exactly as any other config field does.
 The delivery classes and the two-horizon compile are also the playback seam's
 tier-2 `window()` contract for a dimensional shape ([`playback.md`](playback.md)
 § Shaped window): `ShapedTableDecl.window_delivery` is the same
-`window_delivery_class`, and `window(T1, T2)` runs the same
-`build_query_specs` call this driver runs. The driver keeps its own mechanics
+`window_delivery_class`, and `window(T1, T2, tables=S)` runs the same
+`build_query_specs` call this driver runs, over the caller's selection (this
+driver passes `None`). The driver keeps its own mechanics
 (the window-boundary sequence, cursor, fingerprint, drained detection, labels,
 staging, writers) above the seam. The source mode runs the same horizon
 compile with its own static classes — `state` and `junction` tables
@@ -331,7 +368,8 @@ writing rules, and the accepted last-window staleness wart are owned by
 
 Zero-padded indices keep drops sortable; the suffix keeps them human-readable. DuckDB
 records the same label in `_export_windows`. Author table names must not collide
-with the bookkeeping tables (`IncrementalReservedName`).
+with the bookkeeping tables (the modes' always-on reserved table-name rules,
+§ Horizon windowing).
 
 ### Empty windows
 
@@ -390,9 +428,10 @@ a sibling `<out parent>/.tmp_<label>` and atomically renamed to `out`.
    author error; the acceptance suite (`tests/incremental/test_horizon_acceptance.py`)
    detects it as a reconciliation failure.
 6. **Totality.** Every dimensional config that compiles as a full export compiles as a
-   window, provided each `upsert` table's `key` is a stable row identity
-   (`WindowKeyMutable`, the one static windowed rule); the only data-level refusal is
-   `WindowKeyDuplicate`.
+   window: the static facts a window relies on — every `key` a stable row identity
+   (`KeyColumnsStable`), no table named for a bookkeeping table — are always-on
+   load-time rules of the mode, so no static windowed-only refusal exists; the only
+   data-level refusal is `WindowKeyDuplicate`.
 7. **Determinism.** Same emit + config + code version → byte-identical CSV drops,
    identical labels and cursor contents, identical warehouse query results (DuckDB file
    bytes excluded, per the repo-wide stance).
@@ -400,7 +439,9 @@ a sibling `<out parent>/.tmp_<label>` and atomically renamed to `out`.
 **Relied on (upstream guarantees).** The sole branch's `slice_at` bounds all data
 `sim_time`s; the run-level `runtime` anchor is never altered by resume/fork; the
 truncated tape's honesty and the bridging theorem
-([`playback.md`](playback.md) § Shaped state); and **row-set monotonicity under
+([`playback.md`](playback.md) § Shaped state); **start-horizon guard verdicts
+implied by end-horizon verdicts** (§ Horizon windowing — horizon economy), which is
+what lets a delta-free compile open one horizon; and **row-set monotonicity under
 truncation** — for every table not filtered on a mutable column, the keys present
 at an earlier horizon are present at every later one: `history` is append-only, the
 records spine (`created_sim_time ≤ T`), the membership intervals (`joined_sim_time
@@ -424,17 +465,18 @@ rejected and *when*.
 **Parse-time (Pydantic).** `IncrementalConfig` sets **exactly one** of `period` /
 `sim_period_ns`; `sim_period_ns`, when set, is ≥ 1 (`exactly_one_cadence`).
 
-**Windowed business rules (dimensional).** These run **only when
-`build_query_specs` receives a window** — a full export is untouched — and live in
+**Windowed business rule (dimensional).** One rule runs **only when
+`build_query_specs` receives a window** — a full export is untouched — and lives in
 [`windowing.py`](../../src/fabulexa_forge/exporters/dimensional/windowing.py).
 Every always-on rule of the full export applies to each horizon compile at the
-same point it applies today; no other windowed refusal exists.
+same point it applies to the one-shot path; `KeyColumnsStable` (every `key` column
+of every table a horizon-invariant channel, whatever its delivery class) and
+`ReservedTableName` are among them ([`dimensional.md`](dimensional.md) § Validation
+Rules), so no static windowed-only refusal exists.
 
 | Rule | Rejects | Error message |
 |---|---|---|
-| `WindowKeyMutable` | Static, `upsert` tables only: a `key` column whose value channel is not horizon-invariant (§ Horizon windowing) | `"table '{table}' key column '{column}': its value can change between windows ({source}); an upsert-delivered table reconciles by key, so key on columns that identify the row for the whole run"` |
 | `WindowKeyDuplicate` | Against the data, `upsert` tables only: the declared `key` is not unique in the end-horizon relation | `"table '{table}': key {key} is not unique at the window horizon ({n} duplicated key values); an upsert-delivered table reconciles by key, so declare a key that identifies one row"` |
-| `IncrementalReservedName` | An author table named `_export_meta` / `_export_windows` | `"table '{table}': name '{table}' is reserved under incremental export"` |
 
 **Invocation rules (driver).** Regime match (`period` ⇒ anchor resolved;
 `sim_period_ns` ⇒ no anchor); fingerprint stored == computed before any window is
@@ -487,8 +529,8 @@ usage error on stderr, exit 1, before the emit opens).
 - **A fanning membership FK on a records grain has no stable row identity.** A
   records-grain fact whose `fk via: membership` `where` selects more than one binding
   fans one record into several rows; keyed on the record it fails `WindowKeyDuplicate`,
-  keyed on the FK it fails `WindowKeyMutable` (the binding is not invariant on a
-  records grain). Declare it as a membership-grain fact — the binding *is* the row
+  keyed on the FK it fails `KeyColumnsStable` at load (the binding is not invariant on
+  a records grain). Declare it as a membership-grain fact — the binding *is* the row
   there, keyed `(record_id, joined_sim_time, …)`.
 - **Base keeps its state-at snapshot.** Every base table is already a per-window
   snapshot at the window's `end_ns`; it is honest and reconciles by construction,

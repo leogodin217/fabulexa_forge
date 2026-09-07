@@ -249,23 +249,86 @@ canonical relation's order. Presentation-property and identity columns beyond
 
 ### Shaped window (tier 2)
 
-`window(T1, T2)` returns one relation per output table the shape declares, each
-tagged with its **delivery class** (`snapshot` / `upsert` / `append`) so a
-caller lands it correctly. Classes are static per declaration and knowable at
-open through `tables()` — never a refusal — so a caller provisions sinks before
-the first ask. For a dimensional shape the answer is the incremental driver's
-horizon compile, run through the same `build_query_specs` call
-([`incremental.md`](incremental.md) § Horizon windowing): per table,
-`state(T2 − 1)` whole for a `snapshot` declaration, else its delta against
-`state(T1 − 1)` reconciled by the declared key — so `window(T1, T2)` and
-`state(T2 − 1)` agree on every `snapshot` table, and successive `window()`
-deltas reconcile to `state()` at every horizon (the consistency algebra,
-extended to tier 2). The two windowed rules (`WindowKeyMutable`, static;
-`WindowKeyDuplicate`, against the data) raise on the first `window()` ask;
-`state()` is unaffected. For a source shape the answer is the mode's own horizon
-compile ([`source.md`](source.md) § Incremental composition): `state` and
-`junction` tables `snapshot`, the event log `append` (its delta between the
-two horizons).
+`window(T1, T2, tables=S)` returns one relation per **selected** output table
+the shape declares, each tagged with its **delivery class** (`snapshot` /
+`upsert` / `append`) so a caller lands it correctly. Classes are static per
+declaration and knowable at open through `tables()` — never a refusal — so a
+caller provisions sinks before the first ask. For a dimensional shape the
+answer is the incremental driver's horizon compile, run through the same
+`build_query_specs` call ([`incremental.md`](incremental.md) § Horizon
+windowing): per table, `state(T2 − 1)` whole for a `snapshot` declaration, else
+its delta against `state(T1 − 1)` reconciled by the declared key — so
+`window(T1, T2)` and `state(T2 − 1)` agree on every `snapshot` table, and
+successive `window()` deltas reconcile to `state()` at every horizon (the
+consistency algebra, extended to tier 2). For a source shape the answer is the
+mode's own horizon compile ([`source.md`](source.md) § Incremental
+composition): `state` and `junction` tables `snapshot`, the event log `append`
+(its delta between the two horizons).
+
+**Static completeness at open.** Every rule that is a pure function of the
+declaration and the sidecar — the dimensional key rule `KeyColumnsStable` and
+the reserved table-name rule ([`dimensional.md`](dimensional.md) § Validation
+Rules), the source mode's plan rules — runs at `open_shaped_playback` as part
+of the mode's always-on validation. A shape that opens has no static reason any
+table cannot be windowed: `tables()` carries the complete windowability surface
+(the delivery class), and no `window()` ask raises a rule the one-shot export
+of the same config would not. The only ask-time refusals are the data guards
+(`WindowKeyDuplicate` over an `upsert` table's end-horizon relation,
+`ElectedKeyDuplicate` on a guarded fk edge or a reached dim, a source plan's
+data-dependent rules) and the selection gates below.
+
+**Table selection.** `tables` is any non-empty collection of the names
+`tables()` reports (a singleton included), or `None` for the whole shape. Set
+semantics: a repeated name selects its table once; the answer is the selected
+tables in `tables()` order whatever the ask's order. Selection is a
+**projection over the whole-shape compile, never a config rewrite**: every
+declaration still resolves against the full config (fk targets, the election,
+sub-type domains), while per-table compile, per-table data guards, plan
+notices, and materialization run for the selected tables only
+([`incremental.md`](incremental.md) § Horizon windowing — the compile over a
+selection). The head is stateless — bounds, grouping, and position are the
+caller's; the seam defines no table groupings.
+
+Three gates run after the bounds gate and before any compile, each
+sidecar-only and each a `PlaybackError`: a bare `str` (a `str` is a
+`Collection[str]` of its characters, so it is refused before any name is
+read); an empty collection (an ask that names nothing is a caller error, not
+an empty answer); a name `tables()` does not report (the message names every
+unknown name, sorted, and the declared names in `tables()` order). Messages
+and order: [`shaped.py`](../../src/fabulexa_forge/playback/shaped.py)
+`_resolve_selection`; examples:
+[`tests/playback/test_shaped_selection.py`](../../tests/playback/test_shaped_selection.py).
+
+**An ask is atomic.** One call returns every selected table or raises: a data
+guard failing on any selected table — or on a dim a selected table's guarded
+edge reaches — refuses the whole ask, naming the offending table, and no
+sibling in that ask is delivered. Isolation is the caller's, by asking
+separately: two tables asked together share one fate; asked in two calls, a
+key duplicate on one refuses that one alone. An unselected table's own gates
+never affect a selected table. The one way an unselected table's name appears
+in a selected ask's refusal is the dim-side leg guard: a selected table's fk
+edge reaches a dim whose declared `key` projects the edge's resolved surface
+and whose population surface fails uniqueness; the ask refuses with the
+engine's label (`"<dim> (dim-side leg)"`). That is the selected edge's guard —
+a fact of the tape, the edge, and the reached dim's declaration — so the dim
+need not be selected for it to run, and selecting the dim alone does not run
+it (a dim no selected edge reaches is not guarded, exactly as in the full
+export).
+
+**Horizons per ask.** A selection is **delta-bearing** when some selected
+table's class is `upsert` or `append` (dimensional) or the event log is
+selected (source); otherwise it is **delta-free**. The whole shape is
+delta-bearing exactly when some declared table is. A delta-bearing `window()`
+opens the tape at both horizons (`T2 − 1` and `T1 − 1`); a delta-free
+`window()` opens the end horizon only — no compile, guard, or notice at the
+start horizon. The answer never depends on which case applies: a `snapshot`
+table's relation is its end-horizon compile in both, and a delta table forces
+both horizons. `state(T, tables=S)` opens one horizon in either case: the
+mode's full-export compile over the truncated tape, the selected specs
+materialized. The cost of an ask is therefore a per-ask floor (one horizon
+opened per delta-free ask, two per delta-bearing one; for a source shape one
+whole-config plan build per horizon opened) plus a per-selected-table
+marginal, never a sibling's.
 
 ### Shaped state (tier 2): the truncated tape
 
@@ -387,11 +450,13 @@ violation, never a data condition). `at_sim_time` beyond the slice bound yields
 final state / exhaustion — total, no range check. An empty population yields
 zero events and zero-row typed tables (declared atoms always answer).
 Selection-resolvability failure raises `PlaybackError` at open, before any data
-read; a source shape with `anchor=None` raises at `open_shaped_playback`; the
-windowed rules (`WindowKeyMutable` / `WindowKeyDuplicate` for a dimensional
-shape, the source mode's own for a source shape) raise on the first `window`
-ask; `window(T, T)` (the empty tape at both horizons for `T = 0`) answers
-empty deltas and whole snapshots. Upstream guard/reader
+read; a source shape with `anchor=None` raises at `open_shaped_playback`; a
+tier-2 table selection that is a bare `str`, empty, or names an undeclared
+table raises `PlaybackError` before any compile; the data guards
+(`WindowKeyDuplicate` / `ElectedKeyDuplicate` for a dimensional shape, the
+source plan's data-dependent rules for a source shape) raise on the ask whose
+selection runs them and refuse that ask whole; `window(T, T)` (the empty tape
+at both horizons for `T = 0`) answers empty deltas and whole snapshots. Upstream guard/reader
 errors (`ExportError`, `TableNotFoundError`, the version gate) pass through
 untouched.
 
@@ -437,7 +502,33 @@ untouched.
 9. **Bridging (a theorem, not a stipulation).** `state(T_slice)` equals the
    shape's full export for every shape that opens, so the seam is provably
    sufficient to rewrite the shipped verbs on.
-10. **Inherited.** Version-gated input, sidecar-driven schema discovery,
+10. **Projection invariance (tier 2).** For every shape, bounds, and selection
+    `S`, and every `t ∈ S`: the `ShapedTable` for `t` under `window(T1, T2,
+    tables=S)` equals the `ShapedTable` for `t` under `window(T1, T2)`,
+    row-for-row and byte-for-byte; likewise for `state`. A consumer that
+    records asks grouped one way may replay them grouped another way and see
+    the same data. Exact because every table's compiled SQL is self-contained
+    (it reads base tables through the horizon's truncated relations, never a
+    sibling's output) and the only cross-table coupling is declaration-level,
+    satisfied by the full config being present rather than by the dim being in
+    the ask.
+11. **Guard locality (tier 2).** The outcome of every ask-time gate is a
+    function of the gated table's declaration, its reached dims' declarations,
+    the bounds, and the tape — never of which siblings share the ask. Whether
+    a table is *delivered* is the ask's outcome — the conjunction of the gates
+    the selection runs — so grouping never changes a gate's verdict, only
+    which verdicts one call collects.
+12. **Static completeness at open (tier 2).** After `open_shaped_playback`,
+    `tables()` carries everything about windowability that is knowable without
+    data, and every table that opens windows. No `window()` ask raises a rule
+    the one-shot export of the same config would not; the only ask-time
+    refusals are the data guards and the selection gates.
+13. **Horizon economy (tier 2).** A `window()` ask opens the start horizon if
+    and only if it delivers a delta. Skipping it is verdict-preserving, not
+    merely answer-preserving: every start-horizon guard's verdict is implied
+    by the end horizon's ([`incremental.md`](incremental.md) § Horizon
+    windowing — horizon economy).
+14. **Inherited.** Version-gated input, sidecar-driven schema discovery,
     single-branch guard, no producer dependency.
 
 ## Validation Rules
@@ -453,8 +544,11 @@ identity surface) is enforced in
 [`head.py`](../../src/fabulexa_forge/playback/head.py) and
 [`shaped.py`](../../src/fabulexa_forge/playback/shaped.py). Tier-2 additionally
 runs the mode's own full config validation at open (passed through as
-`ExportError`), the source-shape anchor requirement at open, and the windowed
-business rules on the first `window` ask. Unknown record ids are deliberately
+`ExportError`), the source-shape anchor requirement at open, and the three
+table-selection gates on every `window` / `state` ask — a bare `str`, an empty
+collection, an undeclared name (§ Shaped window). Every static rule of the
+mode runs at open; the data guards keep their `ExportError` identities and run
+on the ask whose selection reaches them. Unknown record ids are deliberately
 not a rule — an id filter is a predicate, and a corrupted tape may have deleted
 any id.
 
@@ -488,6 +582,48 @@ any id.
   unread consumer nothing, so `PlaybackEvent.record_id` / `.presentation_id`
   stay always-populated; projection governs the `after` map, never the typed
   fields.
+- **Table selection over lazy tables.** A lazy `ShapedTable` would remove
+  materialization only; the compile's per-table data guards run at every
+  horizon opened regardless and dominate a whole-shape ask's cost. Selection
+  scopes every per-table term — compile, guards, notices, materialization —
+  and keeps the tier-2 answer a value rather than a handle bound to the head's
+  connection.
+- **Selection over per-table sub-heads.** A `head.table(name)` object would be
+  a stateless wrapper over the same compile that loses the ability to batch
+  tables sharing bounds into one ask. A set-valued, caller-defined selection
+  makes per-table bounds unconditional (any table can be asked alone) while
+  letting tables that share bounds amortize the per-ask floor. The seam
+  defines no groupings — a fixed grouping is a scheduling concept, which is
+  the consumer's.
+- **Projection, not config rewrite.** Narrowing the config per ask would
+  change semantics (an fk target must be declared) and re-run whole-config
+  validation per ask. Projecting over the whole-shape compile keeps
+  declaration resolution exactly as the full export sees it.
+- **Ask-scoped, atomic guards.** Scoping data guards to the selection is what
+  makes independently-asked tables independent — one table's key duplicate
+  refuses that table's ask and no other — and is exact because every guard is
+  per table or per reached dim. An ask is atomic rather than partial because
+  a partial answer would need a per-table error channel on a value-returning
+  call, and grouping is already the caller's choice: a caller that wants
+  isolation asks alone. The trade: a defect on an unasked table is discovered
+  when that table is asked, not before.
+- **A delta-free ask opens one horizon.** The start horizon exists to subtract
+  from; a `snapshot` table subtracts nothing. Opening it anyway costs a whole
+  compile (for a source shape, a whole-config plan build with its
+  data-dependent guards — half the floor) to produce a relation the compile
+  discards, guards whose verdicts the end horizon implies, and a duplicate
+  notice emission. The rule is decided at the selection, not per table, so an
+  ask mixing a `snapshot` table with a delta table opens both horizons and
+  answers the `snapshot` table from the end — projection invariance is
+  untouched either way.
+- **Source selection reaches the specs and the horizon, never the plan.** The
+  source mode's data-dependent guards are plan-time and population-scoped, and
+  the plan is whole-config by construction (junctions and the event log span
+  tables). Threading a selection into the plan would change what it validates;
+  the selection reaches the source engine only to choose which specs come back
+  and whether the start horizon is opened.
+- **An empty selection refuses.** An ask that names nothing is far more likely
+  a caller bug than intent; an empty answer would hide it.
 
 ## Boundaries
 
@@ -508,6 +644,17 @@ any id.
   incremental driver and tier-2 `window()` share one dimensional compile
   (`build_query_specs` with a window) while the driver keeps its cadence,
   cursor, and writer mechanics above the seam.
+- **No per-table position.** The seam holds no cursor, edge, last-flush, or
+  cache per table; the caller owns all of it. Grouping tables that share
+  bounds into one ask is the caller's optimization, never a seam requirement.
+- **No horizon memoization.** Materializing the truncated tape once per
+  horizon and sharing it across asks would add connection state at the head;
+  the seam opens the tape per ask.
+- **No selection on tier 1 or the stream head.** Tier 1 selects atoms; the
+  stream head's per-topic independence is a client-side partition of one
+  merged feed by design.
+- **No config surface for selection.** Table selection is an ask argument;
+  YAML never declares which tables a consumer may select.
 - **Trunk-only.** The seam composes `require_single_branch` and is
   single-branch; multi-branch playback is Stage 5.
 
@@ -517,7 +664,7 @@ any id.
 |---|---|
 | [`derivations.md`](derivations.md) | The folds the seam composes, plus the membership-state-at, end-of-tape, and truncated-tape residents it owns |
 | [`source.md`](source.md) · [`dimensional.md`](dimensional.md) | The modes tier 2 compiles; the `base_relations` compile parameter and the `last_mutation_sim_time` reserved-output-name posture |
-| [`incremental.md`](incremental.md) | The horizon compile and delivery classes tier-2 `window` shares with the driver |
+| [`incremental.md`](incremental.md) | The horizon compile and delivery classes tier-2 `window` shares with the driver, the compile over a selection, and the horizon economy |
 | [`streaming.md`](streaming.md) | The canonical order and `seq` a single-content stream conforms to |
 | [`stream-playback.md`](stream-playback.md) | The stream-shaped head and per-event render surface — bounds, seek (snapshot-then-stream), the `r` op, and the seam's one byte-producing contract |
 | [`key-election.md`](key-election.md) | The identity-publication layer split (§ Identity publication) — why the seam projects published identity but never gates it |

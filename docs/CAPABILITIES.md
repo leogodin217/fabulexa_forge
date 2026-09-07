@@ -330,14 +330,28 @@ Each mode reads the same emit and writes a different target shape.
   whole), `upsert` (the keyed delta against the previous cutoff — open
   intervals close, spells extend, length-of-stay fills in), or `append` (a
   delta that never revises an earlier row). Any config that exports one-shot
-  drips; the one rule is that an `upsert` table's key identify the same row for
-  the whole run. Source: the same horizon compile — `state` / `junction`
-  snapshots, the event log appended. Base: every table reconstructed at the window horizon — a full-table
+  drips: every table's `key` must identify the same row for the whole run, and
+  that is a load-time rule of the mode (`KeyColumnsStable`), not a windowed one,
+  so the one-shot export and the drip refuse the same configs. Source: the same
+  horizon compile — `state` / `junction` snapshots, the event log appended. A
+  window with no delta-delivered table compiles the cutoff horizon only. Base: every table reconstructed at the window horizon — a full-table
   snapshot per kind per window. Any mode: a growing DuckDB warehouse (cursor
   atomic with data) or one CSV drop directory per window. See
   [`architecture/incremental.md`](architecture/incremental.md). *Teaches:
   incremental / merge ETL, landing zones, late-arriving data, building SCD-2
   yourself.*
+- ✓ **Playback seam** *(Stage 3; a library surface, no CLI verb of its own)* —
+  drive an emit as a tape from Python. Tier 1: `open_playback` → `events` /
+  `snapshot` / `seek` over atom populations. Tier 2: `open_shaped_playback` →
+  `window(T1, T2, tables=…)` / `state(T, tables=…)` over a declared dimensional
+  or source shape, each answer tagged with its static delivery class
+  (`snapshot` / `upsert` / `append`), with per-ask table selection — any subset
+  of `tables()`, answered identically however the tables are grouped, and a
+  selection with no delta table opening one horizon. Pull-only, deterministic,
+  stateless; every static rule runs at open, so every table that opens can be
+  windowed. See [`architecture/playback.md`](architecture/playback.md).
+  *Teaches: CDC replay, point-in-time reconstruction, feeding a live consumer
+  from a finished run at its own cadence.*
 - ✓ **Timestamp rebasing** *(Stage 2)* — map `sim_time` (ns offset) to wallclock
   through the resolved effective anchor: an author-chosen origin (`rebase.base_date` /
   `--base-date`) and zone (`rebase.timezone` / `--timezone`), falling back to the
