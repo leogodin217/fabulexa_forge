@@ -199,6 +199,7 @@ def _compile_window_specs(
         notice_sink,
         base_relations=None,
         election=election,
+        tables=None,
     )
 
 
@@ -298,6 +299,7 @@ def _compile_state_specs(
         notice_sink,
         base_relations=base_relations,
         election=election,
+        tables=None,
     )
 
 

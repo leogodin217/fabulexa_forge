@@ -211,6 +211,7 @@ def test_scd2_full_export_honors_source_filter(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -234,6 +235,7 @@ def test_scd2_full_export_without_filter_keeps_all_subtypes(tmp_path: Path) -> N
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -260,6 +262,7 @@ def test_scd2_full_export_honors_list_filter(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = emit.query_arrow(specs[0].sql, ())
 
@@ -423,6 +426,7 @@ def test_scd2_unsupported_mode_rejected_via_build_query_specs(tmp_path: Path) ->
                 None,
                 notice_sink=discard_notice_sink,
                 base_relations=None,
+                tables=None,
             )
 
 

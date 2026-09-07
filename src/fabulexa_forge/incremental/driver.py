@@ -375,6 +375,7 @@ def export_window(
             notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
 
     if overlay is not None:

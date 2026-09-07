@@ -195,6 +195,7 @@ def _export_all(
             window,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         return [emit.query_arrow(spec.sql, ()).to_pydict() for spec in specs]
 

@@ -724,6 +724,7 @@ def test_multi_process_fact_table_from_list_filter_end_to_end(tmp_path: Path) ->
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         emergency_spec = next(s for s in specs if s.table_name == "fact_emergency_care")
         surgery_spec = next(s for s in specs if s.table_name == "fact_surgery")

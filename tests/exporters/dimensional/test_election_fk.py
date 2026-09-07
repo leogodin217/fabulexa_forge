@@ -310,6 +310,7 @@ def test_reference_fk_inherited_and_override_condition_table(tmp_path: Path) -> 
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_booking")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -361,6 +362,7 @@ def test_membership_on_records_grain_fk_in_set_and_out_of_set(tmp_path: Path) ->
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_booking")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -394,6 +396,7 @@ def test_membership_on_membership_grain_fk_in_set_and_out_of_set(
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_staff")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -427,6 +430,7 @@ def test_correlation_column_stays_verbatim_record_id_space(tmp_path: Path) -> No
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_booking")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -522,6 +526,7 @@ def test_list_filtered_subset_electing_one_surface_inherits_it(tmp_path: Path) -
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_booking")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -558,6 +563,7 @@ def test_list_filtered_subset_electing_differing_surfaces_raises_ambiguous(
                 notice_sink=discard_notice_sink,
                 base_relations=None,
                 election=election,
+                tables=None,
             )
     message = str(exc_info.value)
     assert "alpha=record_index" in message
@@ -601,6 +607,7 @@ def test_explicit_presentation_id_subsumption_no_keys_block(tmp_path: Path) -> N
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_booking")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -639,6 +646,7 @@ def test_explicit_presentation_id_undeclared_population_in_restricted_set(
                 None,
                 notice_sink=discard_notice_sink,
                 base_relations=None,
+                tables=None,
             )
 
 
@@ -668,6 +676,7 @@ def test_dim_key_agreement_violation_raises(tmp_path: Path) -> None:
                 notice_sink=discard_notice_sink,
                 base_relations=None,
                 election=election,
+                tables=None,
             )
 
 
@@ -699,6 +708,7 @@ def test_dim_key_agreement_explicit_target_key_escapes(tmp_path: Path) -> None:
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_booking")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -728,6 +738,7 @@ def test_combined_mixed_election_dim_legal_with_every_inbound_edge_explicit(
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
 
     config = DimensionalConfig(
@@ -753,6 +764,7 @@ def test_combined_mixed_election_dim_legal_with_every_inbound_edge_explicit(
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_booking")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -856,6 +868,7 @@ def test_edge_gate_union_unsafe_override_raises(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 base_relations=None,
+                tables=None,
             )
 
 
@@ -1089,6 +1102,7 @@ def test_pit_membership_fk_out_of_set_is_null(tmp_path: Path) -> None:
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=election,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_decision")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -1226,6 +1240,7 @@ def test_guard_restricted_to_own_population_spine_ignores_cross_population_dup(
             notice_sink=discard_notice_sink,
             base_relations=None,
             election=resolve_election(emit.sidecar, {"entity": "presentation_id"}),
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_booking")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()
@@ -1248,6 +1263,7 @@ def test_guard_catches_genuine_duplicate_within_population(tmp_path: Path) -> No
                 notice_sink=discard_notice_sink,
                 base_relations=None,
                 election=resolve_election(emit.sidecar, {"entity": "presentation_id"}),
+                tables=None,
             )
 
 

@@ -162,6 +162,7 @@ def test_bridging_theorem_dimensional(tmp_path: "Path") -> None:
             None,
             discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         full_by_name = {
             spec.table_name: emit.query_arrow(spec.sql, ()).to_pydict()
@@ -217,6 +218,7 @@ def test_interior_t_matches_materialized_truncated_emit_dimensional(
             None,
             discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         oracle_by_name = {
             spec.table_name: mat_emit.query_arrow(spec.sql, ()).to_pydict()

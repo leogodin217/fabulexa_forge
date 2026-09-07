@@ -94,6 +94,7 @@ def test_dimensional_none_byte_identical(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
 
         sidecar = emit.sidecar
@@ -253,6 +254,7 @@ def test_dimensional_fk_hop_shadowed_total(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             base_relations=base_relations,
+            tables=None,
         )
         fact_spec = next(s for s in specs if s.table_name == "fact_journey")
         rows = emit.query_arrow(fact_spec.sql, ()).to_pydict()

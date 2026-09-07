@@ -299,6 +299,7 @@ def test_fresh_file_creates_tables_and_meta(tmp_path: Path) -> None:
             window,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
@@ -323,6 +324,7 @@ def test_fresh_file_export_windows_row_written(tmp_path: Path) -> None:
             window,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint="fp123")
 
@@ -355,6 +357,7 @@ def test_second_window_facts_append(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
@@ -364,6 +367,7 @@ def test_second_window_facts_append(tmp_path: Path) -> None:
             w1,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -386,6 +390,7 @@ def test_second_window_export_windows_gains_row(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
@@ -395,6 +400,7 @@ def test_second_window_export_windows_gains_row(tmp_path: Path) -> None:
             w1,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -421,6 +427,7 @@ def test_atomicity_bad_sql_rolls_back(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, w0, fingerprint="fp")
 
@@ -461,6 +468,7 @@ def test_connect_failure_raises_export_runtime_error(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         with pytest.raises(ExportRuntimeError, match="failed to open warehouse DuckDB"):
             write_duckdb_window(emit, specs, bad_path, w0, fingerprint="fp")
@@ -487,6 +495,7 @@ def test_range_path_no_meta_no_windows(tmp_path: Path) -> None:
             window,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
@@ -509,6 +518,7 @@ def test_range_path_author_tables_present(tmp_path: Path) -> None:
             window,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs, out_path, window, fingerprint=None)
 
@@ -537,6 +547,7 @@ def test_empty_window_still_logs_window_row(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
@@ -546,6 +557,7 @@ def test_empty_window_still_logs_window_row(tmp_path: Path) -> None:
             w1,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -575,6 +587,7 @@ def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:
             w0,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         write_duckdb_window(emit, specs0, out_path, w0, fingerprint="fp")
         specs1 = build_query_specs(
@@ -584,6 +597,7 @@ def test_snapshot_dim_reports_full_snapshot_count(tmp_path: Path) -> None:
             w1,
             notice_sink=discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
         result1 = write_duckdb_window(emit, specs1, out_path, w1, fingerprint="fp")
 
@@ -616,6 +630,7 @@ def test_keyed_first_window_creates_constraints_second_window_preserves(
                 w0,
                 notice_sink=discard_notice_sink,
                 base_relations=None,
+                tables=None,
             ),
             "dim_entity",
             keys,
@@ -631,6 +646,7 @@ def test_keyed_first_window_creates_constraints_second_window_preserves(
                 w1,
                 notice_sink=discard_notice_sink,
                 base_relations=None,
+                tables=None,
             ),
             "dim_entity",
             keys,

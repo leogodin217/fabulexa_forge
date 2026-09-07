@@ -26,7 +26,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Collection, Mapping
     from pathlib import Path
 
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -244,6 +244,28 @@ def _table_author_descriptions(table_decl: "TableDecl") -> "Mapping[str, str]":
     }
 
 
+def _selected_table_decls(
+    config: DimensionalConfig, tables: "Collection[str] | None"
+) -> "list[TableDecl]":
+    """The declared tables `tables` selects, in declaration order.
+
+    Shared by `build_query_specs`' full-export loop and
+    `_build_windowed_query_specs`' delivery-class classification, so the two
+    can never disagree on which declarations a selection compiles.
+
+    Args:
+        config: The dimensional config.
+        tables: The caller's selection, or None for every declared table.
+
+    Returns:
+        `config.tables` filtered to the selection, declaration order
+        preserved; every declared table when `tables` is None.
+    """
+    if tables is None:
+        return list(config.tables)
+    return [table_decl for table_decl in config.tables if table_decl.name in tables]
+
+
 def build_query_specs(
     emit: "Emit",
     config: DimensionalConfig,
@@ -253,8 +275,9 @@ def build_query_specs(
     base_relations: "Mapping[str, str] | None",
     *,
     election: "Election | None" = None,
+    tables: "Collection[str] | None",
 ) -> list[QuerySpec]:
-    """Compile table declarations; optionally windowed.
+    """Compile table declarations; optionally windowed; optionally a selection.
 
     window=None is the full-export contract (no parameter default —
     full-export call sites pass None explicitly). With a window: the horizon
@@ -262,7 +285,7 @@ def build_query_specs(
     `window.start_ns - 1` (the empty tape below the first data instant),
     runs this same full-export compile over each — the tape's sidecar view
     for column enumeration, its `base_relations` for every base read — and
-    returns, per declared table in declaration order, one QuerySpec by the
+    returns, per compiled table in declaration order, one QuerySpec by the
     table's static delivery class (`windowing.window_delivery_class`): a
     'snapshot' table's end-horizon query with write_mode 'replace';
     otherwise the multiset difference `end EXCEPT ALL start`, ordered by
@@ -271,10 +294,18 @@ def build_query_specs(
     `ReservedTableName` are always-on rules run by `validate_table` inside
     every full-export compile — every horizon and the one-shot path alike —
     not windowed-only gates; before returning, the WindowKeyDuplicate guard
-    runs over every 'upsert' table's end-horizon relation. Each horizon compile
-    is the full-export compile, so a plan
-    notice reaches the sink once per horizon compiled. `base_relations` must
-    be None under a window — the tape supplies the mapping.
+    runs over every compiled 'upsert' table's end-horizon relation. Each
+    horizon compile is the full-export compile, so a plan notice reaches the
+    sink once per horizon compiled. `base_relations` must be None under a
+    window — the tape supplies the mapping.
+
+    `tables` narrows the compile to the named declarations: per-table
+    compile, WindowKeyDuplicate, the fk-edge guard, and the dim-side leg
+    guard (over the dims the selected tables' edges reach) run for selected
+    tables only; every declaration remains visible to resolution. None
+    compiles every declared table — the full-export and incremental-driver
+    contract. No parameter default: every caller states its selection (the
+    two whole-shape callers pass None).
 
     New behavior: SliceOnlyColumnRefused runs always-on over every
     config-referenced source-column resolution; LookupColumnSafety keys on
@@ -307,9 +338,12 @@ def build_query_specs(
             internal/test caller). Callers that hold `ExportConfig.keys`
             (`export_dimensional`, the incremental driver, tier-2 shaped
             playback) resolve and pass it.
+        tables: The declared names to compile, or None for every table.
+            Every name must be declared — an undeclared name is a
+            programming error, not an author-config refusal.
 
     Returns:
-        One QuerySpec per declared table, in declaration order. Each spec's
+        One QuerySpec per compiled table, in declaration order. Each spec's
         `provenance` is `build_grain_sql`'s fifth element, stamped
         verbatim; `kind_values` stays empty — dimensional has no
         kind-name-as-value output column. `author_descriptions` is stamped
@@ -343,18 +377,23 @@ def build_query_specs(
     resolved_election = (
         election if election is not None else resolve_election(sidecar, None)
     )
+    if tables is not None:
+        declared = {table_decl.name for table_decl in config.tables}
+        assert declared.issuperset(tables), (
+            f"tables selects undeclared name(s): {sorted(set(tables) - declared)}"
+        )
     if window is not None:
         if base_relations is not None:
             raise ValueError("base_relations must be None under a window")
         return _build_windowed_query_specs(
-            emit, config, anchor, window, notice_sink, resolved_election
+            emit, config, anchor, window, notice_sink, resolved_election, tables
         )
 
     specs: list[QuerySpec] = []
     dim_decls: "dict[str, TableDecl]" = {}
     dim_surfaces: "dict[str, set[Literal['record_index', 'presentation_id']]]" = {}
 
-    for table_decl in config.tables:
+    for table_decl in _selected_table_decls(config, tables):
         source_table_name = validate_table(
             table_decl,
             config,
@@ -406,19 +445,48 @@ def _build_windowed_query_specs(
     window: "Window",
     notice_sink: "NoticeSink",
     election: "Election",
+    tables: "Collection[str] | None",
 ) -> list[QuerySpec]:
-    """The horizon compile (§ `build_query_specs`, window set).
+    """The horizon compile (§ `build_query_specs`, window set), over a selection.
 
-    No static rule runs here: `check_key_columns_stable` and
+    Classifies the compiled tables only (`window_delivery_class` over the
+    declarations `tables` selects, declaration order). Opens the end horizon
+    (`window.end_ns - 1`) always, through `build_query_specs(..., None, ...,
+    tables=tables)` over the truncated tape; opens the start horizon
+    (`window.start_ns - 1`) only when some compiled table's class is 'upsert'
+    or 'append'. Pairs end (and start) specs with the compiled declarations
+    positionally. No static rule runs here: `check_key_columns_stable` and
     `check_reserved_table_name` are `validate_table`'s, run by every
     horizon's full-export compile.
+
+    Args:
+        emit: The open physical emit.
+        config: The validated dimensional config.
+        anchor: The resolved EffectiveAnchor, or None.
+        window: The half-open window to compile.
+        notice_sink: Receiver for plan notices, once per horizon opened.
+        election: The resolved election.
+        tables: The declared names to compile, or None for every table
+            (already validated by the caller — `build_query_specs` asserts).
+
+    Returns:
+        One QuerySpec per compiled table, declaration order; 'snapshot'
+        tables carry the end-horizon query with write_mode 'replace', every
+        other the `end EXCEPT ALL start` delta with write_mode 'append' /
+        'upsert' (+ `upsert_key`), guarded by WindowKeyDuplicate.
+
+    Raises:
+        ExportError: WindowKeyDuplicate on a compiled 'upsert' table; any
+            refusal the horizon compiles raise.
     """
     sidecar = emit.sidecar
     fork_path = require_single_branch(sidecar)
+    compiled_decls = _selected_table_decls(config, tables)
     classes = [
         window_delivery_class(table_decl, config, sidecar)
-        for table_decl in config.tables
+        for table_decl in compiled_decls
     ]
+    delta_bearing = any(delivery in ("upsert", "append") for delivery in classes)
 
     def compile_at(at_sim_time: int) -> list[QuerySpec]:
         tape = open_truncated_tape(sidecar, fork_path, at_sim_time)
@@ -430,18 +498,21 @@ def _build_windowed_query_specs(
             notice_sink,
             tape.base_relations,
             election=election,
+            tables=tables,
         )
 
     end_specs = compile_at(window.end_ns - 1)
-    start_specs = compile_at(window.start_ns - 1)
+    start_specs = compile_at(window.start_ns - 1) if delta_bearing else None
 
     specs: list[QuerySpec] = []
-    for table_decl, delivery, end_spec, start_spec in zip(
-        config.tables, classes, end_specs, start_specs, strict=True
+    for index, (table_decl, delivery, end_spec) in enumerate(
+        zip(compiled_decls, classes, end_specs, strict=True)
     ):
         if delivery == "snapshot":
             specs.append(replace(end_spec, write_mode="replace"))
             continue
+        assert start_specs is not None
+        start_spec = start_specs[index]
         if delivery == "upsert":
             check_window_key_unique(emit, table_decl, end_spec.sql)
         specs.append(
@@ -518,6 +589,7 @@ def export_dimensional(
         notice_sink,
         base_relations=None,
         election=election,
+        tables=None,
     )
     if overlay is not None:
         validate_overlay_tables(overlay, [spec.table_name for spec in specs])

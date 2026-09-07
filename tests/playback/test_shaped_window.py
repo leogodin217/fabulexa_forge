@@ -49,7 +49,13 @@ def _direct_dimensional_specs(
     assert config.dimensional is not None
     window = Window(index=None, start_ns=start_ns, end_ns=end_ns, label="")
     return build_query_specs(
-        emit, config.dimensional, None, window, discard_notice_sink, base_relations=None
+        emit,
+        config.dimensional,
+        None,
+        window,
+        discard_notice_sink,
+        base_relations=None,
+        tables=None,
     )
 
 
@@ -275,6 +281,7 @@ def test_window_values_equal_full_export_values(tmp_path: "Path") -> None:
             None,
             discard_notice_sink,
             base_relations=None,
+            tables=None,
         )
     full_spec = next(s for s in full_specs if s.table_name == "fact_shipment")
     with open_emit(emit_dir) as emit:
