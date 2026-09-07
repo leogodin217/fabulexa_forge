@@ -18,7 +18,11 @@ T) is how shaped `state` is realized.
 
 **Source:** [`playback/`](../../src/fabulexa_forge/playback/),
 [`tests/playback/`](../../tests/playback/). Public API:
-[`playback/__init__.py`](../../src/fabulexa_forge/playback/__init__.py).
+[`playback/__init__.py`](../../src/fabulexa_forge/playback/__init__.py) — the
+heads and their types, plus re-exports of what reaching a head needs
+(`open_emit` / `Emit`, `load_export_config` / `load_stream_config`,
+`resolve_effective_anchor` / `EffectiveAnchor`, `StreamEvent`), so a downstream
+imports `fabulexa_forge.playback` alone. The package ships a `py.typed` marker.
 
 ## Boundary
 

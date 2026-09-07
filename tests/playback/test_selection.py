@@ -619,18 +619,21 @@ def _imported_module_names(file_path: Path) -> set[str]:
 
 
 def test_playback_package_imports_no_exporters_or_config() -> None:
-    """Tier 1 (every module but `shaped.py` / `stream.py` / `stream_render.py`)
-    imports no `exporters.*` / `config` name. `shaped.py`, `stream.py`, and
-    `stream_render.py` (tier 2) are the seam's deliberate crossings — they wrap
-    the exporters' own compile / engine surfaces rather than reimplementing
-    their business rules (design doc § Shaped playback (tier 2);
-    stream-playback sprint spec § Seam-side placement)."""
+    """Tier 1 (every module but `shaped.py` / `stream.py` / `stream_render.py`
+    and the package `__init__`) imports no `exporters.*` / `config` name.
+    `shaped.py`, `stream.py`, and `stream_render.py` (tier 2) are the seam's
+    deliberate crossings — they wrap the exporters' own compile / engine
+    surfaces rather than reimplementing their business rules (design doc
+    § Shaped playback (tier 2); stream-playback sprint spec § Seam-side
+    placement). `__init__.py` is the package's public surface, not a tier:
+    it assembles both tiers and re-exports the downstream entry names
+    (`open_emit`, the config loaders, the anchor surface, `StreamEvent`)."""
     package_dir = (
         Path(__file__).resolve().parents[2] / "src" / "fabulexa_forge" / "playback"
     )
-    tier2_modules = {"shaped.py", "stream.py", "stream_render.py"}
+    not_tier1 = {"__init__.py", "shaped.py", "stream.py", "stream_render.py"}
     for py_file in package_dir.glob("*.py"):
-        if py_file.name in tier2_modules:
+        if py_file.name in not_tier1:
             continue
         for module_name in _imported_module_names(py_file):
             assert "exporters" not in module_name, f"{py_file}: imports {module_name}"
