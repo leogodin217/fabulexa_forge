@@ -2,7 +2,7 @@ sprint: supplementary-tables
 parent_branch: enable_complex_queries
 baseline_sha: 5b150f2fb50af8c88e27188bdf8e0509403dc0c4
 started: 2026-09-09
-current_phase: 2
+current_phase: 3
 capabilities:
   - config-envelope: [SupplementDecl, ExportConfig.supplements, parse-time validators, load_supplements]
   - dimensional-exporter: [compile_supplement_specs, source-is-output gate, export_dimensional supplements]
@@ -20,7 +20,7 @@ phases:
     name: "Declaration and loader"
     demo: "docs/sprints/supplementary-tables/demos/phase_1_declare_and_load.py"
   2:
-    status: pending
+    status: complete
     name: "Compile, full export, and companions"
     demo: "docs/sprints/supplementary-tables/demos/phase_2_full_export.py"
     steps:

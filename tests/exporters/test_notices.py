@@ -335,10 +335,19 @@ def test_export_dimensional_output_identical_recording_or_discarding(
 
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
-        export_dimensional(emit, config, out_recording, "csv", None, sink, None)
+        export_dimensional(
+            emit, config, out_recording, "csv", None, sink, None, supplements=()
+        )
     with open_emit(emit_dir) as emit:
         export_dimensional(
-            emit, config, out_discard, "csv", None, discard_notice_sink, None
+            emit,
+            config,
+            out_discard,
+            "csv",
+            None,
+            discard_notice_sink,
+            None,
+            supplements=(),
         )
 
     assert len(sink.notices) == 1

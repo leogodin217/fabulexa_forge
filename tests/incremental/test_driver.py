@@ -1171,6 +1171,7 @@ def test_duckdb_drip_equals_full_export(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     # Drip to drained
@@ -1234,6 +1235,7 @@ def test_csv_drip_equals_full_export(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     # Drip to drained

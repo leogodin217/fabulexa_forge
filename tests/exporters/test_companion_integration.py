@@ -161,6 +161,7 @@ def test_dimensional_csv_writes_dataset_and_both_artifacts(tmp_path: Path) -> No
             None,
             discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert (out_dir / "dim_entity.csv").exists()
@@ -238,6 +239,7 @@ def test_dimensional_duckdb_writes_db_stem_siblings(tmp_path: Path) -> None:
             None,
             discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert db_path.exists()
@@ -267,6 +269,7 @@ def test_dimensional_manifest_entries_carry_null_keys(tmp_path: Path) -> None:
             None,
             discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         export_dimensional(
             emit,
@@ -276,6 +279,7 @@ def test_dimensional_manifest_entries_carry_null_keys(tmp_path: Path) -> None:
             None,
             discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     for manifest_path in (
@@ -354,6 +358,7 @@ def test_overlay_note_renders_into_its_table_section(tmp_path: Path) -> None:
             None,
             discard_notice_sink,
             overlay=overlay,
+            supplements=(),
         )
 
     readme = (out_dir / "dimensional-readme.md").read_text(encoding="utf-8")
@@ -383,6 +388,7 @@ def test_overlay_unknown_table_raises_and_leaves_target_empty(tmp_path: Path) ->
             None,
             discard_notice_sink,
             overlay=overlay,
+            supplements=(),
         )
 
     assert not any(out_dir.iterdir())
@@ -418,6 +424,7 @@ def test_rerun_is_byte_identical_for_both_artifacts(tmp_path: Path, fmt: str) ->
                 None,
                 discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
         if fmt == "csv":
             readme_path = out / "dimensional-readme.md"

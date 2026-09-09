@@ -265,6 +265,7 @@ def test_export_dimensional_csv_writes_one_file_per_table(tmp_path: Path) -> Non
             None,
             discard_notice_sink,
             None,
+            supplements=(),
         )
 
     table_names = {table.name for table in report.tables}
@@ -294,6 +295,7 @@ def test_export_dimensional_csv_empty_table_is_header_only(tmp_path: Path) -> No
             None,
             discard_notice_sink,
             None,
+            supplements=(),
         )
 
     row_counts = {table.name: table.row_count for table in report.tables}
@@ -320,6 +322,7 @@ def test_export_dimensional_duckdb_writes_all_tables(tmp_path: Path) -> None:
             None,
             discard_notice_sink,
             None,
+            supplements=(),
         )
 
     table_names = {table.name for table in report.tables}
@@ -355,6 +358,7 @@ def test_export_dimensional_duckdb_empty_table_typed_not_dropped(
             None,
             discard_notice_sink,
             None,
+            supplements=(),
         )
 
     row_counts = {table.name: table.row_count for table in report.tables}
@@ -384,6 +388,7 @@ def test_export_dimensional_idempotent_csv(tmp_path: Path) -> None:
             None,
             discard_notice_sink,
             None,
+            supplements=(),
         )
     with open_emit(emit_dir) as emit:
         report2 = export_dimensional(
@@ -394,6 +399,7 @@ def test_export_dimensional_idempotent_csv(tmp_path: Path) -> None:
             None,
             discard_notice_sink,
             None,
+            supplements=(),
         )
 
     counts1 = {table.name: table.row_count for table in report1.tables}
@@ -422,6 +428,7 @@ def test_export_dimensional_idempotent_duckdb_row_counts(tmp_path: Path) -> None
             None,
             discard_notice_sink,
             None,
+            supplements=(),
         )
     with open_emit(emit_dir) as emit:
         report2 = export_dimensional(
@@ -432,6 +439,7 @@ def test_export_dimensional_idempotent_duckdb_row_counts(tmp_path: Path) -> None
             None,
             discard_notice_sink,
             None,
+            supplements=(),
         )
 
     counts1 = {table.name: table.row_count for table in report1.tables}
@@ -457,6 +465,7 @@ def test_export_dimensional_writer_failure_raises_export_runtime_error(
                 None,
                 discard_notice_sink,
                 None,
+                supplements=(),
             )
 
 
@@ -582,6 +591,7 @@ def test_records_grain_instant_columns_validate_and_export(tmp_path: Path) -> No
             anchor,
             discard_notice_sink,
             None,
+            supplements=(),
         )
 
     conn = duckdb.connect(str(out_path), read_only=True)

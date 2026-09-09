@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from fabulexa_forge.exporters.companion.artifacts import (
     WindowedArtifactState,
+    companion_artifact_paths,
     is_companion_artifact_name,
     write_companion_artifacts,
 )
@@ -21,6 +22,7 @@ __all__ = [
     "ReadmeOverlay",
     "TableReport",
     "WindowedArtifactState",
+    "companion_artifact_paths",
     "is_companion_artifact_name",
     "load_readme_overlay",
     "validate_overlay_tables",

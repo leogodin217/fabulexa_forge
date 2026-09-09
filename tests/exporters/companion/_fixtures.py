@@ -302,6 +302,7 @@ def documented_actor_table_report(
         author_descriptions=author_descriptions or {},
         author_table_description=author_table_description,
         event_log=False,
+        supplement=None,
     )
 
 
@@ -355,6 +356,7 @@ def event_log_table_report(
         author_descriptions={},
         author_table_description=None,
         event_log=True,
+        supplement=None,
     )
 
 
@@ -395,6 +397,7 @@ def history_interval_table_report(
         author_descriptions=author_descriptions or {},
         author_table_description=None,
         event_log=False,
+        supplement=None,
     )
 
 
@@ -431,6 +434,7 @@ def value_mapped_table_report(
         author_descriptions=author_descriptions or {},
         author_table_description=None,
         event_log=False,
+        supplement=None,
     )
 
 
@@ -478,4 +482,5 @@ def structural_identity_table_report(
         author_descriptions=author_descriptions or {},
         author_table_description=None,
         event_log=False,
+        supplement=None,
     )

@@ -74,6 +74,7 @@ def test_recipe_run_and_assert(
             anchor,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert_recipe_output(expectation, out_path)

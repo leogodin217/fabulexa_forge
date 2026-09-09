@@ -49,7 +49,7 @@ from fabulexa_forge.reader import open_emit, pin_session_timezone, validate
 from fabulexa_forge.reader.errors import ReaderError
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
     from typing import BinaryIO
 
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
     from fabulexa_forge.exporters.notices import Notice, NoticeSink
     from fabulexa_forge.exporters.query_spec import ExportReport
+    from fabulexa_forge.exporters.supplements import ResolvedSupplement
     from fabulexa_forge.reader.conformance import CheckResult
     from fabulexa_forge.reader.emit import Emit
 
@@ -183,6 +184,30 @@ def _resolve_readme_overlay(
     return load_readme_overlay(overlay_path)
 
 
+def _resolve_supplements(
+    config: "ExportConfig", config_path: Path
+) -> "tuple[ResolvedSupplement, ...]":
+    """Load `config.supplements`, resolved against the config file's
+    directory — the sibling of `_resolve_readme_overlay`, run in the same
+    place (after the config loads, before the emit opens).
+
+    Args:
+        config: The validated export config.
+        config_path: The export-config YAML path, as given on the command line.
+
+    Returns:
+        `load_supplements(config, config_path.parent)` — empty when the
+        config declares none.
+
+    Raises:
+        SupplementFileMissing / SupplementFileInvalid /
+            SupplementHeaderMismatch: per load_supplements.
+    """
+    from fabulexa_forge.exporters.supplements import load_supplements
+
+    return load_supplements(config, config_path.parent)
+
+
 def _dispatch_export(
     emit: "Emit",
     config: "ExportConfig",
@@ -194,6 +219,7 @@ def _dispatch_export(
     range_to: str | None,
     notice_sink: "NoticeSink",
     overlay: "ReadmeOverlay | None",
+    supplements: "Sequence[ResolvedSupplement]",
 ) -> int:
     """Run the full, next-window, or explicit-range export for any mode.
 
@@ -202,7 +228,8 @@ def _dispatch_export(
     engine compile), threading `overlay` and printing per-table row counts
     from the returned outcome. The full-export leaf dispatches here on
     `config.mode`, threading `overlay` to the matching engine and printing
-    counts from its returned report.
+    counts from its returned report; the dimensional leaf also threads
+    `supplements` (a source/base config cannot declare any).
 
     Args:
         emit: The open emit.
@@ -215,6 +242,8 @@ def _dispatch_export(
         range_to: Exclusive end for an explicit range (--to), or None.
         notice_sink: Receiver for plan notices.
         overlay: The parsed README overlay, or None.
+        supplements: The loader-resolved supplements, empty when the config
+            declares none.
 
     Returns:
         0 on a written window/range/full export (per-table row counts
@@ -261,7 +290,7 @@ def _dispatch_export(
         from fabulexa_forge.exporters.dimensional.engine import export_dimensional
 
         report = export_dimensional(
-            emit, config, out, fmt, anchor, notice_sink, overlay
+            emit, config, out, fmt, anchor, notice_sink, overlay, supplements
         )
     _print_full_counts(report)
     return 0
@@ -333,6 +362,7 @@ def cmd_export(
     try:
         config = load_export_config(config_path)
         overlay = _resolve_readme_overlay(config, config_path)
+        supplements = _resolve_supplements(config, config_path)
 
         with open_emit(emit_dir) as emit:
             sidecar_runtime = emit.sidecar.runtime()
@@ -354,6 +384,7 @@ def cmd_export(
                 range_to,
                 render_notice_stderr,
                 overlay,
+                supplements,
             )
 
     except (ReaderError, ExporterError) as exc:

@@ -1,10 +1,14 @@
 """Supplementary tables: an author-supplied table carried verbatim into a
 dimensional export.
 
-Phase 1 delivers the loader step the config model does not take: resolving
-each declared `SupplementDecl`'s data — a file or inline rows — into text
-rows the compile (a later phase) turns into a relation. The file is read
-exactly once, here; no later step touches it again.
+`load_supplements` is the filesystem step the config model does not take:
+resolving each declared `SupplementDecl`'s data — a file or inline rows —
+into text rows. The file is read exactly once, there; no later step touches
+it again. `compile_supplement_specs` turns those text rows into a compiled
+`QuerySpec` per supplement — a `VALUES`-and-cast relation over the session,
+gated by the reserved-name rule, the TIMESTAMPTZ anchor rule, and a
+before-any-write cell probe. `check_supplement_sources_not_outputs` refuses a
+file supplement whose resolved source this invocation would overwrite.
 """
 
 from __future__ import annotations
@@ -14,16 +18,27 @@ import hashlib
 import io
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
+from fabulexa_forge.config.models import canonical_supplement_type
 from fabulexa_forge.errors import (
+    ExportError,
     SupplementFileInvalid,
     SupplementFileMissing,
     SupplementHeaderMismatch,
+    SupplementSourceIsOutput,
+    SupplementValueInvalid,
+    TemporalRenderRequiresAnchor,
 )
+from fabulexa_forge.exporters.query_spec import QuerySpec
+from fabulexa_forge.exporters.reserved_names import is_reserved_table_name
 
 if TYPE_CHECKING:
+    from collections.abc import Collection, Sequence
+
+    from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig, SupplementDecl
+    from fabulexa_forge.reader.emit import Emit
 
 
 @dataclass(frozen=True)
@@ -303,3 +318,296 @@ def load_supplements(
         else _load_inline_supplement(decl)
         for decl in config.supplements
     )
+
+
+def _sql_string_literal(text: str) -> str:
+    """A DuckDB single-quoted string literal for one text cell.
+
+    Args:
+        text: The cell's text.
+
+    Returns:
+        The literal, with embedded single quotes doubled.
+    """
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _supplement_columns(decl: "SupplementDecl") -> list[tuple[str, str]]:
+    """One supplement's (output name, canonical type) pairs, declared order.
+
+    Args:
+        decl: The declaration; every type text is known to canonicalize
+            (parse-time `supplement_types_known`).
+
+    Returns:
+        (column name, canonical type) pairs, declared order.
+    """
+    return [
+        (name, canonical_supplement_type(type_text))
+        for name, type_text in decl.columns.items()
+    ]
+
+
+def _supplement_raw_relation_sql(
+    rows: tuple[tuple[str | None, ...], ...], column_count: int
+) -> str:
+    """The untyped `VALUES` relation over `rows`, a leading position column.
+
+    Args:
+        rows: The resolved text rows; non-empty (the caller handles the
+            zero-row case separately).
+        column_count: The declared column count.
+
+    Returns:
+        `(VALUES (1, ...), (2, ...), ...) AS "_raw"("_pos", "_c0", ...)`.
+    """
+    col_names = ", ".join(f'"_c{i}"' for i in range(column_count))
+    values_rows = ", ".join(
+        "({}, {})".format(
+            position,
+            ", ".join(
+                "NULL" if cell is None else _sql_string_literal(cell) for cell in row
+            ),
+        )
+        for position, row in enumerate(rows, start=1)
+    )
+    return f'(VALUES {values_rows}) AS "_raw"("_pos", {col_names})'
+
+
+def _supplement_relation_sql(
+    columns: list[tuple[str, str]], rows: tuple[tuple[str | None, ...], ...]
+) -> str:
+    """The compiled `SELECT` for one supplement: cast columns, given row order.
+
+    Args:
+        columns: (output name, canonical type) pairs, declared order.
+        rows: The resolved text rows.
+
+    Returns:
+        The `VALUES`-and-cast `SELECT`, ordered by position (position
+        projected away); for zero rows the typed empty-relation form
+        (`SELECT CAST(NULL AS <type>) AS <col>, … WHERE false`).
+    """
+    if not rows:
+        projections = ", ".join(
+            f'CAST(NULL AS {ctype}) AS "{name}"' for name, ctype in columns
+        )
+        return f"SELECT {projections} WHERE false"
+    raw = _supplement_raw_relation_sql(rows, len(columns))
+    projections = ", ".join(
+        f'CAST("_c{i}" AS {ctype}) AS "{name}"'
+        for i, (name, ctype) in enumerate(columns)
+    )
+    return f'SELECT {projections} FROM {raw} ORDER BY "_pos"'
+
+
+def _supplement_probe_sql(
+    columns: list[tuple[str, str]], rows: tuple[tuple[str | None, ...], ...]
+) -> str:
+    """One query returning, per column, the first row position (or NULL)
+    whose non-NULL cell does not `TRY_CAST` to the column's type.
+
+    Args:
+        columns: (output name, canonical type) pairs, declared order.
+        rows: The resolved text rows; non-empty (the caller skips a
+            zero-row supplement entirely).
+
+    Returns:
+        A single-row `SELECT`, one nullable position column per declared
+        column, in declared order.
+    """
+    raw = _supplement_raw_relation_sql(rows, len(columns))
+    probes = ", ".join(
+        f'MIN(CASE WHEN "_c{i}" IS NOT NULL AND TRY_CAST("_c{i}" AS {ctype})'
+        f' IS NULL THEN "_pos" END) AS "_bad{i}"'
+        for i, (_, ctype) in enumerate(columns)
+    )
+    return f"SELECT {probes} FROM {raw}"
+
+
+def _check_supplement_reserved_names(
+    supplements: "Sequence[ResolvedSupplement]",
+) -> None:
+    """Refuse a supplement named for a reserved incremental bookkeeping table.
+
+    Args:
+        supplements: The resolved supplements.
+
+    Raises:
+        ExportError: A supplement's `name` is `_export_meta` / `_export_windows`.
+    """
+    for supplement in supplements:
+        name = supplement.decl.name
+        if is_reserved_table_name(name):
+            raise ExportError(
+                f"supplement '{name}' collides with a reserved bookkeeping table name"
+            )
+
+
+def _check_supplement_anchor_requirement(
+    supplements: "Sequence[ResolvedSupplement]", anchor: "EffectiveAnchor | None"
+) -> None:
+    """Refuse a TIMESTAMPTZ supplement column with no resolved anchor.
+
+    Args:
+        supplements: The resolved supplements.
+        anchor: The resolved effective anchor, or None.
+
+    Raises:
+        TemporalRenderRequiresAnchor: A TIMESTAMPTZ column with `anchor` None.
+    """
+    if anchor is not None:
+        return
+    for supplement in supplements:
+        for col_name, type_text in supplement.decl.columns.items():
+            if canonical_supplement_type(type_text) != "TIMESTAMPTZ":
+                continue
+            raise TemporalRenderRequiresAnchor(
+                f"supplement '{supplement.decl.name}': column '{col_name}' is"
+                " TIMESTAMPTZ and requires a resolved anchor; supply"
+                " rebase.base_date/timezone or rely on the sidecar runtime"
+                " anchor"
+            )
+
+
+def _probe_supplement_cells(emit: "Emit", supplement: "ResolvedSupplement") -> None:
+    """Probe one supplement's cells for the first cast failure, before any write.
+
+    Args:
+        emit: The open emit whose session evaluates the probe.
+        supplement: The resolved supplement.
+
+    Raises:
+        SupplementValueInvalid: The first non-NULL cell (column-then-row
+            declared order) that does not `TRY_CAST` to its column's type;
+            names the table, column, 1-based data row, and cell text.
+    """
+    if not supplement.rows:
+        return
+    columns = _supplement_columns(supplement.decl)
+    sql = _supplement_probe_sql(columns, supplement.rows)
+    (result_row,) = emit.query(sql, ())
+    for index, (col_name, ctype) in enumerate(columns):
+        position = cast("int | None", result_row[index])
+        if position is None:
+            continue
+        cell_text = supplement.rows[position - 1][index]
+        raise SupplementValueInvalid(
+            f"supplement '{supplement.decl.name}': column '{col_name}', data"
+            f" row {position}: value {cell_text!r} is not a {ctype}"
+        )
+
+
+def compile_supplement_specs(
+    emit: "Emit",
+    supplements: "Sequence[ResolvedSupplement]",
+    anchor: "EffectiveAnchor | None",
+    write_mode: Literal["create", "replace"],
+) -> list[QuerySpec]:
+    """Compile every supplement into a QuerySpec over the session.
+
+    Each spec's SQL is the VALUES-and-cast relation over the resolved text
+    rows: a leading row-position column, every cell a VARCHAR literal or
+    NULL, one CAST per declared column to its canonical type, ordered by
+    position with the position projected away; the typed
+    `SELECT CAST(NULL AS <type>) AS <col>, … WHERE false` form for zero
+    rows. Carries no keys, empty `provenance` / `kind_values`, the author's
+    `descriptions` as `author_descriptions`, the author's `description` as
+    `author_table_description`, `event_log=False`, and a `SupplementSource`.
+    Runs, in order: the reserved-name gate over every supplement name
+    (`is_reserved_table_name`, the supplement message); the anchor rule (a
+    TIMESTAMPTZ column with `anchor` None); the cell probe (per column in
+    declared order, the first row whose non-NULL cell `TRY_CAST`s to NULL).
+    Every gate is a pure function of the declaration, the resolved rows, and
+    the anchor — no emit table is read — which is what lets the shaped head
+    call this at open.
+
+    Args:
+        emit: The open emit whose session materializes the relation.
+        supplements: The resolved supplements, in declaration order.
+        anchor: The resolved effective anchor, or None — consulted by the
+            TIMESTAMPTZ rule only.
+        write_mode: 'create' for a full export, 'replace' for a windowed
+            compile — the caller's delivery regime, never inferred.
+
+    Returns:
+        One QuerySpec per supplement, in declaration order; empty for an
+        empty input.
+
+    Raises:
+        ExportError: A supplement name is a bookkeeping name.
+        TemporalRenderRequiresAnchor: A TIMESTAMPTZ column with anchor None;
+            names the supplement and the column.
+        SupplementValueInvalid: A cell does not cast to its declared type;
+            names the table, column, 1-based data row, and cell text.
+    """
+    if not supplements:
+        return []
+    _check_supplement_reserved_names(supplements)
+    _check_supplement_anchor_requirement(supplements, anchor)
+    for supplement in supplements:
+        _probe_supplement_cells(emit, supplement)
+
+    specs: list[QuerySpec] = []
+    for supplement in supplements:
+        decl = supplement.decl
+        columns = _supplement_columns(decl)
+        specs.append(
+            QuerySpec(
+                table_name=decl.name,
+                sql=_supplement_relation_sql(columns, supplement.rows),
+                write_mode=write_mode,
+                author_descriptions=decl.descriptions or {},
+                author_table_description=decl.description,
+                supplement=SupplementSource(file=decl.file, sha256=supplement.sha256),
+            )
+        )
+    return specs
+
+
+def check_supplement_sources_not_outputs(
+    supplements: "Sequence[ResolvedSupplement]",
+    output_paths: "Collection[Path]",
+    removed_dirs: "Collection[Path]",
+) -> None:
+    """Refuse a supplement whose resolved source file this invocation would
+    overwrite or delete.
+
+    Both tests run over the resolved source path (`Path.resolve()` on both
+    sides): equality with any output path; containment under any removed
+    directory at any depth.
+
+    Args:
+        supplements: The resolved supplements (inline ones have no path
+            and are skipped).
+        output_paths: Every file the invocation writes, resolved — the
+            union of the naming functions for the invocation's fmt and
+            regime (plus `out` itself under fmt='duckdb'), assembled by the
+            caller from those functions, never enumerated by hand.
+        removed_dirs: Every directory the invocation removes wholesale,
+            resolved — `csv_removed_dirs` under a CSV `--next` window or
+            range; empty for a full export and every DuckDB invocation.
+
+    Raises:
+        SupplementSourceIsOutput: A file supplement's `path` equals an
+            output path, or lies under a removed directory; names the
+            supplement and the path.
+    """
+    resolved_outputs = {path.resolve() for path in output_paths}
+    resolved_removed_dirs = [path.resolve() for path in removed_dirs]
+    for supplement in supplements:
+        if supplement.path is None:
+            continue
+        source = supplement.path.resolve()
+        is_output = source in resolved_outputs
+        is_removed = any(
+            source == removed_dir or removed_dir in source.parents
+            for removed_dir in resolved_removed_dirs
+        )
+        if not is_output and not is_removed:
+            continue
+        raise SupplementSourceIsOutput(
+            f"supplement '{supplement.decl.name}': source file {source} is an"
+            " output of this export; move the source or change the output"
+            " target"
+        )

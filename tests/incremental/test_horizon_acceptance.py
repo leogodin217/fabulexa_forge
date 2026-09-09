@@ -16,6 +16,7 @@ for horizon windowing and stay as the regression gate afterwards.
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,7 +48,7 @@ _RECIPES: list[RecipeFolder] = (
     + discover_recipes(_RECIPES_ROOT / "base")
 )
 _EXPORTERS = {
-    "dimensional": export_dimensional,
+    "dimensional": partial(export_dimensional, supplements=()),
     "source": export_source,
     "base": export_base,
 }

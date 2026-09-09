@@ -26,7 +26,7 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping
+    from collections.abc import Collection, Mapping, Sequence
     from pathlib import Path
 
     from fabulexa_forge.anchor import EffectiveAnchor
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.query_spec import ExportReport
+    from fabulexa_forge.exporters.supplements import ResolvedSupplement
     from fabulexa_forge.incremental.windows import Window
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.reader.sidecar import Sidecar
@@ -44,6 +45,7 @@ from fabulexa_forge.config.models import DimensionalConfig
 from fabulexa_forge.derivations import open_truncated_tape, require_single_branch
 from fabulexa_forge.exporters.base_relations import apply_base_relations
 from fabulexa_forge.exporters.companion import (
+    companion_artifact_paths,
     validate_overlay_tables,
     write_companion_artifacts,
 )
@@ -68,6 +70,11 @@ from fabulexa_forge.exporters.election import (
 )
 from fabulexa_forge.exporters.horizon import compose_window_delta_sql
 from fabulexa_forge.exporters.query_spec import QuerySpec, write_query_specs
+from fabulexa_forge.exporters.supplements import (
+    check_supplement_sources_not_outputs,
+    compile_supplement_specs,
+)
+from fabulexa_forge.writers.csv import csv_output_paths
 
 __all__ = ["QuerySpec", "build_query_specs", "export_dimensional"]
 
@@ -530,6 +537,30 @@ def _build_windowed_query_specs(
     return specs
 
 
+def _dimensional_output_paths(
+    out: "Path",
+    table_names: list[str],
+    config: "ExportConfig",
+    fmt: Literal["csv", "duckdb"],
+) -> "set[Path]":
+    """Every file a full dimensional export writes, for the source-is-output gate.
+
+    Args:
+        out: The output target — directory (csv) or `.duckdb` file path.
+        table_names: Every output table's name, plan + supplement order.
+        config: The validated export config.
+        fmt: The resolved output format.
+
+    Returns:
+        Under CSV: one `<out>/<table>.csv` per name plus the companion pair.
+        Under DuckDB: `out` itself plus the companion pair.
+    """
+    readme_path, manifest_path = companion_artifact_paths(out, config.mode, fmt)
+    if fmt == "csv":
+        return {*csv_output_paths(out, table_names, None), readme_path, manifest_path}
+    return {out, readme_path, manifest_path}
+
+
 def export_dimensional(
     emit: "Emit",
     config: "ExportConfig",
@@ -538,17 +569,23 @@ def export_dimensional(
     anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
     overlay: "ReadmeOverlay | None",
+    supplements: "Sequence[ResolvedSupplement]",
 ) -> "ExportReport":
     """Run the dimensional exporter and write the star schema.
 
     Resolves the election from `config.keys` and builds the QuerySpecs
-    (threading notice_sink and the resolved election to the compile).
-    Immediately after compiling — before any write — validates `overlay`'s
-    `table:` slots against the compiled plan's output tables when `overlay`
-    is present. Dispatches by `fmt` to the matching writer, handing it the
-    open `emit` (the writer materializes each spec through
-    `Emit.query_arrow`), then writes the companion README + manifest and
-    returns the report.
+    (threading notice_sink and the resolved election to the compile). After
+    the plan compile and before any write, in order: compiles the
+    supplement specs (`compile_supplement_specs(..., write_mode='create')`);
+    runs `check_supplement_sources_not_outputs` over every file this
+    invocation writes (an empty removed-directory set — a full export
+    removes nothing); validates `overlay`'s `table:` slots against the
+    union of plan and supplement output names when `overlay` is present.
+    Supplement specs are appended after the declared tables in declaration
+    order and flow through the same write dispatch and companion write.
+    Dispatches by `fmt` to the matching writer, handing it the open `emit`
+    (the writer materializes each spec through `Emit.query_arrow`), then
+    writes the companion README + manifest and returns the report.
 
     Args:
         emit: The open emit.
@@ -563,16 +600,25 @@ def export_dimensional(
         anchor: The resolved EffectiveAnchor, or None for raw sim_time integers.
         notice_sink: Receiver for plan notices.
         overlay: The parsed README overlay, or None.
+        supplements: The loader-resolved supplements, empty when the config
+            declares none.
 
     Returns:
-        The invocation's `ExportReport`: one `TableReport` per declared table,
-        in declaration order (`0` row count for a table whose grain resolved
-        to no rows; such a table is still emitted — empty typed DuckDB table
-        or header-only CSV — never dropped). Both writers obey this rule
-        identically.
+        The invocation's `ExportReport`: one `TableReport` per declared table
+        followed by one per supplement, in declaration order (`0` row count
+        for a table whose grain resolved to no rows; such a table is still
+        emitted — empty typed DuckDB table or header-only CSV — never
+        dropped). Both writers obey this rule identically.
 
     Raises:
-        ExportError: Branch guard or a business rule fails.
+        ExportError: Branch guard or a business rule fails; a supplement
+            name collides with a reserved bookkeeping table name.
+        TemporalRenderRequiresAnchor: A supplement TIMESTAMPTZ column with
+            no resolved anchor.
+        SupplementValueInvalid: A supplement cell does not cast to its
+            declared type.
+        SupplementSourceIsOutput: A file supplement's resolved source is a
+            file this invocation writes.
         ReadmeOverlayUnknownTable: `overlay` names a table the compiled plan
             does not produce.
         ExportRuntimeError: A writer fails, or the companion artifacts fail
@@ -591,8 +637,17 @@ def export_dimensional(
         election=election,
         tables=None,
     )
+    supplement_specs = compile_supplement_specs(
+        emit, supplements, anchor, write_mode="create"
+    )
+    all_names = [spec.table_name for spec in specs] + [
+        spec.table_name for spec in supplement_specs
+    ]
+    check_supplement_sources_not_outputs(
+        supplements, _dimensional_output_paths(out, all_names, config, fmt), ()
+    )
     if overlay is not None:
-        validate_overlay_tables(overlay, [spec.table_name for spec in specs])
-    report = write_query_specs(emit, specs, out, fmt)
+        validate_overlay_tables(overlay, all_names)
+    report = write_query_specs(emit, [*specs, *supplement_specs], out, fmt)
     write_companion_artifacts(emit, config, fmt, anchor, report, overlay, out, None)
     return report

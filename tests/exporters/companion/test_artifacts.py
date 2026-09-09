@@ -38,6 +38,7 @@ def _report(table_name: str = "patients") -> ExportReport:
                 author_descriptions={},
                 author_table_description=None,
                 event_log=False,
+                supplement=None,
             ),
         )
     )

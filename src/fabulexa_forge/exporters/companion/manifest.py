@@ -35,7 +35,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.documentation import Documentation
     from fabulexa_forge.reader.emit import Emit
 
-_MANIFEST_FORMAT_VERSION = 2
+_MANIFEST_FORMAT_VERSION = 3
 """The manifest's own format version -- mode-definitional, like the event
 log's dense first id: every manifest of this design renders it identically."""
 
@@ -148,9 +148,24 @@ def _column_json(
     }
 
 
+def _supplement_json(table: "TableReport") -> dict[str, object] | None:
+    """The `tables[].supplement` value: provenance for a supplement table.
+
+    Args:
+        table: The table's report.
+
+    Returns:
+        None for a mode table; `{"file": <declared string or None>, "sha256":
+        <hex or None>}` for a supplement (file or inline, respectively).
+    """
+    if table.supplement is None:
+        return None
+    return {"file": table.supplement.file, "sha256": table.supplement.sha256}
+
+
 def _table_json(doc: "Documentation", table: "TableReport") -> dict[str, object]:
     """One `tables` entry: name, forwarded description, documented columns,
-    declared keys, row count."""
+    declared keys, row count, supplement provenance."""
     primary_key, unique = _keys_json(table.keys)
     return {
         "name": table.name,
@@ -162,6 +177,7 @@ def _table_json(doc: "Documentation", table: "TableReport") -> dict[str, object]
         "primary_key": primary_key,
         "unique": unique,
         "row_count": table.row_count,
+        "supplement": _supplement_json(table),
     }
 
 

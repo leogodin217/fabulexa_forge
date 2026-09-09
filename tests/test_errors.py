@@ -29,6 +29,8 @@ from fabulexa_forge.errors import (
     SupplementFileInvalid,
     SupplementFileMissing,
     SupplementHeaderMismatch,
+    SupplementSourceIsOutput,
+    SupplementValueInvalid,
 )
 from fabulexa_forge.reader.errors import ReaderError
 
@@ -188,3 +190,19 @@ def test_supplement_loader_error_classes_do_not_subclass_reader_error() -> None:
         assert not issubclass(cls, ReaderError), (
             f"{cls.__name__} must not subclass ReaderError"
         )
+
+
+def test_supplement_compile_error_classes_subclass_export_error() -> None:
+    """SupplementValueInvalid and SupplementSourceIsOutput — raised at plan
+    compile, not at load — subclass ExportError, not ConfigError."""
+    for cls in (SupplementValueInvalid, SupplementSourceIsOutput):
+        assert issubclass(cls, ExportError), f"{cls.__name__} must subclass ExportError"
+
+
+def test_supplement_compile_error_classes_are_catchable_as_exporter_error() -> None:
+    """Supplement compile error instances are caught by except ExporterError."""
+    for cls in (SupplementValueInvalid, SupplementSourceIsOutput):
+        try:
+            raise cls("supplement compile failed")
+        except ExporterError:
+            pass  # expected

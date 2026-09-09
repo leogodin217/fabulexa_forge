@@ -59,6 +59,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 author_descriptions={},
                 author_table_description=None,
                 event_log=False,
+                supplement=None,
             ),
             TableReport(
                 name="visits",
@@ -70,6 +71,7 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 author_descriptions={},
                 author_table_description=None,
                 event_log=False,
+                supplement=None,
             ),
         )
     )
@@ -118,7 +120,7 @@ def test_full_export_field_set(tmp_path: Path) -> None:
 
     document = _build_document(emit_dir, anchor=_ANCHOR, windowed=None)
 
-    assert document["manifest_format_version"] == 2
+    assert document["manifest_format_version"] == 3
     assert document["mode"] == "base"
     assert document["format"] == "csv"
     assert document["forge_version"] == __version__
@@ -414,6 +416,7 @@ def test_override_on_computed_column_with_no_provenance_renders_description_only
                         author_descriptions={"computed_flag": "A derived flag."},
                         author_table_description=None,
                         event_log=False,
+                        supplement=None,
                     ),
                 )
             ),
@@ -453,6 +456,7 @@ def test_table_spanning_multiple_source_tables_forwards_no_description(
                     author_descriptions={},
                     author_table_description=None,
                     event_log=False,
+                    supplement=None,
                 ),
             )
         )

@@ -14,7 +14,7 @@ import pytest
 from exporters._emit_fixtures import build_test_emit
 from fabulexa_forge.errors import ExportRuntimeError
 from fabulexa_forge.reader.emit import open_emit, pin_session_timezone
-from fabulexa_forge.writers.csv import write_csv
+from fabulexa_forge.writers.csv import csv_output_paths, write_csv
 
 
 def test_write_csv_writes_header_and_rows(tmp_path: Path) -> None:
@@ -317,3 +317,43 @@ def test_write_csv_decimal_null_renders_empty_field(tmp_path: Path) -> None:
         write_csv(emit, "t", sql, out_dir)
 
     assert _rows(out_dir / "t.csv") == [["amount"], [""]]
+
+
+# ---------------------------------------------------------------------------
+# csv_output_paths
+# ---------------------------------------------------------------------------
+
+
+def test_csv_output_paths_no_window_label(tmp_path: Path) -> None:
+    """With window_label=None, every path is <out>/<table>.csv, in
+    table_names order."""
+    out = tmp_path / "out"
+
+    paths = csv_output_paths(out, ["dim_a", "dim_b"], None)
+
+    assert paths == (out / "dim_a.csv", out / "dim_b.csv")
+
+
+def test_csv_output_paths_with_window_label(tmp_path: Path) -> None:
+    """With a window_label, every path is <out>/<label>/<table>.csv."""
+    out = tmp_path / "out"
+
+    paths = csv_output_paths(out, ["dim_a", "dim_b"], "w0")
+
+    assert paths == (out / "w0" / "dim_a.csv", out / "w0" / "dim_b.csv")
+
+
+def test_csv_output_paths_matches_write_csv_actual_file(tmp_path: Path) -> None:
+    """write_csv's actual output file equals csv_output_paths' answer for
+    that table."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+
+    with open_emit(emit_dir) as emit:
+        sql = 'SELECT record_id FROM "records__entity" ORDER BY record_id'
+        write_csv(emit, "dim_entity", sql, out_dir)
+
+    (expected_path,) = csv_output_paths(out_dir, ["dim_entity"], None)
+    assert expected_path.exists()
+    assert expected_path == out_dir / "dim_entity.csv"

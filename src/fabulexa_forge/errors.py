@@ -583,3 +583,14 @@ class SupplementFileInvalid(ConfigError):
 class SupplementHeaderMismatch(ConfigError):
     """A supplement's CSV header differs from the declared column names in
     count, order, or spelling; the message names the first differing position."""
+
+
+class SupplementValueInvalid(ExportError):
+    """A supplement cell does not cast to its declared type; names the table,
+    the column, the 1-based data row, and the cell text. Raised at plan
+    compile, before any write."""
+
+
+class SupplementSourceIsOutput(ExportError):
+    """A file supplement's resolved source path is a file this invocation
+    writes or lies under a directory it removes. Raised before any write."""
