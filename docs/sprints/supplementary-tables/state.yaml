@@ -2,7 +2,7 @@ sprint: supplementary-tables
 parent_branch: enable_complex_queries
 baseline_sha: 5b150f2fb50af8c88e27188bdf8e0509403dc0c4
 started: 2026-09-09
-current_phase: 4
+current_phase: 5
 capabilities:
   - config-envelope: [SupplementDecl, ExportConfig.supplements, parse-time validators, load_supplements]
   - dimensional-exporter: [compile_supplement_specs, source-is-output gate, export_dimensional supplements]
@@ -78,7 +78,7 @@ phases:
           - "tests/incremental/test_cursor.py"
           - "tests/test_cli_export.py"
   4:
-    status: pending
+    status: complete
     name: "Shaped playback"
     demo: "docs/sprints/supplementary-tables/demos/phase_4_shaped_playback.py"
     steps:

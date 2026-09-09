@@ -1328,7 +1328,9 @@ def test_shaped_playback_threads_election_into_window_and_state(tmp_path: Path) 
         dimensional=_star_threading_config(),
     )
     with open_emit(emit_dir) as emit:
-        playback = open_shaped_playback(emit, config, None, discard_notice_sink)
+        playback = open_shaped_playback(
+            emit, config, None, discard_notice_sink, supplements=()
+        )
         windowed = playback.window(0, 1_000)
         stated = playback.state(1_000)
 

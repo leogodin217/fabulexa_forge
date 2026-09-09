@@ -29,8 +29,21 @@ the exporters' own compile surfaces rather than reimplementing their business
 rules. Imports the reader, `derivations.guard`, `derivations.truncated_tape`,
 `config.models`, `exporters.notices`, the dimensional validation/engine
 modules, the source plan/engine modules, `exporters.query_spec`,
-`incremental.windows`, `fabulexa_forge.errors`, `fabulexa_forge.playback.errors`,
-and stdlib.
+`exporters.supplements`, `incremental.windows`, `fabulexa_forge.errors`,
+`fabulexa_forge.playback.errors`, and stdlib.
+
+A shape binds its supplements at open (`compile_supplement_specs`, gated
+exactly as a full export gates them — reserved names, the TIMESTAMPTZ anchor
+rule, the before-any-write cell probe — so a bad supplement never opens a
+head). `tables()` reports the declared shape's tables followed by one
+`ShapedTableDecl(name, 'snapshot')` per supplement, in declaration order —
+the union the per-ask selection (`_resolve_selection`) ranges over.
+`window()` / `state()` split a resolved selection into its dimensional part
+(threaded to the mode compile exactly as before) and its supplement part
+(materialized directly — a supplement's compiled relation is window-
+independent, so it is identical whichever ask ranges over it); a selection
+naming supplements only skips the mode compile entirely, so it opens no
+horizon (`window()`) or truncated tape (`state()`) and emits no notice.
 """
 
 from __future__ import annotations
@@ -53,12 +66,13 @@ from fabulexa_forge.exporters.source.engine import (
     source_window_delivery,
 )
 from fabulexa_forge.exporters.source.plan import build_source_plan
+from fabulexa_forge.exporters.supplements import compile_supplement_specs
 from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.playback.errors import PlaybackError
 from fabulexa_forge.reader.emit import Emit, pin_session_timezone
 
 if TYPE_CHECKING:
-    from collections.abc import Collection, Mapping
+    from collections.abc import Collection, Mapping, Sequence
 
     import pyarrow as pa
 
@@ -67,6 +81,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.query_spec import QuerySpec
+    from fabulexa_forge.exporters.supplements import ResolvedSupplement
     from fabulexa_forge.reader.sidecar import Sidecar
 
 _SOURCE_ANCHOR_REQUIRED_MSG = (
@@ -197,6 +212,98 @@ def _resolve_selection(
             )
         )
     return selected
+
+
+def _supplement_table_decls(
+    supplement_specs: "Sequence[QuerySpec]",
+) -> tuple[ShapedTableDecl, ...]:
+    """One ShapedTableDecl per open-compiled supplement spec, `tables()`'s
+    supplement tail.
+
+    Args:
+        supplement_specs: The open-compiled supplement specs, declaration
+            order.
+
+    Returns:
+        One `ShapedTableDecl(name, 'snapshot')` per spec, in the same order
+        — a supplement's window() / state() delivery is always 'snapshot'.
+    """
+    return tuple(
+        ShapedTableDecl(name=spec.table_name, window_delivery="snapshot")
+        for spec in supplement_specs
+    )
+
+
+def _split_selection(
+    selection: frozenset[str] | None,
+    supplement_names: frozenset[str],
+) -> tuple[bool, frozenset[str] | None]:
+    """Split a resolved union selection into whether the mode compile runs
+    and, if so, which declared names it compiles.
+
+    Args:
+        selection: The resolved selection over `tables()` (None for the
+            whole shape).
+        supplement_names: Every supplement's table_name.
+
+    Returns:
+        `(True, None)` for the whole shape — compile every declared table.
+        `(True, names)` for a selection naming at least one declared table —
+        compile exactly those. `(False, frozenset())` for a supplement-only
+        selection — the mode compile must not run at all (no horizon opened
+        for window(), no truncated tape opened for state(), no notice
+        emitted).
+    """
+    if selection is None:
+        return True, None
+    dimensional_names = selection - supplement_names
+    return bool(dimensional_names), dimensional_names
+
+
+def _select_supplements(
+    selection: frozenset[str] | None,
+    supplement_specs: "Sequence[QuerySpec]",
+) -> tuple["QuerySpec", ...]:
+    """The supplement specs a resolved selection answers, declaration order.
+
+    Args:
+        selection: The resolved union selection (None for the whole shape).
+        supplement_specs: The head's open-compiled supplement specs,
+            declaration order.
+
+    Returns:
+        Every supplement spec when selection is None; else the ones whose
+        table_name is in selection, declaration order preserved.
+    """
+    if selection is None:
+        return tuple(supplement_specs)
+    return tuple(spec for spec in supplement_specs if spec.table_name in selection)
+
+
+def _materialize_supplement_tables(
+    emit: "Emit", specs: "Sequence[QuerySpec]"
+) -> tuple[ShapedTable, ...]:
+    """Materialize selected supplement specs as snapshot ShapedTables.
+
+    A supplement's compiled relation is a VALUES-and-cast literal — window-
+    independent — so it is identical whichever ask (or window bounds / T)
+    materializes it.
+
+    Args:
+        emit: The open emit whose session evaluates each spec's relation.
+        specs: The selected supplement specs, in the order to deliver them.
+
+    Returns:
+        One ShapedTable per spec, delivery 'snapshot'.
+    """
+    return tuple(
+        ShapedTable(
+            name=spec.table_name,
+            delivery="snapshot",
+            table=emit.query_arrow(spec.sql, ()),
+        )
+        for spec in specs
+    )
 
 
 def _compile_window_specs(
@@ -482,19 +589,37 @@ class ShapedPlayback:
         notice_sink: "NoticeSink",
         table_decls: tuple[ShapedTableDecl, ...],
         election: "Election",
+        supplement_specs: tuple["QuerySpec", ...],
     ) -> None:
+        """Bind a shaped head to its open-compiled table decls and supplements.
+
+        Args:
+            emit: The open emit.
+            config: The target shape.
+            anchor: The resolved effective anchor, or None.
+            notice_sink: Receiver for every compile's plan notices.
+            table_decls: The declared shape's tables, in declaration order.
+            election: The resolved election.
+            supplement_specs: The open-compiled supplement specs, in
+                declaration order — empty for a source shape (the config
+                cannot declare any).
+        """
         self._emit = emit
         self._config = config
         self._anchor = anchor
         self._notice_sink = notice_sink
-        self._table_decls = table_decls
         self._election = election
+        self._supplement_specs = supplement_specs
+        self._supplement_names = frozenset(spec.table_name for spec in supplement_specs)
+        self._table_decls = table_decls + _supplement_table_decls(supplement_specs)
 
     def tables(self) -> tuple[ShapedTableDecl, ...]:
         """The shape's declared output tables, in the shape's canonical
-        order: config declaration order for a dimensional shape; the source
+        order: config declaration order for a dimensional shape (the source
         mode's deterministic full-export enumeration order for a source
-        shape.
+        shape), followed by one `ShapedTableDecl(name, 'snapshot')` per
+        supplement in declaration order — the union the per-ask selection
+        gates range over.
 
         Returns:
             One ShapedTableDecl per table window() and state() will deliver,
@@ -519,7 +644,13 @@ class ShapedPlayback:
         only when the selection is delta-bearing (some selected table's
         class is 'upsert' or 'append'; the source event log). The answer for
         a table is identical whichever selection it is asked in (projection
-        invariance).
+        invariance). The selection resolves over the union (declared tables
+        plus supplements); the dimensional part compiles exactly as above.
+        Every selected supplement is delivered after the dimensional tables,
+        in declaration order, as 'snapshot' with its whole relation —
+        identical for every window. When the dimensional part of the
+        selection is empty (a supplement-only selection), no horizon is
+        opened, no mode compile runs, and no plan notice is emitted.
 
         Args:
             start_sim_time: Inclusive lower bound (ns); >= 0.
@@ -550,27 +681,37 @@ class ShapedPlayback:
                 )
             )
         selection = _resolve_selection(tables, self._table_decls)
+        compile_dimensional, dimensional_names = _split_selection(
+            selection, self._supplement_names
+        )
 
-        window = Window(
-            index=None, start_ns=start_sim_time, end_ns=end_sim_time, label=""
-        )
-        specs = _compile_window_specs(
-            self._emit,
-            self._config,
-            self._anchor,
-            window,
-            self._notice_sink,
-            self._election,
-            selection,
-        )
-        return tuple(
-            ShapedTable(
-                name=spec.table_name,
-                delivery=_delivery_for_write_mode(spec.write_mode),
-                table=self._emit.query_arrow(spec.sql, ()),
+        dimensional_tables: tuple[ShapedTable, ...] = ()
+        if compile_dimensional:
+            window = Window(
+                index=None, start_ns=start_sim_time, end_ns=end_sim_time, label=""
             )
-            for spec in specs
+            specs = _compile_window_specs(
+                self._emit,
+                self._config,
+                self._anchor,
+                window,
+                self._notice_sink,
+                self._election,
+                dimensional_names,
+            )
+            dimensional_tables = tuple(
+                ShapedTable(
+                    name=spec.table_name,
+                    delivery=_delivery_for_write_mode(spec.write_mode),
+                    table=self._emit.query_arrow(spec.sql, ()),
+                )
+                for spec in specs
+            )
+
+        supplement_tables = _materialize_supplement_tables(
+            self._emit, _select_supplements(selection, self._supplement_specs)
         )
+        return dimensional_tables + supplement_tables
 
     def state(
         self,
@@ -582,7 +723,10 @@ class ShapedPlayback:
         The mode's full-export compile over the truncated tape, for the
         selected tables only; delivery is 'snapshot' on every table.
         state(T_slice, tables=S) equals the full export restricted to S (the
-        bridging theorem under projection).
+        bridging theorem under projection). Supplements join the answer
+        after the dimensional tables, 'snapshot', identical at every T; a
+        supplement-only selection opens no truncated tape and emits no
+        notice.
 
         Args:
             at_sim_time: The inclusive position T (ns); >= 0.
@@ -611,27 +755,37 @@ class ShapedPlayback:
         if at_sim_time < 0:
             raise PlaybackError(_STATE_TIME_INVALID_MSG.format(at_sim_time=at_sim_time))
         selection = _resolve_selection(tables, self._table_decls)
+        compile_dimensional, dimensional_names = _split_selection(
+            selection, self._supplement_names
+        )
 
-        sidecar = self._emit.sidecar
-        fork_path = require_single_branch(sidecar)
-        tape = open_truncated_tape(sidecar, fork_path, at_sim_time)
-        specs = _compile_state_specs(
-            self._emit.with_sidecar(tape.sidecar),
-            self._config,
-            self._anchor,
-            self._notice_sink,
-            tape.base_relations,
-            self._election,
-            selection,
-        )
-        return tuple(
-            ShapedTable(
-                name=spec.table_name,
-                delivery="snapshot",
-                table=self._emit.query_arrow(spec.sql, ()),
+        dimensional_tables: tuple[ShapedTable, ...] = ()
+        if compile_dimensional:
+            sidecar = self._emit.sidecar
+            fork_path = require_single_branch(sidecar)
+            tape = open_truncated_tape(sidecar, fork_path, at_sim_time)
+            specs = _compile_state_specs(
+                self._emit.with_sidecar(tape.sidecar),
+                self._config,
+                self._anchor,
+                self._notice_sink,
+                tape.base_relations,
+                self._election,
+                dimensional_names,
             )
-            for spec in specs
+            dimensional_tables = tuple(
+                ShapedTable(
+                    name=spec.table_name,
+                    delivery="snapshot",
+                    table=self._emit.query_arrow(spec.sql, ()),
+                )
+                for spec in specs
+            )
+
+        supplement_tables = _materialize_supplement_tables(
+            self._emit, _select_supplements(selection, self._supplement_specs)
         )
+        return dimensional_tables + supplement_tables
 
 
 def open_shaped_playback(
@@ -639,6 +793,7 @@ def open_shaped_playback(
     config: "ExportConfig",
     anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
+    supplements: "Sequence[ResolvedSupplement]",
 ) -> ShapedPlayback:
     """Bind a shaped head to an open emit and a declared target shape.
 
@@ -668,6 +823,14 @@ def open_shaped_playback(
     as emitted (an ask re-emits its compile's notices, the incremental
     drip rule). Tier 1 runs no mode compile and emits no notices.
 
+    After the mode's own open validation, runs every supplement gate
+    through `compile_supplement_specs(emit, supplements, anchor,
+    'create')` — the reserved-name rule, the TIMESTAMPTZ anchor rule, and
+    the before-any-write cell probe, each a pure function of the
+    declaration, the resolved rows, and the anchor, so open still reads no
+    base-table data and no supplement ask ever refuses for a reason the
+    compile itself doesn't name. The compiled specs are bound on the head.
+
     Args:
         emit: An open emit (version-gated by open_emit).
         config: The target shape — a validated ExportConfig (mode:
@@ -677,20 +840,30 @@ def open_shaped_playback(
         notice_sink: Receiver for plan notices from every compile the head
             runs (required — the notice-channel contract; a caller that
             wants silence passes a discarding sink).
+        supplements: The loader-resolved supplements bound beside the
+            shape, in declaration order — empty for a source shape (the
+            config cannot declare any).
 
     Returns:
-        A ShapedPlayback head bound to (emit, config, anchor, notice_sink).
-        Resolves `config.keys` once (`resolve_election`) for either mode and
-        threads it to the open validation and every window() / state()
-        compile — the None-for-source special case is gone: a source shape's
+        A ShapedPlayback head bound to (emit, config, anchor, notice_sink,
+        table_decls, election, supplement_specs). Resolves `config.keys`
+        once (`resolve_election`) for either mode and threads it to the
+        open validation and every window() / state() compile — the
+        None-for-source special case is gone: a source shape's
         identity/edge gates need the same election view a dimensional
         shape's do.
 
     Raises:
         PlaybackError: A seam-level open gate fails (source shape with
             anchor=None).
-        ExportError: The mode's own config validation fails or the
-            single-branch guard trips (passed through unchanged).
+        ExportError: The mode's own config validation fails, the
+            single-branch guard trips, or a supplement name collides with
+            a reserved bookkeeping table name (all passed through
+            unchanged).
+        TemporalRenderRequiresAnchor: A supplement TIMESTAMPTZ column with
+            no resolved anchor.
+        SupplementValueInvalid: A supplement cell does not cast to its
+            declared type.
     """
     if config.mode == "source" and anchor is None:
         raise PlaybackError(_SOURCE_ANCHOR_REQUIRED_MSG)
@@ -710,4 +883,10 @@ def open_shaped_playback(
             config.dimensional, emit.sidecar, anchor, notice_sink, election
         )
 
-    return ShapedPlayback(emit, config, anchor, notice_sink, table_decls, election)
+    supplement_specs = tuple(
+        compile_supplement_specs(emit, supplements, anchor, "create")
+    )
+
+    return ShapedPlayback(
+        emit, config, anchor, notice_sink, table_decls, election, supplement_specs
+    )

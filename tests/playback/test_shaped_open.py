@@ -129,7 +129,7 @@ def test_dimensional_opens_with_anchor_none(tmp_path: "Path") -> None:
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         head = open_shaped_playback(
-            emit, dimensional_shape_config(), None, discard_notice_sink
+            emit, dimensional_shape_config(), None, discard_notice_sink, supplements=()
         )
         assert head.tables() == (
             ShapedTableDecl(name="dim_gadget", window_delivery="snapshot"),
@@ -142,7 +142,7 @@ def test_dimensional_tables_in_config_declaration_order(tmp_path: "Path") -> Non
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         head = open_shaped_playback(
-            emit, dimensional_shape_config(), None, discard_notice_sink
+            emit, dimensional_shape_config(), None, discard_notice_sink, supplements=()
         )
         names = tuple(decl.name for decl in head.tables())
         assert names == ("dim_gadget", "fact_shipment", "mem_widget_parts")
@@ -152,7 +152,9 @@ def test_source_shape_requires_anchor(tmp_path: "Path") -> None:
     emit_dir = build_shaped_test_emit(tmp_path)
     with open_emit(emit_dir) as emit:
         with pytest.raises(PlaybackError):
-            open_shaped_playback(emit, source_shape_config(), None, discard_notice_sink)
+            open_shaped_playback(
+                emit, source_shape_config(), None, discard_notice_sink, supplements=()
+            )
 
 
 def test_source_shape_opens_with_resolved_anchor_and_enumerates_tables_then_log(
@@ -162,7 +164,7 @@ def test_source_shape_opens_with_resolved_anchor_and_enumerates_tables_then_log(
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         head = open_shaped_playback(
-            emit, source_shape_config(), anchor, discard_notice_sink
+            emit, source_shape_config(), anchor, discard_notice_sink, supplements=()
         )
         assert head.tables() == (
             ShapedTableDecl(name="gadget", window_delivery="snapshot"),
@@ -181,7 +183,11 @@ def test_source_shape_last_mutation_sim_time_windows(tmp_path: "Path") -> None:
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         head = open_shaped_playback(
-            emit, source_last_mutation_named_shape_config(), anchor, discard_notice_sink
+            emit,
+            source_last_mutation_named_shape_config(),
+            anchor,
+            discard_notice_sink,
+            supplements=(),
         )
         assert head.tables() == (
             ShapedTableDecl(name="widget", window_delivery="snapshot"),
@@ -208,7 +214,9 @@ def test_reserved_presentation_name_refused_at_open(tmp_path: "Path") -> None:
     )
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="last_mutation_sim_time"):
-            open_shaped_playback(emit, config, None, discard_notice_sink)
+            open_shaped_playback(
+                emit, config, None, discard_notice_sink, supplements=()
+            )
 
 
 def test_unstable_key_refused_at_open(tmp_path: "Path") -> None:
@@ -231,7 +239,9 @@ def test_unstable_key_refused_at_open(tmp_path: "Path") -> None:
     )
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="tracked property 'status'"):
-            open_shaped_playback(emit, config, None, discard_notice_sink)
+            open_shaped_playback(
+                emit, config, None, discard_notice_sink, supplements=()
+            )
 
 
 def test_reserved_table_name_refused_at_open(tmp_path: "Path") -> None:
@@ -250,7 +260,9 @@ def test_reserved_table_name_refused_at_open(tmp_path: "Path") -> None:
     )
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError, match="reserved under incremental export"):
-            open_shaped_playback(emit, config, None, discard_notice_sink)
+            open_shaped_playback(
+                emit, config, None, discard_notice_sink, supplements=()
+            )
 
 
 def test_invalid_dimensional_config_export_error_passes_through(
@@ -270,7 +282,9 @@ def test_invalid_dimensional_config_export_error_passes_through(
     )
     with open_emit(emit_dir) as emit:
         with pytest.raises(ExportError):
-            open_shaped_playback(emit, config, None, discard_notice_sink)
+            open_shaped_playback(
+                emit, config, None, discard_notice_sink, supplements=()
+            )
 
 
 def test_open_pins_session_zone_when_anchor_resolves(tmp_path: "Path") -> None:
@@ -280,7 +294,9 @@ def test_open_pins_session_zone_when_anchor_resolves(tmp_path: "Path") -> None:
         anchor = resolve_effective_anchor(
             emit.sidecar.runtime(), None, None, "Asia/Tokyo"
         )
-        open_shaped_playback(emit, source_shape_config(), anchor, discard_notice_sink)
+        open_shaped_playback(
+            emit, source_shape_config(), anchor, discard_notice_sink, supplements=()
+        )
         rows = emit.query("SELECT current_setting('TimeZone')", ())
     assert rows[0][0] == "Asia/Tokyo"
 
@@ -293,7 +309,7 @@ def test_open_does_not_touch_session_zone_when_anchor_is_none(
     with open_emit(emit_dir) as emit:
         baseline = emit.query("SELECT current_setting('TimeZone')", ())[0][0]
         open_shaped_playback(
-            emit, dimensional_shape_config(), None, discard_notice_sink
+            emit, dimensional_shape_config(), None, discard_notice_sink, supplements=()
         )
         after = emit.query("SELECT current_setting('TimeZone')", ())[0][0]
     assert after == baseline
@@ -309,6 +325,10 @@ def test_rebase_and_incremental_blocks_not_read(tmp_path: "Path") -> None:
         incremental=IncrementalConfig(sim_period_ns=10),
     )
     with open_emit(emit_dir) as emit:
-        head_plain = open_shaped_playback(emit, plain, None, discard_notice_sink)
-        head_extras = open_shaped_playback(emit, with_extras, None, discard_notice_sink)
+        head_plain = open_shaped_playback(
+            emit, plain, None, discard_notice_sink, supplements=()
+        )
+        head_extras = open_shaped_playback(
+            emit, with_extras, None, discard_notice_sink, supplements=()
+        )
         assert head_plain.tables() == head_extras.tables()
