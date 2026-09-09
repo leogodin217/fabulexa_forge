@@ -26,6 +26,9 @@ from fabulexa_forge.errors import (
     RebaseOriginUnresolvable,
     RebaseTimezoneUnresolvable,
     RebaseUnknownTimezone,
+    SupplementFileInvalid,
+    SupplementFileMissing,
+    SupplementHeaderMismatch,
 )
 from fabulexa_forge.reader.errors import ReaderError
 
@@ -161,3 +164,27 @@ def test_election_error_classes_are_catchable_as_exporter_error() -> None:
             raise cls("election check failed")
         except ExporterError:
             pass  # expected
+
+
+def test_supplement_loader_error_classes_subclass_config_error() -> None:
+    """The three loader supplement errors subclass ConfigError."""
+    for cls in (SupplementFileMissing, SupplementFileInvalid, SupplementHeaderMismatch):
+        assert issubclass(cls, ConfigError), f"{cls.__name__} must subclass ConfigError"
+
+
+def test_supplement_loader_error_classes_are_catchable_as_exporter_error() -> None:
+    """Supplement loader error instances are caught by except ExporterError."""
+    for cls in (SupplementFileMissing, SupplementFileInvalid, SupplementHeaderMismatch):
+        try:
+            raise cls("supplement load failed")
+        except ExporterError:
+            pass  # expected
+
+
+def test_supplement_loader_error_classes_do_not_subclass_reader_error() -> None:
+    """Supplement loader errors do not subclass ReaderError — separate
+    failure domains."""
+    for cls in (SupplementFileMissing, SupplementFileInvalid, SupplementHeaderMismatch):
+        assert not issubclass(cls, ReaderError), (
+            f"{cls.__name__} must not subclass ReaderError"
+        )

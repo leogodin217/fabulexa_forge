@@ -569,3 +569,17 @@ class StreamPropertyNotAddressable(ExportError):
     same-named producer payload property is unaddressable, full stop.
     Message: `"stream '{name}': '{property}' is an identity surface —
     declare it in identity, not properties"`."""
+
+
+class SupplementFileMissing(ConfigError):
+    """A supplement's resolved `file` does not exist or is not a regular file."""
+
+
+class SupplementFileInvalid(ConfigError):
+    """A supplement's file is not UTF-8, is not valid CSV under the strict
+    dialect, or has a data row whose field count differs from the header's."""
+
+
+class SupplementHeaderMismatch(ConfigError):
+    """A supplement's CSV header differs from the declared column names in
+    count, order, or spelling; the message names the first differing position."""
