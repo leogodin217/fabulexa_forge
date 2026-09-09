@@ -18,6 +18,7 @@ from _support.notices import discard_notice_sink
 from fabulexa_forge.anchor import resolve_effective_anchor
 from fabulexa_forge.config.loader import load_export_config
 from fabulexa_forge.exporters.dimensional.engine import export_dimensional
+from fabulexa_forge.exporters.supplements import load_supplements
 from fabulexa_forge.reader.emit import open_emit
 
 from ._harness import (
@@ -56,6 +57,7 @@ def test_recipe_run_and_assert(
     """Full round-trip: export the recipe and assert against expect.yaml."""
     config = load_export_config(recipe.config_path)
     expectation = load_expectation(recipe.expect_path)
+    supplements = load_supplements(config, recipe.config_path.parent)
 
     out_path = tmp_path / f"{recipe.name}.duckdb"
 
@@ -74,7 +76,7 @@ def test_recipe_run_and_assert(
             anchor,
             notice_sink=discard_notice_sink,
             overlay=None,
-            supplements=(),
+            supplements=supplements,
         )
 
     assert_recipe_output(expectation, out_path)
@@ -95,11 +97,17 @@ def test_recipe_corpus_nonempty() -> None:
 
 @pytest.mark.parametrize("recipe", _ALL_RECIPES, ids=lambda r: r.name)
 def test_recipe_folder_well_formed(recipe: RecipeFolder) -> None:
-    """Each recipe folder contains exactly {config.yaml, expect.yaml}."""
+    """Each recipe folder contains config.yaml + expect.yaml, and no file
+    besides those two other than a supplement's *.csv."""
     folder = recipe.config_path.parent
     actual_names = {p.name for p in folder.iterdir() if not p.name.startswith(".")}
-    expected_names = {"config.yaml", "expect.yaml"}
-    assert actual_names == expected_names, (
-        f"Recipe folder '{recipe.name}' must contain exactly"
-        f" {{config.yaml, expect.yaml}}; found: {sorted(actual_names)}"
+    required_names = {"config.yaml", "expect.yaml"}
+    missing = required_names - actual_names
+    disallowed = {
+        name for name in actual_names - required_names if not name.endswith(".csv")
+    }
+    assert not missing and not disallowed, (
+        f"Recipe folder '{recipe.name}' must contain config.yaml, expect.yaml,"
+        f" and no other file besides *.csv; missing: {sorted(missing)},"
+        f" disallowed: {sorted(disallowed)}"
     )

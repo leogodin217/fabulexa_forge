@@ -1,0 +1,49 @@
+# Recipe: supplement-tables
+# ============================================================
+# Two author-supplied tables declared beside a normal dimensional export: a
+# file supplement (region_code.csv, sitting beside this config) and an
+# inline supplement (priority_level, its rows given directly in YAML).
+# Neither traces to the emit — they are the author's own reference data,
+# carried verbatim into the warehouse and recorded in the manifest/README
+# under `supplement`, after the declared table in declaration order.
+#
+# Fixture world (recipe emit):
+#   records__patient — record_id, prop__name, created_sim_time
+#                      p001 Alice, p002 Bob
+#
+# Output:
+#   customer       — 2 rows, from records__patient
+#   region_code    — file supplement, 2 rows (US, CA)
+#   priority_level — inline supplement, 2 rows
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: customer
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [customer_id]
+      columns:
+        - name: customer_id
+          from: record_id
+        - name: full_name
+          from: prop__name
+
+supplements:
+  - name: region_code
+    file: region_code.csv
+    columns: {code: VARCHAR, label: VARCHAR}
+    description: Sales-region codes used by account management.
+  - name: priority_level
+    columns:
+      level: VARCHAR
+      weight: BIGINT
+    rows:
+      - level: standard
+        weight: 1
+      - level: rush
+        weight: 2

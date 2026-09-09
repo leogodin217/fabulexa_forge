@@ -25,10 +25,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from fabulexa_forge.config.loader import (
+    load_export_config,
+    load_stream_config,
+    load_yaml_mapping,
+)
+from fabulexa_forge.config.models import ExportConfig
 from fabulexa_forge.datasets.manifest import load_manifest
+from fabulexa_forge.errors import ConfigError
+from fabulexa_forge.exporters.supplements import load_supplements
 from fabulexa_forge.reader import ReaderError, open_emit
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from fabulexa_forge.config.models import StreamConfig
     from fabulexa_forge.datasets.models import DatasetEntry
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -82,28 +93,136 @@ def _resolve_bundle_paths(bundle_dir: Path) -> dict[str, Path]:
     return paths
 
 
-def _resolve_config_paths(
+def _load_packed_config(
+    dataset_name: str, config_name: str, config_path: Path
+) -> "ExportConfig | StreamConfig":
+    """Load one configs entry through the loader its top-level shape names.
+
+    Peeks the parsed YAML document's top-level keys to choose the loader — a
+    `mode` key means `load_export_config`, a `streams` key means
+    `load_stream_config` — then re-loads through that loader for its own
+    diagnostics (validation, duplicate keys, etc).
+
+    Args:
+        dataset_name: The manifest entry's name, for the error prefix.
+        config_name: The configs entry's filename, for the error prefix.
+        config_path: The config file's path.
+
+    Returns:
+        The validated ExportConfig or StreamConfig.
+
+    Raises:
+        PackBuildError: The document has neither a `mode` nor a `streams`
+            top-level key, or the chosen loader refuses it (the loader's own
+            diagnostic, prefixed `"dataset '{name}': config '{cfg}': "`).
+    """
+    prefix = f"dataset '{dataset_name}': config '{config_name}': "
+    raw = config_path.read_text(encoding="utf-8")
+    try:
+        data = load_yaml_mapping(raw, "config", config_path)
+    except ConfigError as exc:
+        raise PackBuildError(f"{prefix}{exc}") from exc
+    loader: Callable[[Path], ExportConfig | StreamConfig]
+    if isinstance(data, dict) and "mode" in data:
+        loader = load_export_config
+    elif isinstance(data, dict) and "streams" in data:
+        loader = load_stream_config
+    else:
+        raise PackBuildError(f"{prefix}neither an export nor a stream config")
+    try:
+        return loader(config_path)
+    except ConfigError as exc:
+        raise PackBuildError(f"{prefix}{exc}") from exc
+
+
+def _supplement_member(
+    dataset_name: str,
+    config_name: str,
+    supplement_name: str,
+    source_path: Path,
+    example_dir: Path,
+) -> tuple[str, Path]:
+    """Place one resolved file supplement's source as an archive member.
+
+    Args:
+        dataset_name: The manifest entry's name, for the error prefix.
+        config_name: The configs entry's filename, for the error prefix.
+        supplement_name: The declared supplement's name, for the error message.
+        source_path: The supplement's resolved (absolute) source path.
+        example_dir: The dataset's example directory (resolved).
+
+    Returns:
+        The (config-relative archive path, source path) pair.
+
+    Raises:
+        PackBuildError: source_path does not resolve inside example_dir.
+    """
+    if not source_path.is_relative_to(example_dir):
+        raise PackBuildError(
+            f"dataset '{dataset_name}': config '{config_name}':"
+            f" supplement '{supplement_name}': file {source_path} is outside"
+            f" the dataset directory {example_dir}"
+        )
+    return source_path.relative_to(example_dir).as_posix(), source_path
+
+
+def _packed_config_members(
     entry: "DatasetEntry", example_dir: Path
 ) -> list[tuple[str, Path]]:
-    """Locate every configs entry in the example directory, naming any absent one.
+    """Locate every configs entry, load it through the loader its top-level
+    shape names, and collect its supplement files as members.
+
+    Replaces `_resolve_config_paths`. A document with a top-level `mode`
+    key loads through `load_export_config`; one with a top-level `streams`
+    key through `load_stream_config`; a document with neither is refused.
+    For an export config, `load_supplements(config, example_dir)` resolves
+    every file supplement; each is a member at its config-relative path.
 
     Args:
         entry: The authored manifest entry naming the configs.
         example_dir: The dataset's example directory.
 
     Returns:
-        (filename, path) pairs in the entry's authored `configs` order.
+        (archive path, source path) pairs: each config in the entry's
+        authored order, then each of its supplement files in declaration
+        order. Determinism is unaffected — `_write_deterministic_archive`
+        sorts members by path.
 
     Raises:
-        PackBuildError: A configs entry is absent from example_dir, naming it.
+        PackBuildError: A configs entry is absent, naming it; a config is
+            neither an export nor a stream config; a config its loader
+            refuses (the loader's diagnostic, prefixed `"dataset '{name}':
+            config '{cfg}': "`); a supplement file that is missing or whose
+            resolved path is outside `example_dir`.
     """
-    paths: list[tuple[str, Path]] = []
+    resolved_example_dir = example_dir.resolve()
+    members: list[tuple[str, Path]] = []
     for filename in entry.configs:
-        path = example_dir / filename
-        if not path.is_file():
-            raise PackBuildError(f"missing configs file: {path}")
-        paths.append((filename, path))
-    return paths
+        config_path = example_dir / filename
+        if not config_path.is_file():
+            raise PackBuildError(f"missing configs file: {config_path}")
+        prefix = f"dataset '{entry.name}': config '{filename}': "
+        config = _load_packed_config(entry.name, filename, config_path)
+        members.append((filename, config_path))
+        if not isinstance(config, ExportConfig):
+            continue
+        try:
+            supplements = load_supplements(config, config_path.parent)
+        except ConfigError as exc:
+            raise PackBuildError(f"{prefix}{exc}") from exc
+        for supplement in supplements:
+            if supplement.path is None:
+                continue
+            members.append(
+                _supplement_member(
+                    entry.name,
+                    filename,
+                    supplement.decl.name,
+                    supplement.path,
+                    resolved_example_dir,
+                )
+            )
+    return members
 
 
 def _open_bundle_version(bundle_dir: Path) -> int:
@@ -186,8 +305,11 @@ def build_pack(entry: "DatasetEntry", example_dir: Path, out_path: Path) -> Pack
     Driven by the entry's authored fields: `configs` names the YAMLs packed;
     the entry's stamped fields (sha256, size_bytes, base_format_version) are
     ignored on read and recomputed. Archive layout: bundle/run.duckdb,
-    bundle/base.json, bundle/ATLAS.md, and the configs at the archive root —
-    all member paths relative, no wrapper directory.
+    bundle/base.json, bundle/ATLAS.md, the configs at the archive root, and
+    (for an export config) any file supplement's source at its
+    config-relative path — all member paths relative, no wrapper directory.
+    Loaded through the loader its top-level shape names
+    (`_packed_config_members`) — a config the loader refuses fails the build.
 
     Deterministic means byte-identical: members added in sorted-path order;
     member mtime 0, uid/gid 0, uname/gname empty, mode 0644 (files only — the
@@ -208,16 +330,19 @@ def build_pack(entry: "DatasetEntry", example_dir: Path, out_path: Path) -> Pack
     Raises:
         PackBuildError: Bundle triple (run.duckdb / base.json / ATLAS.md)
             incomplete, naming the missing file; a configs file absent from
-            example_dir, naming it; the bundle refuses to open under
-            open_emit (version refusal included).
+            example_dir, naming it; a config neither an export nor a stream
+            config, or one its loader refuses (see
+            `_packed_config_members`); a supplement file missing or outside
+            example_dir; the bundle refuses to open under open_emit (version
+            refusal included).
     """
     bundle_dir = example_dir / "bundle"
     bundle_paths = _resolve_bundle_paths(bundle_dir)
-    config_paths = _resolve_config_paths(entry, example_dir)
+    config_members = _packed_config_members(entry, example_dir)
     base_format_version = _open_bundle_version(bundle_dir)
 
     members = [(f"bundle/{name}", path) for name, path in bundle_paths.items()]
-    members.extend(config_paths)
+    members.extend(config_members)
     _write_deterministic_archive(out_path, members)
 
     return PackStamp(

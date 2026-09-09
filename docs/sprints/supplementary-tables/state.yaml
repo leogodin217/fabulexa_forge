@@ -98,6 +98,6 @@ phases:
         files:
           - "tests/playback/test_shaped_supplements.py"
   5:
-    status: pending
+    status: complete
     name: "Pack builder and the recipe"
     demo: "docs/sprints/supplementary-tables/demos/phase_5_pack_and_recipe.py"

@@ -29,6 +29,49 @@ from reader._emit_helpers import write_emit as write_reader_emit  # noqa: E402
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TOOL_PATH = _REPO_ROOT / "tools" / "build_dataset_pack.py"
 
+_DIMENSIONAL_TABLE_YAML = """\
+dimensional:
+  tables:
+    - name: customer
+      role: dim
+      scd: type1
+      source: {grain: records, kind: patient}
+      key: [customer_id]
+      columns:
+        - {name: customer_id, from: record_id}
+"""
+
+_DIMENSIONAL_WITH_FILE_SUPPLEMENT_YAML = (
+    "mode: dimensional\n"
+    + _DIMENSIONAL_TABLE_YAML
+    + """\
+supplements:
+  - name: region_code
+    file: data/region_code.csv
+    columns: {code: VARCHAR, label: VARCHAR}
+"""
+)
+
+_DIMENSIONAL_WITH_INLINE_SUPPLEMENT_YAML = (
+    "mode: dimensional\n"
+    + _DIMENSIONAL_TABLE_YAML
+    + """\
+supplements:
+  - name: priority_level
+    columns: {level: VARCHAR}
+    rows:
+      - {level: standard}
+"""
+)
+
+_STREAM_CONFIG_YAML = """\
+content: state-changes
+streams:
+  - name: patient
+    kind: patient
+    properties: [status]
+"""
+
 
 def _load_tool() -> types.ModuleType:
     """Load tools/build_dataset_pack.py as a module (tools/ is not a package)."""
@@ -71,7 +114,7 @@ def _write_full_example(example_dir: Path, configs: list[str] | None = None) -> 
     write_reader_emit(bundle_dir)
     (bundle_dir / "ATLAS.md").write_text("# Atlas\n", encoding="utf-8")
     for name in configs or ["dimensional.yaml"]:
-        (example_dir / name).write_text("grain: event\n", encoding="utf-8")
+        (example_dir / name).write_text("mode: base\n", encoding="utf-8")
 
 
 def _write_unsupported_version_example(
@@ -89,7 +132,7 @@ def _write_unsupported_version_example(
     duckdb.connect(str(bundle_dir / "run.duckdb")).close()
     (bundle_dir / "ATLAS.md").write_text("# Atlas\n", encoding="utf-8")
     for name in configs or ["dimensional.yaml"]:
-        (example_dir / name).write_text("grain: event\n", encoding="utf-8")
+        (example_dir / name).write_text("mode: base\n", encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +298,179 @@ def test_unsupported_version_refuses_naming_found_version(tmp_path: Path) -> Non
 
     with pytest.raises(
         pack_builder.PackBuildError, match=str(UNSUPPORTED_VERSION_SENTINEL)
+    ):
+        pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
+
+
+# ---------------------------------------------------------------------------
+# Loader gate + supplement-file carriage
+# ---------------------------------------------------------------------------
+
+
+def test_file_supplement_becomes_archive_member(tmp_path: Path) -> None:
+    """A file supplement's source lands as a member at its config-relative
+    path, with the source bytes, in sorted member order."""
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text(
+        _DIMENSIONAL_WITH_FILE_SUPPLEMENT_YAML, encoding="utf-8"
+    )
+    data_dir = example_dir / "data"
+    data_dir.mkdir()
+    csv_bytes = b"code,label\nUS,United States\n"
+    (data_dir / "region_code.csv").write_bytes(csv_bytes)
+
+    out_path = tmp_path / "out" / "demo-pack.tar.gz"
+    pack_builder.build_pack(_entry(), example_dir, out_path)
+
+    with tarfile.open(out_path, mode="r:gz") as archive:
+        names = [m.name for m in archive.getmembers()]
+        member = archive.extractfile("data/region_code.csv")
+        assert member is not None
+        member_bytes = member.read()
+
+    assert names == sorted(names)
+    assert "data/region_code.csv" in names
+    assert member_bytes == csv_bytes
+
+
+def test_file_supplement_archive_byte_identical_across_runs(tmp_path: Path) -> None:
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text(
+        _DIMENSIONAL_WITH_FILE_SUPPLEMENT_YAML, encoding="utf-8"
+    )
+    data_dir = example_dir / "data"
+    data_dir.mkdir()
+    (data_dir / "region_code.csv").write_text(
+        "code,label\nUS,United States\n", encoding="utf-8"
+    )
+
+    first_path = tmp_path / "first.tar.gz"
+    second_path = tmp_path / "second.tar.gz"
+    pack_builder.build_pack(_entry(), example_dir, first_path)
+    pack_builder.build_pack(_entry(), example_dir, second_path)
+
+    assert first_path.read_bytes() == second_path.read_bytes()
+
+
+def test_inline_only_supplement_adds_no_member(tmp_path: Path) -> None:
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text(
+        _DIMENSIONAL_WITH_INLINE_SUPPLEMENT_YAML, encoding="utf-8"
+    )
+
+    out_path = tmp_path / "out.tar.gz"
+    pack_builder.build_pack(_entry(), example_dir, out_path)
+
+    with tarfile.open(out_path, mode="r:gz") as archive:
+        names = sorted(m.name for m in archive.getmembers())
+    assert names == [
+        "bundle/ATLAS.md",
+        "bundle/base.json",
+        "bundle/run.duckdb",
+        "dimensional.yaml",
+    ]
+
+
+def test_stream_config_still_packs_and_loads(tmp_path: Path) -> None:
+    """A `streams` top-level config packs through load_stream_config."""
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir, configs=["stream.yaml"])
+    (example_dir / "stream.yaml").write_text(_STREAM_CONFIG_YAML, encoding="utf-8")
+    entry = _entry(
+        configs=["stream.yaml"],
+        commands=["fabulexa-forge stream {dir}/stream.yaml --out out/"],
+    )
+
+    out_path = tmp_path / "out.tar.gz"
+    pack_builder.build_pack(entry, example_dir, out_path)
+
+    with tarfile.open(out_path, mode="r:gz") as archive:
+        names = sorted(m.name for m in archive.getmembers())
+    assert "stream.yaml" in names
+
+
+def test_missing_supplement_file_names_dataset_config_path(tmp_path: Path) -> None:
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text(
+        _DIMENSIONAL_WITH_FILE_SUPPLEMENT_YAML, encoding="utf-8"
+    )
+    # data/region_code.csv deliberately not written.
+
+    with pytest.raises(pack_builder.PackBuildError) as excinfo:
+        pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
+
+    message = str(excinfo.value)
+    assert "demo-pack" in message
+    assert "dimensional.yaml" in message
+    assert "region_code.csv" in message
+
+
+def test_supplement_file_escaping_dataset_directory_refused(tmp_path: Path) -> None:
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text(
+        "mode: dimensional\n" + _DIMENSIONAL_TABLE_YAML + "supplements:\n"
+        "  - name: region_code\n"
+        "    file: ../outside.csv\n"
+        "    columns: {code: VARCHAR, label: VARCHAR}\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "outside.csv").write_text(
+        "code,label\nUS,United States\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        pack_builder.PackBuildError, match="outside the dataset directory"
+    ):
+        pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
+
+
+def test_supplement_absolute_path_refused(tmp_path: Path) -> None:
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    outside_path = tmp_path / "abs_outside.csv"
+    outside_path.write_text("code,label\nUS,United States\n", encoding="utf-8")
+    (example_dir / "dimensional.yaml").write_text(
+        "mode: dimensional\n" + _DIMENSIONAL_TABLE_YAML + "supplements:\n"
+        "  - name: region_code\n"
+        f'    file: "{outside_path}"\n'
+        "    columns: {code: VARCHAR, label: VARCHAR}\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        pack_builder.PackBuildError, match="outside the dataset directory"
+    ):
+        pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
+
+
+def test_config_neither_export_nor_stream_refused(tmp_path: Path) -> None:
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text("grain: event\n", encoding="utf-8")
+
+    with pytest.raises(
+        pack_builder.PackBuildError, match="neither an export nor a stream config"
+    ):
+        pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
+
+
+def test_config_loader_refusal_carries_dataset_and_config_prefix(
+    tmp_path: Path,
+) -> None:
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text(
+        "mode: dimensional\nbogus_field: true\n", encoding="utf-8"
+    )
+
+    with pytest.raises(
+        pack_builder.PackBuildError,
+        match=r"dataset 'demo-pack': config 'dimensional\.yaml': ",
     ):
         pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
 
