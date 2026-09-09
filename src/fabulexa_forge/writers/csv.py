@@ -49,7 +49,7 @@ def write_csv(
     Raises:
         ExportRuntimeError: Query execution or file write fails.
     """
-    out_path = output_dir / f"{table_name}.csv"
+    (out_path,) = csv_output_paths(output_dir, (table_name,), None)
 
     try:
         arrow_table = emit.query_arrow(query, ())

@@ -448,6 +448,22 @@ def test_supplement_absolute_path_refused(tmp_path: Path) -> None:
         pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
 
 
+def test_malformed_config_yaml_carries_dataset_and_config_prefix(
+    tmp_path: Path,
+) -> None:
+    """Malformed YAML syntax refuses through load_yaml_mapping's own ConfigError,
+    still carrying the dataset/config prefix."""
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text("a: [unclosed", encoding="utf-8")
+
+    with pytest.raises(
+        pack_builder.PackBuildError,
+        match=r"dataset 'demo-pack': config 'dimensional\.yaml': invalid YAML",
+    ):
+        pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
+
+
 def test_config_neither_export_nor_stream_refused(tmp_path: Path) -> None:
     example_dir = tmp_path / "example"
     _write_full_example(example_dir)
