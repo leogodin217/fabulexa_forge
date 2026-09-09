@@ -1650,3 +1650,138 @@ def test_cmd_export_supplements_under_source_mode_exits_1_at_load(
     assert "ERROR" in captured.err
     assert "supplements" in captured.err.lower()
     assert not out.exists()
+
+
+# ---------------------------------------------------------------------------
+# Tests — incremental delivery with supplements (supplementary-tables
+# sprint, Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def write_incremental_config_with_supplements(
+    config_path: Path, sim_period_ns: int = _INCR_PERIOD_NS
+) -> None:
+    """Write an incremental `dim_entity` config (matching
+    `build_incremental_emit`) declaring a file supplement (`region_code.csv`,
+    resolved beside `config_path`) and an inline supplement (`rate_tier`).
+
+    Args:
+        config_path: Path to write the YAML config to.
+        sim_period_ns: Window size in nanoseconds.
+    """
+    config_dict: dict[str, object] = {
+        "mode": "dimensional",
+        "incremental": {"sim_period_ns": sim_period_ns},
+        "dimensional": {
+            "tables": [
+                {
+                    "name": "dim_entity",
+                    "role": "dim",
+                    "scd": "type1",
+                    "source": {"grain": "records", "kind": "entity"},
+                    "key": ["id"],
+                    "columns": [
+                        {"name": "id", "from": "record_id"},
+                        {"name": "name", "from": "prop__name"},
+                    ],
+                }
+            ]
+        },
+        "supplements": [
+            {
+                "name": "region_code",
+                "file": "region_code.csv",
+                "columns": {"code": "VARCHAR", "label": "VARCHAR"},
+            },
+            {
+                "name": "rate_tier",
+                "columns": {"tier": "VARCHAR", "capacity": "BIGINT"},
+                "rows": [{"tier": "standard", "capacity": 10}],
+            },
+        ],
+    }
+    config_path.write_text(yaml.dump(config_dict, allow_unicode=True), encoding="utf-8")
+
+
+def test_cmd_export_next_csv_with_supplement_prints_supplement_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--next` CSV with a supplement exits 0 and prints its row-count line."""
+    emit_dir = build_incremental_emit(tmp_path, slice_at=250)
+    config_path = tmp_path / "config.yaml"
+    write_incremental_config_with_supplements(config_path)
+    (config_path.parent / "region_code.csv").write_text(
+        _REGION_CODE_CSV_TEXT, encoding="utf-8"
+    )
+    out = tmp_path / "drops"
+
+    exit_code = cmd_export(emit_dir, config_path, out, "csv", next_window=True)
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "region_code: 1 rows" in captured.out
+    assert "rate_tier: 1 rows" in captured.out
+
+
+def test_cmd_export_next_duckdb_with_supplement_prints_supplement_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--next` DuckDB with a supplement exits 0 and prints its row-count line."""
+    emit_dir = build_incremental_emit(tmp_path, slice_at=250)
+    config_path = tmp_path / "config.yaml"
+    write_incremental_config_with_supplements(config_path)
+    (config_path.parent / "region_code.csv").write_text(
+        _REGION_CODE_CSV_TEXT, encoding="utf-8"
+    )
+    out = tmp_path / "wh.duckdb"
+
+    exit_code = cmd_export(emit_dir, config_path, out, "duckdb", next_window=True)
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "region_code: 1 rows" in captured.out
+    assert "rate_tier: 1 rows" in captured.out
+
+
+def test_cmd_export_range_with_supplement_prints_supplement_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--from`/`--to` with a supplement exits 0 and prints its row-count line."""
+    emit_dir = build_incremental_emit(tmp_path, slice_at=250)
+    config_path = tmp_path / "config.yaml"
+    write_incremental_config_with_supplements(config_path)
+    (config_path.parent / "region_code.csv").write_text(
+        _REGION_CODE_CSV_TEXT, encoding="utf-8"
+    )
+    out = tmp_path / "range_out.duckdb"
+
+    exit_code = cmd_export(
+        emit_dir, config_path, out, "duckdb", range_from="0", range_to="200"
+    )
+    captured = capsys.readouterr()
+    assert exit_code == 0
+    assert "region_code: 1 rows" in captured.out
+    assert "rate_tier: 1 rows" in captured.out
+
+
+def test_cmd_export_next_csv_mid_drip_supplement_edit_exits_1_fingerprint(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A `--next` CSV drip whose supplement source is edited between calls
+    exits 1 on the next call, with the fingerprint mismatch message."""
+    emit_dir = build_incremental_emit(tmp_path, slice_at=250)
+    config_path = tmp_path / "config.yaml"
+    write_incremental_config_with_supplements(config_path)
+    region_path = config_path.parent / "region_code.csv"
+    region_path.write_text(_REGION_CODE_CSV_TEXT, encoding="utf-8")
+    out = tmp_path / "drops"
+
+    first = cmd_export(emit_dir, config_path, out, "csv", next_window=True)
+    capsys.readouterr()
+    assert first == 0
+
+    region_path.write_text("code,label\nUS,United States (edited)\n", encoding="utf-8")
+
+    second = cmd_export(emit_dir, config_path, out, "csv", next_window=True)
+    captured = capsys.readouterr()
+    assert second == 1
+    assert "ERROR" in captured.err
+    assert "fingerprint" in captured.err.lower()

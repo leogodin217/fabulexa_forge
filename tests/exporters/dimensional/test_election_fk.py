@@ -1295,7 +1295,16 @@ def test_incremental_driver_export_window_threads_election(tmp_path: Path) -> No
     window = Window(index=None, start_ns=0, end_ns=1_000, label="w")
     with open_emit(emit_dir) as emit:
         export_window(
-            emit, config, out, "duckdb", None, window, None, discard_notice_sink, None
+            emit,
+            config,
+            out,
+            "duckdb",
+            None,
+            window,
+            None,
+            discard_notice_sink,
+            None,
+            supplements=(),
         )
 
     conn = duckdb.connect(str(out), read_only=True)
@@ -1365,11 +1374,25 @@ def test_keys_field_changes_incremental_fingerprint(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         export_incremental_next(
-            emit, keyed, out, "duckdb", None, discard_notice_sink, None
+            emit,
+            keyed,
+            out,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            None,
+            supplements=(),
         )
 
     with open_emit(emit_dir) as emit:
         with pytest.raises(IncrementalFingerprintMismatch):
             export_incremental_next(
-                emit, unkeyed, out, "duckdb", None, discard_notice_sink, None
+                emit,
+                unkeyed,
+                out,
+                "duckdb",
+                None,
+                discard_notice_sink,
+                None,
+                supplements=(),
             )

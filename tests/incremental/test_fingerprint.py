@@ -63,6 +63,7 @@ def _fp(
         fork_path=fork_path,
         fmt=fmt,  # type: ignore[arg-type]
         package_version=package_version,
+        supplements=(),
     )
 
 

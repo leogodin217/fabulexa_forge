@@ -12,10 +12,14 @@ import json
 from typing import TYPE_CHECKING, Any, Literal
 
 from fabulexa_forge.anchor import anchor_to_json
+from fabulexa_forge.config.models import canonical_supplement_type
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
+    from fabulexa_forge.exporters.supplements import ResolvedSupplement
 
 #: Config surfaces excluded from the canonical dump — presentation-only or
 #: (the column- and table-level description overrides) authored prose that
@@ -34,7 +38,29 @@ _FINGERPRINT_EXCLUDE: "dict[str, Any]" = {
     },
     "source": {"tables": {"__all__": {"descriptions", "description"}}},
     "base": {"rename": {"__all__": {"descriptions", "description"}}},
+    "supplements": {
+        "__all__": {"description", "descriptions", "file"},
+    },
 }
+
+
+def _supplement_fingerprint_entry(supplement: "ResolvedSupplement") -> "dict[str, Any]":
+    """One supplement's fingerprint-map entry.
+
+    Args:
+        supplement: The resolved supplement.
+
+    Returns:
+        `{"columns": [[name, canonical_type], ...], "sha256": hex-or-null}`
+        — the column list as an ordered list of pairs (the canonical
+        document's sorted keys would otherwise erase a reordering of the
+        declared map).
+    """
+    columns = [
+        [name, canonical_supplement_type(type_text)]
+        for name, type_text in supplement.decl.columns.items()
+    ]
+    return {"columns": columns, "sha256": supplement.sha256}
 
 
 def compute_fingerprint(
@@ -44,6 +70,7 @@ def compute_fingerprint(
     fork_path: str,
     fmt: Literal["csv", "duckdb"],
     package_version: str,
+    supplements: "Sequence[ResolvedSupplement]",
 ) -> str:
     """SHA-256 hex over the canonical JSON of every drip-identity input.
 
@@ -53,9 +80,10 @@ def compute_fingerprint(
     — presentation-only fields an author may add, change, or remove mid-drip
     without it counting as a drip-identity change), the resolved anchor
     (start_instant ISO + IANA key, or null), the base.json digest, the sole
-    branch's fork_path, the fmt, and the package version. Any change to any
-    other input yields a new fingerprint, halting --next rather than
-    splicing inconsistent windows.
+    branch's fork_path, the fmt, the package version, and `supplements`: a
+    map from supplement name to `{"columns": [[name, canonical_type], ...],
+    "sha256": hex-or-null}`. Any change to any other input yields a new
+    fingerprint, halting --next rather than splicing inconsistent windows.
 
     Args:
         config: The parsed export config.
@@ -64,6 +92,8 @@ def compute_fingerprint(
         fork_path: The sole branch's fork path.
         fmt: Output format.
         package_version: The installed fabulexa_forge version string.
+        supplements: The resolved supplement set, declaration order; empty
+            when none are declared.
 
     Returns:
         64-char lowercase hex digest.
@@ -75,6 +105,10 @@ def compute_fingerprint(
         "fork_path": fork_path,
         "package_version": package_version,
         "sidecar_sha256": sidecar_sha256,
+        "supplements": {
+            supplement.decl.name: _supplement_fingerprint_entry(supplement)
+            for supplement in supplements
+        },
     }
     canonical = json.dumps(
         document,

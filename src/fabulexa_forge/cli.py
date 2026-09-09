@@ -225,11 +225,12 @@ def _dispatch_export(
 
     The `--next` / `--from`/`--to` leaves call the incremental driver, which
     dispatches on `config.mode` internally (dimensional vs. source vs. base
-    engine compile), threading `overlay` and printing per-table row counts
-    from the returned outcome. The full-export leaf dispatches here on
-    `config.mode`, threading `overlay` to the matching engine and printing
-    counts from its returned report; the dimensional leaf also threads
-    `supplements` (a source/base config cannot declare any).
+    engine compile), threading `overlay` and `supplements` and printing
+    per-table row counts from the returned outcome. The full-export leaf
+    dispatches here on `config.mode`, threading `overlay` to the matching
+    engine and printing counts from its returned report; the dimensional
+    leaf also threads `supplements` (a source/base config cannot declare
+    any).
 
     Args:
         emit: The open emit.
@@ -254,7 +255,7 @@ def _dispatch_export(
         from fabulexa_forge.incremental.driver import export_incremental_next
 
         outcome = export_incremental_next(
-            emit, config, out, fmt, anchor, notice_sink, overlay
+            emit, config, out, fmt, anchor, notice_sink, overlay, supplements
         )
         if outcome.status == "drained":
             print("drained: no more windows to emit")
@@ -271,7 +272,16 @@ def _dispatch_export(
 
         window = parse_range(range_from, range_to, anchor)
         windowed_export = export_window(
-            emit, config, out, fmt, anchor, window, None, notice_sink, overlay
+            emit,
+            config,
+            out,
+            fmt,
+            anchor,
+            window,
+            None,
+            notice_sink,
+            overlay,
+            supplements,
         )
         _print_windowed_report(
             window.label, windowed_export.report, windowed_export.row_counts

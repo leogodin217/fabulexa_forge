@@ -132,6 +132,22 @@ def _list_non_hidden(out: Path) -> list[Path]:
     )
 
 
+def csv_cursor_path(out: Path) -> Path:
+    """The `--next` CSV cursor file's path.
+
+    Read by the source-is-output gate under `--next` CSV, and by
+    `_read_csv_cursor` / `write_csv_cursor` themselves — the one naming
+    authority for the cursor file's location.
+
+    Args:
+        out: The drop parent directory.
+
+    Returns:
+        `<out>/.fabulexa-forge-cursor.json`.
+    """
+    return out / _CURSOR_FILE
+
+
 def _read_csv_cursor(out: Path, window_zero_label: str) -> Cursor | None:
     """Read the cursor from a CSV drop directory.
 
@@ -154,7 +170,7 @@ def _read_csv_cursor(out: Path, window_zero_label: str) -> Cursor | None:
     if not non_hidden:
         return None
 
-    cursor_file = out / _CURSOR_FILE
+    cursor_file = csv_cursor_path(out)
 
     # Crash-recovery: exactly one non-hidden entry, a directory named window_zero_label,
     # and the cursor file is absent (drop renamed, cursor write lost).
@@ -299,7 +315,7 @@ def write_csv_cursor(out: Path, cursor: Cursor) -> None:
     Raises:
         ExportRuntimeError: The write fails.
     """
-    cursor_file = out / _CURSOR_FILE
+    cursor_file = csv_cursor_path(out)
     doc = {
         "cursor_format_version": cursor.cursor_format_version,
         "fingerprint": cursor.fingerprint,
