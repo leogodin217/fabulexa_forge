@@ -1,0 +1,78 @@
+# Recipe: supplement-typed-columns
+# ============================================================
+# An inline supplement whose columns use the typed end of the supplement
+# vocabulary — DECIMAL(p, s), DATE, BOOLEAN — beside BIGINT and VARCHAR,
+# with per-column `descriptions` prose. A minimal diff against
+# supplement-tables, which shows the two data sources (file / inline) over
+# VARCHAR and BIGINT only.
+#
+# The two traps typed columns set for an author:
+#
+#   1. QUOTE ANYTHING YAML WOULD NOT READ AS A PLAIN STRING. An unquoted
+#      2024-01-01 is a YAML date and an unquoted true / yes / no is a YAML
+#      bool by the time forge sees the row; both are refused at parse
+#      ("quote temporal values" / "quote boolean values") — a VARCHAR cell
+#      `NO` would otherwise ship as `false`. Numbers may stay unquoted.
+#   2. THE CAST IS DUCKDB'S, VERBATIM. Every cell is text until the session
+#      casts it to the declared type, and the cast's leniency is the
+#      contract: a DECIMAL(6, 2) cell `0.125` rounds to 0.13, and a BIGINT
+#      cell `1.5` ROUNDS to 2 rather than being refused. A cell that does
+#      not cast at all (`abc` into a DATE) is refused before any table is
+#      written (SupplementValueInvalid, naming table / column / row).
+#
+# TIMESTAMP, DATE, and TIME are zone-free. A TIMESTAMPTZ column additionally
+# requires a resolved anchor (the emit's `runtime` anchor or a `rebase`
+# block) — refused at plan compile without one, like any timestamptz
+# election.
+#
+# Fixture world (recipe emit):
+#   records__patient — record_id, prop__name, created_sim_time
+#                      p001 Alice, p002 Bob
+#
+# Output:
+#   customer  — 2 rows, from records__patient
+#   rate_band — inline supplement, 2 rows; `to_units` NULL on the open band
+
+mode: dimensional
+
+dimensional:
+  tables:
+    - name: customer
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [customer_id]
+      columns:
+        - name: customer_id
+          from: record_id
+        - name: full_name
+          from: prop__name
+
+supplements:
+  - name: rate_band
+    columns:
+      band: VARCHAR
+      from_units: BIGINT
+      to_units: BIGINT
+      rate: DECIMAL(6, 2)
+      effective_from: DATE
+      current: BOOLEAN
+    description: Usage price bands, maintained by account management.
+    descriptions:
+      to_units: Inclusive upper bound of the band; empty on the open-ended top band.
+      effective_from: First day the band applies.
+    rows:
+      - band: base
+        from_units: 0
+        to_units: 1000
+        rate: 0.10
+        effective_from: '2024-01-01'   # quoted: an unquoted date is a YAML date, refused
+        current: 'true'                # quoted: an unquoted bool is a YAML bool, refused
+      - band: volume
+        from_units: 1001
+        to_units: null                 # null → SQL NULL
+        rate: 0.08
+        effective_from: '2024-07-01'
+        current: 'true'

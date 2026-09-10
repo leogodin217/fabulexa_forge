@@ -30,6 +30,12 @@ owned here, since they serve every mode with an elected rendering
   table.
 - **Materialization.** Every writer runs its query through `Emit.query_arrow`; none
   opens `run.duckdb` directly.
+- **Planned paths, callable.** `csv_output_paths(out, table_names, window_label)`
+  names every data file a CSV write lands — `<out>/<table>.csv`, or
+  `<out>/<window_label>/<table>.csv` under `--next` — the writer's placement
+  convention made callable, so the write step and the supplement
+  source-is-output gate ([`supplements.md`](supplements.md)) read one authority.
+  The DuckDB writer exposes none: its one output is `out` itself.
 
 ## Semantics
 
@@ -110,6 +116,7 @@ the caller's decision, never the writer's ([`declared-keys.md`](declared-keys.md
 | [`temporal-elections.md`](temporal-elections.md) | The elected temporal types whose pinned CSV text forms this doc owns. |
 | [`value-rendering-elections.md`](value-rendering-elections.md) | The `decimal` election whose `DECIMAL(p, s)` CSV text form this doc owns, and the event-log site that pins its in-JSON temporal text to these forms. |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability that feeds the DuckDB keyed creation path. |
+| [`supplements.md`](supplements.md) | The supplement type vocabulary bounded by the pinned text forms; the source-is-output gate that reads `csv_output_paths`. |
 | [`reader.md`](reader.md) | `Emit.query_arrow` — the one materialization path every writer uses — and the session-zone pin that makes temporal serialization machine-independent. |
 | [`README.md`](README.md) | Design index, package layout, staged roadmap. |
 | [`../../CLAUDE.md`](../../CLAUDE.md) | Principles, the isolation boundary, vocabulary. |

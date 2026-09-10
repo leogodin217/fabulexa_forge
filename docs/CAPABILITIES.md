@@ -469,6 +469,23 @@ Each mode reads the same emit and writes a different target shape.
   a corrupted emit keeps its dictionary. Sourced, never invented — an
   undocumented item renders nothing. See
   [`architecture/documentation-channel.md`](architecture/documentation-channel.md).
+- ✓ **Supplementary tables** *(dimensional only)* — a `supplements` block on the
+  export config carries author-supplied tables verbatim into the warehouse as
+  ordinary tables: the manually-entered-warehouse-data case (region codes,
+  negotiated price ladders, product categories nobody generated). Each is
+  declared with a name, an ordered typed column list, its data (a CSV beside
+  the config or inline `rows`), and optional prose; forge casts the cells to
+  the declared types under DuckDB's own `VARCHAR` cast and asserts nothing
+  else — no key, reference, order, or timing. A bad cell, a `TIMESTAMPTZ`
+  column without an anchor, or a source file the export would overwrite is
+  refused before any table is written. Supplements land after the declared
+  tables, delivered whole as `snapshot` in every incremental window (the
+  fingerprint tracks the file's SHA-256, not its path), join a shaped
+  playback's table set, are recorded in the manifest under
+  `tables[].supplement`, and travel inside dataset packs. See
+  [`architecture/supplements.md`](architecture/supplements.md).
+  *Teaches: the hand-maintained reference table every real warehouse
+  carries beside its generated facts.*
 - ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
   through a required caller-supplied sink; CLI renders one line per notice to stderr,
   off stdout. See [`architecture/notices.md`](architecture/notices.md).

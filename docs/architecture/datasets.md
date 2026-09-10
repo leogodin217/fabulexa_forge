@@ -174,6 +174,22 @@ stderr, exit 1. It never talks to the network.
   only — the archive carries no directory members; directories materialize at
   extraction); gzip stream with `mtime` 0 and an empty original-filename
   field.
+- **Every packed config loads through its loader.** A document with a top-level
+  `mode` key loads as an export config (`load_export_config`), one with a
+  top-level `streams` key as a stream config (`load_stream_config`); a document
+  with neither, or one its loader refuses, is a build refusal rendering the
+  loader's own diagnostic under a `dataset '<name>': config '<cfg>': ` prefix.
+  The pack's configs therefore load under the wheel that publishes them by
+  construction.
+- **Supplement files are pack members.** A packed export config's file
+  supplements ([`supplements.md`](supplements.md)) are resolved through
+  `load_supplements` against the config's directory (the archive root) and
+  added at their config-relative path (`custom_rate_tier.csv`,
+  `data/custom_rate_tier.csv`); an inline supplement adds no member. A missing
+  file, or one whose resolved path escapes the dataset directory (`..`, an
+  absolute path), is a build refusal naming the config and the path — `get`'s
+  member-safety rule refuses such members on extraction regardless. Supplement
+  members join the sorted-path member order under the same normalization.
 
 Publishing a dataset is: author configs in `docs/examples/<name>/` → run the
 pack builder → upload the archive to the release → commit the manifest entry.
@@ -231,6 +247,8 @@ pre-validated in the wheel:
 | Command/config coherence — every `{dir}/`-prefixed `.yaml` reference in a command (`=`-attached forms included) names a file in that entry's `configs` | Hygiene test — same module |
 | Pack completeness — bundle triple present; every `configs` file exists in the example dir | Pack builder |
 | Pack version — the pack's `base.json` version equals the supported constant | Pack builder (via `open_emit`) |
+| Config loadability — every packed config loads through the loader its top-level shape names | Pack builder |
+| Supplement completeness — every packed export config's file supplements exist under the dataset directory and do not escape it | Pack builder (via `load_supplements`) |
 
 Of the stamped fields, only `base_format_version` is mechanically enforced
 before a wheel ships: the hygiene test runs offline against a repo that holds
@@ -281,4 +299,5 @@ sha256 verification loudly.
 |---|---|
 | [`reader.md`](reader.md) | `open_emit` — the version gate the builder publishes through and every extracted pack is consumed through |
 | [`notices.md`](notices.md) | The notice channel this surface deliberately does not emit into (no emit, no plan) |
+| [`supplements.md`](supplements.md) | The file supplements a packed export config may reference — resolved by the builder through the same loader and carried as members |
 | [`../CLAUDE.md`](../CLAUDE.md) | The bundle boundary distribution moves bytes across without extending |

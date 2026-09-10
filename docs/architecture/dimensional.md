@@ -63,6 +63,17 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
   directory of `<table>.csv` files (`fmt='csv'`) or a single `.duckdb` file holding
   every table (`fmt='duckdb'`). The two output shapes are why `out` is a directory for
   CSV and a file for DuckDB.
+- **Supplements.** `export_dimensional` takes the loader-resolved supplement set
+  beside the overlay (`supplements: Sequence[ResolvedSupplement]`, empty when the
+  config declares none — [`supplements.md`](supplements.md)). After the plan
+  compile and before any write it compiles each supplement to a `QuerySpec`
+  (`compile_supplement_specs`, `write_mode='create'`), runs the source-is-output
+  gate over the invocation's planned output paths, and validates the overlay's
+  `table:` slots against the union of plan and supplement names. Supplement specs
+  are appended after the declared tables in declaration order and flow through
+  the same write dispatch and companion write. A supplement is not a kind: it is
+  neither an `fk` target nor a `lookup` source, takes no key election, and no
+  `render:` / `derived:` election reaches it.
 - **Reader-first; authors no base-table SQL.** Every table and column fact flows from
   the `Sidecar`; the engine hard-codes no column list and opens `run.duckdb` only
   through `Emit`. The engine **names no base table in SQL it authors** — it composes
@@ -724,6 +735,15 @@ at plan build (`check_reserved_presentation_name`, the shared check in
 the playback seam presents the column as the recorded trail under `state`
 ([`playback.md`](playback.md) § The recorded trail).
 
+A supplement's `name` shares the output-table namespace: it is a SQL identifier,
+may not equal another supplement's or a declared table's `name` (parse-time,
+`supplements_names_unique` — both lists are on the config, so the collision is
+decidable before any emit opens), and may not be a bookkeeping name
+(`is_reserved_table_name`, applied to the supplement set at plan compile with
+its own message). Its CSV file is `<name>.csv` like any table's
+([`supplements.md`](supplements.md) § Output naming and the source-is-output
+gate).
+
 ### Determinism and ordering
 
 The exporter is a pure function of `(emit, config, code version)`: same inputs →
@@ -1174,6 +1194,7 @@ What the dimensional exporter deliberately does not own:
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — FK `target_key` semantics, inheritance, the dim-key agreement check, `init`'s `keys` proposal |
 | [`temporal-elections.md`](temporal-elections.md) | The cross-mode election vocabulary `derived: timestamp` / `scd_window` / `elapsed` / `date_parse` render through — the full election set, anchor-requirement rule, and declared date-parse contract |
 | [`value-rendering-elections.md`](value-rendering-elections.md) | The value elections `derived: decimal` / `derived: json_precision` spell per column — semantics, guards, and the shared rendering authorities |
+| [`supplements.md`](supplements.md) | Author-supplied tables carried verbatim beside the declared tables — the declaration, the loader, the compile gates, the source-is-output gate |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The config grammar these semantics bind |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The input contract (table categories, `references`, membership, `history_tracked`) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |

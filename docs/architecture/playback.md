@@ -281,6 +281,20 @@ of the same config would not. The only ask-time refusals are the data guards
 `ElectedKeyDuplicate` on a guarded fk edge or a reached dim, a source plan's
 data-dependent rules) and the selection gates below.
 
+**Supplement tables.** A dimensional shape's table set includes its supplements
+([`supplements.md`](supplements.md)): `open_shaped_playback` binds the
+loader-resolved set beside the config (empty for a source shape, whose config
+cannot declare any), `tables()` reports each with class `snapshot` after the
+declared tables in declaration order, and each is a legal member of the
+per-ask `tables` selection — the three gates range over the union of declared
+and supplement names. Static completeness holds for supplements outright: every
+supplement gate (the reserved-name gate, the `TIMESTAMPTZ` anchor rule, the
+cell probe) is a pure function of the declaration, the resolved rows, and the
+anchor, touches no emit table, and runs at open through
+`compile_supplement_specs`; open still reads no emit data, and no supplement
+ask ever refuses. A supplement's answer is horizon-invariant and never depends
+on the selection, so projection invariance holds for it trivially.
+
 **Table selection.** `tables` is any non-empty collection of the names
 `tables()` reports (a singleton included), or `None` for the whole shape. Set
 semantics: a repeated name selects its table once; the answer is the selected
@@ -333,6 +347,10 @@ materialized. The cost of an ask is therefore a per-ask floor (one horizon
 opened per delta-free ask, two per delta-bearing one; for a source shape one
 whole-config plan build per horizon opened) plus a per-selected-table
 marginal, never a sibling's.
+A selection naming no dimensional table — supplements only — opens no horizon,
+runs no dimensional compile, and emits no plan notices: the horizon economy at
+its floor. A mixed selection compiles the dimensional part as above and appends
+the selected supplements in declaration order.
 
 ### Shaped state (tier 2): the truncated tape
 
@@ -340,7 +358,8 @@ marginal, never a sibling's.
 realized literally, not per class: the mode's full-export compile runs over the
 **truncated tape**, the derivations-owned presentation of the emit sliced at T
 (see [`derivations.md`](derivations.md) § The truncated-tape surface).
-Delivery is `snapshot` on every table. Because the compile is the shipped
+Delivery is `snapshot` on every table, a dimensional shape's supplement tables
+included — identical at every `T`. Because the compile is the shipped
 full-export compile, as-of-T correctness is by construction — no per-class
 rules: type-1 dims read as-of-T values, SCD-2's `LEAD` over truncated `history`
 yields change points ≤ T, records-grain facts reconstruct as of T, source's
@@ -673,5 +692,6 @@ any id.
 | [`stream-playback.md`](stream-playback.md) | The stream-shaped head and per-event render surface — bounds, seek (snapshot-then-stream), the `r` op, and the seam's one byte-producing contract |
 | [`key-election.md`](key-election.md) | The identity-publication layer split (§ Identity publication) — why the seam projects published identity but never gates it |
 | [`slice-only.md`](slice-only.md) | The `slice_only` policy the seam inherits at selection and at open |
+| [`supplements.md`](supplements.md) | The supplement tables a dimensional shape carries — in the table set and the selection domain, every gate at open |
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` both tiers render wallclock through |
 | [`temporal-elections.md`](temporal-elections.md) | The election vocabulary tier 2 renders by reusing the modes' own compile and validation surfaces directly |

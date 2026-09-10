@@ -54,6 +54,16 @@ sourced per-export facts for tooling.
   overlay). The model never touches the filesystem, keeping the config
   emit-independent; overlay existence, readability, and slot validity are
   load-/plan-time checks outside the model.
+- **Supplements.** `export_dimensional` and the incremental driver's windowed
+  entries also take the loader-resolved supplement set
+  ([`supplements.md`](supplements.md)). A supplement reaches the companion
+  writer as an ordinary `TableReport` whose `supplement` field carries its
+  provenance — a `SupplementSource` (the declared, unresolved file string and
+  the file bytes' SHA-256; both `None` for an inline supplement), stated
+  explicitly at every report-assembly site like its siblings. The overlay's
+  `table:` slots validate against the union of plan and supplement names, so
+  a slot may name a supplement; the README renders a supplement as any table
+  under its ordering contract, with nothing to distinguish it.
 - **Mode-neutral.** The companion writer holds no mode-specific branching; the
   mode contributes its packaged template and its report.
 
@@ -73,6 +83,11 @@ modes never collide; the db-stem component keeps two same-mode warehouses in
 one directory from clobbering each other's docs. Windowed CSV exports place
 the artifacts at the output-directory root, never inside window drop
 directories.
+
+The pair's paths are exposed by `companion_artifact_paths(target, mode, fmt)` —
+the placement rule made callable, which is why the mode literal is an input —
+read by the writer and by the supplement source-is-output gate
+([`supplements.md`](supplements.md)) alike.
 
 ### Writing rules
 
@@ -197,6 +212,17 @@ Normative rules the code conforms to:
   accumulated target. `incremental` is null on a full export; on a windowed
   invocation it carries the regime, the window or range label, and the next
   window index (null on a range).
+- **`tables[].supplement` names the non-emit source.** `null` for every mode
+  table; `{"file": <as declared>, "sha256": <hex>}` for a file supplement;
+  `{"file": null, "sha256": null}` for an inline one — the key always
+  present, the stable-field-set posture. A supplement entry's `description`
+  and `columns[].description` are the author's prose alone; `unit` and
+  `enum_options` are `null` (no source property), as are `primary_key` /
+  `unique`. The embedded config carries `supplements` with `file` as declared
+  (the author's string, unresolved) and `rows` verbatim; because the byte form
+  sorts object keys, the embedded `supplements[].columns` map does not
+  preserve declared order — the table entry's `columns` list is the order
+  authority, as it is for every table.
 
 ## Invariants
 
@@ -302,6 +328,7 @@ the overlay pointer or content never raises `IncrementalFingerprintMismatch`
 | [`reader.md`](reader.md) | The documentation view (§ The documentation view) the builders resolve every provenance entry through |
 | [`incremental.md`](incremental.md) | The windowed caller — whole-state artifact rewrite after data + cursor commit, the CSV census exclusion, the fingerprint's `readme_overlay` exclusion |
 | [`writers.md`](writers.md) | The Arrow transcription authority the report's columns/types come from |
+| [`supplements.md`](supplements.md) | The supplement tables whose provenance the manifest's `tables[].supplement` records and whose source files `companion_artifact_paths` guards |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` declarations the manifest transcribes |
 | [`key-election.md`](key-election.md) | The `keys` election on record via the embedded config |
 | [`anchor.md`](anchor.md) | The resolved `EffectiveAnchor` the manifest and README report |
