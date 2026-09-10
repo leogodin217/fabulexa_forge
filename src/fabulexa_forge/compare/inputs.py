@@ -9,9 +9,9 @@ file, `ATTACH`ed as `expected_db`) and the actual side (a DuckDB file
 `ATTACH`ed as `actual_db`, or a directory of CSV files registered as
 all-text relations in the session). It also owns the one SQL-side typing
 step — casting an actual-side CSV cell's raw text toward the expected
-column's canonical-family reference type — including the two bespoke
-parses (blob hex-decode, interval writer-form-then-`TRY_CAST`) the
-architecture doc pins.
+column's canonical-family reference type — including the three bespoke
+parses (blob hex-decode, interval writer-form-then-`TRY_CAST`, decimal
+exact-parse) the architecture doc pins.
 
 See `docs/architecture/compare.md` § Inputs and the schema authority,
 § Canonical value encoding for the semantic authority.
@@ -19,6 +19,7 @@ See `docs/architecture/compare.md` § Inputs and the schema authority,
 
 from __future__ import annotations
 
+import decimal
 import re
 import uuid
 from dataclasses import dataclass
@@ -351,6 +352,30 @@ def _resolve_blob_cell(raw: str) -> str:
     return result
 
 
+def _resolve_decimal_cell(raw: str) -> str:
+    """Resolve one raw CSV decimal cell: an exact Python-side decimal parse,
+    or the raw text on a parse failure (a value discrepancy, never an error).
+
+    The decimal family compares exact values at any precision/scale, so no
+    single DuckDB reference type can carry the cast — a bare `DECIMAL` is
+    `DECIMAL(18, 3)` and would silently round or overflow. Python's
+    `decimal.Decimal` parses the text losslessly; non-finite forms (`NaN`,
+    `Infinity`), which no `DECIMAL` column can hold, count as failures.
+    """
+    try:
+        value = decimal.Decimal(raw)
+    except decimal.InvalidOperation:
+        return raw
+    if not value.is_finite():
+        return raw
+    # A DECIMAL column has no negative zero; a `-0.00` cell is the value 0.
+    if value == 0:
+        value = abs(value)
+    result = encode_value(value, "decimal")
+    assert result is not None
+    return result
+
+
 def _resolve_interval_cell(raw: str, cast_value: object) -> str:
     """Resolve one raw CSV interval cell: the pinned writer form parsed
     directly, else the `TRY_CAST` fallback result, else the raw text on a
@@ -376,7 +401,7 @@ def _resolve_csv_cell(
     Args:
         raw: The raw CSV text, or None for an unquoted-empty (NULL) field.
         cast_value: The materialized `TRY_CAST(raw AS <reference type>)`
-            result (irrelevant for the text and blob families).
+            result (irrelevant for the text, blob, and decimal families).
         family: The expected column's canonical family.
 
     Returns:
@@ -390,6 +415,8 @@ def _resolve_csv_cell(
         return raw
     if family == "blob":
         return _resolve_blob_cell(raw)
+    if family == "decimal":
+        return _resolve_decimal_cell(raw)
     if family == "interval":
         return _resolve_interval_cell(raw, cast_value)
     if cast_value is None:
@@ -410,11 +437,12 @@ def _select_fragment(name: str, family: CanonicalFamily) -> tuple[str, bool]:
         `(fragment, has_cast_column)` — the fragment always projects the raw
         text as `<name>__raw`; `has_cast_column` is True when it also
         projects `TRY_CAST(... AS <reference type>) AS <name>__cast`
-        (every family but text and blob, which resolve without a SQL cast).
+        (every family but text, blob, and decimal, which resolve without a
+        SQL cast).
     """
     ident = quote_identifier(name)
     raw_alias = quote_identifier(f"{name}__raw")
-    if family in ("text", "blob"):
+    if family in ("text", "blob", "decimal"):
         return f"{ident} AS {raw_alias}", False
     ref_type = _REFERENCE_TYPE[family]
     cast_alias = quote_identifier(f"{name}__cast")

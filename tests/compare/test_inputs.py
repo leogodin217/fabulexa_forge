@@ -499,3 +499,61 @@ def test_csv_interval_uncastable_text_is_row_discrepancy_not_error(
     table_comparison = result.tables[0]
     assert table_comparison.rows is not None
     assert table_comparison.rows.extra == (("1", "not-an-interval"),)
+
+
+# ---------------------------------------------------------------------------
+# CSV decimal
+# ---------------------------------------------------------------------------
+
+
+def test_csv_decimal_parses_exactly_beyond_default_scale(tmp_path: "Path") -> None:
+    # 1.2345 exceeds a bare DECIMAL's (18, 3) default scale: a SQL-side cast
+    # would have rounded it; the exact parse compares it as the value it is.
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, amount DECIMAL(10,4))",
+            "INSERT INTO t VALUES (1, 1.2345), (2, 1.5000)",
+        ],
+    )
+    csv_dir = tmp_path / "actual"
+    write_csv_dir(csv_dir, {"t.csv": "id,amount\n1,1.2345\n2,1.5\n"})
+    result = compare_datasets(expected, csv_dir)
+    assert result.equal
+
+
+def test_csv_decimal_different_value_is_row_discrepancy(tmp_path: "Path") -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, amount DECIMAL(10,4))",
+            "INSERT INTO t VALUES (1, 1.2345)",
+        ],
+    )
+    csv_dir = tmp_path / "actual"
+    write_csv_dir(csv_dir, {"t.csv": "id,amount\n1,1.2346\n"})
+    result = compare_datasets(expected, csv_dir)
+    assert not result.equal
+    table_comparison = result.tables[0]
+    assert table_comparison.rows is not None
+    assert table_comparison.rows.missing == (("1", "1.2345"),)
+    assert table_comparison.rows.extra == (("1", "1.2346"),)
+
+
+def test_csv_decimal_unparseable_text_is_row_discrepancy_not_error(
+    tmp_path: "Path",
+) -> None:
+    expected = build_duckdb(
+        tmp_path / "expected.duckdb",
+        [
+            "CREATE TABLE t (id BIGINT, amount DECIMAL(10,4))",
+            "INSERT INTO t VALUES (1, 1.2345), (2, 1.2345)",
+        ],
+    )
+    csv_dir = tmp_path / "actual"
+    write_csv_dir(csv_dir, {"t.csv": "id,amount\n1,not-a-number\n2,NaN\n"})
+    result = compare_datasets(expected, csv_dir)
+    assert not result.equal
+    table_comparison = result.tables[0]
+    assert table_comparison.rows is not None
+    assert table_comparison.rows.extra == (("1", "not-a-number"), ("2", "NaN"))
