@@ -989,7 +989,7 @@ class TestValidate:
 
 
 class TestC15Surface:
-    """C15: the sidecar's surface discriminator and projection absence."""
+    """C15: the sidecar's surface discriminator, projection and rule_docs absence."""
 
     def test_published_surface_passes(self, tmp_path: Path) -> None:
         """A sidecar stamped surface 'published' with no projection block passes."""
@@ -1036,6 +1036,16 @@ class TestC15Surface:
             result = run_check(emit, "C15")
         assert result.passed is False
         assert any("projection" in m for m in result.messages)
+
+    def test_rule_docs_block_fails(self, tmp_path: Path) -> None:
+        """A published-surfaced sidecar carrying a rule_docs block fails C15."""
+        sidecar = _minimal_sidecar()
+        sidecar["rule_docs"] = {"rules": []}
+        dest = _write_emit(tmp_path / "rule_docs", sidecar)
+        with open_emit(dest) as emit:
+            result = run_check(emit, "C15")
+        assert result.passed is False
+        assert any("rule_docs" in m for m in result.messages)
 
 
 # ---------------------------------------------------------------------------
