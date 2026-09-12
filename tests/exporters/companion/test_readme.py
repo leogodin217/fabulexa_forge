@@ -13,6 +13,7 @@ from exporters.companion._fixtures import (
     ACTOR_TABLE_DESCRIPTION,
     EVENT_LOG_ITEM_TYPE_DESCRIPTION,
     EVENT_LOG_TABLE_DESCRIPTION,
+    SCENARIO_NAME,
     documented_actor_table_report,
     event_log_table_report,
     history_interval_table_report,
@@ -238,6 +239,29 @@ def test_overview_absent_when_overlay_is_none(tmp_path: Path) -> None:
     """No overlay at all renders no '## Overview' section."""
     text = _render(tmp_path, overlay=None, anchor=None)
     assert "## Overview" not in text
+
+
+def test_title_is_mode_alone_without_scenario_name(tmp_path: Path) -> None:
+    """An emit declaring no scenario_name titles the README by mode only."""
+    text = _render(tmp_path, overlay=None, anchor=None)
+    assert text.startswith("# Base Export\n\n")
+
+
+def test_title_carries_scenario_name_when_declared(tmp_path: Path) -> None:
+    """A declared scenario_name titles the README after the mode, verbatim."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+    with open_emit(emit_dir) as emit:
+        text = render_readme(
+            mode="base",
+            emit=emit,
+            report=_two_table_report(row_count=1),
+            overlay=None,
+            anchor=None,
+            manifest_filename="base-manifest.json",
+        )
+    assert text.startswith(f"# Base Export — {SCENARIO_NAME}\n\n")
 
 
 # ---------------------------------------------------------------------------

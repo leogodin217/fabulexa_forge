@@ -6,7 +6,8 @@ config, resolved anchor, and one invocation's
 `ExportReport`, and owns the pinned byte serialization every companion write
 renders through. Format version 2 adds the machine-readable documentation
 mirror -- top-level `scenario_description`, per-table `description`,
-per-column `description` / `unit` / `enum_options` -- resolved through
+per-column `description` / `unit` / `enum_options` -- and format version 4
+adds top-level `scenario_name` beside it, all resolved through
 `emit.sidecar.documentation()` via the report's carried provenance
 (`companion/dictionary.py`), the same resolution the README renders.
 Absent -> JSON `null` (the manifest's stable-field-set posture).
@@ -35,7 +36,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.documentation import Documentation
     from fabulexa_forge.reader.emit import Emit
 
-_MANIFEST_FORMAT_VERSION = 3
+_MANIFEST_FORMAT_VERSION = 4
 """The manifest's own format version -- mode-definitional, like the event
 log's dense first id: every manifest of this design renders it identically."""
 
@@ -223,6 +224,7 @@ def build_manifest_document(
         "format": fmt,
         "forge_version": __version__,
         "scenario_description": doc.scenario_description(),
+        "scenario_name": doc.scenario_name(),
         "emit": _emit_identity_json(build_emit_identity(emit)),
         "anchor": anchor_to_json(anchor),
         "config": config.model_dump(mode="json"),

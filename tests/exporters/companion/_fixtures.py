@@ -61,6 +61,7 @@ def write_minimal_emit(
 SCENARIO_DESCRIPTION = (
     "A hospital shift-handoff simulation, tracking staff duty status across care teams."
 )
+SCENARIO_NAME = "Hospital Shift Handoff"
 ACTOR_TABLE_DESCRIPTION = "Hospital staff members."
 FULL_NAME_DESCRIPTION = "Staff member's full legal name."
 STATUS_DESCRIPTION = "Current duty status."
@@ -173,7 +174,7 @@ def write_documented_emit(dest: "Path", *, documented: bool = True) -> None:
     Args:
         dest: The emit directory; base.json and run.duckdb are written inside it.
         documented: False strips every description/unit/enum_domains/
-            scenario_description value while keeping table/column names,
+            scenario_description/scenario_name value while keeping table/column names,
             types, and references identical -- the inertness fixture pair.
     """
     extra: dict[str, object] = {
@@ -193,6 +194,7 @@ def write_documented_emit(dest: "Path", *, documented: bool = True) -> None:
     }
     if documented:
         extra["scenario_description"] = SCENARIO_DESCRIPTION
+        extra["scenario_name"] = SCENARIO_NAME
         extra["enum_domains"] = _DOCUMENTED_ENUM_DOMAINS
     write_emit(
         dest,

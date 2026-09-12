@@ -14,6 +14,7 @@ from exporters.companion._fixtures import (
     EVENT_LOG_ITEM_TYPE_DESCRIPTION,
     EVENT_LOG_TABLE_DESCRIPTION,
     SCENARIO_DESCRIPTION,
+    SCENARIO_NAME,
     documented_actor_table_report,
     event_log_table_report,
     write_documented_emit,
@@ -120,12 +121,13 @@ def test_full_export_field_set(tmp_path: Path) -> None:
 
     document = _build_document(emit_dir, anchor=_ANCHOR, windowed=None)
 
-    assert document["manifest_format_version"] == 3
+    assert document["manifest_format_version"] == 4
     assert document["mode"] == "base"
     assert document["format"] == "csv"
     assert document["forge_version"] == __version__
     assert document["incremental"] is None
     assert document["scenario_description"] is None
+    assert document["scenario_name"] is None
 
     emit_block = document["emit"]
     assert isinstance(emit_block, dict)
@@ -302,6 +304,19 @@ def test_top_level_scenario_description_forwarded(tmp_path: Path) -> None:
 
     document = _build_documented_document(emit_dir)
 
+    assert document["scenario_description"] == SCENARIO_DESCRIPTION
+
+
+def test_top_level_scenario_name_forwarded(tmp_path: Path) -> None:
+    """The manifest's top-level scenario_name carries the sidecar's display
+    label verbatim, beside (not in place of) the description."""
+    emit_dir = tmp_path / "emit"
+    emit_dir.mkdir()
+    write_documented_emit(emit_dir)
+
+    document = _build_documented_document(emit_dir)
+
+    assert document["scenario_name"] == SCENARIO_NAME
     assert document["scenario_description"] == SCENARIO_DESCRIPTION
 
 
@@ -673,6 +688,7 @@ def test_byte_form_sorts_top_level_keys(tmp_path: Path) -> None:
         "manifest_format_version",
         "mode",
         "scenario_description",
+        "scenario_name",
         "tables",
     ]
     positions = [_top_level_key_index(text, key) for key in ordered_keys]

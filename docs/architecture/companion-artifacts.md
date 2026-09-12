@@ -134,8 +134,9 @@ examples [`tests/exporters/companion/`](../../tests/exporters/companion/).
 ### The README
 
 The README is rendered output, never hand-edited. Its **ordering contract**: a
-title identifying the mode and a generated-artifact marker naming the manifest
-file; the overlay's `overview` (when present), then the emit's
+title identifying the mode — suffixed with the emit's `scenario_name` when
+present — and a generated-artifact marker naming the manifest file; the
+overlay's `overview` (when present), then the emit's
 `scenario_description` (when present) — author prose first; either or both may
 be absent, and absence renders nothing; the mode template's semantics
 prose; one section per output table in plan iteration order — the table's
@@ -189,7 +190,7 @@ Normative rules the code conforms to:
   of its own. Bookkeeping objects (`_export_meta`, `_export_windows`, the CSV
   cursor file) are driver state, not output tables, and never appear.
 - **Documentation fields mirror the resolved dictionary.** Top-level
-  `scenario_description`; per-table `description`; per-column `description`,
+  `scenario_description` and `scenario_name`; per-table `description`; per-column `description`,
   `unit`, and `enum_options` (the ordered `[{value, description}]` list where
   the column's source property carries a declared domain) — all resolved
   through the reader's documentation view under the channel's inheritance

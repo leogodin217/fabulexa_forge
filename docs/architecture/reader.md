@@ -364,7 +364,8 @@ is dimensional `init`'s versions-per-record evidence ([`dimensional.md`](dimensi
 
 `Sidecar.documentation()` exposes the emit's five documentation surfaces —
 per-column `description` / `unit`, per-table `description`, `enum_domains`
-per-value glosses, the run's `scenario_description`, and the vendored
+per-value glosses, the run's scenario (`scenario_description` and
+`scenario_name`), and the vendored
 contract's pinned structural-column strings — as one typed, read-only
 `Documentation` view. Construction is lazy and **permissive**, like the
 sibling registries and unlike the strict `presentation_keys` accessor:
@@ -401,8 +402,9 @@ mappings and the conformance checks' pinned column lists (§ Rationale).
 **Table prose and the scenario.** `table_description` answers
 `tables[].description` verbatim, `None` when absent; the fixed `history`
 table answers `None` by construction — the contract carries its meaning as
-contract prose, not sidecar prose. `scenario_description` answers the
-top-level field verbatim, `None` when absent, with no name-derived fallback.
+contract prose, not sidecar prose. `scenario_description` and
+`scenario_name` each answer their top-level field verbatim, `None` when
+absent, with no fallback in either direction.
 
 **Enum glosses share the routing surface's parse floor.**
 `enum_options(kind, prop)` answers the ordered declared value objects as

@@ -20,8 +20,9 @@ suites, [`tests/exporters/companion/`](../../tests/exporters/companion/),
 
 The bundle carries five documentation surfaces: per-column `description` /
 `unit`, per-table `description`, `enum_domains` per-value glosses, the run's
-`scenario_description`, and the vendored contract's pinned structural-column
-strings. The documentation channel forwards them end to end. The reader
+scenario (`scenario_description`, the narrative, and `scenario_name`, the
+display label — each optional, neither substituting for the other), and the
+vendored contract's pinned structural-column strings. The documentation channel forwards them end to end. The reader
 resolves all five behind one typed view
 ([`reader.md`](reader.md) § The documentation view); the file-writing exports
 embed the resolved dictionary in their companion README and manifest
@@ -269,7 +270,8 @@ empty-string sentinel. Field shapes are the dataclass definitions in
 The companion README and manifest are the channel's rendered surfaces; their
 placement and byte-form rules are
 [`companion-artifacts.md`](companion-artifacts.md)'s contract (§ The README,
-§ The manifest). The README renders the scenario narrative, per-table
+§ The manifest). The README titles itself with the scenario name and renders
+the scenario narrative, per-table
 resolved descriptions, per-column description and unit, and declared-value
 gloss lists; the manifest mirrors the same resolution machine-readably, with
 JSON `null` encoding absence. The two surfaces render the same author-first
@@ -297,7 +299,7 @@ annotate through the shared helpers in
 
 | Site | Annotation | When absent |
 |---|---|---|
-| Top of the generated config (all three engines) | comment block carrying `scenario_description` | nothing |
+| Top of the generated config (all three engines) | `# Scenario:` comment block — `scenario_name` on the heading line, `scenario_description` indented beneath; either alone still renders | nothing |
 | State / junction / dim / fact / stream stub for kind `K` or membership `(K, p)` | comment carrying the source table's `tables[].description` (a dim or fact stub: its source kind's) | nothing |
 | A `sub_types: [<v>]` stub | comment carrying `<v>`'s discriminator gloss | nothing |
 | A proposed property / column entry | comment carrying the property's `description` (and `unit`, appended) | nothing |
@@ -384,8 +386,8 @@ uncommenting keeps the documentation.
   (undocumented vs. silenced), and an author who wants no inherited prose
   beside a column writes better prose.
 - **The event log's kind-value gloss is kind-level.** A label's gloss is
-  the source kind's `tables[].description` — often absent for author-declared
-  kinds, by the contract's own design. Sub-type meaning renders where the
+  the source kind's `tables[].description` — absent for an author-declared
+  kind unless the author supplied a `kind_descriptions` entry. Sub-type meaning renders where the
   discriminator column itself renders (the state table's closed-domain gloss
   list, the `init` `sub_types` comments) and is not duplicated onto the
   event log. An author table-level override on a *declared* table does not

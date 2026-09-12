@@ -358,7 +358,7 @@ def test_csv_export_idempotent_bytes(tmp_path: Path) -> None:
 def test_manifest_v3_supplement_provenance_and_embedded_config(
     tmp_path: Path,
 ) -> None:
-    """manifest_format_version == 3; tables[].supplement per table; author
+    """manifest_format_version == 4; tables[].supplement per table; author
     prose forwarded; keys null; config.supplements embedded with declared file."""
     emit_dir = _build_emit(tmp_path / "emit")
     config, _config_dir, supplements = _happy_config_and_supplements(tmp_path)
@@ -374,7 +374,7 @@ def test_manifest_v3_supplement_provenance_and_embedded_config(
         out_dir, "dimensional", "csv"
     )
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert manifest["manifest_format_version"] == 3
+    assert manifest["manifest_format_version"] == 4
 
     by_name = {t["name"]: t for t in manifest["tables"]}
     assert by_name["dim_actor"]["supplement"] is None

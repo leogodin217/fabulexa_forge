@@ -184,6 +184,7 @@ def _base_sidecar(
     presentation_keys: dict[str, object] | None = None,
     row_census: dict[str, object] | None = None,
     scenario_description: str | None = None,
+    scenario_name: str | None = None,
 ) -> dict[str, object]:
     """Build a minimal sidecar dict with optional record_roles/enum_domains/partition."""
     result: dict[str, object] = {
@@ -202,6 +203,8 @@ def _base_sidecar(
         result["row_census"] = row_census
     if scenario_description is not None:
         result["scenario_description"] = scenario_description
+    if scenario_name is not None:
+        result["scenario_name"] = scenario_name
     return result
 
 
@@ -1102,7 +1105,10 @@ _DOCUMENTED_EQUIPMENT_COLUMNS: list[dict[str, object]] = [
 
 
 def build_documented_subtyped_dim_emit(
-    tmp_path: Path, *, scenario_description: str | None
+    tmp_path: Path,
+    *,
+    scenario_description: str | None,
+    scenario_name: str | None = None,
 ) -> Path:
     """A documented, bare-role, sub-typed dim kind ('equipment')."""
     tmp_path.mkdir(parents=True, exist_ok=True)
@@ -1137,6 +1143,7 @@ def build_documented_subtyped_dim_emit(
                 "equipment": {"equipment_type": [forklift_option, scanner_option]}
             },
             scenario_description=scenario_description,
+            scenario_name=scenario_name,
         ),
     )
     return tmp_path
@@ -1153,8 +1160,40 @@ def test_scenario_comment_present_when_declared(tmp_path: Path) -> None:
     assert "# Scenario:\n#   A warehouse equipment scenario.\n" in content
 
 
+def test_scenario_comment_carries_name_on_heading_line(tmp_path: Path) -> None:
+    """A declared `scenario_name` rides the `# Scenario:` heading line, the
+    description indented beneath it."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit",
+        scenario_description="A warehouse equipment scenario.",
+        scenario_name="Warehouse Equipment",
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    assert (
+        "# Scenario: Warehouse Equipment\n#   A warehouse equipment scenario.\n"
+        in content
+    )
+
+
+def test_scenario_comment_name_only(tmp_path: Path) -> None:
+    """A `scenario_name` with no description still renders the heading line."""
+    emit_dir = build_documented_subtyped_dim_emit(
+        tmp_path / "emit",
+        scenario_description=None,
+        scenario_name="Warehouse Equipment",
+    )
+    out_path = tmp_path / "candidate.yaml"
+    cmd_init(emit_dir, out_path, "dimensional")
+    content = out_path.read_text(encoding="utf-8")
+    after_heading = content.split("# Scenario: Warehouse Equipment\n", 1)[1]
+    assert not after_heading.startswith("#   ")
+
+
 def test_scenario_comment_absent_when_not_declared(tmp_path: Path) -> None:
-    """No `scenario_description` -> no `# Scenario:` block anywhere."""
+    """No `scenario_description` and no `scenario_name` -> no `# Scenario:`
+    block anywhere."""
     emit_dir = build_documented_subtyped_dim_emit(
         tmp_path / "emit", scenario_description=None
     )
