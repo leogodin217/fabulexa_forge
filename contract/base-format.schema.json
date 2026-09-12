@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://fabulexa.example/schemas/base-format-v9.schema.json",
+  "$id": "https://fabulexa.example/schemas/base-format-v11.schema.json",
   "title": "Base Format Sidecar (base.json)",
   "description": "Sidecar manifest enumerating the branches and tables present in a base-layer emit's run.duckdb. Defined by base-format.md, beside this schema.",
   "type": "object",
@@ -9,8 +9,8 @@
   "properties": {
     "base_format_version": {
       "type": "integer",
-      "description": "Format version. v9 = 9. Reader gates on this; unknown versions must be rejected.",
-      "const": 9
+      "description": "Format version. v11 = 11. Reader gates on this; unknown versions must be rejected.",
+      "const": 11
     },
     "surface": {
       "type": "string",
@@ -21,6 +21,11 @@
       "type": "string",
       "minLength": 1,
       "description": "The scenario's declared narrative, forwarded verbatim from the source emit. Present only when the scenario declared one; omitted entirely otherwise."
+    },
+    "scenario_name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The scenario's declared display label, forwarded verbatim from the source emit. Present only when the scenario declared one; omitted entirely otherwise. Never filename-derived."
     },
     "branches": {
       "type": "array",
@@ -226,7 +231,7 @@
         "description": {
           "type": "string",
           "minLength": 1,
-          "description": "Engine-owned structural table prose, forwarded verbatim from the source emit's tables[].description on every surviving table. Omitted for an author-declared kind's records table and for the fixed history table."
+          "description": "Table prose forwarded verbatim from the source emit's tables[].description on every surviving table: engine-owned structural prose for engine-cored records and membership tables, or the author's kind_descriptions entry for an author-declared kind's records table. Omitted when the source emit carries none (an author-declared kind without a kind_descriptions entry, and the fixed history table)."
         },
         "columns": {
           "type": "array",
@@ -296,7 +301,7 @@
         },
         "history_tracked": {
           "type": "boolean",
-          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 9 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
+          "description": "SCD class for records-category prop__<name> columns. true = type-2 (priors recoverable from the history table); false = type-1 (current value only). Present on every records-category prop__<name> column of a base_format_version: 11 emit, and on presentation-property columns. Omitted on structural, provenance, fixed-table, membership, and presentation_id columns."
         },
         "temporal_class": {
           "type": "string",
