@@ -2,7 +2,7 @@ sprint: date-dimension
 parent_branch: enable_complex_queries
 baseline_sha: 44af2ee11fa260356dcc230b81168c2f22c4dbc3
 started: 2026-09-13
-current_phase: 5
+current_phase: 6
 capabilities:
   - dimensional-exporter: [date_ref column mode, generated dim_date, range guard]
   - export-config: [date_dimension block, DateRefSpec, ColumnDecl.date_ref]
@@ -46,7 +46,7 @@ phases:
     name: "Incremental delivery"
     demo: "docs/sprints/date-dimension/demos/phase_4_incremental.py"
   5:
-    status: pending
+    status: complete
     name: "Shaped playback"
     demo: "docs/sprints/date-dimension/demos/phase_5_shaped_playback.py"
   6:

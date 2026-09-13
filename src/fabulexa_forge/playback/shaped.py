@@ -32,18 +32,23 @@ modules, the source plan/engine modules, `exporters.query_spec`,
 `exporters.supplements`, `incremental.windows`, `fabulexa_forge.errors`,
 `fabulexa_forge.playback.errors`, and stdlib.
 
-A shape binds its supplements at open (`compile_supplement_specs`, gated
+A shape compiles its generated calendar at open (`compile_date_dimension_spec`,
+a pure function of the declared range — no emit read) when `date_dimension`
+is present, and binds its supplements (`compile_supplement_specs`, gated
 exactly as a full export gates them — reserved names, the TIMESTAMPTZ anchor
 rule, the before-any-write cell probe — so a bad supplement never opens a
-head). `tables()` reports the declared shape's tables followed by one
-`ShapedTableDecl(name, 'snapshot')` per supplement, in declaration order —
-the union the per-ask selection (`_resolve_selection`) ranges over.
-`window()` / `state()` split a resolved selection into its dimensional part
-(threaded to the mode compile exactly as before) and its supplement part
-(materialized directly — a supplement's compiled relation is window-
-independent, so it is identical whichever ask ranges over it); a selection
-naming supplements only skips the mode compile entirely, so it opens no
-horizon (`window()`) or truncated tape (`state()`) and emits no notice.
+head). `tables()` reports the declared shape's tables followed by
+`ShapedTableDecl(DATE_DIMENSION_TABLE_NAME, 'snapshot')` when the calendar is
+present, then one `ShapedTableDecl(name, 'snapshot')` per supplement, in
+declaration order — the union the per-ask selection (`_resolve_selection`)
+ranges over. `window()` / `state()` split a resolved selection into its
+dimensional part (threaded to the mode compile exactly as before, then
+checked against the declared range via `check_date_refs_in_range` when the
+calendar is present) and its static part — the calendar and the supplements
+(materialized directly — their compiled relations are window-independent, so
+each is identical whichever ask ranges over it); a selection naming only
+static tables skips the mode compile entirely, so it opens no horizon
+(`window()`) or truncated tape (`state()`) and emits no notice.
 """
 
 from __future__ import annotations
@@ -54,6 +59,10 @@ from typing import TYPE_CHECKING, Literal
 from fabulexa_forge.derivations.guard import require_single_branch
 from fabulexa_forge.derivations.truncated_tape import open_truncated_tape
 from fabulexa_forge.exporters.base_relations import apply_base_relations
+from fabulexa_forge.exporters.date_dimension import (
+    check_date_refs_in_range,
+    compile_date_dimension_spec,
+)
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.validation import validate_table
 from fabulexa_forge.exporters.dimensional.windowing import window_delivery_class
@@ -214,29 +223,30 @@ def _resolve_selection(
     return selected
 
 
-def _supplement_table_decls(
-    supplement_specs: "Sequence[QuerySpec]",
+def _static_table_decls(
+    static_specs: "Sequence[QuerySpec]",
 ) -> tuple[ShapedTableDecl, ...]:
-    """One ShapedTableDecl per open-compiled supplement spec, `tables()`'s
-    supplement tail.
+    """One ShapedTableDecl per open-compiled static spec, `tables()`'s
+    calendar-and-supplements tail.
 
     Args:
-        supplement_specs: The open-compiled supplement specs, declaration
-            order.
+        static_specs: The open-compiled calendar (when present) and
+            supplement specs, declaration order (calendar first).
 
     Returns:
         One `ShapedTableDecl(name, 'snapshot')` per spec, in the same order
-        — a supplement's window() / state() delivery is always 'snapshot'.
+        — the calendar's and a supplement's window() / state() delivery is
+        always 'snapshot'.
     """
     return tuple(
         ShapedTableDecl(name=spec.table_name, window_delivery="snapshot")
-        for spec in supplement_specs
+        for spec in static_specs
     )
 
 
 def _split_selection(
     selection: frozenset[str] | None,
-    supplement_names: frozenset[str],
+    static_names: frozenset[str],
 ) -> tuple[bool, frozenset[str] | None]:
     """Split a resolved union selection into whether the mode compile runs
     and, if so, which declared names it compiles.
@@ -244,54 +254,56 @@ def _split_selection(
     Args:
         selection: The resolved selection over `tables()` (None for the
             whole shape).
-        supplement_names: Every supplement's table_name.
+        static_names: The calendar's (when present) and every supplement's
+            table_name.
 
     Returns:
         `(True, None)` for the whole shape — compile every declared table.
         `(True, names)` for a selection naming at least one declared table —
-        compile exactly those. `(False, frozenset())` for a supplement-only
+        compile exactly those. `(False, frozenset())` for a static-only
         selection — the mode compile must not run at all (no horizon opened
         for window(), no truncated tape opened for state(), no notice
         emitted).
     """
     if selection is None:
         return True, None
-    dimensional_names = selection - supplement_names
+    dimensional_names = selection - static_names
     return bool(dimensional_names), dimensional_names
 
 
-def _select_supplements(
+def _select_static_specs(
     selection: frozenset[str] | None,
-    supplement_specs: "Sequence[QuerySpec]",
+    static_specs: "Sequence[QuerySpec]",
 ) -> tuple["QuerySpec", ...]:
-    """The supplement specs a resolved selection answers, declaration order.
+    """The calendar and supplement specs a resolved selection answers,
+    declaration order.
 
     Args:
         selection: The resolved union selection (None for the whole shape).
-        supplement_specs: The head's open-compiled supplement specs,
-            declaration order.
+        static_specs: The head's open-compiled static specs, declaration
+            order (calendar first).
 
     Returns:
-        Every supplement spec when selection is None; else the ones whose
+        Every static spec when selection is None; else the ones whose
         table_name is in selection, declaration order preserved.
     """
     if selection is None:
-        return tuple(supplement_specs)
-    return tuple(spec for spec in supplement_specs if spec.table_name in selection)
+        return tuple(static_specs)
+    return tuple(spec for spec in static_specs if spec.table_name in selection)
 
 
-def _materialize_supplement_tables(
+def _materialize_static_tables(
     emit: "Emit", specs: "Sequence[QuerySpec]"
 ) -> tuple[ShapedTable, ...]:
-    """Materialize selected supplement specs as snapshot ShapedTables.
+    """Materialize selected calendar/supplement specs as snapshot ShapedTables.
 
-    A supplement's compiled relation is a VALUES-and-cast literal — window-
-    independent — so it is identical whichever ask (or window bounds / T)
+    The calendar's and a supplement's compiled relation is window-
+    independent, so each is identical whichever ask (or window bounds / T)
     materializes it.
 
     Args:
         emit: The open emit whose session evaluates each spec's relation.
-        specs: The selected supplement specs, in the order to deliver them.
+        specs: The selected static specs, in the order to deliver them.
 
     Returns:
         One ShapedTable per spec, delivery 'snapshot'.
@@ -589,9 +601,11 @@ class ShapedPlayback:
         notice_sink: "NoticeSink",
         table_decls: tuple[ShapedTableDecl, ...],
         election: "Election",
+        calendar_spec: "QuerySpec | None",
         supplement_specs: tuple["QuerySpec", ...],
     ) -> None:
-        """Bind a shaped head to its open-compiled table decls and supplements.
+        """Bind a shaped head to its open-compiled table decls, calendar,
+        and supplements.
 
         Args:
             emit: The open emit.
@@ -600,6 +614,9 @@ class ShapedPlayback:
             notice_sink: Receiver for every compile's plan notices.
             table_decls: The declared shape's tables, in declaration order.
             election: The resolved election.
+            calendar_spec: The open-compiled `dim_date` spec, or None when
+                the shape declares no `date_dimension` (always None for a
+                source shape).
             supplement_specs: The open-compiled supplement specs, in
                 declaration order — empty for a source shape (the config
                 cannot declare any).
@@ -609,17 +626,20 @@ class ShapedPlayback:
         self._anchor = anchor
         self._notice_sink = notice_sink
         self._election = election
-        self._supplement_specs = supplement_specs
-        self._supplement_names = frozenset(spec.table_name for spec in supplement_specs)
-        self._table_decls = table_decls + _supplement_table_decls(supplement_specs)
+        self._static_specs = (
+            (calendar_spec,) if calendar_spec is not None else ()
+        ) + supplement_specs
+        self._static_names = frozenset(spec.table_name for spec in self._static_specs)
+        self._table_decls = table_decls + _static_table_decls(self._static_specs)
 
     def tables(self) -> tuple[ShapedTableDecl, ...]:
         """The shape's declared output tables, in the shape's canonical
         order: config declaration order for a dimensional shape (the source
         mode's deterministic full-export enumeration order for a source
-        shape), followed by one `ShapedTableDecl(name, 'snapshot')` per
-        supplement in declaration order — the union the per-ask selection
-        gates range over.
+        shape), followed by `ShapedTableDecl(DATE_DIMENSION_TABLE_NAME,
+        'snapshot')` when the shape declares `date_dimension`, then one
+        `ShapedTableDecl(name, 'snapshot')` per supplement in declaration
+        order — the union the per-ask selection gates range over.
 
         Returns:
             One ShapedTableDecl per table window() and state() will deliver,
@@ -644,13 +664,18 @@ class ShapedPlayback:
         only when the selection is delta-bearing (some selected table's
         class is 'upsert' or 'append'; the source event log). The answer for
         a table is identical whichever selection it is asked in (projection
-        invariance). The selection resolves over the union (declared tables
-        plus supplements); the dimensional part compiles exactly as above.
-        Every selected supplement is delivered after the dimensional tables,
-        in declaration order, as 'snapshot' with its whole relation —
-        identical for every window. When the dimensional part of the
-        selection is empty (a supplement-only selection), no horizon is
-        opened, no mode compile runs, and no plan notice is emitted.
+        invariance). The selection resolves over the union (declared tables,
+        the calendar, and the supplements); the dimensional part compiles
+        exactly as above, then — when `date_dimension` is present — is
+        checked against the declared range (`check_date_refs_in_range`)
+        before any of its relations materialize; a violation refuses the
+        whole ask atomically. The calendar (when selected) and every
+        selected supplement are delivered after the dimensional tables, in
+        declaration order (calendar first), as 'snapshot' with their whole
+        relation — identical for every window. When the dimensional part of
+        the selection is empty (a calendar-and/or-supplement-only
+        selection), no horizon is opened, no mode compile runs, and no plan
+        notice is emitted.
 
         Args:
             start_sim_time: Inclusive lower bound (ns); >= 0.
@@ -673,6 +698,8 @@ class ShapedPlayback:
                 ask is atomic: any of these refuses every selected table.
             TemporalClassUnavailableError: A consulted column's temporal pair
                 is absent or out of enum (non-conformant emit).
+            DateRefOutOfRange: A selected table's `date_ref` value lies
+                outside the declared `date_dimension` range.
         """
         if start_sim_time < 0 or end_sim_time < start_sim_time:
             raise PlaybackError(
@@ -682,7 +709,7 @@ class ShapedPlayback:
             )
         selection = _resolve_selection(tables, self._table_decls)
         compile_dimensional, dimensional_names = _split_selection(
-            selection, self._supplement_names
+            selection, self._static_names
         )
 
         dimensional_tables: tuple[ShapedTable, ...] = ()
@@ -699,6 +726,8 @@ class ShapedPlayback:
                 self._election,
                 dimensional_names,
             )
+            if self._config.date_dimension is not None:
+                check_date_refs_in_range(self._emit, specs, self._config.date_dimension)
             dimensional_tables = tuple(
                 ShapedTable(
                     name=spec.table_name,
@@ -708,10 +737,10 @@ class ShapedPlayback:
                 for spec in specs
             )
 
-        supplement_tables = _materialize_supplement_tables(
-            self._emit, _select_supplements(selection, self._supplement_specs)
+        static_tables = _materialize_static_tables(
+            self._emit, _select_static_specs(selection, self._static_specs)
         )
-        return dimensional_tables + supplement_tables
+        return dimensional_tables + static_tables
 
     def state(
         self,
@@ -723,10 +752,16 @@ class ShapedPlayback:
         The mode's full-export compile over the truncated tape, for the
         selected tables only; delivery is 'snapshot' on every table.
         state(T_slice, tables=S) equals the full export restricted to S (the
-        bridging theorem under projection). Supplements join the answer
-        after the dimensional tables, 'snapshot', identical at every T; a
-        supplement-only selection opens no truncated tape and emits no
-        notice.
+        bridging theorem under projection). When `date_dimension` is
+        present, the compiled specs are checked against the declared range
+        (`check_date_refs_in_range`, over `self._emit` — the specs' SQL is
+        already base-relations-rewritten, so the guard's aggregate reads the
+        truncated relations through it) before any of them materializes; a
+        violation refuses the whole ask atomically. The calendar (when
+        selected) and every selected supplement join the answer after the
+        dimensional tables, declaration order (calendar first), 'snapshot',
+        identical at every T; a calendar-and/or-supplement-only selection
+        opens no truncated tape and emits no notice.
 
         Args:
             at_sim_time: The inclusive position T (ns); >= 0.
@@ -751,12 +786,14 @@ class ShapedPlayback:
                 is atomic: any of these refuses every selected table.
             TemporalClassUnavailableError: A consulted column's temporal pair
                 is absent or out of enum (non-conformant emit).
+            DateRefOutOfRange: A selected table's `date_ref` value lies
+                outside the declared `date_dimension` range.
         """
         if at_sim_time < 0:
             raise PlaybackError(_STATE_TIME_INVALID_MSG.format(at_sim_time=at_sim_time))
         selection = _resolve_selection(tables, self._table_decls)
         compile_dimensional, dimensional_names = _split_selection(
-            selection, self._supplement_names
+            selection, self._static_names
         )
 
         dimensional_tables: tuple[ShapedTable, ...] = ()
@@ -773,6 +810,8 @@ class ShapedPlayback:
                 self._election,
                 dimensional_names,
             )
+            if self._config.date_dimension is not None:
+                check_date_refs_in_range(self._emit, specs, self._config.date_dimension)
             dimensional_tables = tuple(
                 ShapedTable(
                     name=spec.table_name,
@@ -782,10 +821,10 @@ class ShapedPlayback:
                 for spec in specs
             )
 
-        supplement_tables = _materialize_supplement_tables(
-            self._emit, _select_supplements(selection, self._supplement_specs)
+        static_tables = _materialize_static_tables(
+            self._emit, _select_static_specs(selection, self._static_specs)
         )
-        return dimensional_tables + supplement_tables
+        return dimensional_tables + static_tables
 
 
 def open_shaped_playback(
@@ -823,13 +862,18 @@ def open_shaped_playback(
     as emitted (an ask re-emits its compile's notices, the incremental
     drip rule). Tier 1 runs no mode compile and emits no notices.
 
-    After the mode's own open validation, runs every supplement gate
-    through `compile_supplement_specs(emit, supplements, anchor,
-    'create')` — the reserved-name rule, the TIMESTAMPTZ anchor rule, and
-    the before-any-write cell probe, each a pure function of the
-    declaration, the resolved rows, and the anchor, so open still reads no
-    base-table data and no supplement ask ever refuses for a reason the
-    compile itself doesn't name. The compiled specs are bound on the head.
+    After the mode's own open validation and before the supplement gates,
+    compiles the generated calendar (`compile_date_dimension_spec(
+    config.date_dimension, 'create')`) when `config.date_dimension` is
+    present — a pure function of the block, no emit read, so a shape whose
+    range is malformed would already have refused at config load. Then runs
+    every supplement gate through `compile_supplement_specs(emit,
+    supplements, anchor, 'create')` — the reserved-name rule, the
+    TIMESTAMPTZ anchor rule, and the before-any-write cell probe, each a
+    pure function of the declaration, the resolved rows, and the anchor, so
+    open still reads no base-table data and no supplement ask ever refuses
+    for a reason the compile itself doesn't name. The compiled calendar and
+    supplement specs are bound on the head.
 
     Args:
         emit: An open emit (version-gated by open_emit).
@@ -846,9 +890,9 @@ def open_shaped_playback(
 
     Returns:
         A ShapedPlayback head bound to (emit, config, anchor, notice_sink,
-        table_decls, election, supplement_specs). Resolves `config.keys`
-        once (`resolve_election`) for either mode and threads it to the
-        open validation and every window() / state() compile — the
+        table_decls, election, calendar_spec, supplement_specs). Resolves
+        `config.keys` once (`resolve_election`) for either mode and threads
+        it to the open validation and every window() / state() compile — the
         None-for-source special case is gone: a source shape's
         identity/edge gates need the same election view a dimensional
         shape's do.
@@ -883,10 +927,22 @@ def open_shaped_playback(
             config.dimensional, emit.sidecar, anchor, notice_sink, election
         )
 
+    calendar_spec = (
+        compile_date_dimension_spec(config.date_dimension, "create")
+        if config.date_dimension is not None
+        else None
+    )
     supplement_specs = tuple(
         compile_supplement_specs(emit, supplements, anchor, "create")
     )
 
     return ShapedPlayback(
-        emit, config, anchor, notice_sink, table_decls, election, supplement_specs
+        emit,
+        config,
+        anchor,
+        notice_sink,
+        table_decls,
+        election,
+        calendar_spec,
+        supplement_specs,
     )
