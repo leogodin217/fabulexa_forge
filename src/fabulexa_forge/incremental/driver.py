@@ -36,6 +36,10 @@ from fabulexa_forge.exporters.companion import (
     write_companion_artifacts,
 )
 from fabulexa_forge.exporters.companion.artifacts import WindowedArtifactState
+from fabulexa_forge.exporters.date_dimension import (
+    check_date_refs_in_range,
+    compile_date_dimension_spec,
+)
 from fabulexa_forge.exporters.query_spec import (
     ExportReport,
     TableReport,
@@ -362,14 +366,24 @@ def export_window(
     mode-specific compile contributes only the QuerySpecs, the window math,
     cursor, fingerprint, drained detection, and staging below are
     mode-neutral. Immediately after compiling — before any write — compiles
-    the supplement specs (`compile_supplement_specs(..., write_mode='replace')`)
-    and appends them after the mode's specs; runs
+    the generated calendar (`compile_date_dimension_spec(config.date_dimension,
+    write_mode='replace')`) when `config.date_dimension` is present (the
+    dimensional arm only; source / base carry no `date_dimension` block),
+    delivering `dim_date` `snapshot`/`replace` in every emitting window, the
+    empty window included — a supplement's own posture; then compiles the
+    supplement specs (`compile_supplement_specs(..., write_mode='replace')`)
+    and appends them after the calendar spec; runs
     `check_supplement_sources_not_outputs` over `_windowed_output_paths` (the
     invocation's output files) and `csv_removed_dirs` (the CSV staging/drop
     directories this invocation removes wholesale, empty for DuckDB); then
-    validates `overlay`'s `table:` slots against the union of the mode's and
-    the supplements' author-facing output names when `overlay` is present.
-    Dispatches to the fmt's windowed write path — the CSV write path derives
+    validates `overlay`'s `table:` slots against the union of the mode's, the
+    calendar's, and the supplements' author-facing output names when
+    `overlay` is present; then, as the LAST pre-write gate — after the
+    source-is-output gate and the overlay check, before the `declare_keys`
+    notice and the fmt dispatch — runs `check_date_refs_in_range(emit, specs,
+    config.date_dimension)` over the window's compiled dimensional relations
+    when `config.date_dimension` is present. Dispatches to the fmt's windowed
+    write path — the CSV write path derives
     its staging and drop directories from `csv_removed_dirs`, the one naming
     authority. A supplement is delivered as `snapshot` — DuckDB `replace`,
     CSV the whole file in the window drop — in every emitting window, the
@@ -410,7 +424,8 @@ def export_window(
 
     Returns:
         The invocation's `WindowedExport`: an `ExportReport` with one
-        `TableReport` per declared table followed by one per supplement, in
+        `TableReport` per declared table, then `dim_date` when
+        `config.date_dimension` is present, then one per supplement, in
         declaration order (`row_count` always None), plus a `row_counts`
         mapping of the same tables' real written counts for CLI
         presentation.
@@ -425,6 +440,8 @@ def export_window(
             export_source today; plus a failed artifact write for a
             --from/--to range.
         TemporalClassUnavailableError: Non-conformant temporal pair.
+        DateRefOutOfRange: A `date_ref` value lies outside the declared
+            `date_dimension` range, checked before this window's write.
         SupplementValueInvalid / TemporalRenderRequiresAnchor: Per
             `compile_supplement_specs`, before any write.
         SupplementSourceIsOutput: A file supplement's resolved source is a
@@ -475,10 +492,15 @@ def export_window(
             tables=None,
         )
 
+    calendar_specs = (
+        [compile_date_dimension_spec(config.date_dimension, write_mode="replace")]
+        if config.date_dimension is not None
+        else []
+    )
     supplement_specs = compile_supplement_specs(
         emit, supplements, anchor, write_mode="replace"
     )
-    all_specs = [*specs, *supplement_specs]
+    all_specs = [*specs, *calendar_specs, *supplement_specs]
     all_names = [spec.table_name for spec in all_specs]
     check_supplement_sources_not_outputs(
         supplements,
@@ -488,6 +510,9 @@ def export_window(
 
     if overlay is not None:
         validate_overlay_tables(overlay, all_names)
+
+    if config.date_dimension is not None:
+        check_date_refs_in_range(emit, specs, config.date_dimension)
 
     if fmt == "csv" and declare_keys_active(config):
         notice_sink(keys_not_declarable_csv_notice())
