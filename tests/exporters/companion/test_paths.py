@@ -50,6 +50,8 @@ def _report() -> ExportReport:
                 author_table_description=None,
                 event_log=False,
                 supplement=None,
+                calendar=None,
+                references={},
             ),
         )
     )

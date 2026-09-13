@@ -59,6 +59,9 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from fabulexa_forge.exporters.date_dimension import (
+    DATE_DIMENSION_TABLE_NAME,
+)
 from fabulexa_forge.reader.documentation import ColumnDoc, EnumOption
 from fabulexa_forge.reader.records_columns import (
     RECORDS_TABLE_PREFIX,
@@ -127,6 +130,46 @@ _EVENT_LOG_COLUMN_DESCRIPTIONS: "dict[str, str]" = {
         " a deletion."
     ),
 }
+
+#: The generated calendar's forge-pinned documentation (design doc §
+#: Documentation) — mode-definitional, like the event log's. Applied only to
+#: a `TableReport` marked `calendar is not None`; `author_descriptions`
+#: cannot exist there.
+_DATE_DIMENSION_TABLE_DESCRIPTION = (
+    "A forge-generated calendar over the declared range, one row per day,"
+    " keyed by `yyyymmdd`."
+)
+
+_DATE_DIMENSION_COLUMN_DESCRIPTIONS: "dict[str, str]" = {
+    "date_key": (
+        "`year * 10000 + month * 100 + day` — the `yyyymmdd` smart key; the"
+        " table's row identity and sort order"
+    ),
+    "date": "The calendar date",
+    "year": "Calendar year",
+    "quarter": "1–4",
+    "month": "1–12",
+    "day": "Day of month, 1–31",
+    "day_of_week": "ISO weekday, 1 = Monday … 7 = Sunday",
+    "day_of_year": "1–366",
+    "iso_year": (
+        "ISO-8601 week-numbering year (differs from `year` around the new year)"
+    ),
+    "iso_week": "ISO-8601 week number, 1–53, within `iso_year`",
+    "month_name": "English month name (`January` … `December`)",
+    "day_name": "English weekday name (`Monday` … `Sunday`)",
+    "is_weekend": "`day_of_week >= 6`",
+}
+"""Pinned per column — the Value column of the design doc's calendar table;
+key set equals the names in `DATE_DIMENSION_COLUMNS` (a test pins the
+equality)."""
+
+_DATE_REF_DESCRIPTION_TEMPLATE = (
+    "Calendar key (`yyyymmdd`) into `dim_date`, derived from `{source}`"
+)
+"""A `date_ref` column's pinned description, absent an author override —
+`{source}` the report's provenance `source_column` for the column, the same
+for both the instant and parse shapes."""
 
 #: Export-facing rewrites of the pinned structural strings whose prose
 #: points at base-layer structure a shaped export does not contain — a
@@ -202,13 +245,17 @@ def resolve_table_description(doc: "Documentation", table: "TableReport") -> str
     Returns:
         The report's author table description when present; else the pinned
         event-log table description when the report is marked as the event
-        log; else the single source table's `tables[].description` when
-        every carried column agrees on one source table; else None.
+        log; else the pinned calendar table description when the report is
+        the generated `dim_date`; else the single source table's
+        `tables[].description` when every carried column agrees on one
+        source table; else None.
     """
     if table.author_table_description is not None:
         return table.author_table_description
     if table.event_log:
         return _EVENT_LOG_TABLE_DESCRIPTION
+    if table.calendar is not None:
+        return _DATE_DIMENSION_TABLE_DESCRIPTION
     sources = {entry.source_table for entry in table.provenance.values()}
     if len(sources) != 1:
         return None
@@ -278,14 +325,21 @@ def resolve_column_doc(
         On a report marked as the event log, a column named in the pinned
         event-log set resolves to a description-only `ColumnDoc` with origin
         "forge" (author entries cannot exist there; nothing inherits there
-        today). Otherwise, with an `author_descriptions` entry for the
-        column: the resolved doc with the author's description and origin
-        "author" — on a carried column the inherited unit rides along under
-        today's unit rules; on a column with no carried provenance the doc
-        is description-only (unit None). Without an entry: exactly today's
-        resolution — the source column's resolved `ColumnDoc`
-        (history_interval's virtual `lead_sim_time` case above), a
-        contract-answered description rewritten per
+        today). On the generated calendar (`table.calendar is not None`), a
+        column named in the pinned calendar set resolves the same way. On a
+        column whose `references` entry is `dim_date`: with an
+        `author_descriptions` entry, the author's description at origin
+        "author"; without one, the pinned `date_ref` prose naming the
+        column's provenance source, at origin "forge" — either way `unit`
+        is None (a key carries no unit) and the source column's own doc is
+        never inherited. Otherwise, with an `author_descriptions` entry for
+        the column: the resolved doc with the author's description and
+        origin "author" — on a carried column the inherited unit rides
+        along under today's unit rules; on a column with no carried
+        provenance the doc is description-only (unit None). Without an
+        entry: exactly today's resolution — the source column's resolved
+        `ColumnDoc` (history_interval's virtual `lead_sim_time` case above),
+        a contract-answered description rewritten per
         `_EXPORT_STRUCTURAL_REWRITES` where the pinned string points at
         base-layer structure the export does not contain, unit dropped
         where `output_type` shows the rendering left the source's
@@ -296,6 +350,20 @@ def resolve_column_doc(
         pinned = _EVENT_LOG_COLUMN_DESCRIPTIONS.get(column_name)
         if pinned is not None:
             return ColumnDoc(description=pinned, unit=None, origin="forge")
+    if table.calendar is not None:
+        pinned_calendar = _DATE_DIMENSION_COLUMN_DESCRIPTIONS.get(column_name)
+        if pinned_calendar is not None:
+            return ColumnDoc(description=pinned_calendar, unit=None, origin="forge")
+    if table.references.get(column_name) == DATE_DIMENSION_TABLE_NAME:
+        date_ref_override = table.author_descriptions.get(column_name)
+        if date_ref_override is not None:
+            return ColumnDoc(description=date_ref_override, unit=None, origin="author")
+        source_column = table.provenance[column_name].source_column
+        return ColumnDoc(
+            description=_DATE_REF_DESCRIPTION_TEMPLATE.format(source=source_column),
+            unit=None,
+            origin="forge",
+        )
     provenance = table.provenance.get(column_name)
     override = table.author_descriptions.get(column_name)
     if override is not None:

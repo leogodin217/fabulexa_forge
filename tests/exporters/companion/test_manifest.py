@@ -61,6 +61,8 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 author_table_description=None,
                 event_log=False,
                 supplement=None,
+                calendar=None,
+                references={},
             ),
             TableReport(
                 name="visits",
@@ -73,6 +75,8 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 author_table_description=None,
                 event_log=False,
                 supplement=None,
+                calendar=None,
+                references={},
             ),
         )
     )
@@ -121,7 +125,7 @@ def test_full_export_field_set(tmp_path: Path) -> None:
 
     document = _build_document(emit_dir, anchor=_ANCHOR, windowed=None)
 
-    assert document["manifest_format_version"] == 4
+    assert document["manifest_format_version"] == 5
     assert document["mode"] == "base"
     assert document["format"] == "csv"
     assert document["forge_version"] == __version__
@@ -164,6 +168,7 @@ def test_full_export_field_set(tmp_path: Path) -> None:
             "description": None,
             "unit": None,
             "enum_options": None,
+            "references": None,
         }
     ]
 
@@ -432,6 +437,8 @@ def test_override_on_computed_column_with_no_provenance_renders_description_only
                         author_table_description=None,
                         event_log=False,
                         supplement=None,
+                        calendar=None,
+                        references={},
                     ),
                 )
             ),
@@ -472,6 +479,8 @@ def test_table_spanning_multiple_source_tables_forwards_no_description(
                     author_table_description=None,
                     event_log=False,
                     supplement=None,
+                    calendar=None,
+                    references={},
                 ),
             )
         )

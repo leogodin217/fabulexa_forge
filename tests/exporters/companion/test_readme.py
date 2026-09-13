@@ -89,6 +89,8 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 author_table_description=None,
                 event_log=False,
                 supplement=None,
+                calendar=None,
+                references={},
             ),
             TableReport(
                 name="visits",
@@ -101,6 +103,8 @@ def _two_table_report(*, row_count: int | None) -> ExportReport:
                 author_table_description=None,
                 event_log=False,
                 supplement=None,
+                calendar=None,
+                references={},
             ),
         )
     )
@@ -615,6 +619,8 @@ def test_event_log_marker_wins_over_single_source_provenance_forward(
         author_table_description=None,
         event_log=True,
         supplement=None,
+        calendar=None,
+        references={},
     )
     text = _render_report(tmp_path, report)
     section = text[text.index("### audit_log") :]
@@ -638,6 +644,8 @@ def test_column_outside_pinned_set_resolves_normally_on_marked_report(
         author_table_description=None,
         event_log=True,
         supplement=None,
+        calendar=None,
+        references={},
     )
     text = _render_report(tmp_path, report)
     section = text[text.index("### audit_log") :]
@@ -661,6 +669,8 @@ def test_unmarked_report_never_consults_pinned_event_log_set(tmp_path: Path) -> 
         author_table_description=None,
         event_log=False,
         supplement=None,
+        calendar=None,
+        references={},
     )
     text = _render_report(tmp_path, report)
     assert (
@@ -735,6 +745,8 @@ def test_override_on_computed_column_with_no_provenance_renders_description_only
         author_table_description=None,
         event_log=False,
         supplement=None,
+        calendar=None,
+        references={},
     )
     text = _render_report(tmp_path, report)
     assert (

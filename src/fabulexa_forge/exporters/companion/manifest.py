@@ -6,8 +6,9 @@ config, resolved anchor, and one invocation's
 `ExportReport`, and owns the pinned byte serialization every companion write
 renders through. Format version 2 adds the machine-readable documentation
 mirror -- top-level `scenario_description`, per-table `description`,
-per-column `description` / `unit` / `enum_options` -- and format version 4
-adds top-level `scenario_name` beside it, all resolved through
+per-column `description` / `unit` / `enum_options` -- format version 4
+adds top-level `scenario_name` beside it, and format version 5 adds
+`tables[].calendar` and `columns[].references`, all resolved through
 `emit.sidecar.documentation()` via the report's carried provenance
 (`companion/dictionary.py`), the same resolution the README renders.
 Absent -> JSON `null` (the manifest's stable-field-set posture).
@@ -36,7 +37,7 @@ if TYPE_CHECKING:
     from fabulexa_forge.reader.documentation import Documentation
     from fabulexa_forge.reader.emit import Emit
 
-_MANIFEST_FORMAT_VERSION = 4
+_MANIFEST_FORMAT_VERSION = 5
 """The manifest's own format version -- mode-definitional, like the event
 log's dense first id: every manifest of this design renders it identically."""
 
@@ -134,7 +135,9 @@ def _keys_json(
 def _column_json(
     doc: "Documentation", table: "TableReport", name: str, type_text: str
 ) -> dict[str, object]:
-    """One `columns` entry: name, type, and its resolved documentation mirror."""
+    """One `columns` entry: name, type, its resolved documentation mirror,
+    and the referenced output table name (a `date_ref` or `fk` column),
+    None elsewhere."""
     column_doc = resolve_column_doc(doc, table, name, type_text)
     enum_options = [
         {"value": option.value, "description": option.description}
@@ -146,6 +149,7 @@ def _column_json(
         "description": None if column_doc is None else column_doc.description,
         "unit": None if column_doc is None else column_doc.unit,
         "enum_options": enum_options or None,
+        "references": table.references.get(name),
     }
 
 
@@ -164,9 +168,29 @@ def _supplement_json(table: "TableReport") -> dict[str, object] | None:
     return {"file": table.supplement.file, "sha256": table.supplement.sha256}
 
 
+def _calendar_json(table: "TableReport") -> dict[str, str] | None:
+    """The `tables[].calendar` value.
+
+    Args:
+        table: The table's report.
+
+    Returns:
+        None for every table but the generated calendar; `{"from": "<ISO
+        date>", "to": "<ISO date>"}` (`date.isoformat()`) for `dim_date`.
+    """
+    if table.calendar is None:
+        return None
+    return {
+        "from": table.calendar.from_.isoformat(),
+        "to": table.calendar.to.isoformat(),
+    }
+
+
 def _table_json(doc: "Documentation", table: "TableReport") -> dict[str, object]:
     """One `tables` entry: name, forwarded description, documented columns,
-    declared keys, row count, supplement provenance."""
+    declared keys, row count, supplement provenance, generated-calendar
+    range. `supplement`, `primary_key`, `unique` are None on `dim_date` by
+    construction."""
     primary_key, unique = _keys_json(table.keys)
     return {
         "name": table.name,
@@ -179,6 +203,7 @@ def _table_json(doc: "Documentation", table: "TableReport") -> dict[str, object]
         "unique": unique,
         "row_count": table.row_count,
         "supplement": _supplement_json(table),
+        "calendar": _calendar_json(table),
     }
 
 

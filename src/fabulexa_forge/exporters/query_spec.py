@@ -117,11 +117,15 @@ class TableReport:
     `row_count` is None on windowed invocations. `keys` is the table's
     declared `TableKeys`, or None when nothing was declared or the
     declaration was CSV-dropped. `provenance`, `kind_values`,
-    `author_descriptions`, `author_table_description`, `event_log`, and
-    `supplement` are forwarded verbatim from the compiled `QuerySpec` that
-    produced this table — no default, so every report-assembly call site
-    states them explicitly. `supplement` is set iff this table is a
-    supplement, None for a mode table.
+    `author_descriptions`, `author_table_description`, `event_log`,
+    `supplement`, `calendar`, and `references` are forwarded verbatim from
+    the compiled `QuerySpec` that produced this table — no default, so every
+    report-assembly call site states them explicitly. `supplement` is set
+    iff this table is a supplement, None for a mode table. `calendar` is set
+    iff this table is the generated `dim_date`. `references` maps each
+    output column that points at another output table (a `date_ref` column
+    to `dim_date`, an `fk` column to its resolved dim) to that table's name;
+    empty when the table references nothing.
     """
 
     name: str
@@ -134,6 +138,8 @@ class TableReport:
     author_table_description: str | None
     event_log: bool
     supplement: "SupplementSource | None"
+    calendar: "CalendarSource | None"
+    references: "Mapping[str, str]"
 
 
 @dataclass(frozen=True)
@@ -294,6 +300,8 @@ def write_query_specs(
                     author_table_description=spec.author_table_description,
                     event_log=spec.event_log,
                     supplement=spec.supplement,
+                    calendar=spec.calendar,
+                    references=spec.references,
                 )
                 for spec in specs
             )
@@ -316,6 +324,8 @@ def write_query_specs(
                 author_table_description=spec.author_table_description,
                 event_log=spec.event_log,
                 supplement=spec.supplement,
+                calendar=spec.calendar,
+                references=spec.references,
             )
         )
     return ExportReport(tables=tuple(tables))

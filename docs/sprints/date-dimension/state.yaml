@@ -50,7 +50,7 @@ phases:
     name: "Shaped playback"
     demo: "docs/sprints/date-dimension/demos/phase_5_shaped_playback.py"
   6:
-    status: pending
+    status: complete
     name: "Companion artifacts"
     demo: "docs/sprints/date-dimension/demos/phase_6_companions.py"
     steps:
