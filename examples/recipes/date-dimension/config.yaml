@@ -1,0 +1,81 @@
+# Recipe: date-dimension
+# ============================================================
+# Demonstrates the generated calendar (`dim_date`) and the `date_ref`
+# column mode: a `yyyymmdd` key into the calendar, from either an instant
+# (a sim_time source) or a parsed date string.
+#
+# A top-level `date_dimension: {from, to}` block materializes `dim_date` —
+# one row per calendar day over the declared inclusive range, with a
+# `date_key` matching every `date_ref` column's rendered key. No author
+# writes calendar rows; the generator is the one exception to "reshape,
+# never fabricate" that a *range*, not a value, drives.
+#
+# The `date_ref` column mode (exactly one shape):
+#   {source: <sim_time column>}                 -- the instant shape
+#   {from: <VARCHAR column>, format: "<strptime>"} -- the parse shape
+#
+# Fixture world (recipe emit):
+#   history                 -- patient status changes at 1/2/3*DAY ns offsets
+#                              (2024-01-02, 2024-01-03, 2024-01-04)
+#   records__patient.prop__dob -- p001 "1990-05-14", p002 "1985-11-02"
+#
+# Output:
+#   dim_date            -- one row per day, 1985-01-01..2024-12-31 (14610 rows)
+#   fact_status_event   -- event_ts (wallclock instant) beside event_date_key
+#                          (the same day's yyyymmdd key, instant shape)
+#   dim_patient         -- birth_date (parsed date) beside birth_date_key
+#                          (the same day's yyyymmdd key, parse shape)
+
+mode: dimensional
+
+date_dimension:
+  from: "1985-01-01"
+  to: "2024-12-31"
+
+dimensional:
+  tables:
+    - name: fact_status_event
+      role: fact
+      source:
+        grain: history_point
+        kind: patient
+        property: status
+      key: [patient_id, event_time]
+      columns:
+        - name: patient_id
+          from: record_id
+        - name: event_time
+          from: sim_time
+        - name: status_value
+          from: value
+        # timestamp: render sim_time as a wallclock TIMESTAMP via the anchor.
+        - name: event_ts
+          derived:
+            timestamp:
+              source: sim_time
+        # date_ref, instant shape: the same event's yyyymmdd key into dim_date.
+        - name: event_date_key
+          date_ref:
+            source: sim_time
+
+    - name: dim_patient
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: patient
+      key: [id]
+      columns:
+        - name: id
+          from: record_id
+        # date_parse: parse the upstream-minted ISO date string.
+        - name: birth_date
+          derived:
+            date_parse:
+              from: prop__dob
+              format: "%Y-%m-%d"
+        # date_ref, parse shape: the same date's yyyymmdd key into dim_date.
+        - name: birth_date_key
+          date_ref:
+            from: prop__dob
+            format: "%Y-%m-%d"

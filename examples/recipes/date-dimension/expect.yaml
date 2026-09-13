@@ -1,0 +1,67 @@
+tables:
+  dim_date:
+    columns:
+      [
+        date_key,
+        date,
+        year,
+        quarter,
+        month,
+        day,
+        day_of_week,
+        day_of_year,
+        iso_year,
+        iso_week,
+        month_name,
+        day_name,
+        is_weekend,
+      ]
+    row_count: 14610
+    contains_rows:
+      # First declared day: 1985-01-01 (a Tuesday).
+      - date_key: 19850101
+        year: 1985
+        month: 1
+        day: 1
+        day_name: Tuesday
+        is_weekend: false
+      # Last declared day: 2024-12-31 (a Tuesday).
+      - date_key: 20241231
+        year: 2024
+        month: 12
+        day: 31
+        day_name: Tuesday
+        is_weekend: false
+
+  fact_status_event:
+    columns:
+      [patient_id, event_time, status_value, event_ts, event_date_key]
+    row_count: 4
+    contains_rows:
+      # p001 status change at sim_time 1*DAY (2024-01-02)
+      - patient_id: p001
+        event_time: 86400000000000
+        event_date_key: 20240102
+      # p001 status change at sim_time 2*DAY (2024-01-03)
+      - patient_id: p001
+        event_time: 172800000000000
+        event_date_key: 20240103
+      # p002 status change at sim_time 2*DAY (2024-01-03)
+      - patient_id: p002
+        event_time: 172800000000000
+        event_date_key: 20240103
+      # p001 status change at sim_time 3*DAY (2024-01-04)
+      - patient_id: p001
+        event_time: 259200000000000
+        event_date_key: 20240104
+
+  dim_patient:
+    columns: [id, birth_date, birth_date_key]
+    row_count: 2
+    contains_rows:
+      - id: p001
+        birth_date: 1990-05-14
+        birth_date_key: 19900514
+      - id: p002
+        birth_date: 1985-11-02
+        birth_date_key: 19851102

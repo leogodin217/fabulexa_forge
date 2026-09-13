@@ -49,6 +49,11 @@ from fabulexa_forge.exporters.companion import (
     validate_overlay_tables,
     write_companion_artifacts,
 )
+from fabulexa_forge.exporters.date_dimension import (
+    DATE_DIMENSION_TABLE_NAME,
+    check_date_refs_in_range,
+    compile_date_dimension_spec,
+)
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
 from fabulexa_forge.exporters.dimensional.grains import build_grain_sql
 from fabulexa_forge.exporters.dimensional.populations import (
@@ -84,12 +89,6 @@ _GUARD_SURFACES: tuple[Literal["record_index", "presentation_id"], ...] = (
     "record_index",
     "presentation_id",
 )
-
-#: The generated calendar's published output-table name — mode-definitional,
-#: spelled here (not imported) exactly as `config.models`' own
-#: `dim_date_name_reserved` validator spells it, so this module needs no
-#: forward reference to `exporters.date_dimension`.
-_DATE_DIMENSION_TABLE_NAME = "dim_date"
 
 
 def _guard_fk_relation(
@@ -287,7 +286,7 @@ def _table_references(
 
     One entry per `fk` column (`check_fk_target_is_dim(col, table_decl,
     config).name` — the resolved dim's declared name) and per `date_ref`
-    column (`_DATE_DIMENSION_TABLE_NAME`); no entry otherwise. Pure; every
+    column (`DATE_DIMENSION_TABLE_NAME`); no entry otherwise. Pure; every
     fk target has already passed FkTargetIsDim in `validate_table`.
 
     Args:
@@ -304,7 +303,7 @@ def _table_references(
             target_table_decl = check_fk_target_is_dim(col_decl, table_decl, config)
             refs[col_decl.name] = target_table_decl.name
         elif col_decl.date_ref is not None:
-            refs[col_decl.name] = _DATE_DIMENSION_TABLE_NAME
+            refs[col_decl.name] = DATE_DIMENSION_TABLE_NAME
     return refs
 
 
@@ -584,7 +583,8 @@ def _dimensional_output_paths(
 
     Args:
         out: The output target — directory (csv) or `.duckdb` file path.
-        table_names: Every output table's name, plan + supplement order.
+        table_names: Every output table's name, plan + calendar + supplement
+            order.
         config: The validated export config.
         fmt: The resolved output format.
 
@@ -612,17 +612,27 @@ def export_dimensional(
 
     Resolves the election from `config.keys` and builds the QuerySpecs
     (threading notice_sink and the resolved election to the compile). After
-    the plan compile and before any write, in order: compiles the
-    supplement specs (`compile_supplement_specs(..., write_mode='create')`);
-    runs `check_supplement_sources_not_outputs` over every file this
-    invocation writes (an empty removed-directory set — a full export
-    removes nothing); validates `overlay`'s `table:` slots against the
-    union of plan and supplement output names when `overlay` is present.
-    Supplement specs are appended after the declared tables in declaration
-    order and flow through the same write dispatch and companion write.
-    Dispatches by `fmt` to the matching writer, handing it the open `emit`
-    (the writer materializes each spec through `Emit.query_arrow`), then
-    writes the companion README + manifest and returns the report.
+    the plan compile and before any write, in order:
+    1. Compiles the generated calendar (`compile_date_dimension_spec(config
+       .date_dimension, write_mode='create')`) when `config.date_dimension`
+       is present, else no calendar spec.
+    2. Compiles the supplement specs (`compile_supplement_specs(...,
+       write_mode='create')`).
+    3. Runs `check_supplement_sources_not_outputs` over every file this
+       invocation writes — plan names + the calendar's name + supplement
+       names, so `dim_date.csv` joins the source-is-output list — (an empty
+       removed-directory set — a full export removes nothing).
+    4. Validates `overlay`'s `table:` slots against the same union when
+       `overlay` is present — so `table: dim_date` is a valid slot.
+    5. Runs `check_date_refs_in_range(emit, specs, config.date_dimension)`
+       as the last pre-write gate, when `config.date_dimension` is present.
+    The calendar spec is appended after the declared tables and before the
+    supplement specs, so `write_query_specs` writes declared tables, then
+    `dim_date`, then supplements — all three flow through the same write
+    dispatch and companion write. Dispatches by `fmt` to the matching writer,
+    handing it the open `emit` (the writer materializes each spec through
+    `Emit.query_arrow`), then writes the companion README + manifest and
+    returns the report.
 
     Args:
         emit: The open emit.
@@ -641,11 +651,12 @@ def export_dimensional(
             declares none.
 
     Returns:
-        The invocation's `ExportReport`: one `TableReport` per declared table
-        followed by one per supplement, in declaration order (`0` row count
-        for a table whose grain resolved to no rows; such a table is still
-        emitted — empty typed DuckDB table or header-only CSV — never
-        dropped). Both writers obey this rule identically.
+        The invocation's `ExportReport`: one `TableReport` per declared table,
+        then `dim_date` when `config.date_dimension` is present, then one per
+        supplement, in declaration order (`0` row count for a table whose
+        grain resolved to no rows; such a table is still emitted — empty
+        typed DuckDB table or header-only CSV — never dropped). Both writers
+        obey this rule identically.
 
     Raises:
         ExportError: Branch guard or a business rule fails; a supplement
@@ -658,6 +669,8 @@ def export_dimensional(
             file this invocation writes.
         ReadmeOverlayUnknownTable: `overlay` names a table the compiled plan
             does not produce.
+        DateRefOutOfRange: A `date_ref` value lies outside the declared
+            `date_dimension` range.
         ExportRuntimeError: A writer fails, or the companion artifacts fail
             to write.
         TemporalClassUnavailableError: Non-conformant temporal pair.
@@ -674,17 +687,28 @@ def export_dimensional(
         election=election,
         tables=None,
     )
+    calendar_specs = (
+        [compile_date_dimension_spec(config.date_dimension, write_mode="create")]
+        if config.date_dimension is not None
+        else []
+    )
     supplement_specs = compile_supplement_specs(
         emit, supplements, anchor, write_mode="create"
     )
-    all_names = [spec.table_name for spec in specs] + [
-        spec.table_name for spec in supplement_specs
-    ]
+    all_names = (
+        [spec.table_name for spec in specs]
+        + [spec.table_name for spec in calendar_specs]
+        + [spec.table_name for spec in supplement_specs]
+    )
     check_supplement_sources_not_outputs(
         supplements, _dimensional_output_paths(out, all_names, config, fmt), ()
     )
     if overlay is not None:
         validate_overlay_tables(overlay, all_names)
-    report = write_query_specs(emit, [*specs, *supplement_specs], out, fmt)
+    if config.date_dimension is not None:
+        check_date_refs_in_range(emit, specs, config.date_dimension)
+    report = write_query_specs(
+        emit, [*specs, *calendar_specs, *supplement_specs], out, fmt
+    )
     write_companion_artifacts(emit, config, fmt, anchor, report, overlay, out, None)
     return report

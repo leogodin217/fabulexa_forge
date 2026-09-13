@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from fabulexa_forge.config.models import ExportConfig
+    from fabulexa_forge.exporters.date_dimension import CalendarSource
     from fabulexa_forge.exporters.supplements import SupplementSource
     from fabulexa_forge.reader.emit import Emit
 
@@ -171,7 +172,9 @@ class QuerySpec:
     `TableReport` by both report-assembly sites (`write_query_specs`, the
     driver's `_build_windowed_report`). `references` is stamped at plan
     compile (dimensional only; every other mode leaves it empty) and
-    forwarded to `TableReport` the same way.
+    forwarded to `TableReport` the same way. `calendar` is set iff this
+    spec is the generated `dim_date`; forwarded to `TableReport` by both
+    report-assembly sites.
     """
 
     table_name: str
@@ -188,6 +191,7 @@ class QuerySpec:
     event_log: bool = False
     supplement: "SupplementSource | None" = None
     references: "Mapping[str, str]" = field(default_factory=dict)
+    calendar: "CalendarSource | None" = None
 
 
 NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"
