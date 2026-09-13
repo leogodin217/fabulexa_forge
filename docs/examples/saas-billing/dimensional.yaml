@@ -1,0 +1,534 @@
+# ExportConfig — SaaS billing bundle, dimensional mode (star schema)
+# ============================================================
+# `fabulexa-forge export docs/examples/saas-billing/bundle docs/examples/saas-billing/dimensional.yaml <out> --fmt duckdb`
+#
+# The billing warehouse for the inherited-complex-query teaching track. Forked
+# from `docs/examples/saas/dimensional.yaml` (the product-analytics star) and
+# extended over the billing facts this scenario adds; every claim below was
+# re-derived against this bundle's own sidecar and data.
+#
+# The kind -> table mapping, from the atlas and `sub_type_columns`:
+#
+#   actor.company        541  -> dim_company            (SCD-2: status)
+#   actor.user         9,858  -> dim_user + dim_user_status
+#   entity.company_hub   541  -> dim_account + dim_account_terms
+#   entity.plan_terms      3  -> dim_plan_terms
+#   entity.sku             7  -> dim_sku
+#   entity.rate_tier      10  -> dim_rate_tier
+#   entity.promotion       5  -> dim_promotion
+#   entity.credit        447  -> fact_credit
+#   tick_decision    588,840  -> fact_usage_event
+#   journey_instance  10,399  -> fact_lifecycle_interval (history_interval)
+#   (author-supplied)         -> custom_tier             (supplement)
+#
+# Curation decisions:
+#
+#   TWO "COMPANIES"  actor.company (CMP-) and entity.company_hub (ACC-) are
+#            both "the company". The sidecar references them to each other
+#            (`prop__company` on entity.company_hub -> actor, on actor.user
+#            -> entity, and on entity.credit -> actor). actor.company is the
+#            CRM record (dim_company); entity.company_hub is the billing
+#            tenant (dim_account). A credit references the CRM company, not
+#            the hub — so fact_credit.company_id lands on dim_company and
+#            reaches the account through dim_account.company_id. Kept as the
+#            sidecar declares it; documented as a trap in the README overlay.
+#   BILLING FACTS AS DIMENSIONS  plan_terms, rate_tier, promotion are the
+#            rate card — pinned, constant, small — and are dims the billing
+#            query joins to. rate_tier and promotion carry their active
+#            window as `effective_from` / `effective_to` (`starts_at` /
+#            `ends_at`) rendered from the structural created_sim_time /
+#            deactivated_at: the Analytics band-2 repricing is a
+#            deactivate-and-launch pair sharing the instant 2028-07-01, and
+#            the five promotions are exact 14-day windows. Neither kind has
+#            a tracked property, so type1 loses nothing.
+#   CREDIT IS A FACT  entity.credit (447 rows, no tracked properties) is one
+#            row per issue event with a money measure — a fact at records
+#            grain, keyed CRD-, with issued_at off created_sim_time.
+#   ACCOUNT TERMS  dim_account_terms adds term_commit (1,460 history rows
+#            over the 541 hubs; each new row opens a review term) and
+#            allowance_override (1,456 rows; enterprise-only, absent until
+#            the first review sets it). Both are tracked, so they live on the
+#            SCD-2 satellite; the add-on flags are constant and live on the
+#            Type-1 dim_account.
+#   SUPPLEMENT  custom_tier is the negotiated per-account ladder for the four
+#            largest enterprise accounts (by usage volume over the run —
+#            ACC-00002, ACC-00095, ACC-00027, ACC-00096). It is the author's
+#            data, not the emit's: forge carries it verbatim, casts to the
+#            declared types, declares no reference for it, and records it in
+#            the manifest under `supplement`. account_id / sku_id are written
+#            in the surfaces this config elects (presentation_id: ACC-/SKU-);
+#            nothing checks that. Its DATE windows need no anchor.
+#   DROPPED  entity.prop__attach_weight (arrival-sampling knob, not a
+#            business attribute).
+#   KEPT     the whole journey_instance timeline as fact_lifecycle_interval:
+#            current_state carries 1,210,022 history rows over 10,399
+#            instances (116x) — a state machine, not a dimension. Unlike the
+#            parent pack, the company_lifecycle slice is NOT redundant with
+#            dim_company: actor.status mirrors only onboarding / active /
+#            churned (1,368 dim_company versions), while the journey carries
+#            the quarterly review cadence — 2,977 `reviewed` and 447
+#            `credit_issued` intervals — that dim_company never sees. Review
+#            dates, and hence commit terms, are read off this table.
+#            `active` gaps are lower bounds (skip_cycle self-loops leave no
+#            trace), as in the parent pack.
+#   KEPT     fact_usage_event.context as the JSON payload it is, `volume`
+#            rounded in place to 2dp. There is no JSON-leaf-to-column
+#            derivation, so the metered quantity is read with json_extract —
+#            documented as a trap rather than fabricated into a column.
+#            engagement_score elects DECIMAL(5, 2) as in the parent pack.
+#   ELECTED  dim_company / dim_user_status windows at date grain (coarse
+#            lifecycle milestones); dim_account_terms stays TIMESTAMP (daily
+#            engagement recompute mixes with same-day pricing changes).
+
+mode: dimensional
+
+readme_overlay: README-overlay.md
+
+keys:
+  actor: presentation_id
+  entity: presentation_id
+
+dimensional:
+  tables:
+    # --- dim_company: CRM/sales-stage account (actor.company) ---
+    - name: dim_company
+      description: One row per subscribing company, the account holder whose lifecycle runs from onboarding through repeated renewal reviews to churn.
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: company}
+      key: [company_id, valid_from]
+      columns:
+        - name: company_id
+          from: presentation_id
+          description: Unique company identifier (CMP-#####).
+        - name: status
+          from: prop__status
+          description: "CRM lifecycle status: onboarding / active / churned. Renewal reviews do not change it; they are on fact_lifecycle_interval."
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: When the company signed up.
+        - name: valid_from
+          derived:
+            scd_window: {bound: valid_from, as: date}
+          description: Date this version of the row took effect.
+        - name: valid_to
+          derived:
+            scd_window: {bound: valid_to, as: date}
+          description: Date this version was superseded; NULL on the current version.
+
+    # --- dim_account: billing tenant, Type-1 identity (entity.company_hub) ---
+    - name: dim_account
+      description: One row per account, the billing tenant a company provisions — its plan, identity, flat add-ons, and the company it belongs to. The tracked commercial terms live on dim_account_terms.
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: company_hub}
+      key: [account_id]
+      columns:
+        - name: account_id
+          from: presentation_id
+          description: Unique account identifier (ACC-#####).
+        - name: company_id
+          fk:
+            to: dim_company
+            via: reference
+            path: [prop__company]
+          description: dim_company.company_id of the CRM company this account belongs to.
+        - name: name
+          from: prop__name
+          description: Account display name.
+        - name: domain
+          from: prop__domain
+        - name: plan
+          from: prop__plan
+          description: "Plan tier: starter / professional / enterprise; joins to dim_plan_terms.tier."
+        - name: addon_sso
+          from: prop__addon_sso
+        - name: addon_support
+          from: prop__addon_support
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: When the account was provisioned; the free trial runs from here for dim_plan_terms.trial_days.
+
+    # --- dim_account_terms: SCD-2 satellite of the account's commercial terms ---
+    - name: dim_account_terms
+      description: One row per version of an account's commercial terms — seat price, negotiated usage discount, committed spend, allowance override, churn status, and engagement score — bounded by the interval each version was current for.
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: company_hub}
+      key: [account_id, valid_from]
+      columns:
+        - name: account_id
+          from: presentation_id
+          description: dim_account.account_id of the account these terms belong to.
+        - name: seat_price
+          from: prop__seat_price
+        - name: pct_of_list_rate
+          from: prop__pct_of_list_rate
+          description: Percent of list this account pays for rated usage; 100 until an enterprise renewal negotiates it down.
+        - name: term_commit
+          from: prop__term_commit
+          description: Usage spend (USD) the account committed to for the review term that opened with this version; 0 means no commitment. Consecutive versions whose term_commit changed bound one term.
+        - name: allowance_override
+          from: prop__allowance_override
+          description: Negotiated included Core units per seat per month; NULL until an enterprise review sets it. Overrides dim_plan_terms.included_units_per_seat when present.
+        - name: churn_flag
+          from: prop__churn_flag
+        - name: engagement_score
+          derived:
+            decimal: {from: prop__engagement_score, as: [5, 2]}
+        - name: valid_from
+          derived:
+            scd_window: valid_from
+          description: Instant this version of the row took effect.
+        - name: valid_to
+          derived:
+            scd_window: valid_to
+          description: Instant this version was superseded; NULL on the current version.
+
+    # --- dim_plan_terms: published terms per plan tier (entity.plan_terms) ---
+    - name: dim_plan_terms
+      description: One row per plan tier's published commercial terms — list seat price, included Core units per seat per month, free-trial length, and credit validity. Joined from dim_account.plan.
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: plan_terms}
+      key: [plan_terms_id]
+      columns:
+        - name: plan_terms_id
+          from: presentation_id
+          description: Unique plan-terms identifier (PLN-##).
+        - name: tier
+          from: prop__tier
+          description: The plan tier this row governs; joins to dim_account.plan.
+        - name: list_seat_price
+          from: prop__list_seat_price
+        - name: included_units_per_seat
+          from: prop__included_units_per_seat
+        - name: trial_days
+          from: prop__trial_days
+        - name: credit_validity_days
+          from: prop__credit_validity_days
+
+    # --- dim_sku: product catalogue (entity.sku) ---
+    - name: dim_sku
+      description: One row per product line in the catalogue — metered SKUs rated per unit of usage volume through the rate ladder, flat SKUs billed a fixed monthly fee.
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: sku}
+      key: [sku_id]
+      columns:
+        - name: sku_id
+          from: presentation_id
+          description: Unique SKU identifier (SKU-###).
+        - name: name
+          from: prop__name
+          description: SKU display name.
+        - name: billing_model
+          from: prop__billing_model
+        - name: standard_rate
+          from: prop__standard_rate
+          description: List price per unit of usage volume; the rate a metered SKU is billed at when it has no ladder rows (Workflow), and the base a custom_tier pct_of_list applies to.
+        - name: flat_fee
+          from: prop__flat_fee
+        - name: popularity
+          from: prop__popularity
+        - name: launched_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: When the SKU entered the catalogue; Workflow launched mid-run and has no usage before this.
+
+    # --- dim_rate_tier: graduated price ladder per metered SKU (entity.rate_tier) ---
+    - name: dim_rate_tier
+      description: One row per band of a metered SKU's graduated price ladder — cumulative monthly volume bounds and the per-unit rate inside the band. A repriced band is a new row with its own effective window, never an edit of the old one.
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: rate_tier}
+      key: [rate_tier_id]
+      columns:
+        - name: rate_tier_id
+          from: presentation_id
+          description: Unique band identifier (RT-###).
+        - name: sku_id
+          fk:
+            to: dim_sku
+            via: reference
+            path: [prop__sku]
+          description: dim_sku.sku_id of the SKU this band prices.
+        - name: ordinal
+          from: prop__ordinal
+        - name: from_units
+          from: prop__from_units
+        - name: to_units
+          from: prop__to_units
+          description: Inclusive upper bound of the band; NULL on the open-ended top band.
+        - name: rate
+          from: prop__rate
+          description: Price per unit (USD) inside this band, before the account's negotiated pct_of_list_rate.
+        - name: effective_from
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: Instant this band came into force.
+        - name: effective_to
+          derived:
+            timestamp:
+              source: deactivated_at
+          description: Instant this band was withdrawn; NULL while still in force.
+
+    # --- dim_promotion: dated free-usage campaigns (entity.promotion) ---
+    - name: dim_promotion
+      description: One row per dated campaign that waives rating on one SKU while active — the billing-side record of each spring push.
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: promotion}
+      key: [promotion_id]
+      columns:
+        - name: promotion_id
+          from: presentation_id
+          description: Unique promotion identifier (PRM-###).
+        - name: sku_id
+          fk:
+            to: dim_sku
+            via: reference
+            path: [prop__sku]
+          description: dim_sku.sku_id of the SKU whose usage the promotion waives.
+        - name: campaign
+          from: prop__campaign
+        - name: kind
+          from: prop__kind
+        - name: starts_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: Instant the promotion became active.
+        - name: ends_at
+          derived:
+            timestamp:
+              source: deactivated_at
+          description: Instant the promotion ended; NULL if still active at the end of the extract.
+
+    # --- fact_credit: one row per credit issued (entity.credit) ---
+    - name: fact_credit
+      description: One row per one-time credit issued to a company after a renewal review — face value and reason. Whether and when it is consumed against invoices is derived by the billing query, never stored.
+      role: fact
+      source:
+        grain: records
+        kind: entity
+        filter: {prop__entity_type: credit}
+      key: [credit_id]
+      columns:
+        - name: credit_id
+          from: presentation_id
+          description: Unique credit identifier (CRD-#####).
+        - name: company_id
+          fk:
+            to: dim_company
+            via: reference
+            path: [prop__company]
+          description: dim_company.company_id of the company the credit was issued to; reach its account through dim_account.company_id.
+        - name: amount
+          from: prop__amount
+          description: Face value of the credit (USD) at issue.
+        - name: reason
+          from: prop__reason
+        - name: issued_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: When the credit was issued; it expires issued_at + dim_plan_terms.credit_validity_days later.
+
+    # --- dim_user: seat holder, Type-1 identity (actor.user) ---
+    - name: dim_user
+      description: One row per seat holder, an individual working inside a subscribing company's account.
+      role: dim
+      scd: type1
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: user}
+      key: [user_id]
+      columns:
+        - name: user_id
+          from: presentation_id
+          description: Unique user identifier (USR-######).
+        - name: account_id
+          fk:
+            to: dim_account
+            via: reference
+            path: [prop__company]
+          description: dim_account.account_id of the account this user's seat belongs to.
+        - name: first_name
+          from: prop__first_name
+        - name: last_name
+          from: prop__last_name
+        - name: email
+          from: prop__email
+        - name: company_name
+          from: prop__company_name
+        - name: company_domain
+          from: prop__company_domain
+        - name: email_convention
+          from: prop__email_convention
+        - name: created_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: When the user's seat was created.
+
+    # --- dim_user_status: SCD-2 satellite, seat lifecycle status ---
+    - name: dim_user_status
+      description: One row per seat's status interval, tracking a user's lifecycle from provisioned through active/using to offboarded; billable seat-days are the active/using intervals.
+      role: dim
+      scd: type2
+      source:
+        grain: records
+        kind: actor
+        filter: {prop__actor_type: user}
+      key: [user_id, valid_from]
+      columns:
+        - name: user_id
+          from: presentation_id
+          description: Unique user identifier (USR-######).
+        - name: status
+          from: prop__status
+          description: "Seat lifecycle status: provisioned / active / using / offboarded."
+        - name: valid_from
+          derived:
+            scd_window: {bound: valid_from, as: date}
+          description: Date this version of the row took effect.
+        - name: valid_to
+          derived:
+            scd_window: {bound: valid_to, as: date}
+          description: Date this version was superseded; NULL on the current version.
+
+    # --- fact_usage_event: one row per usage session (tick_decision) ---
+    - name: fact_usage_event
+      role: fact
+      description: One row per product usage session — the volume a seat holder ran, attributed to the SKU the session bound.
+      source:
+        grain: records
+        kind: tick_decision
+      key: [usage_event_id]
+      columns:
+        - name: usage_event_id
+          from: record_index
+          description: Sequential event id (0-based), ascending in event order.
+        - name: occurred_at
+          derived:
+            timestamp:
+              source: created_sim_time
+          description: When the usage session occurred.
+        - name: user_id
+          fk:
+            to: dim_user
+            via: reference
+            path: [prop__journey_instance, prop__actor]
+          description: dim_user.user_id of the user who ran the session.
+        - name: sku_id
+          fk:
+            to: dim_sku
+            via: membership
+            property: bindings
+            member_field: entity
+            where: {elem__role_name: sku}
+          description: dim_sku.sku_id of the product line the session was recorded against.
+        - name: context
+          derived:
+            json_precision:
+              from: prop__context
+              leaves: {volume: 2}
+          description: JSON detail of the usage session; its `volume` leaf is the metered quantity in the SKU's units, rounded to 2dp.
+
+    # --- fact_lifecycle_interval: state-occupancy timeline (journey_instance) ---
+    - name: fact_lifecycle_interval
+      description: One row per state interval occupied by a company or user lifecycle.
+      role: fact
+      source:
+        grain: history_interval
+        kind: journey_instance
+        property: current_state
+      key: [lifecycle_id, started_at]
+      columns:
+        - name: lifecycle_id
+          from: record_id
+          description: Id of the lifecycle this interval belongs to; rows sharing an id form one company or user lifecycle timeline.
+        - name: lifecycle_type
+          lookup:
+            property: journey_type
+          description: "Which lifecycle this is: company_lifecycle or user_lifecycle."
+        - name: company_id
+          fk:
+            to: dim_company
+            via: reference
+            path: [prop__actor]
+          description: dim_company.company_id for company_lifecycle rows; NULL on user_lifecycle rows.
+        - name: user_id
+          fk:
+            to: dim_user
+            via: reference
+            path: [prop__actor]
+          description: dim_user.user_id for user_lifecycle rows; NULL on company_lifecycle rows.
+        - name: state
+          from: value
+          description: "Lifecycle state occupied during this interval."
+        - name: started_at
+          derived:
+            timestamp:
+              source: sim_time
+          description: When the lifecycle entered this state.
+        - name: ended_at
+          derived:
+            timestamp:
+              source: lead_sim_time
+          description: When the lifecycle left this state; NULL if it was still in this state at the end of the extract.
+
+# --- custom_tier: negotiated per-account ladders, author-supplied ---
+supplements:
+  - name: custom_tier
+    file: custom_tier.csv
+    columns:
+      account_id: VARCHAR
+      sku_id: VARCHAR
+      ordinal: BIGINT
+      from_units: BIGINT
+      to_units: BIGINT
+      rate: DECIMAL(6, 4)
+      pct_of_list: BIGINT
+      effective_from: DATE
+      effective_to: DATE
+    description: Negotiated per-account price ladders for the largest enterprise accounts, maintained by account management outside the product. Rows here override dim_rate_tier for that account and SKU while effective; forge carries them verbatim and enforces no reference.
+    descriptions:
+      account_id: dim_account.account_id the ladder belongs to (ACC-#####); not checked against the warehouse.
+      sku_id: dim_sku.sku_id the ladder prices (SKU-###); not checked against the warehouse.
+      ordinal: Position of the band within its ladder, from 1 upward; restarts at 1 in each effective window.
+      from_units: Inclusive lower bound of cumulative monthly volume the band applies to.
+      to_units: Inclusive upper bound of the band; empty on the open-ended top band.
+      rate: Negotiated price per unit (USD) inside the band; empty when the row is priced as pct_of_list instead.
+      pct_of_list: Percent of dim_sku.standard_rate charged inside the band, replacing the account's pct_of_list_rate; empty when the row carries a rate.
+      effective_from: First day the ladder applies, one of the account's renewal-review dates.
+      effective_to: Last day the ladder applies (inclusive); empty while still in force.
