@@ -364,6 +364,13 @@ a check, no operation whose defect the reader's skip-guards silently swallow).
 | [`supplement-tables`](../../examples/recipes/supplement-tables/config.yaml) | `supplements` block: two author-supplied tables carried verbatim beside a declared dim — a file supplement (`region_code.csv` beside the config, header matching the declared `columns`) and an inline supplement (`rows` in YAML, numbers unquoted, anything YAML would not read as a plain string quoted); neither traces to the emit, both land after the declared tables and are recorded in the manifest under `supplement` |
 | [`supplement-typed-columns`](../../examples/recipes/supplement-typed-columns/config.yaml) | The typed end of the supplement vocabulary — `DECIMAL(p, s)`, `DATE`, `BOOLEAN` beside `BIGINT` / `VARCHAR` — with per-column `descriptions`; the two traps: quote any value YAML would not read as a plain string (an unquoted date or `true` is refused at parse), and the cast is DuckDB's verbatim (a `DECIMAL` cell rounds to its scale, a `BIGINT` cell `1.5` rounds to `2`, an uncastable cell is refused before any write) |
 
+**Calendar**
+
+| Recipe | What it teaches |
+|---|---|
+| [`date-dimension`](../../examples/recipes/date-dimension/config.yaml) | The `date_dimension: {from, to}` block materializing the generated calendar `dim_date`, and the `date_ref` column mode in both shapes — an instant's `yyyymmdd` key beside its `derived: timestamp` on a fact, and a parsed date string's key beside its `derived: date_parse` on a dim — every key matching a `dim_date` row by construction |
+
+
 ### Source
 
 | Recipe | What it teaches |

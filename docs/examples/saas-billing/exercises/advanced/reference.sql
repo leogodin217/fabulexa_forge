@@ -5,19 +5,23 @@
 WITH RECURSIVE
 
 -- ---------------------------------------------------------------- calendar
-extract_end AS (
-    SELECT CAST(date_trunc('month', MAX(started_at)) AS DATE) AS last_month
-    FROM fact_lifecycle_interval
+calendar AS (                                     -- one row per month of dim_date
+    SELECT d.year, d.month,
+           MIN(d.date)                                AS month_start,
+           CAST(MAX(d.date) + INTERVAL 1 DAY AS DATE) AS next_month_start,
+           COUNT(*)                                   AS days_in_month
+    FROM dim_date d
+    GROUP BY d.year, d.month
 ),
-calendar AS (
-    SELECT CAST(m AS DATE)                    AS month_start,
-           CAST(m + INTERVAL 1 MONTH AS DATE) AS next_month_start
-    FROM (
-        SELECT UNNEST(generate_series(
-                   (SELECT CAST(date_trunc('month', MIN(created_at)) AS TIMESTAMP) FROM dim_account),
-                   (SELECT CAST(last_month AS TIMESTAMP) FROM extract_end),
-                   INTERVAL 1 MONTH)) AS m
-    )
+calendar_day AS (                                 -- each day's month, keyed as the facts key it
+    SELECT d.date_key, d.date, c.month_start
+    FROM dim_date d
+    JOIN calendar c ON c.year = d.year AND c.month = d.month
+),
+extract_end AS (
+    SELECT MAX(cd.month_start) AS last_month
+    FROM fact_lifecycle_interval f
+    JOIN calendar_day cd ON cd.date_key = f.started_date_key
 ),
 
 -- ---------------------------------------------------------------- accounts
@@ -30,21 +34,22 @@ account AS (
            p.trial_days,
            p.included_units_per_seat,
            p.credit_validity_days,
-           CAST(date_trunc('month', a.created_at) AS DATE) AS first_month,
+           cd.month_start AS first_month,
            LEAST(
                COALESCE(
-                   (SELECT CAST(date_trunc('month', MIN(t.valid_from)) AS DATE)
-                    FROM dim_account_terms t
-                    WHERE t.account_id = a.account_id AND t.churn_flag = 1),
+                   (SELECT MIN(ch.month_start)
+                    FROM dim_company c
+                    JOIN calendar_day ch ON ch.date = c.valid_from
+                    WHERE c.company_id = a.company_id AND c.status = 'churned'),
                    e.last_month),
                e.last_month) AS last_month
     FROM dim_account a
     JOIN dim_plan_terms p ON p.tier = a.plan
+    JOIN calendar_day cd  ON cd.date_key = a.created_date_key
     CROSS JOIN extract_end e
 ),
 billing_month AS MATERIALIZED (
-    SELECT ac.account_id, c.month_start, c.next_month_start,
-           date_diff('day', c.month_start, c.next_month_start) AS days_in_month
+    SELECT ac.account_id, c.month_start, c.next_month_start, c.days_in_month
     FROM account ac
     JOIN calendar c ON c.month_start BETWEEN ac.first_month AND ac.last_month
 ),
@@ -85,10 +90,11 @@ seat_charge AS MATERIALIZED (
 -- ---------------------------------------------------------------- 3-4 usage
 usage AS (                                        -- metered, outside promo and trial
     SELECT u.account_id,
-           CAST(date_trunc('month', e.occurred_at) AS DATE) AS month_start,
+           cd.month_start,
            e.sku_id,
            CAST(SUM(CAST(json_extract_string(e.context, '$.volume') AS DECIMAL(14,2))) AS DECIMAL(18,6)) AS volume
     FROM fact_usage_event e
+    JOIN calendar_day cd ON cd.date_key = e.occurred_date_key
     JOIN dim_user u    ON u.user_id = e.user_id
     JOIN dim_sku k     ON k.sku_id = e.sku_id AND k.billing_model = 'metered'
     JOIN account ac    ON ac.account_id = u.account_id
@@ -99,7 +105,7 @@ usage AS (                                        -- metered, outside promo and 
               AND pr.kind = 'free_usage'
               AND pr.starts_at <= e.occurred_at
               AND (pr.ends_at IS NULL OR e.occurred_at < pr.ends_at))
-    GROUP BY u.account_id, date_trunc('month', e.occurred_at), e.sku_id
+    GROUP BY u.account_id, cd.month_start, e.sku_id
 ),
 
 -- ---------------------------------------------------------------- 5 allowance
@@ -267,11 +273,13 @@ invoice AS MATERIALIZED (
 -- ---------------------------------------------------------------- 10 credits
 credit AS (
     SELECT f.credit_id, ac.account_id, f.issued_at,
+           cd.month_start AS issued_month,
            CAST(f.amount AS DECIMAL(28,14)) AS amount,
            f.issued_at + ac.credit_validity_days * INTERVAL 1 DAY AS expires_at
     FROM fact_credit f
-    JOIN dim_account a ON a.company_id = f.company_id
-    JOIN account ac    ON ac.account_id = a.account_id
+    JOIN calendar_day cd ON cd.date_key = f.issued_date_key
+    JOIN dim_account a   ON a.company_id = f.company_id
+    JOIN account ac      ON ac.account_id = a.account_id
 ),
 -- Month-by-month ledger. One cursor row per account per month (credit_id NULL)
 -- keeps the recursion advancing through months with no open credit; credit
@@ -323,8 +331,7 @@ ledger AS (
          AND i.month_start = CAST(l.month_start + INTERVAL 1 MONTH AS DATE)
         JOIN credit c
           ON c.account_id = i.account_id
-         AND c.issued_at >= CAST(i.month_start AS TIMESTAMP)
-         AND c.issued_at <  CAST(i.next_month_start AS TIMESTAMP)
+         AND c.issued_month = i.month_start
         WHERE l.credit_id IS NULL
     ) x
 ),

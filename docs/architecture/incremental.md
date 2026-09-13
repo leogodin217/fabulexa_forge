@@ -162,6 +162,18 @@ The windowed compile passes `write_mode='replace'` to `compile_supplement_specs`
 and appends the supplement specs after the declared tables; an empty window and
 an explicit range deliver it whole like any snapshot table.
 
+The generated calendar `dim_date` ([`date-dimension.md`](date-dimension.md)) is
+likewise `snapshot` in every emitting window: `compile_date_dimension_spec` is
+called with `write_mode='replace'` and its spec appended after the declared
+tables and before the supplements. Horizon-invariant by construction — it reads
+no emit table — so an empty window and an explicit range deliver it whole. A
+`date_ref` column's value channel is its source column's under the one
+variance reading below, so a `date_ref` over a source that can change makes its
+table `upsert`, never `append`. The range guard (`check_date_refs_in_range`)
+runs per window over that window's compiled relations — the delta or the
+snapshot the window delivers — before the window's write, after the
+`WindowKeyDuplicate` guard and the overlay check.
+
 | Condition | Result |
 |---|---|
 | `start_ns = 0` (window 0, or a range from the tape's start) | The start horizon is the empty tape; the delta is `state(h)` whole |
@@ -179,7 +191,7 @@ read by the classifier and the key gate alike so the two cannot drift):
 
 | Column form | Horizon-invariant iff |
 |---|---|
-| `from:` / `correlation:` / `value_map.from` / `decimal.from` / `date_parse.from` / `json_precision.from` / `derived: timestamp` `source` | The source column is constant: an identity column, `created_sim_time`, `sim_time`, `joined_sim_time`, `value` / `property` on a history grain, an element field, a `history_tracked: false` property or its `ref_index__` sibling — or, on an `scd: type2` dim, any property (a version row carries its version's value). Not: `active`, `deactivated_at`, `last_mutation_sim_time` (the recorded trail advances), a tracked property on a non-versioned table, `lead_sim_time`, `left_sim_time` |
+| `from:` / `correlation:` / `value_map.from` / `decimal.from` / `date_parse.from` / `json_precision.from` / `derived: timestamp` `source` / `date_ref` `source` / `from` | The source column is constant: an identity column, `created_sim_time`, `sim_time`, `joined_sim_time`, `value` / `property` on a history grain, an element field, a `history_tracked: false` property or its `ref_index__` sibling — or, on an `scd: type2` dim, any property (a version row carries its version's value). Not: `active`, `deactivated_at`, `last_mutation_sim_time` (the recorded trail advances), a tracked property on a non-versioned table, `lead_sim_time`, `left_sim_time` |
 | `derived: scd_window: valid_from` | Always (a version's start is its identity) |
 | `derived: scd_window: valid_to` | Never (the successor closes it) |
 | `derived: elapsed` | Never (the counterpart row may land later) |
@@ -348,6 +360,9 @@ found, not what it is) and keeps `columns` as declared, so a re-spelled type
 trips the fingerprint through the dump. A changed CSV byte, inline row, column
 name, column order, or type mid-drip is a mismatch; an edited description, or a
 moved or renamed file whose bytes are identical, is not.
+
+`date_dimension` enters the fingerprint through the config dump like any
+data-affecting field: a changed calendar range mid-drip is a mismatch.
 
 A cursor that is unreadable, structurally invalid, or **lost** is
 `IncrementalCursorInvalid`. The fresh/lost boundary is exact:
@@ -585,6 +600,7 @@ usage error on stderr, exit 1, before the emit opens).
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability and its per-write-regime window gating |
 | [`companion-artifacts.md`](companion-artifacts.md) | The README + manifest pair each emitting invocation rewrites whole-state; the census and fingerprint exclusions it motivates |
 | [`supplements.md`](supplements.md) | Supplement tables — `snapshot` every window, the fingerprint's `supplements` map, the removed-directory naming the source-is-output gate reads |
+| [`date-dimension.md`](date-dimension.md) | The generated calendar — `snapshot` every window, the per-window range guard, the `date_ref` value-channel reading |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface the driver reads through |
 | [`derivations.md`](derivations.md) | The truncated tape every horizon compile runs over |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored contract carrying the relied-on `slice_at` and row-order guarantees |

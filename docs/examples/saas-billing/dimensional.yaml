@@ -49,7 +49,9 @@
 #            allowance_override (1,456 rows; enterprise-only, absent until
 #            the first review sets it). Both are tracked, so they live on the
 #            SCD-2 satellite; the add-on flags are constant and live on the
-#            Type-1 dim_account.
+#            Type-1 dim_account. Every version of this table is a contract
+#            amendment fired at a renewal review; its valid_from is the
+#            amendment's effective instant.
 #   SUPPLEMENT  custom_tier is the negotiated per-account ladder for the four
 #            largest enterprise accounts (by usage volume over the run —
 #            ACC-00002, ACC-00095, ACC-00027, ACC-00096). It is the author's
@@ -58,8 +60,41 @@
 #            the manifest under `supplement`. account_id / sku_id are written
 #            in the surfaces this config elects (presentation_id: ACC-/SKU-);
 #            nothing checks that. Its DATE windows need no anchor.
-#   DROPPED  entity.prop__attach_weight (arrival-sampling knob, not a
-#            business attribute).
+#   CALENDAR dim_date spans the run's five calendar years (2026-01-01 ..
+#            2030-12-31). Every instant a billing rule attributes to a month
+#            carries a yyyymmdd key beside its timestamp — dim_account.
+#            created_date_key, fact_usage_event.occurred_date_key,
+#            fact_credit.issued_date_key, fact_lifecycle_interval.
+#            started_date_key / ended_date_key (NULL while open) — so the
+#            reference query reads its month spine, month boundaries and
+#            days-in-month off the calendar instead of computing them.
+#   DROPPED  simulation mechanisms no billing system would hold (reviewed
+#            with the scenario author):
+#            - company_hub.attach_weight — arrival-sampling knob.
+#            - company_hub.churn_flag — the cascade signal that starts user
+#              offboarding, written in the same firing as
+#              actor.company.status = churned. Churn is that status row.
+#            - company_hub.engagement_score — a daily roll-up of active
+#              seats, derivable from dim_user_status. Dropping the column
+#              does not drop its versions: an SCD-2 dim cuts a version at
+#              every change of any tracked property of the kind, projected
+#              or not, so 10,189 of dim_account_terms' 13,591 versions
+#              differ from their predecessor in no projected column. Kept
+#              as a documented trap (README overlay) — it is what a
+#              version-on-any-upstream-change pipeline really produces.
+#            - sku.popularity — the weight deciding which SKU a session
+#              binds; observed popularity is a query over fact_usage_event.
+#            - user.email_convention — generator knob for the email format.
+#            - user.company_name / company_domain — byte-identical copies of
+#              the account's name / domain; dim_user.account_id is the FK.
+#            - promotion.campaign — the same string as `name`, differently
+#              cased, read by nothing.
+#   FIRMOGRAPHICS  company_hub carries industry, size_band, HQ location and
+#            the billing contact; actor.user carries job_title and phone;
+#            promotion carries a display name. All are set once at creation
+#            (one history row per record), so they sit on the Type-1 dims.
+#            size_band is the customer's headcount band, not its seat count —
+#            the two disagree by design and the README overlay says so.
 #   KEPT     the whole journey_instance timeline as fact_lifecycle_interval:
 #            current_state carries 1,210,022 history rows over 10,399
 #            instances (116x) — a state machine, not a dimension. Unlike the
@@ -77,12 +112,17 @@
 #            documented as a trap rather than fabricated into a column.
 #            engagement_score elects DECIMAL(5, 2) as in the parent pack.
 #   ELECTED  dim_company / dim_user_status windows at date grain (coarse
-#            lifecycle milestones); dim_account_terms stays TIMESTAMP (daily
-#            engagement recompute mixes with same-day pricing changes).
+#            lifecycle milestones); dim_account_terms stays TIMESTAMP (an
+#            amendment takes effect at the review's instant, and the billing
+#            spec's as-of-month-end rule is written against instants).
 
 mode: dimensional
 
 readme_overlay: README-overlay.md
+
+date_dimension:
+  from: "2026-01-01"
+  to: "2030-12-31"
 
 keys:
   actor: presentation_id
@@ -123,7 +163,7 @@ dimensional:
 
     # --- dim_account: billing tenant, Type-1 identity (entity.company_hub) ---
     - name: dim_account
-      description: One row per account, the billing tenant a company provisions — its plan, identity, flat add-ons, and the company it belongs to. The tracked commercial terms live on dim_account_terms.
+      description: One row per account, the billing tenant a company provisions — its plan, identity, firmographics, headquarters and billing contact, flat add-ons, and the company it belongs to. The tracked commercial terms live on dim_account_terms.
       role: dim
       scd: type1
       source:
@@ -146,6 +186,23 @@ dimensional:
           description: Account display name.
         - name: domain
           from: prop__domain
+        - name: industry
+          from: prop__industry
+        - name: size_band
+          from: prop__size_band
+          description: Headcount band of the customer organisation (employees, not seats); it is independent of how many seats the account holds.
+        - name: hq_city
+          from: prop__hq_city
+        - name: hq_subdivision
+          from: prop__hq_subdivision
+        - name: hq_postal_code
+          from: prop__hq_postal_code
+        - name: hq_area_code
+          from: prop__hq_area_code
+        - name: billing_street
+          from: prop__billing_street
+        - name: billing_phone
+          from: prop__billing_phone
         - name: plan
           from: prop__plan
           description: "Plan tier: starter / professional / enterprise; joins to dim_plan_terms.tier."
@@ -158,10 +215,14 @@ dimensional:
             timestamp:
               source: created_sim_time
           description: When the account was provisioned; the free trial runs from here for dim_plan_terms.trial_days.
+        - name: created_date_key
+          date_ref:
+            source: created_sim_time
+          description: dim_date.date_key of the day the account was provisioned; its month is the account's first billing month.
 
     # --- dim_account_terms: SCD-2 satellite of the account's commercial terms ---
     - name: dim_account_terms
-      description: One row per version of an account's commercial terms — seat price, negotiated usage discount, committed spend, allowance override, churn status, and engagement score — bounded by the interval each version was current for.
+      description: One row per version of an account's commercial terms — seat price, negotiated usage discount, committed spend, and allowance override — bounded by the interval each version was current for. Each version is an amendment made at a renewal review.
       role: dim
       scd: type2
       source:
@@ -184,11 +245,6 @@ dimensional:
         - name: allowance_override
           from: prop__allowance_override
           description: Negotiated included Core units per seat per month; NULL until an enterprise review sets it. Overrides dim_plan_terms.included_units_per_seat when present.
-        - name: churn_flag
-          from: prop__churn_flag
-        - name: engagement_score
-          derived:
-            decimal: {from: prop__engagement_score, as: [5, 2]}
         - name: valid_from
           derived:
             scd_window: valid_from
@@ -248,8 +304,6 @@ dimensional:
           description: List price per unit of usage volume; the rate a metered SKU is billed at when it has no ladder rows (Workflow), and the base a custom_tier pct_of_list applies to.
         - name: flat_fee
           from: prop__flat_fee
-        - name: popularity
-          from: prop__popularity
         - name: launched_at
           derived:
             timestamp:
@@ -317,8 +371,9 @@ dimensional:
             via: reference
             path: [prop__sku]
           description: dim_sku.sku_id of the SKU whose usage the promotion waives.
-        - name: campaign
-          from: prop__campaign
+        - name: name
+          from: prop__name
+          description: Promotion display name.
         - name: kind
           from: prop__kind
         - name: starts_at
@@ -361,6 +416,10 @@ dimensional:
             timestamp:
               source: created_sim_time
           description: When the credit was issued; it expires issued_at + dim_plan_terms.credit_validity_days later.
+        - name: issued_date_key
+          date_ref:
+            source: created_sim_time
+          description: dim_date.date_key of the issue day; the credit enters the ledger in that month.
 
     # --- dim_user: seat holder, Type-1 identity (actor.user) ---
     - name: dim_user
@@ -388,12 +447,10 @@ dimensional:
           from: prop__last_name
         - name: email
           from: prop__email
-        - name: company_name
-          from: prop__company_name
-        - name: company_domain
-          from: prop__company_domain
-        - name: email_convention
-          from: prop__email_convention
+        - name: job_title
+          from: prop__job_title
+        - name: phone
+          from: prop__phone
         - name: created_at
           derived:
             timestamp:
@@ -443,6 +500,10 @@ dimensional:
             timestamp:
               source: created_sim_time
           description: When the usage session occurred.
+        - name: occurred_date_key
+          date_ref:
+            source: created_sim_time
+          description: dim_date.date_key of the session's day; usage is billed in that month.
         - name: user_id
           fk:
             to: dim_user
@@ -506,6 +567,14 @@ dimensional:
             timestamp:
               source: lead_sim_time
           description: When the lifecycle left this state; NULL if it was still in this state at the end of the extract.
+        - name: started_date_key
+          date_ref:
+            source: sim_time
+          description: dim_date.date_key of the day the state was entered.
+        - name: ended_date_key
+          date_ref:
+            source: lead_sim_time
+          description: dim_date.date_key of the day the state was left; NULL while still occupied.
 
 # --- custom_tier: negotiated per-account ladders, author-supplied ---
 supplements:

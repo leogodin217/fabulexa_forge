@@ -64,6 +64,15 @@ sourced per-export facts for tooling.
   `table:` slots validate against the union of plan and supplement names, so
   a slot may name a supplement; the README renders a supplement as any table
   under its ordering contract, with nothing to distinguish it.
+- **Date dimension.** The generated calendar reaches the companion writer as an
+  ordinary `TableReport` whose `calendar` field carries its provenance — a
+  `CalendarSource` (the declared inclusive range), stated explicitly at every
+  report-assembly site like `supplement`. Every report also carries
+  `references`, the output-column → referenced-output-table map the
+  dimensional plan stamps for `date_ref` (→ `dim_date`) and `fk` (→ the
+  resolved dim) columns; the source and base modes state `calendar=None` and
+  `references={}` ([`date-dimension.md`](date-dimension.md)). The overlay's
+  `table:` slots range over plan, `dim_date`, and supplement names alike.
 - **Mode-neutral.** The companion writer holds no mode-specific branching; the
   mode contributes its packaged template and its report.
 
@@ -224,6 +233,16 @@ Normative rules the code conforms to:
   sorts object keys, the embedded `supplements[].columns` map does not
   preserve declared order — the table entry's `columns` list is the order
   authority, as it is for every table.
+- **`tables[].calendar` names the generated calendar.** `{"from": "<ISO
+  date>", "to": "<ISO date>"}` for `dim_date`, `null` for every other table —
+  the key always present. A calendar entry's `description` and
+  `columns[].description` come from the forge-pinned calendar dictionary;
+  `unit`, `enum_options`, `primary_key`, `unique`, and `supplement` are `null`.
+  The embedded config carries `date_dimension` as declared.
+- **`columns[].references` names the referenced output table.** `"dim_date"`
+  for a `date_ref` column, the resolved dim table's name for an `fk` column,
+  `null` elsewhere — transcribed from the report's `references` map, never
+  re-derived from config or SQL.
 
 ## Invariants
 
@@ -330,6 +349,7 @@ the overlay pointer or content never raises `IncrementalFingerprintMismatch`
 | [`incremental.md`](incremental.md) | The windowed caller — whole-state artifact rewrite after data + cursor commit, the CSV census exclusion, the fingerprint's `readme_overlay` exclusion |
 | [`writers.md`](writers.md) | The Arrow transcription authority the report's columns/types come from |
 | [`supplements.md`](supplements.md) | The supplement tables whose provenance the manifest's `tables[].supplement` records and whose source files `companion_artifact_paths` guards |
+| [`date-dimension.md`](date-dimension.md) | The generated calendar whose range the manifest's `tables[].calendar` records, and the `date_ref` / `fk` references `columns[].references` names |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` declarations the manifest transcribes |
 | [`key-election.md`](key-election.md) | The `keys` election on record via the embedded config |
 | [`anchor.md`](anchor.md) | The resolved `EffectiveAnchor` the manifest and README report |

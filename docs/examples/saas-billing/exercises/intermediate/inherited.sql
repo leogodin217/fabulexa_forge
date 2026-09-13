@@ -40,7 +40,7 @@ from (select da.account_id as aid, da.company_id as cid, da.plan as pln, da.addo
             from (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) d1,
                  (select 0 as n union all select 1 union all select 2 union all select 3 union all select 4 union all select 5 union all select 6 union all select 7 union all select 8 union all select 9) d2) mm
       where substr(cast(mm.ms as varchar),1,7) >= substr(cast(da.created_at as varchar),1,7)
-        and substr(cast(mm.ms as varchar),1,7) <= (select case when x.chn is null or x.chn > x.lst then x.lst else x.chn end from (select (select substr(cast(min(dat.valid_from) as varchar),1,7) from dim_account_terms dat where dat.account_id = da.account_id and dat.churn_flag = 1) as chn, (select substr(cast(max(fli.started_at) as varchar),1,7) from fact_lifecycle_interval fli) as lst) x)
+        and substr(cast(mm.ms as varchar),1,7) <= (select case when x.chn is null or x.chn > x.lst then x.lst else x.chn end from (select (select substr(cast(min(dc.valid_from) as varchar),1,7) from dim_company dc where dc.company_id = da.company_id and dc.status = 'churned') as chn, (select substr(cast(max(fli.started_at) as varchar),1,7) from fact_lifecycle_interval fli) as lst) x)
      ) m
       ) t1) b
 order by 1, 2

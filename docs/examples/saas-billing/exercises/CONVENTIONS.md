@@ -42,6 +42,17 @@ the order rows happen to be summed in, or on how a query is restructured.
 
 ## Time
 
+- **The month spine is the warehouse calendar.** `dim_date` (one row per day,
+  2026-01-01 to 2030-12-31) grouped by `year, month` gives every billing
+  month's `month_start`, `next_month_start`, and `days_in_month` (its row
+  count). Nothing is generated in the query.
+- **An instant belongs to the month of its `*_date_key`** (`dim_account.
+  created_date_key`, `fact_usage_event.occurred_date_key`, `fact_credit.
+  issued_date_key`, `fact_lifecycle_interval.started_date_key`) looked up on
+  `dim_date.date_key`; a `DATE` column (`dim_company.valid_from`) is looked
+  up on `dim_date.date`. The key is the local date of the same instant the
+  timestamp column renders, so `date_trunc('month', <timestamp>)` agrees
+  with it — a candidate may use either.
 - **Month end instant** `T` = the last instant of the month. An SCD-2 version
   is "as of month end" when `valid_from < next_month_start AND (valid_to IS
   NULL OR valid_to >= next_month_start)`. The same rule reads `dim_rate_tier`
@@ -49,9 +60,9 @@ the order rows happen to be summed in, or on how a query is restructured.
   month_end_date AND (effective_to IS NULL OR effective_to >= month_end_date)`.
 - **The extract ends** in the month of the last `fact_lifecycle_interval`
   transition. It is read from the data, not written into the query.
-- **Churn month** = the month of the first `dim_account_terms` version with
-  `churn_flag = 1`. Nothing after it is billed, including usage that seats run
-  while offboarding.
+- **Churn month** = the month of the first `dim_company` version with
+  `status = 'churned'`, reached through `dim_account.company_id`. Nothing
+  after it is billed, including usage that seats run while offboarding.
 - **Account → plan terms** through `dim_account.plan = dim_plan_terms.tier`.
 
 ## Stages

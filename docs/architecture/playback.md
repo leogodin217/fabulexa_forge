@@ -295,6 +295,18 @@ anchor, touches no emit table, and runs at open through
 ask ever refuses. A supplement's answer is horizon-invariant and never depends
 on the selection, so projection invariance holds for it trivially.
 
+**The calendar table.** With `date_dimension` declared, a dimensional shape's
+table set also carries the generated `dim_date`
+([`date-dimension.md`](date-dimension.md)): `tables()` reports it with class
+`snapshot` after the declared tables and before the supplements, and it is a
+legal member of the `tables` selection. Its compile reads no emit table, so a
+selection naming no declared table materializes it without opening a horizon
+or a truncated tape, and its answer is identical at every `T` and every
+window. The range guard is data-dependent and so runs per ask, over the ask's
+materialized tables, after the selection gates and `WindowKeyDuplicate` and
+before the ask returns; a violation raises `DateRefOutOfRange` from the ask —
+the one way a `date_ref`-bearing ask refuses after open.
+
 **Table selection.** `tables` is any non-empty collection of the names
 `tables()` reports (a singleton included), or `None` for the whole shape. Set
 semantics: a repeated name selects its table once; the answer is the selected
@@ -347,7 +359,7 @@ materialized. The cost of an ask is therefore a per-ask floor (one horizon
 opened per delta-free ask, two per delta-bearing one; for a source shape one
 whole-config plan build per horizon opened) plus a per-selected-table
 marginal, never a sibling's.
-A selection naming no dimensional table — supplements only — opens no horizon,
+A selection naming no dimensional table — supplements and the calendar only — opens no horizon,
 runs no dimensional compile, and emits no plan notices: the horizon economy at
 its floor. A mixed selection compiles the dimensional part as above and appends
 the selected supplements in declaration order.
@@ -358,8 +370,8 @@ the selected supplements in declaration order.
 realized literally, not per class: the mode's full-export compile runs over the
 **truncated tape**, the derivations-owned presentation of the emit sliced at T
 (see [`derivations.md`](derivations.md) § The truncated-tape surface).
-Delivery is `snapshot` on every table, a dimensional shape's supplement tables
-included — identical at every `T`. Because the compile is the shipped
+Delivery is `snapshot` on every table, a dimensional shape's supplement and
+calendar tables included — identical at every `T`. Because the compile is the shipped
 full-export compile, as-of-T correctness is by construction — no per-class
 rules: type-1 dims read as-of-T values, SCD-2's `LEAD` over truncated `history`
 yields change points ≤ T, records-grain facts reconstruct as of T, source's
@@ -693,5 +705,6 @@ any id.
 | [`key-election.md`](key-election.md) | The identity-publication layer split (§ Identity publication) — why the seam projects published identity but never gates it |
 | [`slice-only.md`](slice-only.md) | The `slice_only` policy the seam inherits at selection and at open |
 | [`supplements.md`](supplements.md) | The supplement tables a dimensional shape carries — in the table set and the selection domain, every gate at open |
+| [`date-dimension.md`](date-dimension.md) | The generated calendar a dimensional shape carries — in the table set and the selection domain; the per-ask range guard |
 | [`anchor.md`](anchor.md) | The `EffectiveAnchor` both tiers render wallclock through |
 | [`temporal-elections.md`](temporal-elections.md) | The election vocabulary tier 2 renders by reusing the modes' own compile and validation surfaces directly |

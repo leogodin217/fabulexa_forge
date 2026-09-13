@@ -486,6 +486,26 @@ Each mode reads the same emit and writes a different target shape.
   [`architecture/supplements.md`](architecture/supplements.md).
   *Teaches: the hand-maintained reference table every real warehouse
   carries beside its generated facts.*
+- ✓ **Date dimension** *(dimensional only)* — a top-level `date_dimension:
+  {from, to}` block materializes `dim_date`, a forge-generated calendar over
+  the declared inclusive range: one row per day, a pinned thirteen-column set
+  (`date_key` `yyyymmdd`, `date`, year / quarter / month / day, ISO weekday,
+  day-of-year, ISO year / week, English month and day names, `is_weekend`),
+  byte-identical for the same range regardless of emit or anchor. The
+  `date_ref` column mode — beside `fk`, on any grain — renders the matching
+  `yyyymmdd` key from a structural instant's local date in the anchor zone or
+  from a parsed date string, through the one key expression `dim_date` itself
+  uses, so a fact's key and the calendar's agree by construction. A key
+  outside the declared range is a dangling reference and is refused before
+  any table is written (`DateRefOutOfRange`). `dim_date` lands after the
+  declared tables and before supplements, delivered `snapshot` every
+  incremental window, joins a shaped playback's table set, and is recorded in
+  the manifest under `tables[].calendar` with every `date_ref` and `fk`
+  column's target under `columns[].references`. The generated calendar is
+  Principle #3's second named exception — driven by a range, never a value.
+  See [`architecture/date-dimension.md`](architecture/date-dimension.md).
+  *Teaches: the calendar dimension every star schema joins its fact instants
+  to for by-month / by-weekday / by-quarter analysis.*
 - ✓ **Notice channel** — deterministic, non-fatal informational records (`Notice`)
   through a required caller-supplied sink; CLI renders one line per notice to stderr,
   off stdout. See [`architecture/notices.md`](architecture/notices.md).

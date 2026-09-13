@@ -53,8 +53,10 @@ consumes the previous stage's output.
 
 **Conventions.** Month-end attribute values (stage 2, 5, 7) are the
 `dim_account_terms` version whose `[valid_from, valid_to)` contains the
-last instant of the month. Volume is in the SKU's own units; the ladder
-bounds are inclusive on both ends.
+last instant of the month. The month an instant belongs to is read through
+its `*_date_key` on `dim_date` (the local date in the export's zone), and a
+month's length is the calendar's row count for that month. Volume is in the
+SKU's own units; the ladder bounds are inclusive on both ends.
 
 ### Deliberate ambiguities
 
@@ -83,6 +85,15 @@ of the inherited query should be able to say which one it implements.
   churned only). The review timeline — and each credit's issuing review —
   is on `fact_lifecycle_interval` under `lifecycle_type =
   company_lifecycle`, states `reviewed` and `credit_issued`.
+- Three quarters of `dim_account_terms` versions change nothing you can
+  see: 10,189 of 13,591 rows carry the same seat price, discount, commit
+  and allowance as the row before them (the upstream system re-versioned
+  the account on an attribute this warehouse does not carry). Counting
+  versions does not count amendments; `LAG` over the four terms columns
+  does. The as-of-month-end rule is unaffected.
+- There is no churn column on the account or its terms. Churn is the
+  `dim_company` version whose `status` is `churned`, one hop away through
+  `dim_account.company_id`; its `valid_from` is the cancellation date.
 - `dim_user.account_id` points at the **account** (`ACC-`); `dim_account.
   company_id` and `fact_credit.company_id` point at the **company**
   (`CMP-`). Both are "the company" in plain English. A credit reaches its
@@ -96,6 +107,15 @@ of the inherited query should be able to say which one it implements.
   warehouse elects for accounts (`ACC-#####`). Nothing checks this: a
   ladder row for an id that does not exist joins to zero rows and is never
   reported.
+- `dim_date` spans exactly the five run years, 2026-01-01 to 2030-12-31. A
+  date the query computes — a credit's expiry, a term end a year out — can
+  fall past it and then has no `date_key`; compare such dates as dates or
+  instants rather than keying into the calendar.
+  `fact_lifecycle_interval.ended_date_key` is NULL on an interval still open
+  at the extract's end, like `ended_at`.
+- `dim_account.size_band` is the customer's **headcount** band (employees),
+  not its seat count. Seats are read off `dim_user_status`; a segmentation
+  by `size_band` will not track billable seats and is not meant to.
 
 ## table: custom_tier
 

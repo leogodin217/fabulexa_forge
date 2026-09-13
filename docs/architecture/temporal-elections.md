@@ -10,8 +10,9 @@ already-derived value.
 
 **Source:** the shared election type and instant renderer live in
 [`anchor.py`](../../src/fabulexa_forge/anchor.py)
-(`TemporalRender`, `render_anchor_temporal_expr`); the date-parse renderer in
-[`_sql.py`](../../src/fabulexa_forge/_sql.py) (`render_date_parse_expr`,
+(`TemporalRender`, `anchor_temporal_expr`, `render_anchor_temporal_expr`); the
+date-parse renderer in [`_sql.py`](../../src/fabulexa_forge/_sql.py)
+(`date_parse_expr`, `render_date_parse_expr`,
 with `validate_date_parse_format` and `date_parse_denoted_type`);
 the config grammar in
 [`config/models.py`](../../src/fabulexa_forge/config/models.py). Per-mode
@@ -223,6 +224,7 @@ elections ([`value-rendering-elections.md`](value-rendering-elections.md)
 | dimensional | `derived: scd_window` | object form `{bound, as}`; the bare-literal shorthand means default rendering | [`dimensional.md`](dimensional.md) § Timestamp source and the runtime anchor |
 | dimensional | `derived: elapsed` | exactly one of `unit` (numeric) / `as: interval` | [`dimensional.md`](dimensional.md) § Derived columns |
 | dimensional | `derived: date_parse` | `{from, format}` | [`dimensional.md`](dimensional.md) § Derived columns |
+| dimensional | `date_ref` | `{source}` — the instant shape is an explicit `date` election; `{from, format}` — the parse shape is the declared parse cast to `DATE`; both then keyed through `date_key_expr` | [`date-dimension.md`](date-dimension.md) § The `date_ref` column mode |
 | source | declared table (`state` / `junction`) | unified `render:` map — bare shorthand (structural instant) / `{date_parse: …}` entry (payload) | [`source.md`](source.md) § Wallclock timestamps |
 | source | event log | `render:` map, keyed on the log's one instant column `event_sim_time` — a constant of the log's published contract, not a reader question | [`source.md`](source.md) § The event log |
 | base | per-table render declaration | unified `render:` map keyed on the same pre-default column identities the mode's `rename` uses | [`base.md`](base.md) § Presentation, typing, and ordering |
@@ -274,7 +276,11 @@ version ordering is unaffected); the open interval's `NULL` `valid_to` stays
    `render_anchor_temporal_expr`, the one SQL renderer every mode shares
    ([`anchor.md`](anchor.md)); every declared parse renders through
    `render_date_parse_expr`, over the one denoted type
-   `date_parse_denoted_type` derives. Neither renderer is duplicated per
+   `date_parse_denoted_type` derives. Each renderer exposes a bare (unaliased) expression —
+   `anchor_temporal_expr`, `date_parse_expr` — that its aliased fragment
+   wraps, the decimal authority's posture, so a composing consumer (the
+   dimensional `date_ref` mode) reuses the expression rather than re-spelling
+   it. Neither renderer is duplicated per
    mode, and no consumer re-derives a denoted type.
 6. **An elected rendering never falls back to a raw integer.** Absence of an
    anchor under an explicit election is a load-time error, not a silent raw
@@ -379,5 +385,6 @@ byte-identically for the same election.
 | [`incremental.md`](incremental.md) | The election-aware ordinal-invariance reading of the windowed delivery classifier. |
 | [`playback.md`](playback.md) | Tier-2 shaped playback's reuse of the modes' own compile and validation surfaces, session-zone pin included. |
 | [`slice-only.md`](slice-only.md) | The refusal surface a `date_parse` source column joins. |
+| [`date-dimension.md`](date-dimension.md) | The `date_ref` column mode — the `date` election and the declared parse composed through the bare renderer expressions into a calendar key. |
 | [`key-election.md`](key-election.md) | A sibling cross-mode election surface: one vocabulary, per-mode attach points. |
 | [`row-predicates.md`](row-predicates.md) | A sibling shared-grammar surface with one rendering authority. |
