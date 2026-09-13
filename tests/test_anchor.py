@@ -11,6 +11,7 @@ import pytest
 from fabulexa_forge.anchor import (
     EffectiveAnchor,
     TemporalRender,
+    anchor_temporal_expr,
     render_anchor_temporal_expr,
     resolve_effective_anchor,
 )
@@ -291,6 +292,33 @@ def test_rebase_invalid_runtime_anchor_naive() -> None:
 # ---------------------------------------------------------------------------
 # render_anchor_temporal_expr: election family
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "anchor",
+    [
+        EffectiveAnchor(
+            start_instant=datetime.fromisoformat("2020-03-01T00:00:00+00:00"),
+            timezone=ZoneInfo("UTC"),
+        ),
+        EffectiveAnchor(
+            start_instant=datetime.fromisoformat("2024-06-01T12:00:00-04:00"),
+            timezone=ZoneInfo("America/New_York"),
+        ),
+    ],
+    ids=["utc", "dst_observing"],
+)
+@pytest.mark.parametrize("render", ["timestamp", "date", "time", "timestamptz"])
+def test_anchor_temporal_expr_plus_alias_equals_render_anchor_temporal_expr(
+    anchor: EffectiveAnchor, render: TemporalRender
+) -> None:
+    """`anchor_temporal_expr(...) + ' AS "x"'` equals
+    `render_anchor_temporal_expr(...)` byte-for-byte, for each of the four
+    renderings under a UTC and a DST-observing anchor."""
+    qualified_source = '"_grain"."sim_time"'
+    bare = anchor_temporal_expr(anchor, qualified_source, render)
+    aliased = render_anchor_temporal_expr(anchor, qualified_source, "x", render)
+    assert f'{bare} AS "x"' == aliased
 
 
 def test_timestamp_election_byte_identical_to_predecessor() -> None:

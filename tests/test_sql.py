@@ -29,7 +29,9 @@ import pytest
 
 from fabulexa_forge._sql import (
     cast_predicate_element,
+    date_key_expr,
     date_parse_denoted_type,
+    date_parse_expr,
     forge_json_precision,
     quote_identifier,
     register_render_functions,
@@ -486,6 +488,64 @@ def test_render_date_parse_expr_null_source_yields_null_of_denoted_type(
     value, sql_type = _execute_date_parse(None, date_format)
     assert value is None
     assert sql_type == date_parse_denoted_type(date_format)
+
+
+# ---------------------------------------------------------------------------
+# date_key_expr — the one yyyymmdd key authority (date-dimension sprint Phase 1)
+# ---------------------------------------------------------------------------
+
+
+def _evaluate_date_key(date_literal: str) -> object:
+    """Evaluate `date_key_expr` over a bare DATE/NULL::DATE literal."""
+    conn = duckdb.connect(":memory:")
+    try:
+        expr = date_key_expr(date_literal)
+        row = conn.execute(f"SELECT {expr}").fetchone()
+    finally:
+        conn.close()
+    assert row is not None
+    return row[0]
+
+
+def test_date_key_expr_evaluates_yyyymmdd() -> None:
+    """A DATE literal evaluates to its integer yyyymmdd key."""
+    assert _evaluate_date_key("DATE '2024-01-02'") == 20240102
+
+
+def test_date_key_expr_pads_low_year() -> None:
+    """A pre-1000 year renders without dropping leading zeros."""
+    assert _evaluate_date_key("DATE '0999-12-31'") == 9991231
+
+
+def test_date_key_expr_null_propagates() -> None:
+    """A NULL DATE evaluates to NULL, not an error."""
+    assert _evaluate_date_key("NULL::DATE") is None
+
+
+def test_date_key_expr_carries_no_alias() -> None:
+    """The returned expression text carries no `AS "<name>"` column alias
+    (the trailing `AS INTEGER` is the CAST's type, not a column alias)."""
+    assert 'AS "' not in date_key_expr("DATE '2024-01-02'")
+
+
+# ---------------------------------------------------------------------------
+# date_parse_expr — the bare authority render_date_parse_expr wraps
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "date_format",
+    ["%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%H:%M:%S"],
+    ids=["date", "timestamp", "time"],
+)
+def test_date_parse_expr_plus_alias_equals_render_date_parse_expr(
+    date_format: str,
+) -> None:
+    """`date_parse_expr(...) + ' AS "x"'` equals `render_date_parse_expr(...)`
+    byte-for-byte, for a DATE, a naive TIMESTAMP, and a TIME format."""
+    bare = date_parse_expr('"_grain"."dob"', date_format, "visits")
+    aliased = render_date_parse_expr('"_grain"."dob"', date_format, "x", "visits")
+    assert f'{bare} AS "x"' == aliased
 
 
 # ---------------------------------------------------------------------------

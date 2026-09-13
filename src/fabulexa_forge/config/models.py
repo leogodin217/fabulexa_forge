@@ -25,7 +25,11 @@ from pydantic import (
 )
 from typing_extensions import Self
 
-from fabulexa_forge._sql import is_recognized_sql_type, validate_date_parse_format
+from fabulexa_forge._sql import (
+    date_parse_denoted_type,
+    is_recognized_sql_type,
+    validate_date_parse_format,
+)
 from fabulexa_forge.anchor import TemporalRender
 
 # ---------------------------------------------------------------------------
@@ -523,6 +527,61 @@ class DateParseSpec(StrictBaseModel):
         return self
 
 
+class DateRefSpec(StrictBaseModel):
+    """A `yyyymmdd` key into `dim_date`, from an instant or a parsed date string."""
+
+    source: str | None = None
+    """Instant shape: the sim_time source column, rendered to its local
+    date in the anchor zone — the same availability as `TimestampSpec.source`."""
+    from_: str | None = Field(default=None, alias="from")
+    """Parse shape: the VARCHAR source column holding date strings."""
+    format: str | None = None
+    """Parse shape: the declared parse format (closed strptime-directive set,
+    see validate_date_parse_format); must be date-complete. Present iff `from_`."""
+
+    @model_validator(mode="after")
+    def exactly_one_shape(self) -> Self:
+        """Exactly one of `source` / `from_` is set; `format` iff `from_`;
+        a set `source` / `from_` is non-empty; `format` denotes a date.
+
+        Date-completeness is read through the one denotation authority:
+        `validate_date_parse_format(format, "date_ref.format")` then
+        `date_parse_denoted_type(format) in ("DATE", "TIMESTAMP")` — a
+        `TIME` denotation (time-only format) is refused.
+
+        Raises:
+            ValueError: Neither or both shapes set; `format` without `from_`
+                or `from_` without `format`; an empty column name; a
+                `format` that is not date-complete (time-only) or that
+                fails the declared-parse directive rules.
+        """
+        source_set = self.source is not None
+        from_set = self.from_ is not None
+        if source_set == from_set:
+            raise ValueError(
+                "date_ref: set exactly one of 'source' / 'from'"
+                f" (got source={self.source!r}, from={self.from_!r})"
+            )
+        if from_set != (self.format is not None):
+            raise ValueError(
+                "date_ref.format is required iff 'from' is set"
+                f" (from={self.from_!r}, format={self.format!r})"
+            )
+        if self.source is not None:
+            _require_nonempty_str(self.source, "date_ref.source")
+        if self.from_ is not None:
+            _require_nonempty_str(self.from_, "date_ref.from")
+        if self.format is not None:
+            validate_date_parse_format(self.format, "date_ref.format")
+            denoted = date_parse_denoted_type(self.format)
+            if denoted not in ("DATE", "TIMESTAMP"):
+                raise ValueError(
+                    f"date_ref.format {self.format!r} denotes {denoted},"
+                    " not a date (a time-only format is not date-complete)"
+                )
+        return self
+
+
 class DecimalSpec(StrictBaseModel):
     """Dimensional derived spelling of the decimal election."""
 
@@ -714,6 +773,8 @@ class ColumnDecl(StrictBaseModel):
     """Emits a NULL column — a placeholder the author intends to fill externally."""
     lookup: LookupClause | None = None
     """Enriches the row with a type-1 scalar property of a related record."""
+    date_ref: DateRefSpec | None = None
+    """Renders a `yyyymmdd` key into the generated `dim_date`."""
     description: str | None = None
     """Author-supplied rendered description for this output column. Replaces
     the inherited (or forge-pinned) description in the companion README and
@@ -731,7 +792,10 @@ class ColumnDecl(StrictBaseModel):
     @model_validator(mode="after")
     def exactly_one_column_mode(self) -> Self:
         """A ColumnDecl sets exactly one of
-        from / fk / correlation / derived / null / lookup.
+        from / fk / correlation / derived / null / lookup / date_ref.
+
+        Delta: `date_ref` joins the set-fields list; the message's mode list
+        becomes `from/fk/correlation/derived/null/lookup/date_ref`.
 
         Raises:
             ValueError: zero or more than one mode is set.
@@ -745,13 +809,14 @@ class ColumnDecl(StrictBaseModel):
                 ("derived", self.derived),
                 ("null", self.null),
                 ("lookup", self.lookup),
+                ("date_ref", self.date_ref),
             ]
             if v is not None
         ]
         if len(set_fields) != 1:
             raise ValueError(
                 f"ColumnDecl '{self.name}' must set exactly one of"
-                f" from/fk/correlation/derived/null/lookup; "
+                f" from/fk/correlation/derived/null/lookup/date_ref; "
                 f"got {len(set_fields)}: {set_fields}"
             )
         return self
@@ -1711,6 +1776,53 @@ class IncrementalConfig(StrictBaseModel):
         return self
 
 
+class DateDimensionConfig(StrictBaseModel):
+    """The inclusive calendar range the generated `dim_date` covers."""
+
+    from_: date = Field(alias="from")
+    """First calendar day, inclusive. Loaded from an ISO `YYYY-MM-DD` string."""
+    to: date
+    """Last calendar day, inclusive; not before `from_` (`range_ordered`)."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def bounds_are_strings(cls, data: object) -> object:
+        """Refuse any non-string value for either bound.
+
+        Both bounds must arrive as `str` and be parsed here, so the author
+        sees this rule rather than a type-union failure — and so no other
+        input Pydantic's `date` would accept (an unquoted YAML date, or an
+        integer read as a Unix timestamp) can parse silently to a wrong day.
+        Reads the alias key `from` (and `from_` under populate_by_name).
+
+        Raises:
+            ValueError: `from` or `to` is present and not a `str`.
+        """
+        if not isinstance(data, dict):
+            return data
+        for data_key, label in (("from", "from"), ("from_", "from"), ("to", "to")):
+            if data_key in data and not isinstance(data[data_key], str):
+                raise ValueError(
+                    f"date_dimension.{label} must be a quoted ISO date string"
+                    f" (got {data[data_key]!r})"
+                )
+        return data
+
+    @model_validator(mode="after")
+    def range_ordered(self) -> Self:
+        """`to` is not before `from_`.
+
+        Raises:
+            ValueError: `to < from_`.
+        """
+        if self.to < self.from_:
+            raise ValueError(
+                f"date_dimension: 'to' ({self.to.isoformat()}) is before"
+                f" 'from' ({self.from_.isoformat()})"
+            )
+        return self
+
+
 # ---------------------------------------------------------------------------
 # Supplementary tables: an author-supplied table carried verbatim
 # ---------------------------------------------------------------------------
@@ -1975,6 +2087,11 @@ class ExportConfig(StrictBaseModel):
     """Optional wallclock origin and timezone for timestamp rendering."""
     incremental: IncrementalConfig | None = None
     """Optional incremental export cadence; absent means full export."""
+    date_dimension: DateDimensionConfig | None = None
+    """Present → the generated calendar `dim_date` is materialized over the
+    declared range and `date_ref` columns may reference it. Legal only with
+    mode='dimensional' (`date_dimension_requires_dimensional`). Absent → no
+    calendar, and any `date_ref` is refused (`date_refs_require_date_dimension`)."""
     dimensional: DimensionalConfig | None = None
     """The star-schema declaration for the dimensional mode."""
     source: SourceConfig | None = None
@@ -2128,6 +2245,67 @@ class ExportConfig(StrictBaseModel):
                     f"supplement '{decl.name}' collides with declared table"
                     f" '{decl.name}'"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def date_dimension_requires_dimensional(self) -> Self:
+        """A present `date_dimension` requires mode='dimensional'.
+
+        Raises:
+            ValueError: `date_dimension` present under mode='source' / 'base'.
+        """
+        if self.date_dimension is not None and self.mode != "dimensional":
+            raise ValueError(
+                f"date_dimension requires mode='dimensional' (got mode={self.mode!r})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def date_refs_require_date_dimension(self) -> Self:
+        """Any `date_ref` column in the dimensional tables requires
+        `date_dimension` (message names the table and column).
+
+        Raises:
+            ValueError: A `date_ref` column exists and `date_dimension` is None.
+        """
+        if self.date_dimension is not None or self.dimensional is None:
+            return self
+        for table in self.dimensional.tables:
+            for column in table.columns:
+                if column.date_ref is not None:
+                    raise ValueError(
+                        f"table '{table.name}' column '{column.name}': date_ref"
+                        " requires a top-level 'date_dimension' block"
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def dim_date_name_reserved(self) -> Self:
+        """With `date_dimension` present, no declared dimensional table and
+        no supplement is named `dim_date` — the generated calendar's
+        published name (the literal is spelled here; config.models does not
+        import exporters). Without the block the name is the author's to use.
+
+        Raises:
+            ValueError: A declared table or supplement is named `dim_date`
+                while `date_dimension` is present.
+        """
+        if self.date_dimension is None:
+            return self
+        if self.dimensional is not None:
+            for table in self.dimensional.tables:
+                if table.name == "dim_date":
+                    raise ValueError(
+                        "table 'dim_date' collides with the generated"
+                        " calendar's reserved name (date_dimension is present)"
+                    )
+        if self.supplements is not None:
+            for decl in self.supplements:
+                if decl.name == "dim_date":
+                    raise ValueError(
+                        "supplement 'dim_date' collides with the generated"
+                        " calendar's reserved name (date_dimension is present)"
+                    )
         return self
 
 
