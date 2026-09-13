@@ -51,6 +51,7 @@ from fabulexa_forge.errors import (
     JsonPrecisionSourceIsVarchar,
     TemporalRenderRequiresAnchor,
 )
+from fabulexa_forge.exporters.dimensional.columns import resolve_date_ref_source
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
 from fabulexa_forge.exporters.dimensional.populations import (
     dim_key_projects_surface,
@@ -254,8 +255,9 @@ def check_projection_column_exists(
     """Enforce ProjectionColumnExists for a single column declaration.
 
     Checks from, correlation, derived.value_map.from, derived.date_parse.from,
-    derived.decimal.from, and derived.json_precision.from against the grain
-    surface — each derived `from` resolves off the grain's projectable
+    derived.decimal.from, derived.json_precision.from, and a `date_ref` parse
+    shape's `from_` against the grain surface — each derived `from` (and a
+    `date_ref` parse shape's `from_`) resolves off the grain's projectable
     surface exactly as `value_map.from` does.
 
     Args:
@@ -279,6 +281,8 @@ def check_projection_column_exists(
         src = col_decl.derived.decimal.from_
     elif col_decl.derived is not None and col_decl.derived.json_precision is not None:
         src = col_decl.derived.json_precision.from_
+    elif col_decl.date_ref is not None and col_decl.date_ref.from_ is not None:
+        src = col_decl.date_ref.from_
 
     if src is not None and src not in surface:
         raise ExportError(
@@ -319,13 +323,17 @@ def check_timestamp_source_available(
 ) -> None:
     """Enforce TimestampSourceAvailable: derived timestamp source is on the grain.
 
-    The accepted timestamp sources per grain are the structural columns only
-    (`_TIMESTAMP_SOURCES_BY_GRAIN`) plus any `prop__<t>` source present on the
-    grain surface. `created_by_sim_time` is no longer accepted — it cannot occur
-    in a sanitised emit, so it now fails like any unavailable source.
+    The source under test is `derived.timestamp.source` when set, else
+    `date_ref.source` when the instant shape is set, else the rule does not
+    apply. The accepted timestamp sources per grain are the structural
+    columns only (`_TIMESTAMP_SOURCES_BY_GRAIN`) plus any `prop__<t>` source
+    present on the grain surface. `created_by_sim_time` is no longer
+    accepted — it cannot occur in a sanitised emit, so it now fails like any
+    unavailable source.
 
     Args:
-        col_decl: The column declaration with a timestamp derived spec.
+        col_decl: The column declaration with a timestamp derived spec or a
+            `date_ref` instant shape.
         table_decl: The output table declaration (for error messages).
         source: The grain source binding.
         surface: The projectable column surface for the grain.
@@ -333,10 +341,13 @@ def check_timestamp_source_available(
     Raises:
         ExportError: The timestamp source is not available on this grain.
     """
-    if col_decl.derived is None or col_decl.derived.timestamp is None:
+    if col_decl.derived is not None and col_decl.derived.timestamp is not None:
+        ts_source = col_decl.derived.timestamp.source
+    elif col_decl.date_ref is not None and col_decl.date_ref.source is not None:
+        ts_source = col_decl.date_ref.source
+    else:
         return
 
-    ts_source = col_decl.derived.timestamp.source
     grain = source.grain
 
     # The fixed per-grain allowed set
@@ -369,11 +380,12 @@ def check_temporal_render_requires_anchor(
     """Enforce TemporalRenderRequiresAnchor: an explicit election needs an anchor.
 
     Covers `derived: timestamp` with `as` set (the mode-definitional default
-    `timestamp` rendering, absence detection, is exempt) and the
-    `scd_window` object form (always an explicit election — the object form
-    exists to elect). `elapsed: interval` and `date_parse` are exempt: a
-    duration is a physical delta and a parse reads no sim_time (§ Anchor
-    requirement).
+    `timestamp` rendering, absence detection, is exempt), the `scd_window`
+    object form (always an explicit election — the object form exists to
+    elect), and a `date_ref` instant shape (always an explicit `date`
+    election). `elapsed: interval`, `date_parse`, and a `date_ref` parse
+    shape are exempt: a duration is a physical delta and a parse reads no
+    sim_time (§ Anchor requirement).
 
     Args:
         col_decl: The column declaration.
@@ -383,15 +395,18 @@ def check_temporal_render_requires_anchor(
         TemporalRenderRequiresAnchor: An explicit election is set and no
             anchor resolved.
     """
-    if anchor is not None or col_decl.derived is None:
+    if anchor is not None:
         return
 
-    derived = col_decl.derived
     render: str | None = None
-    if derived.timestamp is not None and derived.timestamp.as_ is not None:
-        render = derived.timestamp.as_
-    elif isinstance(derived.scd_window, ScdWindowSpec):
-        render = derived.scd_window.as_
+    if col_decl.date_ref is not None and col_decl.date_ref.source is not None:
+        render = "date"
+    elif col_decl.derived is not None:
+        derived = col_decl.derived
+        if derived.timestamp is not None and derived.timestamp.as_ is not None:
+            render = derived.timestamp.as_
+        elif isinstance(derived.scd_window, ScdWindowSpec):
+            render = derived.scd_window.as_
 
     if render is not None:
         raise TemporalRenderRequiresAnchor(
@@ -443,12 +458,14 @@ def check_date_parse_source_column(
 ) -> None:
     """Enforce DateParseSourceColumn: the parse source is a declared VARCHAR column.
 
+    Reads `derived.date_parse.from_` or a `date_ref` parse shape's `from_`.
     Existence/resolution is ProjectionColumnExists' (`from` resolves off the
     grain's projectable surface exactly as `value_map.from` does); this rule
     additionally requires the resolved column carry a declared VARCHAR type.
 
     Args:
-        col_decl: The column declaration potentially containing a date_parse spec.
+        col_decl: The column declaration potentially containing a date_parse
+            spec or a `date_ref` parse shape.
         table_decl: The output table declaration (for error messages).
         source_table_name: The resolved DuckDB source table name.
         sidecar: The open emit's sidecar.
@@ -457,10 +474,13 @@ def check_date_parse_source_column(
         DateParseSourceColumn: The resolved source column carries no declared
             VARCHAR type.
     """
-    if col_decl.derived is None or col_decl.derived.date_parse is None:
+    if col_decl.derived is not None and col_decl.derived.date_parse is not None:
+        dp_from = col_decl.derived.date_parse.from_
+    elif col_decl.date_ref is not None and col_decl.date_ref.from_ is not None:
+        dp_from = col_decl.date_ref.from_
+    else:
         return
 
-    dp_from = col_decl.derived.date_parse.from_
     resolved_type = _resolve_grain_source_type(dp_from, source_table_name, sidecar)
     if resolved_type is None or resolved_type.upper() != "VARCHAR":
         got = resolved_type if resolved_type is not None else "no declared type"
@@ -734,12 +754,13 @@ def _collect_value_read_sources(col_decl: "ColumnDecl") -> list[str]:
 
     Covers from, correlation, resolved value_map.from, derived: timestamp
     source, derived: elapsed correlate_on/start_source/end_source/
-    other_where keys, derived: date_parse.from, derived: decimal.from, and
-    derived: json_precision.from — the exhaustive SliceOnlyColumnRefused
-    value-read surface (lookup and fk hops are checked separately). Each
-    derived source is a value-read like any other: it joins this surface
-    list, so deriving from a slice_only column is refused at plan time
-    (§ The declared date parse).
+    other_where keys, derived: date_parse.from, derived: decimal.from,
+    derived: json_precision.from, and date_ref.source / date_ref.from_
+    (whichever is set) — the exhaustive SliceOnlyColumnRefused value-read
+    surface (lookup and fk hops are checked separately). Each derived
+    source is a value-read like any other: it joins this surface list, so
+    deriving from a slice_only column is refused at plan time (§ The
+    declared date parse).
 
     Args:
         col_decl: The column declaration.
@@ -769,6 +790,8 @@ def _collect_value_read_sources(col_decl: "ColumnDecl") -> list[str]:
             refs.append(derived.decimal.from_)
         if derived.json_precision is not None:
             refs.append(derived.json_precision.from_)
+    if col_decl.date_ref is not None:
+        refs.append(resolve_date_ref_source(col_decl.date_ref))
     return refs
 
 
@@ -926,11 +949,11 @@ def check_scd2_column_mode_supported(
 ) -> None:
     """Enforce Scd2ColumnModeSupported: type2 columns use supported modes.
 
-    The type2 surface admits from, null, derived: scd_window, and the pure
-    per-row value renderings derived: timestamp / date_parse / value_map /
-    decimal / json_precision — each a pure function of one row's source
-    value, evaluated per record for constant sources and per version for
-    tracked sources. It refuses fk, correlation, derived: ordinal, and
+    The type2 surface admits from, null, derived: scd_window, date_ref, and
+    the pure per-row value renderings derived: timestamp / date_parse /
+    value_map / decimal / json_precision — each a pure function of one row's
+    source value, evaluated per record for constant sources and per version
+    for tracked sources. It refuses fk, correlation, derived: ordinal, and
     derived: elapsed — cross-row or grain-surface semantics the type2 build
     does not define. (lookup is gated separately by LookupColumnSafety;
     slice_only sources by the export-wide slice-only surface.)
@@ -962,9 +985,9 @@ def check_scd2_column_mode_supported(
         raise ExportError(
             f"column '{col_decl.name}' on table '{table_decl.name}':"
             f" {mode} is not supported on an scd: type2 table; type2 columns"
-            " support only from, null, derived: scd_window, and the value"
-            " renderings derived: timestamp, derived: date_parse, derived:"
-            " value_map, derived: decimal, and derived: json_precision"
+            " support only from, null, derived: scd_window, date_ref, and the"
+            " value renderings derived: timestamp, derived: date_parse,"
+            " derived: value_map, derived: decimal, and derived: json_precision"
         )
 
 
@@ -1090,14 +1113,17 @@ def validate_table(
     """Run all business rules for a single table declaration.
 
     Runs: SourceTableExists, ExcludedKindNotSourced, ExcludedTableNotSourced,
-    KeyColumnsDeclared, ProjectionColumnExists, OrdinalRefsSiblings,
-    TimestampSourceAvailable, TemporalRenderRequiresAnchor,
-    DateParseSourceColumn, DecimalSourceIsDouble, JsonPrecisionSourceIsVarchar,
-    DiscriminatorValueObserved, FkTargetIsDim,
+    KeyColumnsDeclared, ProjectionColumnExists (reads a `date_ref` parse
+    shape's `from_`), OrdinalRefsSiblings, TimestampSourceAvailable (reads a
+    `date_ref` instant shape's `source`), TemporalRenderRequiresAnchor
+    (reads a `date_ref` instant shape's election), DateParseSourceColumn
+    (reads a `date_ref` parse shape's `from_`), DecimalSourceIsDouble,
+    JsonPrecisionSourceIsVarchar, DiscriminatorValueObserved, FkTargetIsDim,
     ReferencePathResolvable, MembershipEdgeResolvable, Scd2NeedsHistory,
-    Scd2ColumnModeSupported, LookupColumnSafety, SliceOnlyColumnRefused
-    (filter keys, column reads including date_parse.from / decimal.from /
-    json_precision.from, fk hops),
+    Scd2ColumnModeSupported (admits date_ref), LookupColumnSafety,
+    SliceOnlyColumnRefused (filter keys, column reads including
+    date_parse.from / decimal.from / json_precision.from / date_ref.source /
+    date_ref.from_, fk hops),
     ReservedPresentationName (last_mutation_sim_time — always-on, full
     export included), ReservedTableName (run immediately after
     ReservedPresentationName), and KeyColumnsStable (run last, after the

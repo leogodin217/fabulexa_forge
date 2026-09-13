@@ -18,6 +18,7 @@ from fabulexa_forge import SUPPORTED_BASE_FORMAT_VERSION
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DateParseSpec,
+    DateRefSpec,
     DecimalSpec,
     DerivedSpec,
     DimensionalConfig,
@@ -48,6 +49,7 @@ from fabulexa_forge.exporters.dimensional.validation import (
     check_ordinal_refs_siblings,
     check_projection_column_exists,
     check_reserved_table_name,
+    check_scd2_column_mode_supported,
     check_scd2_needs_history,
     check_slice_only_column_reads,
     check_slice_only_filter_keys,
@@ -511,6 +513,119 @@ def test_temporal_render_requires_anchor_with_anchor_never_raises() -> None:
     check_temporal_render_requires_anchor(col, MagicMock())  # must not raise
 
 
+def test_date_ref_instant_shape_requires_anchor_raises() -> None:
+    """A `date_ref` instant shape is always an explicit `date` election — no
+    anchor is refused, naming the column."""
+    col = ColumnDecl(
+        name="event_date_key", date_ref=DateRefSpec(source="created_sim_time")
+    )
+    with pytest.raises(TemporalRenderRequiresAnchor, match="event_date_key"):
+        check_temporal_render_requires_anchor(col, None)
+
+
+def test_date_ref_parse_shape_no_anchor_passes() -> None:
+    """A `date_ref` parse shape reads no sim_time — no anchor does not raise."""
+    col = ColumnDecl(
+        name="birth_date_key",
+        date_ref=DateRefSpec(**{"from": "prop__dob"}, format="%Y-%m-%d"),
+    )
+    check_temporal_render_requires_anchor(col, None)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# date_ref — TimestampSourceAvailable / ProjectionColumnExists /
+# DateParseSourceColumn (instant shape reads TimestampSourceAvailable's
+# source; parse shape reads ProjectionColumnExists' and
+# DateParseSourceColumn's `from_`)
+# ---------------------------------------------------------------------------
+
+
+def test_date_ref_instant_lead_sim_time_on_records_raises(tmp_path: Path) -> None:
+    """A `date_ref` instant shape over lead_sim_time on records grain raises
+    TimestampSourceAvailable's existing message."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        col = ColumnDecl(
+            name="next_date_key", date_ref=DateRefSpec(source="lead_sim_time")
+        )
+        tbl = _make_table_decl(
+            grain="records", kind="entity", columns=[col], key=["next_date_key"]
+        )
+        from fabulexa_forge.exporters.dimensional.validation import (
+            _grain_projectable_surface,
+            _resolve_source_table_name,
+        )
+
+        src_name = _resolve_source_table_name(tbl.source)
+        surface = _grain_projectable_surface(tbl.source, emit.sidecar, src_name)
+        with pytest.raises(ExportError, match="lead_sim_time"):
+            check_timestamp_source_available(col, tbl, tbl.source, surface)
+
+
+def test_date_ref_instant_over_prop_bigint_accepted() -> None:
+    """A `date_ref` instant shape over a `prop__` BIGINT source on the
+    projectable surface passes — the same allowance `derived: timestamp`
+    has."""
+    sidecar = _date_parse_sidecar(
+        [
+            identity_column("record_id", "VARCHAR"),
+            {"name": "prop__epoch_days", "type": "BIGINT"},
+        ]
+    )
+    col = ColumnDecl(
+        name="epoch_date_key", date_ref=DateRefSpec(source="prop__epoch_days")
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["epoch_date_key"])
+    from fabulexa_forge.exporters.dimensional.validation import (
+        _grain_projectable_surface,
+        _resolve_source_table_name,
+    )
+
+    src_name = _resolve_source_table_name(tbl.source)
+    surface = _grain_projectable_surface(tbl.source, sidecar, src_name)
+    check_timestamp_source_available(col, tbl, tbl.source, surface)  # must not raise
+
+
+def test_date_ref_parse_from_missing_raises(tmp_path: Path) -> None:
+    """A `date_ref` parse shape's `from_` naming an absent column raises
+    ProjectionColumnExists' existing message."""
+    emit_dir = build_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        col = ColumnDecl(
+            name="x",
+            date_ref=DateRefSpec(**{"from": "nonexistent_column"}, format="%Y-%m-%d"),
+        )
+        tbl = _make_table_decl(columns=[col], key=["x"])
+        from fabulexa_forge.exporters.dimensional.validation import (
+            _grain_projectable_surface,
+            _resolve_source_table_name,
+        )
+
+        src_name = _resolve_source_table_name(tbl.source)
+        surface = _grain_projectable_surface(tbl.source, emit.sidecar, src_name)
+        with pytest.raises(ExportError, match="nonexistent_column"):
+            check_projection_column_exists(col, tbl, surface)
+
+
+def test_date_ref_parse_from_non_varchar_raises() -> None:
+    """A `date_ref` parse shape's `from_` naming a declared non-VARCHAR
+    column raises DateParseSourceColumn's existing message."""
+    sidecar = _date_parse_sidecar(
+        [
+            identity_column("record_id", "VARCHAR"),
+            {"name": "prop__epoch_days", "type": "BIGINT"},
+        ]
+    )
+    col = ColumnDecl(
+        name="epoch_date_key",
+        date_ref=DateRefSpec(**{"from": "prop__epoch_days"}, format="%Y-%m-%d"),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["epoch_date_key"])
+    with pytest.raises(DateParseSourceColumn, match="epoch_date_key") as exc_info:
+        check_date_parse_source_column(col, tbl, "records__actor", sidecar)
+    assert "BIGINT" in str(exc_info.value)
+
+
 # ---------------------------------------------------------------------------
 # DateParseSourceColumn
 # ---------------------------------------------------------------------------
@@ -965,6 +1080,15 @@ def _scd2_derived_source_sidecar() -> Sidecar:
             }
         ]
     )
+
+
+def test_scd2_column_mode_supported_message_lists_date_ref() -> None:
+    """Scd2ColumnModeSupported's refusal message names `date_ref` among the
+    admitted type2 modes."""
+    col = ColumnDecl(name="link_id", correlation="prop__link_id")
+    tbl = _scd2_derived_validate_table_decl(col)
+    with pytest.raises(ExportError, match="date_ref"):
+        check_scd2_column_mode_supported(col, tbl)
 
 
 def test_validate_table_type2_derived_date_parse_tracked_source_passes() -> None:
@@ -1436,6 +1560,36 @@ def test_derived_date_parse_from_refuses_slice_only() -> None:
         ),
     )
     tbl = _make_table_decl(kind="actor", columns=[col], key=["tier_date"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+# ---------------------------------------------------------------------------
+# SliceOnlyColumnRefused — date_ref (both shapes)
+# ---------------------------------------------------------------------------
+
+
+def test_date_ref_instant_source_refuses_slice_only() -> None:
+    """A `date_ref` instant shape's `source` reading a non-exempt slice_only
+    column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(name="tier_key", date_ref=DateRefSpec(source="prop__tier"))
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier_key"])
+    with pytest.raises(ExportError) as exc_info:
+        check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
+    _assert_slice_only_message(str(exc_info.value))
+
+
+def test_date_ref_parse_from_refuses_slice_only() -> None:
+    """A `date_ref` parse shape's `from_` reading a non-exempt slice_only
+    VARCHAR column raises."""
+    sidecar = _slice_only_actor_sidecar()
+    col = ColumnDecl(
+        name="tier_date_key",
+        date_ref=DateRefSpec(**{"from": "prop__tier"}, format="%Y-%m-%d"),
+    )
+    tbl = _make_table_decl(kind="actor", columns=[col], key=["tier_date_key"])
     with pytest.raises(ExportError) as exc_info:
         check_slice_only_column_reads(col, tbl, tbl.source, "records__actor", sidecar)
     _assert_slice_only_message(str(exc_info.value))

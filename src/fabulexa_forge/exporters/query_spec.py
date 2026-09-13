@@ -169,7 +169,9 @@ class QuerySpec:
     forge-pinned event-log set; stamped only by the source plan compiler.
     `supplement` is set iff this spec is a supplement table; forwarded to
     `TableReport` by both report-assembly sites (`write_query_specs`, the
-    driver's `_build_windowed_report`).
+    driver's `_build_windowed_report`). `references` is stamped at plan
+    compile (dimensional only; every other mode leaves it empty) and
+    forwarded to `TableReport` the same way.
     """
 
     table_name: str
@@ -185,6 +187,7 @@ class QuerySpec:
     author_table_description: str | None = None
     event_log: bool = False
     supplement: "SupplementSource | None" = None
+    references: "Mapping[str, str]" = field(default_factory=dict)
 
 
 NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"

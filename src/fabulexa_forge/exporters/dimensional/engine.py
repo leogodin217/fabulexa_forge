@@ -85,6 +85,12 @@ _GUARD_SURFACES: tuple[Literal["record_index", "presentation_id"], ...] = (
     "presentation_id",
 )
 
+#: The generated calendar's published output-table name — mode-definitional,
+#: spelled here (not imported) exactly as `config.models`' own
+#: `dim_date_name_reserved` validator spells it, so this module needs no
+#: forward reference to `exporters.date_dimension`.
+_DATE_DIMENSION_TABLE_NAME = "dim_date"
+
 
 def _guard_fk_relation(
     emit: "Emit",
@@ -273,6 +279,35 @@ def _selected_table_decls(
     return [table_decl for table_decl in config.tables if table_decl.name in tables]
 
 
+def _table_references(
+    table_decl: "TableDecl",
+    config: DimensionalConfig,
+) -> "Mapping[str, str]":
+    """The table's output-column -> referenced-output-table map, declaration order.
+
+    One entry per `fk` column (`check_fk_target_is_dim(col, table_decl,
+    config).name` — the resolved dim's declared name) and per `date_ref`
+    column (`_DATE_DIMENSION_TABLE_NAME`); no entry otherwise. Pure; every
+    fk target has already passed FkTargetIsDim in `validate_table`.
+
+    Args:
+        table_decl: The output table declaration.
+        config: The dimensional config (fk resolution).
+
+    Returns:
+        Output column name -> referenced output table name; empty when the
+        table references nothing.
+    """
+    refs: dict[str, str] = {}
+    for col_decl in table_decl.columns:
+        if col_decl.fk is not None:
+            target_table_decl = check_fk_target_is_dim(col_decl, table_decl, config)
+            refs[col_decl.name] = target_table_decl.name
+        elif col_decl.date_ref is not None:
+            refs[col_decl.name] = _DATE_DIMENSION_TABLE_NAME
+    return refs
+
+
 def build_query_specs(
     emit: "Emit",
     config: DimensionalConfig,
@@ -355,7 +390,8 @@ def build_query_specs(
         verbatim; `kind_values` stays empty — dimensional has no
         kind-name-as-value output column. `author_descriptions` is stamped
         from the table's column entries (§ `_table_author_descriptions`),
-        keyed by each entry's own output name.
+        keyed by each entry's own output name. `references` is stamped from
+        `_table_references(table_decl, config)`.
 
     Raises:
         ExportError: An always-on business rule fails (including
@@ -437,6 +473,7 @@ def build_query_specs(
                 provenance=provenance,
                 author_descriptions=_table_author_descriptions(table_decl),
                 author_table_description=table_decl.description,
+                references=_table_references(table_decl, config),
             )
         )
 

@@ -2,7 +2,7 @@ sprint: date-dimension
 parent_branch: enable_complex_queries
 baseline_sha: 44af2ee11fa260356dcc230b81168c2f22c4dbc3
 started: 2026-09-13
-current_phase: 2
+current_phase: 3
 capabilities:
   - dimensional-exporter: [date_ref column mode, generated dim_date, range guard]
   - export-config: [date_dimension block, DateRefSpec, ColumnDecl.date_ref]
@@ -23,7 +23,7 @@ phases:
     name: "Renderer authorities and the config grammar"
     demo: "docs/sprints/date-dimension/demos/phase_1_config_and_authorities.py"
   2:
-    status: pending
+    status: complete
     name: "The date_ref column mode"
     demo: "docs/sprints/date-dimension/demos/phase_2_date_ref_columns.py"
     steps:

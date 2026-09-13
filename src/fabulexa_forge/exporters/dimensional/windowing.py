@@ -39,6 +39,7 @@ from fabulexa_forge.derivations.reference_resolution import (
     _path_hint_to_cols,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.columns import resolve_date_ref_source
 from fabulexa_forge.exporters.dimensional.fk import check_fk_target_is_dim
 from fabulexa_forge.exporters.dimensional.validation import check_source_table_exists
 from fabulexa_forge.exporters.horizon import WindowDelivery
@@ -110,7 +111,15 @@ def _channel_variance(
     sidecar: "Sidecar",
     source_table_name: str,
 ) -> str | None:
-    """Why a column's value channel may vary between horizons, or None if invariant."""
+    """Why a column's value channel may vary between horizons, or None if invariant.
+
+    A `date_ref` column's channel is its source's — `date_ref.source` or
+    `date_ref.from_` — classified through `_source_variance` exactly as
+    `derived: timestamp` `source` / `date_parse.from` are. This is the ONE
+    per-column variance reading; `window_delivery_class` and
+    `check_key_columns_stable` change behaviour through it with no edit of
+    their own.
+    """
     grain = table_decl.source.grain
     source = col_decl.from_ if col_decl.from_ is not None else col_decl.correlation
     derived = col_decl.derived
@@ -140,6 +149,8 @@ def _channel_variance(
                 sidecar,
                 source_table_name,
             )
+    if col_decl.date_ref is not None:
+        source = resolve_date_ref_source(col_decl.date_ref)
     if source is not None:
         return _source_variance(
             source, grain, sidecar, source_table_name, table_decl.scd == "type2"

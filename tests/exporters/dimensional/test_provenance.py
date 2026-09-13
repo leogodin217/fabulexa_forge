@@ -13,33 +13,52 @@ repeated compiles of the same plan.
 
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
+from zoneinfo import ZoneInfo
 
 import duckdb
 from _support.notices import discard_notice_sink
 from _support.sidecar_builder import identity_column, prop_column, write_emit
 
 from exporters._emit_fixtures import _create_ddl, _table_spec
+from exporters.base._base_fixtures import build_base_test_emit
+from exporters.source._source_fixtures import build_source_test_emit
+from fabulexa_forge.anchor import EffectiveAnchor, resolve_effective_anchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
+    DateRefSpec,
     DerivedSpec,
     DimensionalConfig,
     ElapsedSpec,
+    ExportConfig,
+    FkClause,
     LookupClause,
     OrdinalSpec,
+    SourceConfig,
     SourceDecl,
+    SourceTableDecl,
     TableDecl,
     TimestampSpec,
     ValueMapSpec,
 )
+from fabulexa_forge.exporters.base.engine import build_base_query_specs
 from fabulexa_forge.exporters.dimensional.engine import build_query_specs
+from fabulexa_forge.exporters.election import resolve_election
 from fabulexa_forge.exporters.query_spec import ColumnProvenance
+from fabulexa_forge.exporters.source.engine import build_source_query_specs
+from fabulexa_forge.exporters.source.plan import build_source_plan
 from fabulexa_forge.reader.emit import open_emit
 
 if TYPE_CHECKING:
     from fabulexa_forge.exporters.query_spec import QuerySpec
     from fabulexa_forge.reader.emit import Emit
+
+_ANCHOR = EffectiveAnchor(
+    start_instant=datetime.fromisoformat("2024-01-01T00:00:00+00:00"),
+    timezone=ZoneInfo("UTC"),
+)
 
 # ---------------------------------------------------------------------------
 # Fixture emit: team / actor (+ a status change) / tick_decision
@@ -279,14 +298,22 @@ def _build_config(*table_decls: TableDecl) -> DimensionalConfig:
     return DimensionalConfig(tables=list(table_decls))
 
 
-def _compile_specs(emit: "Emit", config: DimensionalConfig) -> "dict[str, QuerySpec]":
-    """Compile a full-export (window=None) plan, keyed by table_name."""
+def _compile_specs(
+    emit: "Emit",
+    config: DimensionalConfig,
+    anchor: "EffectiveAnchor | None" = None,
+) -> "dict[str, QuerySpec]":
+    """Compile a full-export (window=None) plan, keyed by table_name.
+
+    `anchor` defaults to None (every existing caller reads no temporal
+    election); a `date_ref` instant shape's caller passes `_ANCHOR`.
+    """
     return {
         spec.table_name: spec
         for spec in build_query_specs(
             emit,
             config,
-            None,
+            anchor,
             None,
             notice_sink=discard_notice_sink,
             base_relations=None,
@@ -580,3 +607,143 @@ def test_provenance_deterministic_across_compiles(tmp_path: Path) -> None:
     assert {name: spec.provenance for name, spec in first.items()} == {
         name: spec.provenance for name, spec in second.items()
     }
+
+
+# ---------------------------------------------------------------------------
+# date_ref: ColumnProvenance for both shapes
+# ---------------------------------------------------------------------------
+
+
+def test_date_ref_instant_shape_stamps_source_provenance(tmp_path: Path) -> None:
+    """A `date_ref` instant shape's ColumnProvenance names the grain's
+    resolved source table and `date_ref.source` -- the same shape an
+    explicit `derived: timestamp` election stamps."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_actor",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["actor_id"],
+        columns=[
+            ColumnDecl(name="actor_id", **{"from": "record_id"}),
+            ColumnDecl(
+                name="joined_date_key", date_ref=DateRefSpec(source="created_sim_time")
+            ),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(table_decl), anchor=_ANCHOR)
+
+    assert specs["dim_actor"].provenance["joined_date_key"] == ColumnProvenance(
+        source_table="records__actor", source_column="created_sim_time"
+    )
+
+
+def test_date_ref_parse_shape_stamps_source_provenance(tmp_path: Path) -> None:
+    """A `date_ref` parse shape's ColumnProvenance names the grain's resolved
+    source table and `date_ref.from_` -- no anchor required."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    table_decl = TableDecl(
+        name="dim_actor",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["actor_id"],
+        columns=[
+            ColumnDecl(name="actor_id", **{"from": "record_id"}),
+            ColumnDecl(
+                name="name_date_key",
+                date_ref=DateRefSpec(**{"from": "prop__full_name"}, format="%Y-%m-%d"),
+            ),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(table_decl))
+
+    assert specs["dim_actor"].provenance["name_date_key"] == ColumnProvenance(
+        source_table="records__actor", source_column="prop__full_name"
+    )
+
+
+# ---------------------------------------------------------------------------
+# QuerySpec.references: fk -> resolved dim, date_ref -> dim_date
+# ---------------------------------------------------------------------------
+
+
+def test_references_stamps_fk_and_date_ref_in_declaration_order(tmp_path: Path) -> None:
+    """`QuerySpec.references` maps each `fk` column to its resolved dim's
+    declared name and each `date_ref` column to `dim_date`, in declaration
+    order."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    dim_team = TableDecl(
+        name="dim_team",
+        role="dim",
+        scd="type1",
+        source=SourceDecl(grain="records", kind="team"),
+        key=["team_id"],
+        columns=[ColumnDecl(name="team_id", **{"from": "record_id"})],
+    )
+    fact = TableDecl(
+        name="fact_actor",
+        role="fact",
+        source=SourceDecl(grain="records", kind="actor"),
+        key=["actor_id"],
+        columns=[
+            ColumnDecl(name="actor_id", **{"from": "record_id"}),
+            ColumnDecl(name="team_key", fk=FkClause(to="dim_team", via="reference")),
+            ColumnDecl(
+                name="joined_date_key", date_ref=DateRefSpec(source="created_sim_time")
+            ),
+        ],
+    )
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(dim_team, fact), anchor=_ANCHOR)
+
+    assert list(specs["fact_actor"].references.items()) == [
+        ("team_key", "dim_team"),
+        ("joined_date_key", "dim_date"),
+    ]
+
+
+def test_table_with_no_fk_or_date_ref_has_empty_references(tmp_path: Path) -> None:
+    """A table declaring neither `fk` nor `date_ref` stamps `references={}`."""
+    emit_dir = _build_provenance_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        specs = _compile_specs(emit, _build_config(_dim_actor_table_decl()))
+
+    assert specs["dim_actor"].references == {}
+
+
+def test_base_mode_spec_has_empty_references(tmp_path: Path) -> None:
+    """A non-dimensional (base) compiled QuerySpec's `references` stays
+    empty -- only the dimensional engine stamps `references`."""
+    emit_dir = build_base_test_emit(tmp_path)
+    with open_emit(emit_dir) as emit:
+        specs = build_base_query_specs(
+            emit,
+            ExportConfig(mode="base"),
+            None,
+            None,
+            notice_sink=discard_notice_sink,
+        )
+
+    assert all(spec.references == {} for spec in specs)
+
+
+def test_source_mode_spec_has_empty_references(tmp_path: Path) -> None:
+    """A non-dimensional (source) compiled QuerySpec's `references` stays
+    empty."""
+    emit_dir = build_source_test_emit(tmp_path)
+    config = ExportConfig(
+        mode="source",
+        source=SourceConfig(tables=(SourceTableDecl(name="visit", kind="visit"),)),
+    )
+    with open_emit(emit_dir) as emit:
+        anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
+        assert anchor is not None
+        election = resolve_election(emit.sidecar, config.keys)
+        plan = build_source_plan(emit, config, anchor, election, discard_notice_sink)
+        specs = build_source_query_specs(plan)
+
+    assert all(spec.references == {} for spec in specs)

@@ -15,18 +15,25 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
     from fabulexa_forge.anchor import EffectiveAnchor
-    from fabulexa_forge.config.models import ColumnDecl, DimensionalConfig, TableDecl
+    from fabulexa_forge.config.models import (
+        ColumnDecl,
+        DateRefSpec,
+        DimensionalConfig,
+        TableDecl,
+    )
     from fabulexa_forge.exporters.election import Election
     from fabulexa_forge.reader.sidecar import Sidecar
 
 from fabulexa_forge._sql import (
+    date_key_expr,
+    date_parse_expr,
     render_date_parse_expr,
     render_decimal_expr,
     render_json_precision_expr,
     render_predicate_condition,
     render_typed_literal,
 )
-from fabulexa_forge.anchor import render_anchor_temporal_expr
+from fabulexa_forge.anchor import anchor_temporal_expr, render_anchor_temporal_expr
 from fabulexa_forge.config.models import (
     scd_window_bound,
     scd_window_render,
@@ -498,6 +505,71 @@ def build_json_precision_expr(
     return f'{expr} AS "{col_decl.name}"'
 
 
+def resolve_date_ref_source(spec: "DateRefSpec") -> str:
+    """The one source column name a `date_ref` spec reads.
+
+    The instant shape's `source`, or the parse shape's `from_` —
+    `DateRefSpec.exactly_one_shape` guarantees exactly one is set and
+    non-empty, so this never falls through. Shared by every reader of a
+    `date_ref` column's source identity: provenance, plan-time validation,
+    and window-variance classification.
+
+    Args:
+        spec: The column's `date_ref` spec.
+
+    Returns:
+        The source column name as declared.
+    """
+    if spec.source is not None:
+        return spec.source
+    assert spec.from_ is not None
+    return spec.from_
+
+
+def render_date_ref_expr(
+    spec: "DateRefSpec",
+    qualified_source: str,
+    out_name: str,
+    table_label: str,
+    anchor: "EffectiveAnchor | None",
+) -> str:
+    """Render the SQL SELECT fragment for one `date_ref` column.
+
+    Instant shape: `anchor_temporal_expr` with the `date` election over
+    `qualified_source` (the caller has already enforced the anchor rule, so
+    `anchor` is non-None here — asserted), then `date_key_expr`. Parse
+    shape: over `date_parse_expr` (its loud non-matching-cell failure
+    naming `table_label`, unchanged) cast to DATE, then `date_key_expr`.
+    Either way the fragment ends in `AS "<out_name>"` and is
+    NULL-propagating; both shapes compose the bare forms of the shared
+    renderers, never a re-spelling of their SQL.
+
+    Args:
+        spec: The column's `date_ref` spec.
+        qualified_source: The fully table-qualified source column SQL for
+            whichever shape the spec carries (the caller qualifies
+            `spec.source` or `spec.from_` — grain alias, or the SCD-2
+            tracked cast).
+        out_name: The output column name.
+        table_label: The output table name, interpolated into the parse
+            shape's mismatch error; unused by the instant shape.
+        anchor: The resolved anchor; consulted by the instant shape only.
+
+    Returns:
+        A SQL SELECT-list expression fragment ending in `AS "<out_name>"`.
+    """
+    if spec.source is not None:
+        assert anchor is not None, "date_ref instant shape requires a resolved anchor"
+        date_sql = anchor_temporal_expr(anchor, qualified_source, "date")
+    else:
+        assert spec.format is not None
+        date_sql = (
+            f"CAST({date_parse_expr(qualified_source, spec.format, table_label)}"
+            " AS DATE)"
+        )
+    return f'{date_key_expr(date_sql)} AS "{out_name}"'
+
+
 def build_column_expr(
     col_decl: "ColumnDecl",
     anchor: "EffectiveAnchor | None",
@@ -549,6 +621,16 @@ def build_column_expr(
         return build_correlation_expr(col_decl, grain_alias), []
     if col_decl.null is not None:
         return build_null_expr(col_decl), []
+    if col_decl.date_ref is not None:
+        assert table_decl is not None, "table_decl required for date_ref column"
+        date_ref = col_decl.date_ref
+        qualified_source = f'"{grain_alias}"."{resolve_date_ref_source(date_ref)}"'
+        return (
+            render_date_ref_expr(
+                date_ref, qualified_source, col_decl.name, table_decl.name, anchor
+            ),
+            [],
+        )
     if col_decl.fk is not None:
         assert table_decl is not None, "table_decl required for fk column"
         assert source_grain is not None, "source_grain required for fk column"
@@ -654,10 +736,11 @@ def resolve_carried_source_column(col_decl: "ColumnDecl") -> str | None:
     Covers every source-bearing spelling: `from` -> from_; `correlation` ->
     correlation; the pure per-row value renderings `derived: decimal` /
     `json_precision` / `date_parse` / `value_map` -> the mode's own `from_`;
-    `derived: timestamp` -> timestamp.source. Every other mode (`null`, `fk`,
-    `lookup`, `derived: ordinal` / `elapsed` / `scd_window`) carries no single
-    faithfully-mapped source column and returns None — a computed value, not
-    a carry.
+    `derived: timestamp` -> timestamp.source; `date_ref` -> its instant
+    shape's `source` or its parse shape's `from_`. Every other mode (`null`,
+    `fk`, `lookup`, `derived: ordinal` / `elapsed` / `scd_window`) carries no
+    single faithfully-mapped source column and returns None — a computed
+    value, not a carry.
 
     Args:
         col_decl: The output column declaration.
@@ -682,6 +765,8 @@ def resolve_carried_source_column(col_decl: "ColumnDecl") -> str | None:
             return derived.value_map.from_
         if derived.timestamp is not None:
             return derived.timestamp.source
+    if col_decl.date_ref is not None:
+        return resolve_date_ref_source(col_decl.date_ref)
     return None
 
 
