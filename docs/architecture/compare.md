@@ -209,13 +209,18 @@ of the surface, not a resolved value, so Purity holds.
 
 Actual-side CSV typing: a cell is cast from text toward the expected column's
 family reference type, and the cast authority is pinned — DuckDB's `TRY_CAST`
-in the (zone-pinned) compare session for every family except two with bespoke
-parses: blob (a hex-decode) and interval (a parse of the pinned
+in the (zone-pinned) compare session for every family except three with
+bespoke parses: blob (a hex-decode), interval (a parse of the pinned
 `[-]H:MM:SS.ffffff` writer form — sign, unbounded hours, fixed six-digit µs
 field — tried first, then `TRY_CAST` for other interval vocabularies, whose
-result the calendar-component rule above encodes). Typing casts are the one
-SQL-side step; canonical *encoding* of the resulting materialized values is
-always Python-side. A cast failure (non-NULL text that fails its family's pinned
+result the calendar-component rule above encodes), and decimal (an exact
+Python-side `decimal.Decimal` parse — the family admits any precision/scale,
+and no single DuckDB reference type carries that: a bare `DECIMAL` is
+`DECIMAL(18, 3)` and would silently round or overflow; non-finite text such
+as `NaN`, which no `DECIMAL` column can hold, is a cast failure, and a
+negative-zero cell is the value 0). Typing casts are the one SQL-side step;
+canonical *encoding* of the resulting materialized values is always
+Python-side. A cast failure (non-NULL text that fails its family's pinned
 cast) is a **value discrepancy** carrying the raw text, never a crash. An
 unquoted empty field reads as NULL; a quoted empty string (`""`) reads as the
 empty string — the one place CSV must distinguish what DuckDB storage

@@ -264,6 +264,15 @@ class Documentation:
         value = self._sidecar.raw.get("scenario_description")
         return value if isinstance(value, str) else None
 
+    def scenario_name(self) -> str | None:
+        """The run's declared display label, verbatim; None when absent.
+
+        Independent of `scenario_description`: neither substitutes for the
+        other (contract § Scenario narrative).
+        """
+        value = self._sidecar.raw.get("scenario_name")
+        return value if isinstance(value, str) else None
+
     def table_description(self, table_name: str) -> str | None:
         """One table's tables[].description, verbatim.
 

@@ -16,6 +16,7 @@ for horizon windowing and stay as the regression gate afterwards.
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,7 +48,7 @@ _RECIPES: list[RecipeFolder] = (
     + discover_recipes(_RECIPES_ROOT / "base")
 )
 _EXPORTERS = {
-    "dimensional": export_dimensional,
+    "dimensional": partial(export_dimensional, supplements=()),
     "source": export_source,
     "base": export_base,
 }
@@ -100,7 +101,14 @@ def _drip(
     with open_emit(emit_dir) as emit:
         for _ in range(windows):
             outcome = export_incremental_next(
-                emit, config, warehouse, "duckdb", anchor, discard_notice_sink, None
+                emit,
+                config,
+                warehouse,
+                "duckdb",
+                anchor,
+                discard_notice_sink,
+                None,
+                supplements=(),
             )
             assert outcome.status == "emitted"
 
@@ -142,7 +150,14 @@ def test_drip_reconciles_to_one_shot(
     _drip(config, bounded_emit_dir, warehouse, anchor, _WINDOWS)
     with open_emit(bounded_emit_dir) as emit:
         drained = export_incremental_next(
-            emit, config, warehouse, "duckdb", anchor, discard_notice_sink, None
+            emit,
+            config,
+            warehouse,
+            "duckdb",
+            anchor,
+            discard_notice_sink,
+            None,
+            supplements=(),
         )
     assert drained.status == "drained"
 

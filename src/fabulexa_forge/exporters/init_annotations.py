@@ -29,14 +29,19 @@ def scenario_comment_lines(sidecar: "Sidecar") -> list[str]:
         sidecar: The open emit's sidecar.
 
     Returns:
-        `#`-prefixed comment lines carrying `scenario_description`, or `[]`
-        when the emit declares none.
+        `#`-prefixed comment lines: a `# Scenario:` heading carrying
+        `scenario_name` (when declared), then the `scenario_description`
+        lines indented beneath it (when declared); `[]` when the emit
+        declares neither.
     """
-    description = sidecar.documentation().scenario_description()
-    if description is None:
+    doc = sidecar.documentation()
+    name = doc.scenario_name()
+    description = doc.scenario_description()
+    if name is None and description is None:
         return []
-    lines = ["# Scenario:"]
-    lines.extend(f"#   {line}" for line in description.splitlines())
+    lines = [f"# Scenario: {name}" if name is not None else "# Scenario:"]
+    if description is not None:
+        lines.extend(f"#   {line}" for line in description.splitlines())
     return lines
 
 

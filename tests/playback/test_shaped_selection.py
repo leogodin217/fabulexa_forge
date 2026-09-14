@@ -54,12 +54,14 @@ def _tables_by_name(tables: tuple[ShapedTable, ...]) -> dict[str, ShapedTable]:
 
 
 def _open_dimensional(emit: "Emit", config: "ExportConfig"):
-    return open_shaped_playback(emit, config, None, discard_notice_sink)
+    return open_shaped_playback(emit, config, None, discard_notice_sink, supplements=())
 
 
 def _open_source(emit: "Emit", config: "ExportConfig"):
     anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-    return open_shaped_playback(emit, config, anchor, discard_notice_sink)
+    return open_shaped_playback(
+        emit, config, anchor, discard_notice_sink, supplements=()
+    )
 
 
 def _assert_selected_matches_whole(
@@ -170,7 +172,9 @@ def test_unknown_names_name_sorted_unknowns_and_declared_order(
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        head = open_shaped_playback(emit, source_shape_config(), anchor, sink)
+        head = open_shaped_playback(
+            emit, source_shape_config(), anchor, sink, supplements=()
+        )
         with pytest.raises(PlaybackError) as exc_info:
             head.window(0, 10, tables={"nope", "also_nope", "gadget"})
     message = str(exc_info.value)
@@ -314,7 +318,7 @@ def test_horizon_economy_dimensional_snapshot_only_delivers_notice_once(
     config = ExportConfig(mode="dimensional", dimensional=_selection_config())
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
-        head = open_shaped_playback(emit, config, None, sink)
+        head = open_shaped_playback(emit, config, None, sink, supplements=())
         before = len(sink.notices)
         head.window(0, 100, tables={"dim_gadget"})
     assert len(sink.notices) - before == 1
@@ -327,7 +331,7 @@ def test_horizon_economy_dimensional_append_sibling_delivers_notice_twice(
     config = ExportConfig(mode="dimensional", dimensional=_selection_config())
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
-        head = open_shaped_playback(emit, config, None, sink)
+        head = open_shaped_playback(emit, config, None, sink, supplements=())
         before = len(sink.notices)
         head.window(0, 100, tables={"dim_gadget", "fact_append"})
     assert len(sink.notices) - before == 2
@@ -341,7 +345,7 @@ def test_horizon_economy_source_snapshot_only_delivers_notice_once(
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        head = open_shaped_playback(emit, config, anchor, sink)
+        head = open_shaped_playback(emit, config, anchor, sink, supplements=())
         before = len(sink.notices)
         head.window(0, 100, tables={"sensor_state"})
     assert len(sink.notices) - before == 1
@@ -355,7 +359,7 @@ def test_horizon_economy_source_event_log_included_delivers_notice_twice(
     sink = RecordingNoticeSink()
     with open_emit(emit_dir) as emit:
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-        head = open_shaped_playback(emit, config, anchor, sink)
+        head = open_shaped_playback(emit, config, anchor, sink, supplements=())
         before = len(sink.notices)
         head.window(0, 100, tables={"sensor_state", _SENSOR_EVENTS_UNIT})
     assert len(sink.notices) - before == 2

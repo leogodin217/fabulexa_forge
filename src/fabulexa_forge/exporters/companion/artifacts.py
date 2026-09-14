@@ -49,7 +49,7 @@ class WindowedArtifactState:
     next_window_index: int | None
 
 
-def _artifact_paths(
+def companion_artifact_paths(
     target: "Path", mode: str, fmt: Literal["csv", "duckdb"]
 ) -> tuple["Path", "Path"]:
     """The (readme_path, manifest_path) pair for one export target.
@@ -58,7 +58,8 @@ def _artifact_paths(
     `<mode>-*`. A `duckdb` target is the `.duckdb` file path: the pair lands
     beside it, named `<db-stem>-<mode>-*`
     (`docs/architecture/companion-artifacts.md` § Artifact names and
-    placement).
+    placement). Also read by the supplement source-is-output gate so the
+    gate can never disagree with where these two files land.
 
     Args:
         target: The output directory (csv) or `.duckdb` file path (duckdb).
@@ -107,7 +108,7 @@ def write_companion_artifacts(
     Raises:
         ExportRuntimeError: An artifact file cannot be written.
     """
-    readme_path, manifest_path = _artifact_paths(target, config.mode, fmt)
+    readme_path, manifest_path = companion_artifact_paths(target, config.mode, fmt)
     manifest_document = build_manifest_document(
         emit=emit,
         config=config,

@@ -26,6 +26,7 @@ from fabulexa_forge.exporters.dimensional.columns import (
     build_json_precision_expr,
     build_timestamp_expr,
     build_value_map_expr,
+    render_date_ref_expr,
     resolve_carried_source_column,
     resolve_source_column_type,
 )
@@ -66,6 +67,11 @@ def build_scd2_column_expr_flag(
     - `derived: scd_window` renders the version bounds
       (version_start / version_end) through render_anchor_temporal_expr.
     - `null` emits a typed NULL.
+    - `date_ref` renders through render_date_ref_expr, handed the same
+      tracked/untracked source_expr as every other mode — tracked sources
+      read per version through the declared-type cast, untracked per
+      record, the source-class-blind posture the other value renderings
+      have.
     - A pure per-row value rendering (`derived: timestamp` / `date_parse` /
       `value_map` / `decimal` / `json_precision`) compiles through the same
       per-column builder every records-grain column uses
@@ -141,6 +147,11 @@ def build_scd2_column_expr_flag(
             )
             if is_value_map
             else "VARCHAR"
+        )
+
+    if col_decl.date_ref is not None:
+        return render_date_ref_expr(
+            col_decl.date_ref, source_expr, col_decl.name, table_label, anchor
         )
 
     if col_decl.derived is not None and col_decl.derived.timestamp is not None:

@@ -1,0 +1,28 @@
+# Identical customer output to table-descriptions' fixture world; the two
+# supplements are documentation-inert on customer and carry no reference to
+# the emit — their rows come straight from the declaration / region_code.csv.
+tables:
+  customer:
+    columns: [customer_id, full_name]
+    row_count: 2
+    contains_rows:
+      - customer_id: p001
+        full_name: Alice
+      - customer_id: p002
+        full_name: Bob
+  region_code:
+    columns: [code, label]
+    row_count: 2
+    contains_rows:
+      - code: US
+        label: United States
+      - code: CA
+        label: Canada
+  priority_level:
+    columns: [level, weight]
+    row_count: 2
+    contains_rows:
+      - level: standard
+        weight: 1
+      - level: rush
+        weight: 2

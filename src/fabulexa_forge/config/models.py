@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 import re
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import date, datetime, time
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import (
@@ -20,11 +20,16 @@ from pydantic import (
     Discriminator,
     Field,
     Tag,
+    field_validator,
     model_validator,
 )
 from typing_extensions import Self
 
-from fabulexa_forge._sql import is_recognized_sql_type, validate_date_parse_format
+from fabulexa_forge._sql import (
+    date_parse_denoted_type,
+    is_recognized_sql_type,
+    validate_date_parse_format,
+)
 from fabulexa_forge.anchor import TemporalRender
 
 # ---------------------------------------------------------------------------
@@ -522,6 +527,61 @@ class DateParseSpec(StrictBaseModel):
         return self
 
 
+class DateRefSpec(StrictBaseModel):
+    """A `yyyymmdd` key into `dim_date`, from an instant or a parsed date string."""
+
+    source: str | None = None
+    """Instant shape: the sim_time source column, rendered to its local
+    date in the anchor zone — the same availability as `TimestampSpec.source`."""
+    from_: str | None = Field(default=None, alias="from")
+    """Parse shape: the VARCHAR source column holding date strings."""
+    format: str | None = None
+    """Parse shape: the declared parse format (closed strptime-directive set,
+    see validate_date_parse_format); must be date-complete. Present iff `from_`."""
+
+    @model_validator(mode="after")
+    def exactly_one_shape(self) -> Self:
+        """Exactly one of `source` / `from_` is set; `format` iff `from_`;
+        a set `source` / `from_` is non-empty; `format` denotes a date.
+
+        Date-completeness is read through the one denotation authority:
+        `validate_date_parse_format(format, "date_ref.format")` then
+        `date_parse_denoted_type(format) in ("DATE", "TIMESTAMP")` — a
+        `TIME` denotation (time-only format) is refused.
+
+        Raises:
+            ValueError: Neither or both shapes set; `format` without `from_`
+                or `from_` without `format`; an empty column name; a
+                `format` that is not date-complete (time-only) or that
+                fails the declared-parse directive rules.
+        """
+        source_set = self.source is not None
+        from_set = self.from_ is not None
+        if source_set == from_set:
+            raise ValueError(
+                "date_ref: set exactly one of 'source' / 'from'"
+                f" (got source={self.source!r}, from={self.from_!r})"
+            )
+        if from_set != (self.format is not None):
+            raise ValueError(
+                "date_ref.format is required iff 'from' is set"
+                f" (from={self.from_!r}, format={self.format!r})"
+            )
+        if self.source is not None:
+            _require_nonempty_str(self.source, "date_ref.source")
+        if self.from_ is not None:
+            _require_nonempty_str(self.from_, "date_ref.from")
+        if self.format is not None:
+            validate_date_parse_format(self.format, "date_ref.format")
+            denoted = date_parse_denoted_type(self.format)
+            if denoted not in ("DATE", "TIMESTAMP"):
+                raise ValueError(
+                    f"date_ref.format {self.format!r} denotes {denoted},"
+                    " not a date (a time-only format is not date-complete)"
+                )
+        return self
+
+
 class DecimalSpec(StrictBaseModel):
     """Dimensional derived spelling of the decimal election."""
 
@@ -713,6 +773,8 @@ class ColumnDecl(StrictBaseModel):
     """Emits a NULL column — a placeholder the author intends to fill externally."""
     lookup: LookupClause | None = None
     """Enriches the row with a type-1 scalar property of a related record."""
+    date_ref: DateRefSpec | None = None
+    """Renders a `yyyymmdd` key into the generated `dim_date`."""
     description: str | None = None
     """Author-supplied rendered description for this output column. Replaces
     the inherited (or forge-pinned) description in the companion README and
@@ -730,7 +792,10 @@ class ColumnDecl(StrictBaseModel):
     @model_validator(mode="after")
     def exactly_one_column_mode(self) -> Self:
         """A ColumnDecl sets exactly one of
-        from / fk / correlation / derived / null / lookup.
+        from / fk / correlation / derived / null / lookup / date_ref.
+
+        Delta: `date_ref` joins the set-fields list; the message's mode list
+        becomes `from/fk/correlation/derived/null/lookup/date_ref`.
 
         Raises:
             ValueError: zero or more than one mode is set.
@@ -744,13 +809,14 @@ class ColumnDecl(StrictBaseModel):
                 ("derived", self.derived),
                 ("null", self.null),
                 ("lookup", self.lookup),
+                ("date_ref", self.date_ref),
             ]
             if v is not None
         ]
         if len(set_fields) != 1:
             raise ValueError(
                 f"ColumnDecl '{self.name}' must set exactly one of"
-                f" from/fk/correlation/derived/null/lookup; "
+                f" from/fk/correlation/derived/null/lookup/date_ref; "
                 f"got {len(set_fields)}: {set_fields}"
             )
         return self
@@ -1710,6 +1776,308 @@ class IncrementalConfig(StrictBaseModel):
         return self
 
 
+class DateDimensionConfig(StrictBaseModel):
+    """The inclusive calendar range the generated `dim_date` covers."""
+
+    from_: date = Field(alias="from")
+    """First calendar day, inclusive. Loaded from an ISO `YYYY-MM-DD` string."""
+    to: date
+    """Last calendar day, inclusive; not before `from_` (`range_ordered`)."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def bounds_are_strings(cls, data: object) -> object:
+        """Refuse any non-string value for either bound.
+
+        Both bounds must arrive as `str` and be parsed here, so the author
+        sees this rule rather than a type-union failure — and so no other
+        input Pydantic's `date` would accept (an unquoted YAML date, or an
+        integer read as a Unix timestamp) can parse silently to a wrong day.
+        Reads the alias key `from` (and `from_` under populate_by_name).
+
+        Raises:
+            ValueError: `from` or `to` is present and not a `str`.
+        """
+        if not isinstance(data, dict):
+            return data
+        for data_key, label in (("from", "from"), ("from_", "from"), ("to", "to")):
+            if data_key in data and not isinstance(data[data_key], str):
+                raise ValueError(
+                    f"date_dimension.{label} must be a quoted ISO date string"
+                    f" (got {data[data_key]!r})"
+                )
+        return data
+
+    @model_validator(mode="after")
+    def range_ordered(self) -> Self:
+        """`to` is not before `from_`.
+
+        Raises:
+            ValueError: `to < from_`.
+        """
+        if self.to < self.from_:
+            raise ValueError(
+                f"date_dimension: 'to' ({self.to.isoformat()}) is before"
+                f" 'from' ({self.from_.isoformat()})"
+            )
+        return self
+
+
+# ---------------------------------------------------------------------------
+# Supplementary tables: an author-supplied table carried verbatim
+# ---------------------------------------------------------------------------
+
+_SUPPLEMENT_SIMPLE_TYPES = frozenset(
+    {
+        "BIGINT",
+        "INTEGER",
+        "SMALLINT",
+        "TINYINT",
+        "DOUBLE",
+        "FLOAT",
+        "BOOLEAN",
+        "VARCHAR",
+        "TIMESTAMP",
+        "DATE",
+        "TIME",
+        "TIMESTAMPTZ",
+    }
+)
+
+_SUPPLEMENT_DECIMAL_RE = re.compile(r"^DECIMAL\(\s*(\d+)\s*,\s*(\d+)\s*\)$")
+
+_SUPPLEMENT_TYPE_VOCABULARY_TEXT = (
+    "BIGINT, INTEGER, SMALLINT, TINYINT, DOUBLE, FLOAT, BOOLEAN, VARCHAR,"
+    " TIMESTAMP, DATE, TIME, TIMESTAMPTZ, DECIMAL(p, s)"
+)
+
+
+def canonical_supplement_type(type_text: str) -> str:
+    """Canonicalize one supplement column's declared type text.
+
+    The one authority on the supplement type vocabulary: `BIGINT` /
+    `INTEGER` / `SMALLINT` / `TINYINT`, `DOUBLE` / `FLOAT`, `BOOLEAN`,
+    `VARCHAR`, `TIMESTAMP`, `DATE`, `TIME`, `TIMESTAMPTZ`, and
+    `DECIMAL(p, s)` under `_check_decimal_bounds`. Matched
+    case-insensitively with surrounding whitespace ignored; returned in the
+    canonical upper-case spelling (`DECIMAL(p, s)` re-rendered as
+    `DECIMAL(p,s)` with the parsed integers).
+
+    Args:
+        type_text: The author's type text, verbatim.
+
+    Returns:
+        The canonical spelling.
+
+    Raises:
+        ValueError: The text is not in the vocabulary, or a DECIMAL's
+            precision / scale are out of bounds (the bounds helper's
+            message).
+    """
+    upper = type_text.strip().upper()
+    if upper in _SUPPLEMENT_SIMPLE_TYPES:
+        return upper
+    match = _SUPPLEMENT_DECIMAL_RE.fullmatch(upper)
+    if match is None:
+        raise ValueError(
+            f"supplement type {type_text!r} is not recognized;"
+            f" supplement types are {_SUPPLEMENT_TYPE_VOCABULARY_TEXT}"
+        )
+    precision, scale = int(match.group(1)), int(match.group(2))
+    _check_decimal_bounds(precision, scale, "supplement column type")
+    return f"DECIMAL({precision},{scale})"
+
+
+def _check_supplement_row_scalar(value: object, row_index: int, col: str) -> None:
+    """Refuse a `bool` or temporal scalar YAML resolved before this model
+    sees it (`bool` first — it is an `int` subclass).
+
+    Args:
+        value: One raw inline-row cell, before Pydantic's union check.
+        row_index: The 1-based row position, for the message.
+        col: The cell's column name, for the message.
+
+    Raises:
+        ValueError: `value` is a `bool`, or a `date` / `datetime` / `time`.
+    """
+    if isinstance(value, bool):
+        raise ValueError(
+            f"supplement rows: quote boolean values (row {row_index}, column {col!r})"
+        )
+    if isinstance(value, (date, datetime, time)):
+        raise ValueError(
+            f"supplement rows: quote temporal values (row {row_index}, column {col!r})"
+        )
+
+
+class SupplementDecl(StrictBaseModel):
+    """One author-supplied table carried verbatim into a dimensional export."""
+
+    name: str
+    """Output table name — a SQL identifier, unique across the export's
+    tables (`supplements_names_unique` on ExportConfig)."""
+    columns: dict[str, str]
+    """Ordered column name -> type text from the supplement type vocabulary
+    (`supplement_types_known`). Non-empty; names are SQL identifiers. Cells
+    are cast by the session's VARCHAR cast, whose leniency is the contract:
+    a fractional text rounds into an integer column (`1.5` -> 2), a DECIMAL
+    rounds to its scale, boolean spellings are DuckDB's."""
+    file: str | None = None
+    """CSV path, resolved against the config file's directory by the loader;
+    the model never touches the filesystem. Exactly one of `file` / `rows`."""
+    rows: list[dict[str, str | int | float | None]] | None = None
+    """Inline rows in output order; each row's keys equal `columns`' names.
+    Quote any value YAML would not read as a plain string: temporal and
+    boolean scalars are refused; numeric look-alikes (`010`, `1_000`,
+    `12:30:00`) are not detectable and ship as the number YAML made."""
+    description: str | None = None
+    """Table prose; rendered and embedded like a declared table's.
+    Presentation only — excluded from the incremental fingerprint."""
+    descriptions: dict[str, str] | None = None
+    """Per-column prose; keys are a subset of `columns`. Presentation only —
+    excluded from the incremental fingerprint."""
+
+    @field_validator("rows", mode="before")
+    @classmethod
+    def supplement_rows_scalars(cls, value: object) -> object:
+        """Refuse a `date` / `datetime` / `time` cell ("quote temporal
+        values") and a `bool` cell ("quote boolean values"), each naming the
+        1-based row and the column, before Pydantic's union check so the
+        author sees the rule, not a union-failure text. `bool` is checked
+        before `int` (it is an `int` subclass). Any other shape passes
+        through to the union.
+
+        Raises:
+            ValueError: A temporal or boolean scalar cell.
+        """
+        if not isinstance(value, list):
+            return value
+        for row_index, row in enumerate(value, start=1):
+            if not isinstance(row, dict):
+                continue
+            for col, cell in row.items():
+                _check_supplement_row_scalar(cell, row_index, col)
+        return value
+
+    @model_validator(mode="after")
+    def supplement_name_is_sql_identifier(self) -> Self:
+        """`name` matches `_SQL_IDENTIFIER_RE`.
+
+        Raises:
+            ValueError: It does not.
+        """
+        _require_sql_identifier(self.name, "supplement name")
+        return self
+
+    @model_validator(mode="after")
+    def supplement_columns_well_formed(self) -> Self:
+        """`columns` is non-empty; every name is a SQL identifier; every type
+        text is non-blank.
+
+        Raises:
+            ValueError: Any of the three fails.
+        """
+        if not self.columns:
+            raise ValueError(f"supplement '{self.name}': 'columns' must not be empty")
+        for col_name, type_text in self.columns.items():
+            _require_sql_identifier(col_name, f"supplement '{self.name}': column name")
+            if not type_text.strip():
+                raise ValueError(
+                    f"supplement '{self.name}': column '{col_name}' has a blank type"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def supplement_types_known(self) -> Self:
+        """Every `columns` type text canonicalizes under
+        `canonical_supplement_type`.
+
+        Raises:
+            ValueError: The design's message naming the supplement, the
+                column, the offending text, and the vocabulary.
+        """
+        for col_name, type_text in self.columns.items():
+            try:
+                canonical_supplement_type(type_text)
+            except ValueError as exc:
+                raise ValueError(
+                    f"supplement '{self.name}': column '{col_name}' declares"
+                    f" type '{type_text}'; supplement types are"
+                    f" {_SUPPLEMENT_TYPE_VOCABULARY_TEXT}"
+                ) from exc
+        return self
+
+    @model_validator(mode="after")
+    def supplement_source_exactly_one(self) -> Self:
+        """Exactly one of `file` / `rows` is present; a present `file` is
+        non-blank.
+
+        Raises:
+            ValueError: Both, neither, or a blank `file`.
+        """
+        has_file = self.file is not None
+        has_rows = self.rows is not None
+        if has_file and has_rows:
+            raise ValueError(
+                f"supplement '{self.name}': set exactly one of 'file' / 'rows'"
+                " (both given)"
+            )
+        if not has_file and not has_rows:
+            raise ValueError(
+                f"supplement '{self.name}': set exactly one of 'file' / 'rows'"
+                " (neither given)"
+            )
+        if self.file is not None and not self.file.strip():
+            raise ValueError(f"supplement '{self.name}': 'file' must not be blank")
+        return self
+
+    @model_validator(mode="after")
+    def supplement_rows_shape(self) -> Self:
+        """Every inline row's key set equals `columns`' key set.
+
+        Raises:
+            ValueError: A row with a missing or extra key, naming the
+                1-based row.
+        """
+        if self.rows is None:
+            return self
+        declared = set(self.columns)
+        for row_index, row in enumerate(self.rows, start=1):
+            row_keys = set(row)
+            if row_keys != declared:
+                raise ValueError(
+                    f"supplement '{self.name}': row {row_index} keys {sorted(row_keys)}"
+                    f" do not match declared columns {sorted(declared)}"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def supplement_documentation_well_formed(self) -> Self:
+        """A present `description` is non-blank; `descriptions` keys are
+        declared columns and values are non-blank.
+
+        Raises:
+            ValueError: Any fails.
+        """
+        _require_nonblank_str(
+            self.description, f"supplement '{self.name}': 'description'"
+        )
+        if self.descriptions is None:
+            return self
+        for col_name, text in self.descriptions.items():
+            if col_name not in self.columns:
+                raise ValueError(
+                    f"supplement '{self.name}': descriptions key '{col_name}'"
+                    " is not a declared column"
+                )
+            if not text.strip():
+                raise ValueError(
+                    f"supplement '{self.name}': descriptions['{col_name}']"
+                    " must not be blank"
+                )
+        return self
+
+
 class ExportConfig(StrictBaseModel):
     """Top-level export configuration block."""
 
@@ -1719,6 +2087,11 @@ class ExportConfig(StrictBaseModel):
     """Optional wallclock origin and timezone for timestamp rendering."""
     incremental: IncrementalConfig | None = None
     """Optional incremental export cadence; absent means full export."""
+    date_dimension: DateDimensionConfig | None = None
+    """Present → the generated calendar `dim_date` is materialized over the
+    declared range and `date_ref` columns may reference it. Legal only with
+    mode='dimensional' (`date_dimension_requires_dimensional`). Absent → no
+    calendar, and any `date_ref` is refused (`date_refs_require_date_dimension`)."""
     dimensional: DimensionalConfig | None = None
     """The star-schema declaration for the dimensional mode."""
     source: SourceConfig | None = None
@@ -1740,6 +2113,12 @@ class ExportConfig(StrictBaseModel):
     config file's directory by whoever loaded the config — the model never
     touches the filesystem. Absent: the README renders from the mode template
     and derived facts alone."""
+    supplements: list[SupplementDecl] | None = None
+    """Author-supplied tables carried verbatim into the warehouse; absent
+    means none. Legal only with mode='dimensional'
+    (`supplements_require_dimensional`); non-empty when present, names
+    unique among themselves and against the declared dimensional tables
+    (`supplements_names_unique`)."""
 
     @model_validator(mode="after")
     def readme_overlay_nonempty(self) -> Self:
@@ -1821,6 +2200,112 @@ class ExportConfig(StrictBaseModel):
                 "base.slice_at and incremental are mutually exclusive"
                 " (a pinned instant and a window sequence are contradictory)"
             )
+        return self
+
+    @model_validator(mode="after")
+    def supplements_require_dimensional(self) -> Self:
+        """A present `supplements` list requires mode='dimensional'.
+
+        Raises:
+            ValueError: `supplements` present under mode='source' / 'base'.
+        """
+        if self.supplements is not None and self.mode != "dimensional":
+            raise ValueError(
+                f"supplements requires mode='dimensional' (got mode={self.mode!r})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def supplements_names_unique(self) -> Self:
+        """A present `supplements` list is non-empty; no two supplements
+        share a `name`; no supplement `name` equals a declared dimensional
+        table's `name` (message: "supplement '{name}' collides with declared
+        table '{name}'").
+
+        Raises:
+            ValueError: Empty list, duplicate name, or collision.
+        """
+        if self.supplements is None:
+            return self
+        if not self.supplements:
+            raise ValueError("supplements must not be empty (omit the field instead)")
+        seen: set[str] = set()
+        for decl in self.supplements:
+            if decl.name in seen:
+                raise ValueError(f"supplements contains duplicate name '{decl.name}'")
+            seen.add(decl.name)
+        table_names = (
+            {table.name for table in self.dimensional.tables}
+            if self.dimensional is not None
+            else set()
+        )
+        for decl in self.supplements:
+            if decl.name in table_names:
+                raise ValueError(
+                    f"supplement '{decl.name}' collides with declared table"
+                    f" '{decl.name}'"
+                )
+        return self
+
+    @model_validator(mode="after")
+    def date_dimension_requires_dimensional(self) -> Self:
+        """A present `date_dimension` requires mode='dimensional'.
+
+        Raises:
+            ValueError: `date_dimension` present under mode='source' / 'base'.
+        """
+        if self.date_dimension is not None and self.mode != "dimensional":
+            raise ValueError(
+                f"date_dimension requires mode='dimensional' (got mode={self.mode!r})"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def date_refs_require_date_dimension(self) -> Self:
+        """Any `date_ref` column in the dimensional tables requires
+        `date_dimension` (message names the table and column).
+
+        Raises:
+            ValueError: A `date_ref` column exists and `date_dimension` is None.
+        """
+        if self.date_dimension is not None or self.dimensional is None:
+            return self
+        for table in self.dimensional.tables:
+            for column in table.columns:
+                if column.date_ref is not None:
+                    raise ValueError(
+                        f"table '{table.name}' column '{column.name}': date_ref"
+                        " requires a top-level 'date_dimension' block"
+                    )
+        return self
+
+    @model_validator(mode="after")
+    def dim_date_name_reserved(self) -> Self:
+        """With `date_dimension` present, no declared dimensional table and
+        no supplement is named `dim_date` — the generated calendar's
+        published name (the literal is spelled here; config.models does not
+        import exporters). Without the block the name is the author's to use.
+
+        Raises:
+            ValueError: A declared table or supplement is named `dim_date`
+                while `date_dimension` is present.
+        """
+        if self.date_dimension is None:
+            return self
+        if self.dimensional is not None:
+            for table in self.dimensional.tables:
+                if table.name == "dim_date":
+                    raise ValueError(
+                        "table 'dim_date' collides with the generated"
+                        " calendar's reserved name (date_dimension is present)"
+                    )
+        if self.supplements is not None:
+            for decl in self.supplements:
+                if decl.name == "dim_date":
+                    raise ValueError(
+                        "supplement 'dim_date' collides with the generated"
+                        " calendar's reserved name (date_dimension is present)"
+                    )
         return self
 
 

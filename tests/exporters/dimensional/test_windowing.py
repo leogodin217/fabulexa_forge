@@ -9,11 +9,17 @@ cutoff) are tests/incremental/test_horizon_acceptance.py.
 
 from __future__ import annotations
 
-import pytest
-from recipes._recipe_fixture import build_recipe_emit
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
+import pytest
+from _support.notices import discard_notice_sink
+from recipes._recipe_fixture import DAY, build_recipe_emit
+
+from fabulexa_forge.anchor import EffectiveAnchor
 from fabulexa_forge.config.models import (
     ColumnDecl,
+    DateRefSpec,
     DerivedSpec,
     DimensionalConfig,
     ElapsedSpec,
@@ -24,12 +30,14 @@ from fabulexa_forge.config.models import (
     TimestampSpec,
 )
 from fabulexa_forge.errors import ExportError
+from fabulexa_forge.exporters.dimensional.engine import build_query_specs
 from fabulexa_forge.exporters.dimensional.windowing import (
     check_key_columns_stable,
     check_window_key_unique,
     window_delivery_class,
 )
 from fabulexa_forge.exporters.horizon import compose_window_delta_sql
+from fabulexa_forge.incremental.windows import Window
 from fabulexa_forge.reader.emit import Emit, open_emit
 from fabulexa_forge.reader.sidecar import Sidecar
 
@@ -67,6 +75,12 @@ _DIM_DOCTOR = TableDecl(
 
 def _config(*tables: TableDecl) -> DimensionalConfig:
     return DimensionalConfig(tables=[_DIM_DOCTOR, *tables])
+
+
+_ANCHOR = EffectiveAnchor(
+    start_instant=datetime.fromisoformat("2024-01-01T00:00:00+00:00"),
+    timezone=ZoneInfo("UTC"),
+)
 
 
 def _records_fact(
@@ -177,6 +191,50 @@ def test_ordinal_partitioned_by_mutable_column_varies(sidecar: Sidecar) -> None:
         _derived("seq", ordinal=OrdinalSpec(partition_by="status", order_by="created")),
     )
     assert _classify(table, sidecar) == "upsert"
+
+
+# ---------------------------------------------------------------------------
+# window_delivery_class — date_ref: channel is its source's, both shapes
+# ---------------------------------------------------------------------------
+
+
+def test_date_ref_instant_over_created_sim_time_is_append(sidecar: Sidecar) -> None:
+    """A `date_ref` instant shape over the grain's raw time key is invariant."""
+    table = _records_fact(
+        ColumnDecl(name="created_key", date_ref=DateRefSpec(source="created_sim_time"))
+    )
+    assert _classify(table, sidecar) == "append"
+
+
+def test_date_ref_instant_over_deactivated_at_is_upsert(sidecar: Sidecar) -> None:
+    """A `date_ref` instant shape over a mutable structural source varies."""
+    table = _records_fact(
+        ColumnDecl(
+            name="deactivated_key", date_ref=DateRefSpec(source="deactivated_at")
+        )
+    )
+    assert _classify(table, sidecar) == "upsert"
+
+
+def test_date_ref_parse_over_tracked_property_on_dim_is_upsert(
+    sidecar: Sidecar,
+) -> None:
+    """A `date_ref` parse shape over a tracked property on an unversioned dim
+    varies -- the same reading a tracked `from` carries."""
+    table = TableDecl(
+        name="dim_patient_status",
+        role="dim",
+        source=SourceDecl(grain="records", kind="patient"),
+        key=["patient_id"],
+        columns=[
+            _from("patient_id", "record_id"),
+            ColumnDecl(
+                name="status_date_key",
+                date_ref=DateRefSpec(**{"from": "prop__status"}, format="%Y-%m-%d"),
+            ),
+        ],
+    )
+    assert window_delivery_class(table, _config(table), sidecar) == "upsert"
 
 
 def test_elapsed_varies(sidecar: Sidecar) -> None:
@@ -321,6 +379,32 @@ def test_key_on_tracked_property_refused(sidecar: Sidecar) -> None:
         check_key_columns_stable(table, _config(table), sidecar)
 
 
+def test_key_on_date_ref_deactivated_at_refused(sidecar: Sidecar) -> None:
+    """A `date_ref` over a mutable structural source in `key` is refused,
+    naming the varying source -- KeyColumnsStable reads `_channel_variance`
+    exactly as any other column mode."""
+    table = _records_fact(
+        ColumnDecl(
+            name="deactivated_key", date_ref=DateRefSpec(source="deactivated_at")
+        ),
+        key=["patient_id", "deactivated_key"],
+    )
+    with pytest.raises(
+        ExportError, match=r"key column 'deactivated_key'.*deactivated_at"
+    ):
+        check_key_columns_stable(table, _config(table), sidecar)
+
+
+def test_key_on_date_ref_created_sim_time_accepted(sidecar: Sidecar) -> None:
+    """A `date_ref` over the grain's raw time key in `key` is accepted --
+    invariant like any other carry of `created_sim_time`."""
+    table = _records_fact(
+        ColumnDecl(name="created_key", date_ref=DateRefSpec(source="created_sim_time")),
+        key=["patient_id", "created_key"],
+    )
+    check_key_columns_stable(table, _config(table), sidecar)  # must not raise
+
+
 def test_stable_key_passes(sidecar: Sidecar) -> None:
     table = _membership_fact(_from("left", "left_sim_time"))
     check_key_columns_stable(table, _config(table), sidecar)
@@ -377,3 +461,32 @@ def test_delta_is_ordered_multiset_difference(emit: Emit) -> None:
     start = _literal("(2, 'y'), (3, NULL)", "k, v")
     sql = compose_window_delta_sql(end, start, ["k", "v"])
     assert emit.query(sql, ()) == [(1, "x"), (2, "y")]
+
+
+# ---------------------------------------------------------------------------
+# A windowed compile carries `references` through dataclasses.replace
+# ---------------------------------------------------------------------------
+
+
+def test_windowed_date_ref_references_carried_through_replace(emit: Emit) -> None:
+    """A windowed `date_ref`-bearing fact's `QuerySpec.references` survives
+    the windowed-compile update site: `_build_windowed_query_specs` derives
+    every windowed spec via `dataclasses.replace(end_spec, ...)`, which
+    replaces only `sql`/`write_mode`/`upsert_key` and leaves `references`
+    (stamped at the underlying full-export compile) untouched."""
+    table = _records_fact(
+        ColumnDecl(name="created_key", date_ref=DateRefSpec(source="created_sim_time"))
+    )
+    config = _config(table)
+    window = Window(index=0, start_ns=0, end_ns=4 * DAY, label="w0")
+    specs = build_query_specs(
+        emit,
+        config,
+        _ANCHOR,
+        window,
+        discard_notice_sink,
+        base_relations=None,
+        tables=None,
+    )
+    fact_spec = next(s for s in specs if s.table_name == "fact")
+    assert dict(fact_spec.references) == {"created_key": "dim_date"}

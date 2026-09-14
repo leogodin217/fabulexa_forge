@@ -89,6 +89,7 @@ def _export_once(
             None,
             None,
         )
+        extra_kwargs = {"supplements": ()} if mode == "dimensional" else {}
         engine(
             emit,
             config,
@@ -97,6 +98,7 @@ def _export_once(
             anchor,
             notice_sink=discard_notice_sink,
             overlay=None,
+            **extra_kwargs,
         )
 
 

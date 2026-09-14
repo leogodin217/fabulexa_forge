@@ -1,0 +1,30 @@
+# customer is identical to supplement-tables' (the supplement never touches
+# the emit). rate_band's values are the declared rows cast to their declared
+# types: `0.10` → DECIMAL(6, 2) 0.10, '2024-01-01' → DATE, 'true' → BOOLEAN,
+# null → NULL. The harness binds YAML-typed parameters, so the bare date and
+# bool below compare against the typed columns directly.
+tables:
+  customer:
+    columns: [customer_id, full_name]
+    row_count: 2
+    contains_rows:
+      - customer_id: p001
+        full_name: Alice
+      - customer_id: p002
+        full_name: Bob
+  rate_band:
+    columns: [band, from_units, to_units, rate, effective_from, current]
+    row_count: 2
+    contains_rows:
+      - band: base
+        from_units: 0
+        to_units: 1000
+        rate: 0.10
+        effective_from: 2024-01-01
+        current: true
+      - band: volume
+        from_units: 1001
+        to_units: null
+        rate: 0.08
+        effective_from: 2024-07-01
+        current: true

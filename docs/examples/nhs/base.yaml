@@ -110,7 +110,6 @@ base:
         prop__suspicious_finding: suspicious_finding
         prop__surgical_indicated: surgical_indicated
         prop__procedure_code: procedure_code
-        prop__readmission_risk: readmission_risk
         prop__fft_outcome: fft_outcome
         prop__fft_invited: fft_invited
         prop__hai_status: hai_status

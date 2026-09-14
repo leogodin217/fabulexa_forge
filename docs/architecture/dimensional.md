@@ -47,7 +47,8 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
 | [`exporters/dimensional/grains.py`](../../src/fabulexa_forge/exporters/dimensional/grains.py) | `build_grain_sql` and the four per-grain SQL builders — composing the reader faithful-read and versioned-intervals relations |
 | [`exporters/dimensional/scd.py`](../../src/fabulexa_forge/exporters/dimensional/scd.py) | `build_scd2_sql` — the SCD-2 wide reconstruction, composing the versioned-intervals derivation and the reader records relation |
 | [`exporters/dimensional/fk.py`](../../src/fabulexa_forge/exporters/dimensional/fk.py) | `build_fk_expr` — the labeled-edge pathfind, composing the reference-path and membership-edge derivations |
-| [`exporters/dimensional/columns.py`](../../src/fabulexa_forge/exporters/dimensional/columns.py) | `build_column_expr` — the six column source modes |
+| [`exporters/dimensional/columns.py`](../../src/fabulexa_forge/exporters/dimensional/columns.py) | `build_column_expr` — the seven column source modes; `render_date_ref_expr` — the `date_ref` mode over the bare temporal and declared-parse renderers |
+| [`exporters/date_dimension.py`](../../src/fabulexa_forge/exporters/date_dimension.py) | `compile_date_dimension_spec`, `check_date_refs_in_range` — the generated calendar and the range guard, read by this mode, the incremental driver, and the shaped playback head alike ([`date-dimension.md`](date-dimension.md)) |
 | [`exporters/dimensional/lookup.py`](../../src/fabulexa_forge/exporters/dimensional/lookup.py) | `build_lookup_expr`, `check_lookup_temporal_safety` — the `lookup` mode (composing the reference-path derivation, terminal `prop__<property>`) and its type-1 temporal-safety business rule |
 | [`exporters/dimensional/validation.py`](../../src/fabulexa_forge/exporters/dimensional/validation.py) | The business rules run against the sidecar before any SQL is emitted |
 | [`exporters/dimensional/init.py`](../../src/fabulexa_forge/exporters/dimensional/init.py) | `generate_init_config` — the sidecar-driven candidate-config proposer |
@@ -63,6 +64,27 @@ emit (run.duckdb + base.json @ the supported `base_format_version`)
   directory of `<table>.csv` files (`fmt='csv'`) or a single `.duckdb` file holding
   every table (`fmt='duckdb'`). The two output shapes are why `out` is a directory for
   CSV and a file for DuckDB.
+- **Supplements.** `export_dimensional` takes the loader-resolved supplement set
+  beside the overlay (`supplements: Sequence[ResolvedSupplement]`, empty when the
+  config declares none — [`supplements.md`](supplements.md)). After the plan
+  compile and before any write it compiles each supplement to a `QuerySpec`
+  (`compile_supplement_specs`, `write_mode='create'`), runs the source-is-output
+  gate over the invocation's planned output paths, and validates the overlay's
+  `table:` slots against the union of plan and supplement names. Supplement specs
+  are appended after the declared tables in declaration order and flow through
+  the same write dispatch and companion write. A supplement is not a kind: it is
+  neither an `fk` target nor a `lookup` source, takes no key election, and no
+  `render:` / `derived:` election reaches it.
+- **Date dimension.** With `date_dimension` declared, `export_dimensional`
+  compiles the generated calendar to a `QuerySpec` after the plan compile
+  (`compile_date_dimension_spec`, `write_mode='create'`) and appends it after
+  the declared tables and before the supplement specs; the overlay's `table:`
+  slots and the source-is-output gate read the union of plan, `dim_date`, and
+  supplement names. The range guard (`check_date_refs_in_range`) is the last
+  pre-write gate — after the plan compile, the calendar compile, the supplement
+  gates, the source-is-output gate, and the overlay check — so every
+  declaration-level refusal surfaces before a data probe runs
+  ([`date-dimension.md`](date-dimension.md)).
 - **Reader-first; authors no base-table SQL.** Every table and column fact flows from
   the `Sidecar`; the engine hard-codes no column list and opens `run.duckdb` only
   through `Emit`. The engine **names no base table in SQL it authors** — it composes
@@ -114,6 +136,7 @@ A column declaration carries **exactly one** source mode:
 |---|---|---|
 | `from: <src>` | Projection of a source column | `prop__<p>`, `elem__<f>`, `member__<f>__id`, `record_id`, `active`, … read directly off the grain |
 | `fk: {to, via, …}` | Dim foreign key | A labeled-edge pathfind to the target dim's grain `record_id` |
+| `date_ref: {source} \| {from, format}` | Calendar key | An `INTEGER` `yyyymmdd` key into the generated `dim_date` — a structural instant's local date in the anchor zone, or a parsed date string ([`date-dimension.md`](date-dimension.md)) |
 | `correlation: <src>` | Degenerate correlation key | A reference-id column projected + renamed, **no** dim join |
 | `derived: <spec>` | Computed column | ordinal / value-map / anchored timestamp / SCD window |
 | `null: true` | NULL-pad | A constant **typed** `CAST(NULL AS VARCHAR)` for a target column the emit cannot fill |
@@ -531,8 +554,8 @@ excluded: time-of-day is **not** monotone in the instant, so raw-ns
 substitution would contradict the author's evident intent (ordering by time
 of day across days) — a `time`-elected amendment column instead orders by
 its own rendered value, `record_id` tie-broken as any ordinary column.
-`interval`-rendered `elapsed` columns and `date_parse` columns are never
-amendment columns; they order by value, `record_id` tie-broken. An SCD-2
+`interval`-rendered `elapsed` columns, `date_parse` columns, and `date_ref`
+columns are never amendment columns; they order by value, `record_id` tie-broken. An SCD-2
 `valid_to` bound stays outside the amendment under every election — it
 orders by rendered value like any other column. Under windowed export the
 delivery classifier reads the same amendment: an ordinal ordered by the
@@ -723,6 +746,22 @@ at plan build (`check_reserved_presentation_name`, the shared check in
 [`source.md`](source.md) carries the same reservation on its `rename` targets, and
 the playback seam presents the column as the recorded trail under `state`
 ([`playback.md`](playback.md) § The recorded trail).
+
+A supplement's `name` shares the output-table namespace: it is a SQL identifier,
+may not equal another supplement's or a declared table's `name` (parse-time,
+`supplements_names_unique` — both lists are on the config, so the collision is
+decidable before any emit opens), and may not be a bookkeeping name
+(`is_reserved_table_name`, applied to the supplement set at plan compile with
+its own message). Its CSV file is `<name>.csv` like any table's
+([`supplements.md`](supplements.md) § Output naming and the source-is-output
+gate).
+
+`dim_date` is the generated calendar's published name. With `date_dimension`
+declared, no declared table and no supplement may carry it (parse-time,
+`dim_date_name_reserved`); without the block the name is the author's to use.
+It joins the output-name list every caller hands the source-is-output gate, so
+a supplement sourced from a `dim_date.csv` the invocation would write is refused
+like any other collision ([`date-dimension.md`](date-dimension.md)).
 
 ### Determinism and ordering
 
@@ -927,7 +966,9 @@ SQL is emitted.
 
 Parse-time validation is the Pydantic model validators in
 [`config/models.py`](../../src/fabulexa_forge/config/models.py): exactly one column
-source mode; exactly one `derived` sub-field; `scd` set iff `role == dim`; source
+source mode; exactly one `derived` sub-field; exactly one `date_ref` shape, a
+`date_ref` only under a `date_dimension` block, and `dim_date` reserved while the
+block is present ([`date-dimension.md`](date-dimension.md) § Validation Rules); `scd` set iff `role == dim`; source
 fields matching the grain (`property` required for history/membership, `filter` only
 on records, `where` only on membership, `value` only on `history_point`); membership
 FK fields (`where`/`member_field`/`property`) only on `via: membership` and `path`
@@ -951,26 +992,27 @@ error message. The remaining business rules run against the sidecar in
 | `SingleBranch` | Exactly one branch — the layer's `require_single_branch`, not in `validation.py` |
 | `SourceTableExists` | The `records__<kind>` / `history` / `membership__<kind>__<property>` table for each source is in the sidecar |
 | `KeyColumnsDeclared` | Every `key` entry is a declared column of its table |
-| `ProjectionColumnExists` | Each `from` / `correlation` source — and each `derived: value_map`'s `from` — exists on the grain's projectable surface; no cross-table reach |
+| `ProjectionColumnExists` | Each `from` / `correlation` source — and each `derived: value_map`'s and `date_ref` parse shape's `from` — exists on the grain's projectable surface; no cross-table reach |
 | `FkTargetIsDim` | Each `fk.to` names a declared `role: dim` table |
 | `ReferencePathResolvable` | A `via: reference` FK has exactly one `references` `prop__` chain from the anchor kind to the dim's source kind, or a `path` hint naming one (each entry a `references` column whose target is the next hop) |
 | `MembershipEdgeResolvable` | A `via: membership` FK resolves to exactly one `membership__<kind>__<property>` table (`property` names it when the kind owns several); every `where` column is a real `elem__` column; `member_field` is a reference field (inferred when unique); some rows' `member__<member_field>__kind` equals the dim's source kind |
 | `DiscriminatorValueObserved` | Each element of a records `filter` value is among the kind's observed `enum_domains` values for that property — evaluated per element, one `discriminator-value-unobserved` [`Notice`](notices.md) per unobserved element, in config element order. A notice, never an error: a declared-but-unobserved value is a legitimate way to write a config against a family of emits. The message states the table will be empty for a scalar and for a list no element of which was observed; for a partially-observed list, where the observed elements still contribute rows, it says only that the element contributes no rows. A property absent from `enum_domains` (e.g. a modelling discriminator like `decision_type`) carries no observed-value set, so its filter is not checked |
 | Dim-population domain gate | Every element of a sub-typed dim's discriminator conjunct is a declared sub-type of the kind's domain — per element, naming the offending one (§ Foreign keys). Distinct from `DiscriminatorValueObserved`: the domain is the declared sub-type registry rather than the observed-value set, and an out-of-domain population is an error, not a notice |
-| `SliceOnlyColumnRefused` | No config-referenced value-read resolves to a non-exempt `temporal_class: slice_only` column ([`slice-only.md`](slice-only.md)). The surface list is exhaustive over the grammar: `from`, `correlation`, records `filter` keys, `value_map.from`, `derived: timestamp` `source`, `derived: elapsed` `correlate_on` / `start_source` / `end_source` / `other_where` keys, `derived: date_parse` `from`, `derived: decimal` `from`, `derived: json_precision` `from`, `fk via: reference` resolved-path hop columns (the check runs over the hops the resolution actually traverses), `fk via: membership` `member_path` hop columns and `as_of`. (`lookup` reads are `LookupColumnSafety`'s. Membership element predicates and history-grain scoping are outside the population — those columns carry no class.) Always-on, full export included |
+| `SliceOnlyColumnRefused` | No config-referenced value-read resolves to a non-exempt `temporal_class: slice_only` column ([`slice-only.md`](slice-only.md)). The surface list is exhaustive over the grammar: `from`, `correlation`, records `filter` keys, `value_map.from`, `derived: timestamp` `source`, `derived: elapsed` `correlate_on` / `start_source` / `end_source` / `other_where` keys, `derived: date_parse` `from`, `derived: decimal` `from`, `derived: json_precision` `from`, `date_ref` `source` / `from`, `fk via: reference` resolved-path hop columns (the check runs over the hops the resolution actually traverses), `fk via: membership` `member_path` hop columns and `as_of`. (`lookup` reads are `LookupColumnSafety`'s. Membership element predicates and history-grain scoping are outside the population — those columns carry no class.) Always-on, full export included |
 | `OrdinalRefsSiblings` | `ordinal.partition_by` / `order_by` name sibling output columns of the same table |
-| `TimestampSourceAvailable` | Each `derived: timestamp`'s `source` is available on the table's grain: an instant-carrying structural column of the grain's table category (resolved through the reader's structural-temporal surface, not a private list), the grain's virtual interval-end column where the grain defines one, or a `prop__<name>` present on the grain's projectable surface (§ Timestamp source) |
-| `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering — `derived: timestamp`'s `as`, or the `scd_window` object form — has a resolved effective anchor; naming the column when it does not ([`temporal-elections.md`](temporal-elections.md)) |
-| `DateParseSourceColumn` | Each `derived: date_parse`'s `from` resolves off the grain's projectable surface and carries a declared VARCHAR type (§ Derived columns); not `slice_only` |
+| `TimestampSourceAvailable` | Each `derived: timestamp`'s `source` and each `date_ref` instant shape's `source` is available on the table's grain: an instant-carrying structural column of the grain's table category (resolved through the reader's structural-temporal surface, not a private list), the grain's virtual interval-end column where the grain defines one, or a `prop__<name>` present on the grain's projectable surface (§ Timestamp source) |
+| `TemporalRenderRequiresAnchor` | Every explicitly-elected instant rendering — `derived: timestamp`'s `as`, the `scd_window` object form, or a `date_ref` instant shape (inherently a `date` election) — has a resolved effective anchor; naming the column when it does not ([`temporal-elections.md`](temporal-elections.md)) |
+| `DateParseSourceColumn` | Each `derived: date_parse`'s and each `date_ref` parse shape's `from` resolves off the grain's projectable surface and carries a declared VARCHAR type (§ Derived columns); not `slice_only` |
 | `DecimalSourceIsDouble` / `JsonPrecisionSourceIsVarchar` | Each `derived: decimal`'s / `derived: json_precision`'s `from` resolves off the grain's projectable surface and carries a declared DOUBLE / VARCHAR type respectively ([`value-rendering-elections.md`](value-rendering-elections.md) § Validation Rules) |
-| `Scd2ColumnModeSupported` | Every column of an `scd: type2` table uses an admitted mode — `from`, `null`, `derived: scd_window`, or a pure per-row value rendering (`derived: timestamp` / `date_parse` / `value_map` / `decimal` / `json_precision`), evaluated per record for untracked sources and per version for tracked ones (§ SCD-2 wide reconstruction). `fk`, `correlation`, `derived: ordinal`, and `derived: elapsed` are refused; the error names the column, the table, and the offending mode. The source-type gates (`DecimalSourceIsDouble`, `JsonPrecisionSourceIsVarchar`, `DateParseSourceColumn`, `TimestampSourceAvailable`) and the export-time guards apply to tracked sources through the same sidecar declared-type authority — the declared type is a sidecar fact independent of source class |
+| `Scd2ColumnModeSupported` | Every column of an `scd: type2` table uses an admitted mode — `from`, `null`, `derived: scd_window`, or a pure per-row value rendering (`derived: timestamp` / `date_parse` / `value_map` / `decimal` / `json_precision`, or `date_ref` in either shape), evaluated per record for untracked sources and per version for tracked ones (§ SCD-2 wide reconstruction). `fk`, `correlation`, `derived: ordinal`, and `derived: elapsed` are refused; the error names the column, the table, and the offending mode. The source-type gates (`DecimalSourceIsDouble`, `JsonPrecisionSourceIsVarchar`, `DateParseSourceColumn`, `TimestampSourceAvailable`) and the export-time guards apply to tracked sources through the same sidecar declared-type authority — the declared type is a sidecar fact independent of source class |
 | `Scd2NeedsHistory` | An `scd: type2` table declares a `valid_from` `scd_window` column in `key`, the emit carries the `history_tracked` flag, and the kind has at least one tracked column (flag-authoritative; a tracked-but-unchanged column qualifies). A flag-absent emit is refused — re-emit with `history_tracked` — never reconstructed by `history`-table inference |
 | `LookupColumnSafety` | A `lookup` column resolves and reads only temporally exact data: the terminal `records__<kind>` table and its `prop__<property>` exist; a unique reference path resolves from the anchor kind to `to` (or the `path` hint validates hop-by-hop); the terminal property plus every traversed hop column are `temporal_class: constant` (the exempt discriminator excepted, any class — § Lookup); a zero-hop self lookup is not on a `records` grain (redundant with `from`); and the table is not `scd: type2` (the SCD-2 wide builder does not project lookup columns) |
 | `ExcludedKindNotSourced` | No declared table sources an `exclude.kinds` kind |
 | `ExcludedTableNotSourced` | No declared table's source resolves to an `exclude.tables` sidecar table name |
 | `check_reserved_presentation_name` | No author-named output column is `last_mutation_sim_time` — a reserved output name (the presentation-name posture; § Output naming). The shared check in [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py); the value channels freely under any other name |
 | `ReservedTableName` | No declared table is named `_export_meta` / `_export_windows` — the incremental driver's bookkeeping tables. Always-on, full export included, through the shared predicate in [`exporters/reserved_names.py`](../../src/fabulexa_forge/exporters/reserved_names.py) (the source mode's posture at every plan build), so a one-shot export and a later drip on the same target agree by construction; runs immediately after `check_reserved_presentation_name` |
-| `KeyColumnsStable` | Every `key` column of every table is a horizon-invariant value channel under the windowing module's one reading ([`incremental.md`](incremental.md) § Horizon windowing — horizon-invariant value channels): a row keeps its key at every horizon at which it exists. Always-on, every delivery class, full export included — the declared `key` is the table's row identity and recorded warehouse PK, and an identity that changes is wrong one-shot exactly as under a window. Conservative: a channel whose constancy the sidecar cannot establish (a producer-added column outside the structural set, an undeclared `prop__` column, a `via: reference` fk on an emit without `history_tracked` flags) is refused, not admitted, with the unknown constancy named as the varying source. Runs last among the per-table rules, after every rule the reading presumes (`KeyColumnsDeclared`, `ProjectionColumnExists`, `OrdinalRefsSiblings`, `FkTargetIsDim`, `ReferencePathResolvable`, `MembershipEdgeResolvable`, `LookupColumnSafety`), so those refuse under their own identities first — the position the delivery classifier occupies, reading the same function. The first varying channel in `key` order refuses, naming the table, the column, and the varying source. Stability, not uniqueness (§ Boundaries). Implementation: [`windowing.py`](../../src/fabulexa_forge/exporters/dimensional/windowing.py) `check_key_columns_stable` |
+| `KeyColumnsStable` | Every `key` column of every table is a horizon-invariant value channel under the windowing module's one reading ([`incremental.md`](incremental.md) § Horizon windowing — horizon-invariant value channels): a row keeps its key at every horizon at which it exists. Always-on, every delivery class, full export included — the declared `key` is the table's row identity and recorded warehouse PK, and an identity that changes is wrong one-shot exactly as under a window. Conservative: a channel whose constancy the sidecar cannot establish (a producer-added column outside the structural set, an undeclared `prop__` column, a `via: reference` fk on an emit without `history_tracked` flags) is refused, not admitted, with the unknown constancy named as the varying source. Runs last among the per-table rules, after every rule the reading presumes (`KeyColumnsDeclared`, `ProjectionColumnExists`, `OrdinalRefsSiblings`, `FkTargetIsDim`, `ReferencePathResolvable`, `MembershipEdgeResolvable`, `LookupColumnSafety`), so those refuse under their own identities first — the position the delivery classifier occupies, reading the same function. The first varying channel in `key` order refuses, naming the table, the column, and the varying source. Stability, not uniqueness (§ Boundaries). A `date_ref` column in `key` is horizon-invariant iff its source column is, under the reading `derived: timestamp`'s `source` / `date_parse.from` share. Implementation: [`windowing.py`](../../src/fabulexa_forge/exporters/dimensional/windowing.py) `check_key_columns_stable` |
+| `DateRefOutOfRange` | The one data guard: every non-`NULL` `date_ref` value in every compiled relation lies in the declared `date_dimension` range, probed by `MIN` / `MAX` beside the two bound keys through the one key authority; the last pre-write gate of the invocation, the window, and the shaped ask ([`date-dimension.md`](date-dimension.md) § The range guard) |
 
 The engine does not validate author `role` against `record_roles`: role is
 author-authoritative (Principle #7), and the registry informs only `init`'s proposal.
@@ -1174,6 +1216,8 @@ What the dimensional exporter deliberately does not own:
 | [`key-election.md`](key-election.md) | The cross-mode key-election surface — FK `target_key` semantics, inheritance, the dim-key agreement check, `init`'s `keys` proposal |
 | [`temporal-elections.md`](temporal-elections.md) | The cross-mode election vocabulary `derived: timestamp` / `scd_window` / `elapsed` / `date_parse` render through — the full election set, anchor-requirement rule, and declared date-parse contract |
 | [`value-rendering-elections.md`](value-rendering-elections.md) | The value elections `derived: decimal` / `derived: json_precision` spell per column — semantics, guards, and the shared rendering authorities |
+| [`supplements.md`](supplements.md) | Author-supplied tables carried verbatim beside the declared tables — the declaration, the loader, the compile gates, the source-is-output gate |
+| [`date-dimension.md`](date-dimension.md) | The generated calendar `dim_date` and the `date_ref` column mode — the seventh column mode, the calendar compile appended beside the supplements, the range guard as the last pre-write gate |
 | [`config/models.py`](../../src/fabulexa_forge/config/models.py) | The config grammar these semantics bind |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The input contract (table categories, `references`, membership, `history_tracked`) |
 | [`../CAPABILITIES.md`](../CAPABILITIES.md) | Feature inventory and status |

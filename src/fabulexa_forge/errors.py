@@ -426,6 +426,14 @@ class DateParseSourceColumn(ExportError):
     virtual, or grain-constant source, or a non-VARCHAR declared column."""
 
 
+class DateRefOutOfRange(ExportError):
+    """A `date_ref` column carries a non-NULL date outside the declared
+    `date_dimension` range — a reference no `dim_date` row answers. Raised
+    before any write. Message: `"table '{table}' column '{column}': date key
+    {key} lies outside date_dimension {from}..{to}"` — `{key}` the integer
+    as it appears in the column, `{from}` / `{to}` ISO dates."""
+
+
 class RenderKeyResolves(ExportError):
     """A source declared-table or base-entry `render` key does not name a
     column in its value form's key domain: the bare shorthand form requires
@@ -569,3 +577,28 @@ class StreamPropertyNotAddressable(ExportError):
     same-named producer payload property is unaddressable, full stop.
     Message: `"stream '{name}': '{property}' is an identity surface —
     declare it in identity, not properties"`."""
+
+
+class SupplementFileMissing(ConfigError):
+    """A supplement's resolved `file` does not exist or is not a regular file."""
+
+
+class SupplementFileInvalid(ConfigError):
+    """A supplement's file is not UTF-8, is not valid CSV under the strict
+    dialect, or has a data row whose field count differs from the header's."""
+
+
+class SupplementHeaderMismatch(ConfigError):
+    """A supplement's CSV header differs from the declared column names in
+    count, order, or spelling; the message names the first differing position."""
+
+
+class SupplementValueInvalid(ExportError):
+    """A supplement cell does not cast to its declared type; names the table,
+    the column, the 1-based data row, and the cell text. Raised at plan
+    compile, before any write."""
+
+
+class SupplementSourceIsOutput(ExportError):
+    """A file supplement's resolved source path is a file this invocation
+    writes or lies under a directory it removes. Raised before any write."""

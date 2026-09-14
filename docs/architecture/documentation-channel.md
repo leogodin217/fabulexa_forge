@@ -20,8 +20,9 @@ suites, [`tests/exporters/companion/`](../../tests/exporters/companion/),
 
 The bundle carries five documentation surfaces: per-column `description` /
 `unit`, per-table `description`, `enum_domains` per-value glosses, the run's
-`scenario_description`, and the vendored contract's pinned structural-column
-strings. The documentation channel forwards them end to end. The reader
+scenario (`scenario_description`, the narrative, and `scenario_name`, the
+display label — each optional, neither substituting for the other), and the
+vendored contract's pinned structural-column strings. The documentation channel forwards them end to end. The reader
 resolves all five behind one typed view
 ([`reader.md`](reader.md) § The documentation view); the file-writing exports
 embed the resolved dictionary in their companion README and manifest
@@ -173,12 +174,13 @@ For one output table, the rendered description resolves first-present-wins:
 | Tier | Source | Applies to |
 |---|---|---|
 | 1 | The author table override | Any table of the three batch modes |
-| 2 | The forge-pinned event-log table description | The marked event-log table |
+| 2 | The forge-pinned event-log or calendar table description | The marked event-log table; the generated `dim_date` (keyed off `TableReport.calendar`) |
 | 3 | The single-source sidecar forward (`tables[].description`, when every carried column agrees on one source table) | Tables with single-source provenance |
 | 4 | Nothing | Everything else |
 
 Tiers 1 and 2 never compete: the events declaration has no `description`
-field, so the marked table can never carry an author entry. The resolved
+field, so the marked table can never carry an author entry, and `dim_date` is
+not a declared table, so it carries none either. The resolved
 answer renders in the README's per-table description slot and in the
 manifest's per-table `description` field; absence renders nothing / JSON
 `null`. An overlay `table:` note composes — the note renders first, then the
@@ -227,6 +229,35 @@ per-column prose: it is the mode template's subject. The pinned prose
 depends on nothing inherited, so it renders even against an undocumented
 emit.
 
+### The pinned calendar documentation
+
+The generated calendar `dim_date` ([`date-dimension.md`](date-dimension.md))
+is forge-constructed like the event log, so its table and thirteen column
+descriptions are a forge-pinned set in the companion dictionary, applied to
+the table whose report carries a `calendar` provenance; each column doc
+resolves with `origin: "forge"`, no unit, no enum options. `dim_date` is not
+a declared table, so `author_descriptions` cannot exist there.
+
+A `date_ref` column is an ordinary declared column with provenance to its
+source column, but it is a key, not a carried value, so it does not inherit:
+
+| Tier | Source |
+|---|---|
+| 1 | The author's `description` on the column entry |
+| 2 | The pinned `date_ref` prose — "Calendar key (`yyyymmdd`) into `dim_date`, derived from `<source column>`", the source column read from the report's provenance entry, keyed off `references[column] == "dim_date"` |
+
+Never inheritance: the pinned entry always answers when no override exists, so
+the source column's own description is not carried onto a key column even
+though the column carries provenance to it. The prose names neither the shape
+nor the parse format — the report carries only the source column and the
+reference, and the dictionary resolves from the report alone; shape and format
+are on record in the embedded config. `unit` is `None` on **both** tiers — a
+key carries no unit — a rule the dictionary applies to any column with
+`references[column] == "dim_date"`, distinct from the unit-stop: that stop
+drops a carried `ns` unit only when the output type has left the integer
+family, and a `yyyymmdd` key is `INTEGER`, so without this rule an
+author-described `date_ref` over `created_sim_time` would inherit `ns`.
+
 ### Provenance carriage
 
 The inheritance rule is answered once, **at plan compile** — the one point
@@ -269,7 +300,8 @@ empty-string sentinel. Field shapes are the dataclass definitions in
 The companion README and manifest are the channel's rendered surfaces; their
 placement and byte-form rules are
 [`companion-artifacts.md`](companion-artifacts.md)'s contract (§ The README,
-§ The manifest). The README renders the scenario narrative, per-table
+§ The manifest). The README titles itself with the scenario name and renders
+the scenario narrative, per-table
 resolved descriptions, per-column description and unit, and declared-value
 gloss lists; the manifest mirrors the same resolution machine-readably, with
 JSON `null` encoding absence. The two surfaces render the same author-first
@@ -297,7 +329,7 @@ annotate through the shared helpers in
 
 | Site | Annotation | When absent |
 |---|---|---|
-| Top of the generated config (all three engines) | comment block carrying `scenario_description` | nothing |
+| Top of the generated config (all three engines) | `# Scenario:` comment block — `scenario_name` on the heading line, `scenario_description` indented beneath; either alone still renders | nothing |
 | State / junction / dim / fact / stream stub for kind `K` or membership `(K, p)` | comment carrying the source table's `tables[].description` (a dim or fact stub: its source kind's) | nothing |
 | A `sub_types: [<v>]` stub | comment carrying `<v>`'s discriminator gloss | nothing |
 | A proposed property / column entry | comment carrying the property's `description` (and `unit`, appended) | nothing |
@@ -320,7 +352,8 @@ uncommenting keeps the documentation.
 1. **Author-first, then one authority.** With an override present, the
    author's prose is the column's or table's description; with none,
    documentation resolves from exactly one source — the forge-pinned
-   event-log set for the marked table, the vendored contract strings for
+   event-log set for the marked table, the forge-pinned calendar set for
+   `dim_date` and for an undescribed `date_ref` column, the vendored contract strings for
    structural columns, the sidecar for per-run columns and single-source
    tables. Never a blend, no
    fallback across authorities, no inference from names, types, or rows.
@@ -329,7 +362,8 @@ uncommenting keeps the documentation.
    undocumented item.
 3. **Sourced, never invented.** Every rendered documentation string traces
    to the sidecar, the vendored contract, a forge-pinned dictionary
-   constant (the event-log table + column set; the interval-end
+   constant (the event-log table + column set; the calendar table + column
+   set and the `date_ref` key description; the interval-end
    description; the four export rewrites of
    base-pointing contract strings), or the author's export config — the
    same standing `readme_overlay` has on its surface. The only transformations are
@@ -352,11 +386,17 @@ uncommenting keeps the documentation.
 7. **The marked table has no author tier.** No config surface addresses the
    event log's documentation — the events declaration rejects a
    `description` key (strict models) — so the author tier and the
-   forge-pinned event-log tier never compete.
+   forge-pinned event-log tier never compete. `dim_date` is not a declared
+   table, so no table-level override reaches the calendar set; a `date_ref`
+   column's own `description` is the author's one reach into it.
 8. **At most one marked table per source plan, zero elsewhere.** Only the
    source compiler sets the event-log marker, only on the event-log spec:
    exactly one marked table when the plan carries an events declaration,
    none otherwise, and never in any other mode.
+9. **At most one calendar table per dimensional plan, zero elsewhere.** Only
+   the dimensional entry points compile `dim_date`, only when `date_dimension`
+   is declared; the source and base modes state `calendar=None` on every
+   report.
 
 ## Rationale
 
@@ -384,8 +424,8 @@ uncommenting keeps the documentation.
   (undocumented vs. silenced), and an author who wants no inherited prose
   beside a column writes better prose.
 - **The event log's kind-value gloss is kind-level.** A label's gloss is
-  the source kind's `tables[].description` — often absent for author-declared
-  kinds, by the contract's own design. Sub-type meaning renders where the
+  the source kind's `tables[].description` — absent for an author-declared
+  kind unless the author supplied a `kind_descriptions` entry. Sub-type meaning renders where the
   discriminator column itself renders (the state table's closed-domain gloss
   list, the `init` `sub_types` comments) and is not duplicated onto the
   event log. An author table-level override on a *declared* table does not
@@ -451,6 +491,7 @@ uncommenting keeps the documentation.
 |---|---|
 | [`reader.md`](reader.md) | The documentation view — the one resolution point (contract vs sidecar authority, placeholder substitution, enum glosses, scenario narrative) every consumer of this channel reads through |
 | [`companion-artifacts.md`](companion-artifacts.md) | The rendered dictionary's home — README ordering and manifest fields |
+| [`date-dimension.md`](date-dimension.md) | The generated calendar and `date_ref` column mode the pinned calendar set documents |
 | [`corrupters.md`](corrupters.md) | The base-emit writer whose round-trip invariant forwards the documentation attributes onto a corrupted emit |
 | [`dimensional.md`](dimensional.md) / [`source.md`](source.md) / [`streaming.md`](streaming.md) | The three `init` proposal engines that annotate their output through the shared helpers |
 | [`incremental.md`](incremental.md) | The windowed report assembler — the second provenance-forwarding site — and the fingerprint that excludes documentation |

@@ -258,7 +258,14 @@ def test_next_csv_window0_artifacts_at_root_not_in_drop_dir(tmp_path: Path) -> N
 
     with open_emit(emit_dir) as emit:
         outcome = export_incremental_next(
-            emit, config, out, "csv", None, discard_notice_sink, overlay=None
+            emit,
+            config,
+            out,
+            "csv",
+            None,
+            discard_notice_sink,
+            overlay=None,
+            supplements=(),
         )
 
     assert outcome.status == "emitted"
@@ -295,13 +302,27 @@ def test_second_next_rewrites_artifacts_whole_state(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         export_incremental_next(
-            emit, config, out, "csv", None, discard_notice_sink, overlay=None
+            emit,
+            config,
+            out,
+            "csv",
+            None,
+            discard_notice_sink,
+            overlay=None,
+            supplements=(),
         )
         manifest0_bytes = (out / "base-manifest.json").read_bytes()
         readme0_bytes = (out / "base-readme.md").read_bytes()
 
         outcome1 = export_incremental_next(
-            emit, config, out, "csv", None, discard_notice_sink, overlay=overlay
+            emit,
+            config,
+            out,
+            "csv",
+            None,
+            discard_notice_sink,
+            overlay=overlay,
+            supplements=(),
         )
 
     assert outcome1.status == "emitted"
@@ -328,12 +349,26 @@ def test_empty_window_artifacts_still_rewritten(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         o0 = export_incremental_next(
-            emit, config, db_path, "duckdb", None, discard_notice_sink, overlay=None
+            emit,
+            config,
+            db_path,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            overlay=None,
+            supplements=(),
         )
         manifest0_bytes = (tmp_path / "wh-dimensional-manifest.json").read_bytes()
 
         o1 = export_incremental_next(
-            emit, config, db_path, "duckdb", None, discard_notice_sink, overlay=None
+            emit,
+            config,
+            db_path,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            overlay=None,
+            supplements=(),
         )
 
     assert o0.status == "emitted"
@@ -358,7 +393,14 @@ def test_drained_leaves_both_artifacts_untouched(tmp_path: Path) -> None:
     with open_emit(emit_dir) as emit:
         while True:
             outcome = export_incremental_next(
-                emit, config, db_path, "duckdb", None, discard_notice_sink, overlay=None
+                emit,
+                config,
+                db_path,
+                "duckdb",
+                None,
+                discard_notice_sink,
+                overlay=None,
+                supplements=(),
             )
             if outcome.status == "drained":
                 break
@@ -367,7 +409,14 @@ def test_drained_leaves_both_artifacts_untouched(tmp_path: Path) -> None:
         readme_before = (tmp_path / "wh-base-readme.md").read_bytes()
 
         drained_again = export_incremental_next(
-            emit, config, db_path, "duckdb", None, discard_notice_sink, overlay=None
+            emit,
+            config,
+            db_path,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            overlay=None,
+            supplements=(),
         )
 
     assert drained_again.status == "drained"
@@ -399,6 +448,7 @@ def test_range_writes_null_next_window_index(tmp_path: Path) -> None:
             None,
             discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert "patient" in {t.name for t in windowed_export.report.tables}
@@ -423,12 +473,26 @@ def test_duckdb_windowed_writes_db_stem_siblings_and_rewrites(tmp_path: Path) ->
 
     with open_emit(emit_dir) as emit:
         export_incremental_next(
-            emit, config, db_path, "duckdb", None, discard_notice_sink, overlay=None
+            emit,
+            config,
+            db_path,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            overlay=None,
+            supplements=(),
         )
         manifest0_bytes = (tmp_path / "wh-base-manifest.json").read_bytes()
 
         outcome1 = export_incremental_next(
-            emit, config, db_path, "duckdb", None, discard_notice_sink, overlay=None
+            emit,
+            config,
+            db_path,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            overlay=None,
+            supplements=(),
         )
 
     assert (tmp_path / "wh-base-readme.md").exists()

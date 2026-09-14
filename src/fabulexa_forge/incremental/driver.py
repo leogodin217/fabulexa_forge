@@ -12,13 +12,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Mapping, Sequence
 
     from fabulexa_forge.anchor import EffectiveAnchor
     from fabulexa_forge.config.models import ExportConfig
     from fabulexa_forge.exporters.companion.overlay import ReadmeOverlay
     from fabulexa_forge.exporters.notices import NoticeSink
     from fabulexa_forge.exporters.query_spec import QuerySpec
+    from fabulexa_forge.exporters.supplements import ResolvedSupplement
     from fabulexa_forge.reader.emit import Emit
     from fabulexa_forge.writers.relation import WrittenRelation
 
@@ -30,24 +31,35 @@ from fabulexa_forge.errors import (
     IncrementalRangeTargetExists,
 )
 from fabulexa_forge.exporters.companion import (
+    companion_artifact_paths,
     validate_overlay_tables,
     write_companion_artifacts,
 )
 from fabulexa_forge.exporters.companion.artifacts import WindowedArtifactState
+from fabulexa_forge.exporters.date_dimension import (
+    check_date_refs_in_range,
+    compile_date_dimension_spec,
+)
 from fabulexa_forge.exporters.query_spec import (
     ExportReport,
     TableReport,
     declare_keys_active,
     keys_not_declarable_csv_notice,
 )
+from fabulexa_forge.exporters.supplements import (
+    check_supplement_sources_not_outputs,
+    compile_supplement_specs,
+)
 from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
     Cursor,
+    csv_cursor_path,
     read_cursor,
     write_csv_cursor,
 )
 from fabulexa_forge.incremental.windows import Window, derive_window
 from fabulexa_forge.reader.emit import compute_sidecar_sha256
+from fabulexa_forge.writers.csv import csv_output_paths
 
 
 @dataclass(frozen=True)
@@ -113,6 +125,7 @@ def _build_fingerprint(
     config: "ExportConfig",
     anchor: "EffectiveAnchor | None",
     fmt: Literal["csv", "duckdb"],
+    supplements: "Sequence[ResolvedSupplement]",
 ) -> str:
     """Compute the drip fingerprint for the given emit, config, anchor, and fmt.
 
@@ -121,6 +134,8 @@ def _build_fingerprint(
         config: The validated export config.
         anchor: The resolved anchor, or None.
         fmt: Output format.
+        supplements: The loader-resolved supplements, empty when the config
+            declares none.
 
     Returns:
         64-char lowercase hex digest.
@@ -137,6 +152,7 @@ def _build_fingerprint(
         fork_path=fork_path,
         fmt=fmt,
         package_version=__version__,
+        supplements=supplements,
     )
 
 
@@ -226,8 +242,9 @@ def _build_windowed_report(
     the CSV/DuckDB constraint-surface split `write_query_specs` uses for
     full exports: DuckDB carries the spec's declared keys, CSV always None.
     `provenance`, `kind_values`, `author_descriptions`,
-    `author_table_description`, and `event_log` are forwarded from each spec
-    verbatim — windowed and full stamping are identical for the same table.
+    `author_table_description`, `event_log`, `supplement`, `calendar`, and
+    `references` are forwarded from each spec verbatim — windowed and full
+    stamping are identical for the same table.
 
     Args:
         specs: The compiled windowed QuerySpecs, in plan iteration order.
@@ -251,6 +268,9 @@ def _build_windowed_report(
                     author_descriptions=spec.author_descriptions,
                     author_table_description=spec.author_table_description,
                     event_log=spec.event_log,
+                    supplement=spec.supplement,
+                    calendar=spec.calendar,
+                    references=spec.references,
                 )
                 for spec in specs
             )
@@ -259,6 +279,70 @@ def _build_windowed_report(
             spec.table_name: written[spec.table_name].row_count for spec in specs
         },
     )
+
+
+def csv_removed_dirs(out: Path, window: Window) -> tuple[Path, ...]:
+    """The directories a CSV windowed invocation removes wholesale.
+
+    The driver's existing staging/drop names made callable — read by the
+    CSV write path and the source-is-output gate so the two can never
+    disagree. Under `--next` (`window.index is not None`): the window drop,
+    deleted and re-created from staging on every emitting window, and the
+    staging directory, whose leftover is discarded at the next staging.
+    Under a range (`window.index is None`): the sibling staging directory
+    alone — the range's drop is `out`, refused when pre-existing, never
+    removed.
+
+    Args:
+        out: The drop parent directory (`--next`) or the range's drop
+            (`--from/--to`).
+        window: The window being exported; its `index` distinguishes the
+            two regimes, its `label` names the directories.
+
+    Returns:
+        `(<out>/<label>, <out>/.tmp_<label>)` under `--next`;
+        `(<out parent>/.tmp_<label>,)` under a range.
+    """
+    if window.index is None:
+        return (out.parent / f".tmp_{window.label}",)
+    return (out / window.label, out / f".tmp_{window.label}")
+
+
+def _windowed_output_paths(
+    out: Path,
+    all_names: "list[str]",
+    config: "ExportConfig",
+    fmt: Literal["csv", "duckdb"],
+    window: Window,
+) -> "set[Path]":
+    """Every file one windowed export invocation writes, for the
+    source-is-output gate.
+
+    Args:
+        out: The output target — directory (csv) or `.duckdb` file path.
+        all_names: Every output table's name, plan + supplement order.
+        config: The validated export config.
+        fmt: The resolved output format.
+        window: The window being exported.
+
+    Returns:
+        Under CSV: one `csv_output_paths` entry per name (under the window's
+        label for `--next`, at `out` directly for a range) plus the
+        companion pair, plus `csv_cursor_path(out)` under `--next`. Under
+        DuckDB: `out` itself plus the companion pair.
+    """
+    readme_path, manifest_path = companion_artifact_paths(out, config.mode, fmt)
+    if fmt == "duckdb":
+        return {out, readme_path, manifest_path}
+    is_next = window.index is not None
+    output_paths = {
+        *csv_output_paths(out, all_names, window.label if is_next else None),
+        readme_path,
+        manifest_path,
+    }
+    if is_next:
+        output_paths.add(csv_cursor_path(out))
+    return output_paths
 
 
 def export_window(
@@ -271,6 +355,7 @@ def export_window(
     fingerprint: str | None,
     notice_sink: "NoticeSink",
     overlay: "ReadmeOverlay | None",
+    supplements: "Sequence[ResolvedSupplement]",
 ) -> WindowedExport:
     """Run one pure windowed export (the body --next wraps; also --from/--to).
 
@@ -282,10 +367,29 @@ def export_window(
     `build_query_specs`; all three thread notice_sink to their compile — the
     mode-specific compile contributes only the QuerySpecs, the window math,
     cursor, fingerprint, drained detection, and staging below are
-    mode-neutral. Immediately after compiling — before any write — validates
-    `overlay`'s `table:` slots against the compiled plan's author-facing
-    output names when `overlay` is present. Dispatches to the fmt's windowed
-    write path. fingerprint is None iff window.index is None (an
+    mode-neutral. Immediately after compiling — before any write — compiles
+    the generated calendar (`compile_date_dimension_spec(config.date_dimension,
+    write_mode='replace')`) when `config.date_dimension` is present (the
+    dimensional arm only; source / base carry no `date_dimension` block),
+    delivering `dim_date` `snapshot`/`replace` in every emitting window, the
+    empty window included — a supplement's own posture; then compiles the
+    supplement specs (`compile_supplement_specs(..., write_mode='replace')`)
+    and appends them after the calendar spec; runs
+    `check_supplement_sources_not_outputs` over `_windowed_output_paths` (the
+    invocation's output files) and `csv_removed_dirs` (the CSV staging/drop
+    directories this invocation removes wholesale, empty for DuckDB); then
+    validates `overlay`'s `table:` slots against the union of the mode's, the
+    calendar's, and the supplements' author-facing output names when
+    `overlay` is present; then, as the LAST pre-write gate — after the
+    source-is-output gate and the overlay check, before the `declare_keys`
+    notice and the fmt dispatch — runs `check_date_refs_in_range(emit, specs,
+    config.date_dimension)` over the window's compiled dimensional relations
+    when `config.date_dimension` is present. Dispatches to the fmt's windowed
+    write path — the CSV write path derives
+    its staging and drop directories from `csv_removed_dirs`, the one naming
+    authority. A supplement is delivered as `snapshot` — DuckDB `replace`,
+    CSV the whole file in the window drop — in every emitting window, the
+    empty window included. fingerprint is None iff window.index is None (an
     explicit range): the output is then a standalone artifact — a fresh
     .duckdb / a single drop directory at out (a CSV range stages at the
     sibling <out parent>/.tmp_<label> and renames to out), refused if out
@@ -316,12 +420,17 @@ def export_window(
             range — standalone, bookkeeping-free).
         notice_sink: Receiver for plan notices.
         overlay: The parsed README overlay, or None.
+        supplements: The loader-resolved supplements, empty when the config
+            declares none. The source and base arms never see a supplement
+            (the config cannot declare one under those modes).
 
     Returns:
         The invocation's `WindowedExport`: an `ExportReport` with one
-        `TableReport` per declared table (`row_count` always None), plus a
-        `row_counts` mapping of the same tables' real written counts for
-        CLI presentation.
+        `TableReport` per declared table, then `dim_date` when
+        `config.date_dimension` is present, then one per supplement, in
+        declaration order (`row_count` always None), plus a `row_counts`
+        mapping of the same tables' real written counts for CLI
+        presentation.
 
     Raises:
         IncrementalRangeTargetExists: window.index is None and out already
@@ -333,6 +442,13 @@ def export_window(
             export_source today; plus a failed artifact write for a
             --from/--to range.
         TemporalClassUnavailableError: Non-conformant temporal pair.
+        DateRefOutOfRange: A `date_ref` value lies outside the declared
+            `date_dimension` range, checked before this window's write.
+        SupplementValueInvalid / TemporalRenderRequiresAnchor: Per
+            `compile_supplement_specs`, before any write.
+        SupplementSourceIsOutput: A file supplement's resolved source is a
+            file or removed directory this invocation writes, before any
+            write.
     """
     from fabulexa_forge.writers.duckdb import write_duckdb_window
 
@@ -378,16 +494,37 @@ def export_window(
             tables=None,
         )
 
+    calendar_specs = (
+        [compile_date_dimension_spec(config.date_dimension, write_mode="replace")]
+        if config.date_dimension is not None
+        else []
+    )
+    supplement_specs = compile_supplement_specs(
+        emit, supplements, anchor, write_mode="replace"
+    )
+    all_specs = [*specs, *calendar_specs, *supplement_specs]
+    all_names = [spec.table_name for spec in all_specs]
+    check_supplement_sources_not_outputs(
+        supplements,
+        _windowed_output_paths(out, all_names, config, fmt, window),
+        csv_removed_dirs(out, window) if fmt == "csv" else (),
+    )
+
     if overlay is not None:
-        validate_overlay_tables(overlay, [s.table_name for s in specs])
+        validate_overlay_tables(overlay, all_names)
+
+    if config.date_dimension is not None:
+        check_date_refs_in_range(emit, specs, config.date_dimension)
 
     if fmt == "csv" and declare_keys_active(config):
         notice_sink(keys_not_declarable_csv_notice())
 
     if fmt == "duckdb":
-        written_relations = write_duckdb_window(emit, specs, out, window, fingerprint)
+        written_relations = write_duckdb_window(
+            emit, all_specs, out, window, fingerprint
+        )
         windowed_export = _build_windowed_report(
-            specs, written_relations, include_keys=True
+            all_specs, written_relations, include_keys=True
         )
         if is_range:
             _write_windowed_artifacts(
@@ -398,13 +535,13 @@ def export_window(
     # CSV path
     if is_range:
         # Range: stage into sibling .tmp_<label>, rename to out
-        staging_dir = out.parent / f".tmp_{window.label}"
+        (staging_dir,) = csv_removed_dirs(out, window)
         if staging_dir.exists():
             shutil.rmtree(staging_dir)
         staging_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            written = _write_csv_specs(emit, specs, staging_dir)
+            written = _write_csv_specs(emit, all_specs, staging_dir)
         except Exception:
             shutil.rmtree(staging_dir, ignore_errors=True)
             raise
@@ -417,7 +554,7 @@ def export_window(
                 f"failed to rename staging dir {staging_dir} to {out}: {exc}"
             ) from exc
 
-        windowed_export = _build_windowed_report(specs, written, include_keys=False)
+        windowed_export = _build_windowed_report(all_specs, written, include_keys=False)
         _write_windowed_artifacts(
             emit, config, fmt, anchor, windowed_export.report, overlay, out, window
         )
@@ -425,19 +562,18 @@ def export_window(
 
     # --next CSV: stage into out/.tmp_<label>; the caller commits the cursor
     # and then the artifacts once staging is renamed.
+    drop_dir, staging_dir = csv_removed_dirs(out, window)
     out.mkdir(parents=True, exist_ok=True)
-    staging_dir = out / f".tmp_{window.label}"
     if staging_dir.exists():
         shutil.rmtree(staging_dir)
     staging_dir.mkdir(parents=True, exist_ok=True)
 
     try:
-        written = _write_csv_specs(emit, specs, staging_dir)
+        written = _write_csv_specs(emit, all_specs, staging_dir)
     except Exception:
         shutil.rmtree(staging_dir, ignore_errors=True)
         raise
 
-    drop_dir = out / window.label
     if drop_dir.exists():
         shutil.rmtree(drop_dir)
 
@@ -448,7 +584,7 @@ def export_window(
             f"failed to rename staging dir {staging_dir} to {drop_dir}: {exc}"
         ) from exc
 
-    return _build_windowed_report(specs, written, include_keys=False)
+    return _build_windowed_report(all_specs, written, include_keys=False)
 
 
 def _write_csv_specs(
@@ -487,6 +623,7 @@ def export_incremental_next(
     anchor: "EffectiveAnchor | None",
     notice_sink: "NoticeSink",
     overlay: "ReadmeOverlay | None",
+    supplements: "Sequence[ResolvedSupplement]",
 ) -> IncrementalOutcome:
     """Emit the next window and advance the cursor; or report drained.
 
@@ -512,6 +649,9 @@ def export_incremental_next(
         anchor: The resolved anchor, or None.
         notice_sink: Receiver for plan notices.
         overlay: The parsed README overlay, or None.
+        supplements: The loader-resolved supplements, empty when the config
+            declares none. Threaded to the fingerprint computation and to
+            `export_window`.
 
     Returns:
         IncrementalOutcome — status 'emitted' with the window and the
@@ -531,6 +671,11 @@ def export_incremental_next(
             staging directory is rolled back / discarded; or a failed
             artifact write (only possible once data and cursor are sound).
         TemporalClassUnavailableError: Non-conformant temporal pair.
+        SupplementValueInvalid / TemporalRenderRequiresAnchor: Per
+            `compile_supplement_specs`, before any write.
+        SupplementSourceIsOutput: A file supplement's resolved source is a
+            file or removed directory this invocation writes, before any
+            write.
     """
     if config.incremental is None:
         raise IncrementalConfigMissing(
@@ -547,7 +692,7 @@ def export_incremental_next(
     cursor = read_cursor(out, fmt, window_zero_label)
 
     # Compute the current fingerprint
-    fingerprint = _build_fingerprint(emit, config, anchor, fmt)
+    fingerprint = _build_fingerprint(emit, config, anchor, fmt, supplements)
 
     if cursor is not None:
         # Verify fingerprint matches what was stored
@@ -576,7 +721,16 @@ def export_incremental_next(
 
     # Run the windowed export
     windowed_export = export_window(
-        emit, config, out, fmt, anchor, window, fingerprint, notice_sink, overlay
+        emit,
+        config,
+        out,
+        fmt,
+        anchor,
+        window,
+        fingerprint,
+        notice_sink,
+        overlay,
+        supplements,
     )
 
     # For CSV: write the cursor after the atomic rename

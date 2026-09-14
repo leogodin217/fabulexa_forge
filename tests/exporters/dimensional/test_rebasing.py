@@ -225,6 +225,7 @@ def test_utc_identity_anchor_same_values(tmp_path: Path) -> None:
             anchor,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     timestamps = _query_timestamps(out_path, "dim_entity", "ts")
@@ -270,6 +271,7 @@ def test_dst_zone_renders_correct_offset(tmp_path: Path) -> None:
             anchor,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     valid_froms = _query_timestamps(out_path, "dim_actor", "valid_from")
@@ -311,6 +313,7 @@ def test_rebase_origin_shift_moves_all_timestamps(tmp_path: Path) -> None:
             anchor_original,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     # Rebased: 7 days later (still UTC)
@@ -328,6 +331,7 @@ def test_rebase_origin_shift_moves_all_timestamps(tmp_path: Path) -> None:
             anchor_rebased,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     ts_original = _query_timestamps(out_original, "dim_entity", "ts")
@@ -405,6 +409,7 @@ def test_rezone_same_instant_different_wall_clock(tmp_path: Path) -> None:
             anchor_utc,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     # Re-zone to America/New_York (no base_date override)
@@ -421,6 +426,7 @@ def test_rezone_same_instant_different_wall_clock(tmp_path: Path) -> None:
             anchor_ny,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     ts_utc = _query_timestamps(out_utc, "dim_entity", "ts")
@@ -477,6 +483,7 @@ def test_scd_window_rebases_same_as_timestamp(tmp_path: Path) -> None:
             anchor,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     # Rebased 30 days later
@@ -494,6 +501,7 @@ def test_scd_window_rebases_same_as_timestamp(tmp_path: Path) -> None:
             anchor_rebased,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     vf_identity = _query_timestamps(out_identity, "dim_actor", "valid_from")
@@ -591,6 +599,7 @@ def test_no_anchor_yields_raw_integers(tmp_path: Path) -> None:
             anchor,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     conn = duckdb.connect(str(out_path), read_only=True)

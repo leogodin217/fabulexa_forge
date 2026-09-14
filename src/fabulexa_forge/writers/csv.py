@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, cast
 
 if TYPE_CHECKING:
     import datetime as _datetime
+    from collections.abc import Sequence
     from decimal import Decimal
 
     import pyarrow as pa
@@ -48,7 +49,7 @@ def write_csv(
     Raises:
         ExportRuntimeError: Query execution or file write fails.
     """
-    out_path = output_dir / f"{table_name}.csv"
+    (out_path,) = csv_output_paths(output_dir, (table_name,), None)
 
     try:
         arrow_table = emit.query_arrow(query, ())
@@ -71,6 +72,27 @@ def write_csv(
         row_count=cast(int, arrow_table.num_rows),
         columns=describe_arrow_table(arrow_table),
     )
+
+
+def csv_output_paths(
+    out: Path,
+    table_names: "Sequence[str]",
+    window_label: str | None,
+) -> tuple[Path, ...]:
+    """Every data file a CSV write of `table_names` lands.
+
+    Args:
+        out: The output directory.
+        table_names: The output tables, in plan order.
+        window_label: The `--next` window's label, or None for a full export
+            or an explicit range (whose drop is `out` itself).
+
+    Returns:
+        `<out>/<table>.csv` per table, or `<out>/<window_label>/<table>.csv`
+        under `--next`, in `table_names` order.
+    """
+    base = out if window_label is None else out / window_label
+    return tuple(base / f"{name}.csv" for name in table_names)
 
 
 def _format_date(value: "_datetime.date") -> str:

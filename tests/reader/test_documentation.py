@@ -452,6 +452,21 @@ def test_scenario_description_absent_is_none() -> None:
     assert sidecar.documentation().scenario_description() is None
 
 
+def test_scenario_name_verbatim() -> None:
+    """scenario_name returns the sidecar's display label verbatim."""
+    sidecar = _build_sidecar([_HISTORY_TABLE], scenario_name="Retail Loyalty")
+    assert sidecar.documentation().scenario_name() == "Retail Loyalty"
+
+
+def test_scenario_name_absent_is_none_independently_of_description() -> None:
+    """scenario_name is None when undeclared, even with a description present
+    -- neither field substitutes for the other."""
+    sidecar = _build_sidecar(
+        [_HISTORY_TABLE], scenario_description="A retail loyalty simulation."
+    )
+    assert sidecar.documentation().scenario_name() is None
+
+
 # ---------------------------------------------------------------------------
 # Laziness
 # ---------------------------------------------------------------------------

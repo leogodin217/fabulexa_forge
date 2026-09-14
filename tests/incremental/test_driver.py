@@ -291,6 +291,7 @@ def test_incremental_config_missing_raises(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
 
@@ -314,6 +315,7 @@ def test_duckdb_fresh_target_emits_window_0(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert outcome.status == "emitted"
@@ -337,6 +339,7 @@ def test_duckdb_repeated_calls_advance_index(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         o1 = export_incremental_next(
             emit,
@@ -346,6 +349,7 @@ def test_duckdb_repeated_calls_advance_index(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         o2 = export_incremental_next(
             emit,
@@ -355,6 +359,7 @@ def test_duckdb_repeated_calls_advance_index(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert o0.window is not None and o0.window.index == 0
@@ -378,6 +383,7 @@ def test_duckdb_cursor_matches_after_each_window(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
             cursor = read_cursor(out, "duckdb", "w00000_ns0")
             assert cursor is not None
@@ -402,6 +408,7 @@ def test_duckdb_drained_when_start_ns_exceeds_slice_at(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         assert o0.status == "emitted"
 
@@ -414,6 +421,7 @@ def test_duckdb_drained_when_start_ns_exceeds_slice_at(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert o1.status == "drained"
@@ -437,6 +445,7 @@ def test_duckdb_window_containing_slice_at_is_emitted(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )  # window 0
         o1 = export_incremental_next(
             emit,
@@ -446,6 +455,7 @@ def test_duckdb_window_containing_slice_at_is_emitted(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )  # window 1
 
     assert o1.status == "emitted"
@@ -467,6 +477,7 @@ def test_duckdb_drained_cursor_untouched(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )  # window 0
 
         cursor_before = read_cursor(out, "duckdb", "w00000_ns0")
@@ -481,6 +492,7 @@ def test_duckdb_drained_cursor_untouched(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )  # drained
 
         cursor_after = read_cursor(out, "duckdb", "w00000_ns0")
@@ -508,6 +520,7 @@ def test_csv_fresh_target_emits_window_0(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert outcome.status == "emitted"
@@ -532,6 +545,7 @@ def test_csv_repeated_calls_advance_index(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         o1 = export_incremental_next(
             emit,
@@ -541,6 +555,7 @@ def test_csv_repeated_calls_advance_index(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         o2 = export_incremental_next(
             emit,
@@ -550,6 +565,7 @@ def test_csv_repeated_calls_advance_index(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert o0.window is not None and o0.window.index == 0
@@ -573,6 +589,7 @@ def test_csv_cursor_matches_after_each_window(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
             assert outcome.window is not None
             w0_label = derive_window_zero_label(config)
@@ -596,6 +613,7 @@ def test_csv_drained(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         assert o0.status == "emitted"
         o1 = export_incremental_next(
@@ -606,6 +624,7 @@ def test_csv_drained(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert o1.status == "drained"
@@ -637,6 +656,7 @@ def test_csv_leftover_tmp_discarded(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert outcome.status == "emitted"
@@ -671,6 +691,7 @@ def test_csv_crash_recovery_restart(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert outcome.status == "emitted"
@@ -698,6 +719,7 @@ def test_duckdb_fingerprint_mismatch_raises(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )  # window 0
 
     # Change the config (adds a new table) to get a different fingerprint
@@ -733,6 +755,7 @@ def test_duckdb_fingerprint_mismatch_raises(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
 
@@ -751,6 +774,7 @@ def test_csv_fingerprint_mismatch_fmt_change_raises(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )  # window 0
 
     # Now try to continue with a different fmt (same config, different fmt)
@@ -779,6 +803,7 @@ def test_csv_fingerprint_mismatch_fmt_change_raises(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
 
@@ -840,6 +865,7 @@ def test_duckdb_empty_window_is_emitted(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         o1 = export_incremental_next(
             emit,
@@ -849,6 +875,7 @@ def test_duckdb_empty_window_is_emitted(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     # Window 0: type-1 dim — snapshot (all rows)
@@ -890,6 +917,7 @@ def test_range_target_exists_raises(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
 
@@ -912,6 +940,7 @@ def test_range_duckdb_fresh_creates_standalone_artifact(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert out.exists()
@@ -949,6 +978,7 @@ def test_range_csv_fresh_creates_standalone_artifact(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert out.exists()
@@ -976,6 +1006,7 @@ def test_next_against_range_artifact_raises(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     # Now try --next on the same artifact
@@ -993,6 +1024,7 @@ def test_next_against_range_artifact_raises(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
 
@@ -1049,6 +1081,7 @@ def test_range_csv_write_failure_discards_staging(
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
     assert not out.exists()
@@ -1076,6 +1109,7 @@ def test_next_csv_write_failure_discards_staging(
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
     label = "w00000_ns0"
@@ -1108,6 +1142,7 @@ def test_range_csv_rename_failure_raises_and_discards_staging(
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
     assert not out.exists()
@@ -1136,6 +1171,7 @@ def test_next_csv_rename_failure_raises_no_drop_no_cursor(
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
     label = "w00000_ns0"
@@ -1171,6 +1207,7 @@ def test_duckdb_drip_equals_full_export(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     # Drip to drained
@@ -1184,6 +1221,7 @@ def test_duckdb_drip_equals_full_export(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
             if outcome.status == "drained":
                 break
@@ -1234,6 +1272,7 @@ def test_csv_drip_equals_full_export(tmp_path: Path) -> None:
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     # Drip to drained
@@ -1248,6 +1287,7 @@ def test_csv_drip_equals_full_export(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
             if outcome.status == "drained":
                 break
@@ -1295,6 +1335,7 @@ def test_csv_determinism_byte_identical_drops(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
             assert outcome.window is not None
             labels_a.append(outcome.window.label)
@@ -1309,6 +1350,7 @@ def test_csv_determinism_byte_identical_drops(tmp_path: Path) -> None:
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
             assert outcome.window is not None
             labels_b.append(outcome.window.label)
@@ -1406,6 +1448,7 @@ def _drain_source_drip(
             anchor,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         if outcome.status == "drained":
             return outcomes
@@ -1438,6 +1481,7 @@ def test_source_mode_duckdb_multi_window_drip_dispatches_to_source_engine(
                 anchor,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
             if outcome.status == "drained":
                 break
@@ -1516,6 +1560,7 @@ def test_source_mode_export_window_explicit_range_dispatches_to_source_engine(
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert {t.name for t in windowed_export.report.tables} == {
@@ -1560,6 +1605,7 @@ def test_source_mode_fingerprint_mismatch_on_source_config_change(
             anchor,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )  # window 0
 
     altered_config = _source_config(
@@ -1577,6 +1623,7 @@ def test_source_mode_fingerprint_mismatch_on_source_config_change(
                 anchor,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
 
 
@@ -1619,6 +1666,7 @@ def test_source_mode_events_where_narrowed_windowed_ids_match_full_export(
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         with duckdb.connect(str(full_out)) as conn:
             full_rows = conn.execute(
@@ -1645,6 +1693,7 @@ def test_source_mode_events_where_narrowed_windowed_ids_match_full_export(
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
             with duckdb.connect(str(out)) as conn:
                 window_rows = conn.execute(
@@ -1696,6 +1745,7 @@ def test_base_mode_multi_window_drip_dispatches_to_base_engine(tmp_path: Path) -
                 None,
                 notice_sink=discard_notice_sink,
                 overlay=None,
+                supplements=(),
             )
             if outcome.status == "drained":
                 break
@@ -1733,6 +1783,7 @@ def test_base_mode_config_no_longer_reaches_dimensional_branch(tmp_path: Path) -
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert outcome.status == "emitted"
@@ -1871,14 +1922,28 @@ def test_declare_keys_csv_notice_base_mode_once_per_invocation(tmp_path: Path) -
     with open_emit(emit_dir) as emit:
         sink1 = RecordingNoticeSink()
         export_incremental_next(
-            emit, config, out, "csv", None, notice_sink=sink1, overlay=None
+            emit,
+            config,
+            out,
+            "csv",
+            None,
+            notice_sink=sink1,
+            overlay=None,
+            supplements=(),
         )
         codes1 = [n.code for n in sink1.notices]
         assert codes1.count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
 
         sink2 = RecordingNoticeSink()
         export_incremental_next(
-            emit, config, out, "csv", None, notice_sink=sink2, overlay=None
+            emit,
+            config,
+            out,
+            "csv",
+            None,
+            notice_sink=sink2,
+            overlay=None,
+            supplements=(),
         )
         codes2 = [n.code for n in sink2.notices]
         assert codes2.count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
@@ -1902,7 +1967,14 @@ def test_declare_keys_csv_notice_source_mode_once_per_invocation(
         anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
         sink = RecordingNoticeSink()
         export_incremental_next(
-            emit, config, out, "csv", anchor, notice_sink=sink, overlay=None
+            emit,
+            config,
+            out,
+            "csv",
+            anchor,
+            notice_sink=sink,
+            overlay=None,
+            supplements=(),
         )
 
     assert [n.code for n in sink.notices].count(NOTICE_KEYS_NOT_DECLARABLE_CSV) == 1
@@ -1925,7 +1997,7 @@ def test_windowed_duckdb_declare_keys_constraints_carried_across_windows(
     with open_emit(emit_dir) as emit:
         sink1 = RecordingNoticeSink()
         outcome1 = export_incremental_next(
-            emit, config, out, "duckdb", None, sink1, overlay=None
+            emit, config, out, "duckdb", None, sink1, overlay=None, supplements=()
         )
         assert outcome1.status == "emitted"
         assert outcome1.report is not None
@@ -1945,7 +2017,7 @@ def test_windowed_duckdb_declare_keys_constraints_carried_across_windows(
 
         sink2 = RecordingNoticeSink()
         outcome2 = export_incremental_next(
-            emit, config, out, "duckdb", None, sink2, overlay=None
+            emit, config, out, "duckdb", None, sink2, overlay=None, supplements=()
         )
         assert outcome2.status == "emitted"
         assert outcome2.report is not None
@@ -1979,12 +2051,26 @@ def test_windowed_duckdb_declare_keys_falsifying_window_rolls_back(
 
     with open_emit(emit_dir) as emit:
         export_incremental_next(
-            emit, config, out, "duckdb", None, discard_notice_sink, overlay=None
+            emit,
+            config,
+            out,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            overlay=None,
+            supplements=(),
         )
 
         with pytest.raises(ExportRuntimeError):
             export_incremental_next(
-                emit, config, out, "duckdb", None, discard_notice_sink, overlay=None
+                emit,
+                config,
+                out,
+                "duckdb",
+                None,
+                discard_notice_sink,
+                overlay=None,
+                supplements=(),
             )
 
     conn = duckdb.connect(str(out), read_only=True)
@@ -2011,14 +2097,28 @@ def test_declare_keys_fingerprint_mismatch_on_flip(tmp_path: Path) -> None:
 
     with open_emit(emit_dir) as emit:
         export_incremental_next(
-            emit, config, out, "duckdb", None, discard_notice_sink, overlay=None
+            emit,
+            config,
+            out,
+            "duckdb",
+            None,
+            discard_notice_sink,
+            overlay=None,
+            supplements=(),
         )
 
     flipped = _base_config_declare_keys(sim_period_ns=500, declare_keys=False)
     with open_emit(emit_dir) as emit:
         with pytest.raises(IncrementalFingerprintMismatch):
             export_incremental_next(
-                emit, flipped, out, "duckdb", None, discard_notice_sink, overlay=None
+                emit,
+                flipped,
+                out,
+                "duckdb",
+                None,
+                discard_notice_sink,
+                overlay=None,
+                supplements=(),
             )
 
 
@@ -2054,6 +2154,7 @@ def test_windowed_report_forwards_dimensional_provenance_verbatim(
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
 
     assert outcome.report is not None
@@ -2082,6 +2183,7 @@ def test_windowed_and_full_dimensional_provenance_stamping_identical(
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         assert outcome.report is not None
         windowed_provenance = {t.name: t.provenance for t in outcome.report.tables}[
@@ -2125,6 +2227,7 @@ def test_windowed_and_full_author_descriptions_forwarding_identical(
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         assert outcome.report is not None
         windowed_descriptions = {
@@ -2175,6 +2278,7 @@ def test_windowed_and_full_table_description_forwarding_identical(
             None,
             notice_sink=discard_notice_sink,
             overlay=None,
+            supplements=(),
         )
         assert outcome.report is not None
         windowed_table = next(

@@ -154,6 +154,26 @@ table is delivered by a **class** derived statically from its declaration
 | `upsert` | `state(h) EXCEPT ALL state(h')` — the multiset of rows present at `h` and not at `h'`, reconciled by the declared `key`; a changed row and a new row are both in it, undistinguished | delete every target row whose key equals a delta row's key, then insert the delta | the delta | every other table |
 | `append` | the same delta, which for this class contains only new keys | insert the delta | the delta | an `upsert` table every one of whose value channels is horizon-invariant |
 
+A supplement table ([`supplements.md`](supplements.md)) is `snapshot` in every
+emitting window — DuckDB replace, CSV the whole file in each drop — by
+construction: no horizon is taken to build it, so it is horizon-invariant and
+present whole from window 0, regardless of which rows it may name have arrived.
+The windowed compile passes `write_mode='replace'` to `compile_supplement_specs`
+and appends the supplement specs after the declared tables; an empty window and
+an explicit range deliver it whole like any snapshot table.
+
+The generated calendar `dim_date` ([`date-dimension.md`](date-dimension.md)) is
+likewise `snapshot` in every emitting window: `compile_date_dimension_spec` is
+called with `write_mode='replace'` and its spec appended after the declared
+tables and before the supplements. Horizon-invariant by construction — it reads
+no emit table — so an empty window and an explicit range deliver it whole. A
+`date_ref` column's value channel is its source column's under the one
+variance reading below, so a `date_ref` over a source that can change makes its
+table `upsert`, never `append`. The range guard (`check_date_refs_in_range`)
+runs per window over that window's compiled relations — the delta or the
+snapshot the window delivers — before the window's write, after the
+`WindowKeyDuplicate` guard and the overlay check.
+
 | Condition | Result |
 |---|---|
 | `start_ns = 0` (window 0, or a range from the tape's start) | The start horizon is the empty tape; the delta is `state(h)` whole |
@@ -171,7 +191,7 @@ read by the classifier and the key gate alike so the two cannot drift):
 
 | Column form | Horizon-invariant iff |
 |---|---|
-| `from:` / `correlation:` / `value_map.from` / `decimal.from` / `date_parse.from` / `json_precision.from` / `derived: timestamp` `source` | The source column is constant: an identity column, `created_sim_time`, `sim_time`, `joined_sim_time`, `value` / `property` on a history grain, an element field, a `history_tracked: false` property or its `ref_index__` sibling — or, on an `scd: type2` dim, any property (a version row carries its version's value). Not: `active`, `deactivated_at`, `last_mutation_sim_time` (the recorded trail advances), a tracked property on a non-versioned table, `lead_sim_time`, `left_sim_time` |
+| `from:` / `correlation:` / `value_map.from` / `decimal.from` / `date_parse.from` / `json_precision.from` / `derived: timestamp` `source` / `date_ref` `source` / `from` | The source column is constant: an identity column, `created_sim_time`, `sim_time`, `joined_sim_time`, `value` / `property` on a history grain, an element field, a `history_tracked: false` property or its `ref_index__` sibling — or, on an `scd: type2` dim, any property (a version row carries its version's value). Not: `active`, `deactivated_at`, `last_mutation_sim_time` (the recorded trail advances), a tracked property on a non-versioned table, `lead_sim_time`, `left_sim_time` |
 | `derived: scd_window: valid_from` | Always (a version's start is its identity) |
 | `derived: scd_window: valid_to` | Never (the successor closes it) |
 | `derived: elapsed` | Never (the counterpart row may land later) |
@@ -329,6 +349,21 @@ recomputes it and refuses on mismatch (`IncrementalFingerprintMismatch`): change
 config, changed rebase flags, a different emit, or a code upgrade mid-drip all halt
 rather than splice an inconsistent seam.
 
+The document also carries, under the key `supplements`, a map from supplement
+name to `{"columns": [[name, canonical type], …], "sha256": <hex or null>}`
+([`supplements.md`](supplements.md)): the column list as an ordered list of
+pairs because the canonical form's sorted keys would erase a reordering of the
+declared map; the SHA-256 the file's identity, `null` for an inline supplement.
+The config dump excludes each supplement's `description` / `descriptions`
+(presentation, like `readme_overlay`) and its `file` string (where the data was
+found, not what it is) and keeps `columns` as declared, so a re-spelled type
+trips the fingerprint through the dump. A changed CSV byte, inline row, column
+name, column order, or type mid-drip is a mismatch; an edited description, or a
+moved or renamed file whose bytes are identical, is not.
+
+`date_dimension` enters the fingerprint through the config dump like any
+data-affecting field: a changed calendar range mid-drip is a mismatch.
+
 A cursor that is unreadable, structurally invalid, or **lost** is
 `IncrementalCursorInvalid`. The fresh/lost boundary is exact:
 
@@ -370,6 +405,16 @@ Zero-padded indices keep drops sortable; the suffix keeps them human-readable. D
 records the same label in `_export_windows`. Author table names must not collide
 with the bookkeeping tables (the modes' always-on reserved table-name rules,
 § Horizon windowing).
+
+The directories a CSV windowed invocation removes wholesale are exposed by one
+pure naming function, `csv_removed_dirs` — under `--next` the window drop
+`<out>/<label>` (deleted and re-created from staging on every emitting window)
+and the staging directory `<out>/.tmp_<label>`; under a range the sibling
+staging directory `<out parent>/.tmp_<label>` alone (the range's drop is `out`,
+refused when pre-existing, never removed) — and the `--next` CSV cursor file by
+`csv_cursor_path`. The write step and the supplement source-is-output gate
+([`supplements.md`](supplements.md)) read the same functions, so the two can
+never disagree about what a window removes.
 
 ### Empty windows
 
@@ -554,6 +599,8 @@ usage error on stderr, exit 1, before the emit opens).
 | [`temporal-elections.md`](temporal-elections.md) | The election vocabulary the ordinal invariance reading is election-aware over |
 | [`declared-keys.md`](declared-keys.md) | The `declare_keys` capability and its per-write-regime window gating |
 | [`companion-artifacts.md`](companion-artifacts.md) | The README + manifest pair each emitting invocation rewrites whole-state; the census and fingerprint exclusions it motivates |
+| [`supplements.md`](supplements.md) | Supplement tables — `snapshot` every window, the fingerprint's `supplements` map, the removed-directory naming the source-is-output gate reads |
+| [`date-dimension.md`](date-dimension.md) | The generated calendar — `snapshot` every window, the per-window range guard, the `date_ref` value-channel reading |
 | [`reader.md`](reader.md) | The `Emit` / `Sidecar` surface the driver reads through |
 | [`derivations.md`](derivations.md) | The truncated tape every horizon compile runs over |
 | [`../../contract/base-format.md`](../../contract/base-format.md) | The vendored contract carrying the relied-on `slice_at` and row-order guarantees |

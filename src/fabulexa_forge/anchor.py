@@ -251,6 +251,44 @@ def render_ts(event_sim_time: int, anchor: EffectiveAnchor | None) -> str | int:
     return instant_local.isoformat()
 
 
+def anchor_temporal_expr(
+    anchor: EffectiveAnchor,
+    qualified_source: str,
+    render: TemporalRender,
+) -> str:
+    """The bare (unaliased) expression of the shared temporal renderer.
+
+    Byte-identical to the expression `render_anchor_temporal_expr` aliases
+    today; that function becomes this expression wrapped in `AS
+    "<out_name>"` (with its no-anchor pass-through unchanged), so the one
+    renderer every wallclock mode shares stays one. The decimal authority's
+    posture: bare expression, caller aliases.
+
+    Args:
+        anchor: The resolved anchor (the no-anchor path never reaches here).
+        qualified_source: The fully table-qualified BIGINT-ns source SQL.
+        render: The elected temporal rendering.
+
+    Returns:
+        A SQL expression of the elected type (no alias).
+    """
+    zone = str(anchor.timezone)
+    origin = anchor.start_instant.isoformat()
+    instant_expr = (
+        f"TIMESTAMPTZ '{origin}'"
+        f" + to_microseconds(CAST({qualified_source} AS BIGINT) // 1000)"
+    )
+    if render == "timestamptz":
+        return instant_expr
+
+    local_expr = f"timezone('{zone}', {instant_expr})"
+    if render == "date":
+        return f"CAST({local_expr} AS DATE)"
+    if render == "time":
+        return f"CAST({local_expr} AS TIME)"
+    return local_expr
+
+
 def render_anchor_temporal_expr(
     anchor: EffectiveAnchor | None,
     qualified_source: str,
@@ -285,22 +323,7 @@ def render_anchor_temporal_expr(
     """
     if anchor is None:
         return f'{qualified_source} AS "{out_name}"'
-
-    zone = str(anchor.timezone)
-    origin = anchor.start_instant.isoformat()
-    instant_expr = (
-        f"TIMESTAMPTZ '{origin}'"
-        f" + to_microseconds(CAST({qualified_source} AS BIGINT) // 1000)"
-    )
-    if render == "timestamptz":
-        return f'{instant_expr} AS "{out_name}"'
-
-    local_expr = f"timezone('{zone}', {instant_expr})"
-    if render == "date":
-        return f'CAST({local_expr} AS DATE) AS "{out_name}"'
-    if render == "time":
-        return f'CAST({local_expr} AS TIME) AS "{out_name}"'
-    return f'{local_expr} AS "{out_name}"'
+    return f'{anchor_temporal_expr(anchor, qualified_source, render)} AS "{out_name}"'
 
 
 def anchor_to_json(anchor: "EffectiveAnchor | None") -> dict[str, str] | None:

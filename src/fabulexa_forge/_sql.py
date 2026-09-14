@@ -435,6 +435,67 @@ def date_parse_denoted_type(fmt: str) -> Literal["DATE", "TIME", "TIMESTAMP"]:
     return "DATE"
 
 
+def date_key_expr(date_sql: str) -> str:
+    """The one `yyyymmdd` key expression, over a DATE-typed SQL expression.
+
+    Renders `CAST(year(d) * 10000 + month(d) * 100 + day(d) AS INTEGER)`
+    with `d` the given expression, NULL-propagating. Read by the `dim_date`
+    relation and by every `date_ref` compile so the calendar's key and every
+    reference into it agree by construction.
+
+    Args:
+        date_sql: A SQL expression of type DATE.
+
+    Returns:
+        A SQL expression of type INTEGER (no alias).
+    """
+    return (
+        f"CAST(year({date_sql}) * 10000 + month({date_sql}) * 100"
+        f" + day({date_sql}) AS INTEGER)"
+    )
+
+
+def date_parse_expr(
+    qualified_source: str,
+    date_format: str,
+    table_label: str,
+) -> str:
+    """The bare (unaliased) expression of the declared-parse renderer.
+
+    Byte-identical to the `CASE` expression `render_date_parse_expr` aliases
+    today — the loud non-matching-cell guard naming `table_label` included;
+    that function becomes this expression wrapped in `AS "<out_name>"`.
+
+    Args:
+        qualified_source: The fully table-qualified VARCHAR source SQL.
+        date_format: The validated declared parse format.
+        table_label: The output table name interpolated into the guard.
+
+    Returns:
+        A SQL expression of the format's denoted type (no alias).
+    """
+    denoted_type = date_parse_denoted_type(date_format)
+    column_label = qualified_source.rsplit(".", 1)[-1].strip('"')
+    strptime_format = date_format.replace("%g", "%f")
+    format_literal = _sql_literal(strptime_format)
+    message_prefix = _sql_literal(
+        f"date_parse on '{table_label}.{column_label}': value '"
+    )
+    message_suffix = _sql_literal(f"' does not match format '{date_format}'")
+    error_expr = (
+        f"error({message_prefix}"
+        f" || CAST({qualified_source} AS VARCHAR) || {message_suffix})"
+    )
+    return (
+        "CASE"
+        f" WHEN {qualified_source} IS NULL THEN CAST(NULL AS {denoted_type})"
+        f" WHEN TRY_STRPTIME({qualified_source}, {format_literal}) IS NOT NULL"
+        f" THEN CAST(STRPTIME({qualified_source}, {format_literal}) AS {denoted_type})"
+        f" ELSE CAST({error_expr} AS {denoted_type})"
+        " END"
+    )
+
+
 def render_date_parse_expr(
     qualified_source: str,
     date_format: str,
@@ -466,25 +527,8 @@ def render_date_parse_expr(
         A SQL SELECT-list expression fragment ending in `AS "<out_name>"`,
         typed as the format's denoted type.
     """
-    denoted_type = date_parse_denoted_type(date_format)
-    column_label = qualified_source.rsplit(".", 1)[-1].strip('"')
-    strptime_format = date_format.replace("%g", "%f")
-    format_literal = _sql_literal(strptime_format)
-    message_prefix = _sql_literal(
-        f"date_parse on '{table_label}.{column_label}': value '"
-    )
-    message_suffix = _sql_literal(f"' does not match format '{date_format}'")
-    error_expr = (
-        f"error({message_prefix}"
-        f" || CAST({qualified_source} AS VARCHAR) || {message_suffix})"
-    )
     return (
-        "CASE"
-        f" WHEN {qualified_source} IS NULL THEN CAST(NULL AS {denoted_type})"
-        f" WHEN TRY_STRPTIME({qualified_source}, {format_literal}) IS NOT NULL"
-        f" THEN CAST(STRPTIME({qualified_source}, {format_literal}) AS {denoted_type})"
-        f" ELSE CAST({error_expr} AS {denoted_type})"
-        f' END AS "{out_name}"'
+        f'{date_parse_expr(qualified_source, date_format, table_label)} AS "{out_name}"'
     )
 
 

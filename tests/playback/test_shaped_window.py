@@ -34,12 +34,14 @@ def _tables_by_name(tables: tuple[ShapedTable, ...]) -> dict[str, ShapedTable]:
 
 
 def _open_dimensional(emit: "Emit", config: "ExportConfig"):
-    return open_shaped_playback(emit, config, None, discard_notice_sink)
+    return open_shaped_playback(emit, config, None, discard_notice_sink, supplements=())
 
 
 def _open_source(emit: "Emit", config: "ExportConfig"):
     anchor = resolve_effective_anchor(emit.sidecar.runtime(), None, None, None)
-    return open_shaped_playback(emit, config, anchor, discard_notice_sink)
+    return open_shaped_playback(
+        emit, config, anchor, discard_notice_sink, supplements=()
+    )
 
 
 def _direct_dimensional_specs(

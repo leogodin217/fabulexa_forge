@@ -86,14 +86,30 @@ Non-negotiable. Every decision must be checkable against these.
 2. **All output is configurable.** No hardcoded target schemas, table names, or
    domains.
 3. **Faithful reshaping — reshape, never fabricate.** Every exporter output value
-   traces to a base-layer value. Exporters may drop, rename, denormalize, aggregate,
-   or reconstruct point-in-time state — never invent. *Corrupters are the sole
-   exception:* they intentionally break **semantic** conformance (C6/C7) to inject
-   realistic data-quality defects while preserving **structural** conformance (C1–C5).
-   Breaking the data is the corrupter's declared purpose; an exporter never does it.
+   traces to a base-layer value. Exporters may drop, rename, denormalize,
+   aggregate, or reconstruct point-in-time state — never invent. Exactly three
+   named exceptions exist, each declared in config and named in a manifest:
+   - **Supplements** — author-supplied tables carried verbatim, cast to their
+     declared types. Sourced from the author instead of the emit; the manifest
+     names which.
+   - **The generated calendar** (`date_dimension` → `dim_date`) — a pure function
+     of the author-declared range, byte-identical for the same range; the
+     manifest records the range. Its rows are the only exporter values that
+     trace to neither the emit nor an author-supplied cell.
+   - **Corrupters** — they intentionally break **semantic** conformance (C6/C7)
+     to inject realistic data-quality defects while preserving **structural**
+     conformance (C1–C5); `defects.json` names every injected defect. Breaking
+     the data is the corrupter's declared purpose; an exporter never does it.
+
+   Nothing else may fabricate. A new source of output values is an amendment to
+   this list, not a local decision.
 4. **Referential and temporal integrity preserved.** Exporters introduce no dangling
    references, no forward references, and no non-monotonic time. These guarantees come
-   in via the base layer; an exporter must not destroy them.
+   in via the base layer; an exporter must not destroy them. A supplement's columns
+   are the author's data: forge declares no reference for them and makes no integrity
+   claim about them, and delivers the supplement whole regardless of which rows it may
+   name have been delivered yet — forge's own reshape still introduces no dangling or
+   forward reference on a supplement's account.
 5. **Realistic complexity, faithfully.** Exporters may target clean OLAP shapes or
    messy OLTP shapes (change logs, late-arriving data). Fidelity to the source, not
    messiness, is the invariant.
@@ -131,8 +147,8 @@ Non-negotiable. Every decision must be checkable against these.
 | Invariant | Meaning |
 |---|---|
 | Deterministic | Same emit + same export/corrupt config + same code version → identical output. |
-| Faithful reshaping | Exporter output traces wholly to base-layer values; no fabrication. |
-| Integrity preserved | Exporters emit no dangling/forward references; monotonic time survives the reshape. |
+| Faithful reshaping | Every exporter output value traces to a base-layer value, or to one of Principle #3's three named exceptions (a supplement's author data, the generated calendar's declared range, a corrupter's declared defect) — each named in a manifest; no other fabrication. |
+| Integrity preserved | Exporters emit no dangling/forward references; monotonic time survives the reshape. A supplement's values carry no forge integrity claim — they are the author's data, delivered whole. |
 | Version-gated input | Unknown `base_format_version` → refuse to interpret. |
 | Single coupling | The bundle + vendored `contract/` is the only interface; no dependency on the bundle's producer. |
 
@@ -208,7 +224,10 @@ fixed-category / records-category / membership-category table, provenance opt-in
 
 Repo-local terms: **exporter** (base → different shape), **corrupter** (base → broken
 base), **export config**, **target shape**, **fidelity**, **reader**, **recipe**
-(minimal single-feature export config, test-guarded — the primary author-facing doc).
+(minimal single-feature export config, test-guarded — the primary author-facing doc),
+**supplement** (an author-supplied table declared in the export config and carried
+verbatim into the export — the manually-entered-warehouse-data case; never emit
+data, never a kind).
 
 ## Audience
 
@@ -225,8 +244,10 @@ mode, adjust YAML, and run the CLI. They do not write Python.
 - Invent target grain, keys, or schema the author must specify (Principle #7).
 - Write code for features that don't exist yet (Principle #8).
 - Look anywhere but the vendored `contract/` for the input spec — it lives only there.
-- Fabricate data in an exporter (Principle #3). Only corrupters break conformance, and
-  only C6/C7.
+- Fabricate data in an exporter (Principle #3). Supplements and the generated
+  calendar are its named exceptions — a supplement's cells are never interpreted,
+  filled, or derived from; the calendar derives from nothing but its declared
+  range. Only corrupters break conformance, and only C6/C7.
 
 ---
 

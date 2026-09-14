@@ -152,10 +152,14 @@ never changed in this run) is not — while `description` and `unit` carry
 what the property means and is measured in (author- or engine-declared,
 forwarded verbatim; membership element-field columns carry them too).
 Table-level, `tables[].description` carries engine-owned structural prose
-for machinery-cored kinds' records tables and for membership tables, and the
+for machinery-cored kinds' records tables and for membership tables (and the
+author's `kind_descriptions` entry for an author-declared kind, when one was
+supplied), and the
 contract itself pins verbatim-embeddable descriptions for the structural
 columns (contract § Structural column descriptions). Top-level, the optional
-`scenario_description` forwards the scenario's declared narrative, and
+`scenario_description` forwards the scenario's declared narrative,
+`scenario_name` its declared display label (each present only when the
+scenario declared it; neither substitutes for the other), and
 `row_census` counts rows per table, per `(kind, property)` history series,
 and per sub-type: the volume evidence that decides grain. It is advisory —
 no conformance check ranges over its contents.

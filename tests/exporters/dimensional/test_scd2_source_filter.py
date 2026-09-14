@@ -24,6 +24,7 @@ from exporters._emit_fixtures import _create_ddl, _table_spec
 from fabulexa_forge.config.models import (
     ColumnDecl,
     DateParseSpec,
+    DateRefSpec,
     DecimalSpec,
     DerivedSpec,
     DimensionalConfig,
@@ -362,6 +363,10 @@ _SUPPORTED_MODE_COLUMNS: list[ColumnDecl] = [
             )
         ),
     ),
+    ColumnDecl(
+        name="birth_date_key",
+        date_ref=DateRefSpec(**{"from": "prop__name"}, format="%Y-%m-%d"),
+    ),
 ]
 
 
@@ -377,6 +382,7 @@ _SUPPORTED_MODE_COLUMNS: list[ColumnDecl] = [
         "value_map",
         "decimal",
         "json_precision",
+        "date_ref",
     ],
 )
 def test_scd2_supported_column_modes_pass(col_decl: ColumnDecl) -> None:

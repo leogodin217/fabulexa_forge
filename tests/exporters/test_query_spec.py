@@ -5,11 +5,13 @@ DuckDB-arm key flattening.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from _support.duckdb_introspect import constraint_types
 
 from exporters._emit_fixtures import build_test_emit
+from fabulexa_forge.exporters.date_dimension import CalendarSource
 from fabulexa_forge.exporters.query_spec import (
     ColumnProvenance,
     KindValueEntry,
@@ -18,6 +20,9 @@ from fabulexa_forge.exporters.query_spec import (
     write_query_specs,
 )
 from fabulexa_forge.reader.emit import open_emit
+
+_CALENDAR = CalendarSource(from_=date(2024, 1, 1), to=date(2024, 1, 31))
+_REFERENCES = {"event_date_key": "dim_date"}
 
 
 def test_write_query_specs_duckdb_arm_lands_keyed_constraints(tmp_path: Path) -> None:
@@ -193,6 +198,55 @@ def test_write_query_specs_csv_arm_forwards_table_description_verbatim(
     assert table.event_log is True
 
 
+def test_write_query_specs_duckdb_arm_forwards_calendar_and_references_verbatim(
+    tmp_path: Path,
+) -> None:
+    """`write_query_specs` forwards a spec's `calendar` and `references`
+    onto the matching `TableReport` unchanged, under the DuckDB arm."""
+    emit_dir = build_test_emit(tmp_path)
+    out_path = tmp_path / "out.duckdb"
+
+    spec = QuerySpec(
+        table_name="dim_date",
+        sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
+        write_mode="create",
+        calendar=_CALENDAR,
+        references=_REFERENCES,
+    )
+
+    with open_emit(emit_dir) as emit:
+        report = write_query_specs(emit, [spec], out_path, "duckdb")
+
+    table = report.tables[0]
+    assert table.calendar == _CALENDAR
+    assert table.references == _REFERENCES
+
+
+def test_write_query_specs_csv_arm_forwards_calendar_and_references_verbatim(
+    tmp_path: Path,
+) -> None:
+    """`write_query_specs` forwards a spec's `calendar` and `references`
+    onto the matching `TableReport` unchanged, under the CSV arm."""
+    emit_dir = build_test_emit(tmp_path)
+    out_dir = tmp_path / "csv_out"
+    out_dir.mkdir()
+
+    spec = QuerySpec(
+        table_name="dim_date",
+        sql='SELECT record_id FROM "records__entity" ORDER BY record_id',
+        write_mode="create",
+        calendar=_CALENDAR,
+        references=_REFERENCES,
+    )
+
+    with open_emit(emit_dir) as emit:
+        report = write_query_specs(emit, [spec], out_dir, "csv")
+
+    table = report.tables[0]
+    assert table.calendar == _CALENDAR
+    assert table.references == _REFERENCES
+
+
 def test_write_query_specs_forwards_empty_maps_by_default(tmp_path: Path) -> None:
     """A spec that stamps nothing forwards empty `provenance`, `kind_values`,
     and `author_descriptions` onto its `TableReport` -- absence is not
@@ -215,3 +269,5 @@ def test_write_query_specs_forwards_empty_maps_by_default(tmp_path: Path) -> Non
     assert table.author_descriptions == {}
     assert table.author_table_description is None
     assert table.event_log is False
+    assert table.calendar is None
+    assert table.references == {}

@@ -16,6 +16,7 @@ from fabulexa_forge.errors import IncrementalCursorInvalid
 from fabulexa_forge.incremental.cursor import (
     _CURRENT_CURSOR_FORMAT_VERSION,
     Cursor,
+    csv_cursor_path,
     read_cursor,
     write_csv_cursor,
 )
@@ -247,6 +248,34 @@ def test_csv_two_entries_no_cursor_file_raises(tmp_path: Path) -> None:
 
     with pytest.raises(IncrementalCursorInvalid, match="cursor"):
         read_cursor(drops, "csv", _WINDOW_ZERO_LABEL)
+
+
+# ---------------------------------------------------------------------------
+# csv_cursor_path: the one naming authority for the cursor file's location
+# ---------------------------------------------------------------------------
+
+
+def test_csv_cursor_path_is_dotfile_under_out(tmp_path: Path) -> None:
+    """`csv_cursor_path(out) == out / ".fabulexa-forge-cursor.json"`."""
+    out = tmp_path / "drops"
+    assert csv_cursor_path(out) == out / ".fabulexa-forge-cursor.json"
+
+
+def test_write_csv_cursor_writes_exactly_csv_cursor_path(tmp_path: Path) -> None:
+    """`write_csv_cursor` writes exactly the path `csv_cursor_path` names,
+    no other file."""
+    drops = tmp_path / "drops"
+    drops.mkdir()
+    cursor = Cursor(
+        cursor_format_version=_CURRENT_CURSOR_FORMAT_VERSION,
+        fingerprint=_FINGERPRINT,
+        next_window_index=0,
+    )
+
+    write_csv_cursor(drops, cursor)
+
+    assert csv_cursor_path(drops).is_file()
+    assert [p.name for p in drops.iterdir()] == [csv_cursor_path(drops).name]
 
 
 # ---------------------------------------------------------------------------

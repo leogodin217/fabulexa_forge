@@ -22,6 +22,8 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from fabulexa_forge.config.models import ExportConfig
+    from fabulexa_forge.exporters.date_dimension import CalendarSource
+    from fabulexa_forge.exporters.supplements import SupplementSource
     from fabulexa_forge.reader.emit import Emit
 
 
@@ -115,10 +117,15 @@ class TableReport:
     `row_count` is None on windowed invocations. `keys` is the table's
     declared `TableKeys`, or None when nothing was declared or the
     declaration was CSV-dropped. `provenance`, `kind_values`,
-    `author_descriptions`, `author_table_description`, and `event_log` are
-    forwarded verbatim from the compiled `QuerySpec` that produced this
-    table — no default, so every report-assembly call site states them
-    explicitly.
+    `author_descriptions`, `author_table_description`, `event_log`,
+    `supplement`, `calendar`, and `references` are forwarded verbatim from
+    the compiled `QuerySpec` that produced this table — no default, so every
+    report-assembly call site states them explicitly. `supplement` is set
+    iff this table is a supplement, None for a mode table. `calendar` is set
+    iff this table is the generated `dim_date`. `references` maps each
+    output column that points at another output table (a `date_ref` column
+    to `dim_date`, an `fk` column to its resolved dim) to that table's name;
+    empty when the table references nothing.
     """
 
     name: str
@@ -130,6 +137,9 @@ class TableReport:
     author_descriptions: "Mapping[str, str]"
     author_table_description: str | None
     event_log: bool
+    supplement: "SupplementSource | None"
+    calendar: "CalendarSource | None"
+    references: "Mapping[str, str]"
 
 
 @dataclass(frozen=True)
@@ -164,6 +174,13 @@ class QuerySpec:
     spec is the source mode's compiled polymorphic event log — the one table
     whose documentation the companion dictionary answers from the
     forge-pinned event-log set; stamped only by the source plan compiler.
+    `supplement` is set iff this spec is a supplement table; forwarded to
+    `TableReport` by both report-assembly sites (`write_query_specs`, the
+    driver's `_build_windowed_report`). `references` is stamped at plan
+    compile (dimensional only; every other mode leaves it empty) and
+    forwarded to `TableReport` the same way. `calendar` is set iff this
+    spec is the generated `dim_date`; forwarded to `TableReport` by both
+    report-assembly sites.
     """
 
     table_name: str
@@ -178,6 +195,9 @@ class QuerySpec:
     author_descriptions: "Mapping[str, str]" = field(default_factory=dict)
     author_table_description: str | None = None
     event_log: bool = False
+    supplement: "SupplementSource | None" = None
+    references: "Mapping[str, str]" = field(default_factory=dict)
+    calendar: "CalendarSource | None" = None
 
 
 NOTICE_KEYS_NOT_DECLARABLE_CSV = "keys-not-declarable-csv"
@@ -279,6 +299,9 @@ def write_query_specs(
                     author_descriptions=spec.author_descriptions,
                     author_table_description=spec.author_table_description,
                     event_log=spec.event_log,
+                    supplement=spec.supplement,
+                    calendar=spec.calendar,
+                    references=spec.references,
                 )
                 for spec in specs
             )
@@ -300,6 +323,9 @@ def write_query_specs(
                 author_descriptions=spec.author_descriptions,
                 author_table_description=spec.author_table_description,
                 event_log=spec.event_log,
+                supplement=spec.supplement,
+                calendar=spec.calendar,
+                references=spec.references,
             )
         )
     return ExportReport(tables=tuple(tables))

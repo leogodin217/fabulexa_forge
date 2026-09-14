@@ -2021,10 +2021,12 @@ def _check_c15(emit: "Emit") -> CheckResult:
     """C15: Surface consistency.
 
     A published emit's `surface` MUST be the string "published", and it MUST
-    carry no `projection` block. The other invariants of a published emit (no
-    `firings` table, no machinery kinds, no provenance column group) are owned
-    by C3, C12, and C5; C15 checks only the `surface` discriminator itself and
-    the `projection` absence the contract pairs with it.
+    carry neither a `projection` block nor a top-level `rule_docs` block — the
+    anchors of the latter (`firings`, machinery tables) are stripped surfaces.
+    The other invariants of a published emit (no `firings` table, no machinery
+    kinds, no provenance column group) are owned by C3, C12, and C5; C15
+    checks only the `surface` discriminator itself and the two block absences
+    the contract pairs with it.
 
     Reads only the raw sidecar; runs no data query.
 
@@ -2046,6 +2048,10 @@ def _check_c15(emit: "Emit") -> CheckResult:
     if "projection" in raw:
         messages.append(
             "C15: sidecar carries a 'projection' block — a published emit must not"
+        )
+    if "rule_docs" in raw:
+        messages.append(
+            "C15: sidecar carries a 'rule_docs' block — a published emit must not"
         )
 
     return CheckResult(
