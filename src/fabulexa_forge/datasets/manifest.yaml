@@ -36,21 +36,20 @@ datasets:
       - fabulexa-forge export {dir}/bundle {dir}/source.yaml retail-app.duckdb --fmt duckdb
       - fabulexa-forge export {dir}/bundle {dir}/base.yaml retail-base.duckdb --fmt duckdb
       - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout
-  - name: saas
+  - name: saas-billing
     description: >-
-      A B2B SaaS vendor over five years — companies on plan tiers, seat-holding
-      users cycling between use and idleness, a usage-event firehose, and
-      renewal reviews that renegotiate each account's pricing or churn it.
-    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v2/saas.tar.gz
-    sha256: c0592f6524f85131254ade24fadcfb0a739f393f14ad2f76522d6eeded484962
-    size_bytes: 33138973
+      A B2B SaaS vendor's billing warehouse over five years — accounts on plan
+      tiers with negotiated seat prices and usage discounts, seat holders
+      cycling between use and idleness, a metered usage firehose rated
+      through per-SKU tier ladders, promotions and post-renewal credits; the
+      facts of a monthly invoice, never the invoice itself.
+    url: https://github.com/leogodin217/fabulexa_forge/releases/download/datasets-v2/saas-billing.tar.gz
+    sha256: 17893c75b7bede392196834426a39e706d2a01e7752a6e09d0d4cc3ee04fb5a1
+    size_bytes: 41087328
     base_format_version: 11
-    configs: [dimensional.yaml, source.yaml, base.yaml, stream.yaml]
+    configs: [dimensional.yaml]
     commands:
-      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml saas-star.duckdb --fmt duckdb
-      - fabulexa-forge export {dir}/bundle {dir}/source.yaml saas-app.duckdb --fmt duckdb
-      - fabulexa-forge export {dir}/bundle {dir}/base.yaml saas-base.duckdb --fmt duckdb
-      - fabulexa-forge stream {dir}/bundle {dir}/stream.yaml --fmt jsonl --sink stdout
+      - fabulexa-forge export {dir}/bundle {dir}/dimensional.yaml saas-billing-star.duckdb --fmt duckdb
   - name: ride-sharing
     description: >-
       A single-region ride-sharing marketplace over one week — riders, a small

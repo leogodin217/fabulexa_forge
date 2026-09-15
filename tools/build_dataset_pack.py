@@ -5,7 +5,8 @@ Repo-side only — never shipped in the wheel; run through this repo's own
 venv (`uv run python tools/build_dataset_pack.py <name> --out DIR`), since it
 imports `open_emit`. Builds `<out>/<name>.tar.gz` from
 `docs/examples/<name>/`: `bundle/{run.duckdb,base.json,ATLAS.md}` plus the
-manifest entry's `configs` YAMLs at the example directory's root.
+manifest entry's `configs` YAMLs at the example directory's root, and every
+config-relative file those configs name (file supplements, `readme_overlay`).
 
 Print, never edit: the stamped fields (sha256, size_bytes,
 base_format_version) are printed as a paste-ready YAML fragment for the
@@ -135,20 +136,22 @@ def _load_packed_config(
         raise PackBuildError(f"{prefix}{exc}") from exc
 
 
-def _supplement_member(
+def _config_file_member(
     dataset_name: str,
     config_name: str,
-    supplement_name: str,
+    label: str,
     source_path: Path,
     example_dir: Path,
 ) -> tuple[str, Path]:
-    """Place one resolved file supplement's source as an archive member.
+    """Place one config-named file (a file supplement's source, the
+    `readme_overlay`) as an archive member.
 
     Args:
         dataset_name: The manifest entry's name, for the error prefix.
         config_name: The configs entry's filename, for the error prefix.
-        supplement_name: The declared supplement's name, for the error message.
-        source_path: The supplement's resolved (absolute) source path.
+        label: What the config named the file as, for the error message
+            (`supplement '<name>'`, `readme_overlay`).
+        source_path: The file's resolved (absolute) source path.
         example_dir: The dataset's example directory (resolved).
 
     Returns:
@@ -160,7 +163,7 @@ def _supplement_member(
     if not source_path.is_relative_to(example_dir):
         raise PackBuildError(
             f"dataset '{dataset_name}': config '{config_name}':"
-            f" supplement '{supplement_name}': file {source_path} is outside"
+            f" {label}: file {source_path} is outside"
             f" the dataset directory {example_dir}"
         )
     return source_path.relative_to(example_dir).as_posix(), source_path
@@ -170,13 +173,15 @@ def _packed_config_members(
     entry: "DatasetEntry", example_dir: Path
 ) -> list[tuple[str, Path]]:
     """Locate every configs entry, load it through the loader its top-level
-    shape names, and collect its supplement files as members.
+    shape names, and collect the files it names as members.
 
-    Replaces `_resolve_config_paths`. A document with a top-level `mode`
-    key loads through `load_export_config`; one with a top-level `streams`
-    key through `load_stream_config`; a document with neither is refused.
-    For an export config, `load_supplements(config, example_dir)` resolves
-    every file supplement; each is a member at its config-relative path.
+    A document with a top-level `mode` key loads through
+    `load_export_config`; one with a top-level `streams` key through
+    `load_stream_config`; a document with neither is refused. For an export
+    config, `load_supplements(config, example_dir)` resolves every file
+    supplement and the config's `readme_overlay` resolves beside it, exactly
+    as the CLI resolves them at export time; each is a member at its
+    config-relative path, so the packed config runs from the extracted pack.
 
     Args:
         entry: The authored manifest entry naming the configs.
@@ -185,15 +190,15 @@ def _packed_config_members(
     Returns:
         (archive path, source path) pairs: each config in the entry's
         authored order, then each of its supplement files in declaration
-        order. Determinism is unaffected — `_write_deterministic_archive`
-        sorts members by path.
+        order, then its overlay. Determinism is unaffected —
+        `_write_deterministic_archive` sorts members by path.
 
     Raises:
         PackBuildError: A configs entry is absent, naming it; a config is
             neither an export nor a stream config; a config its loader
             refuses (the loader's diagnostic, prefixed `"dataset '{name}':
-            config '{cfg}': "`); a supplement file that is missing or whose
-            resolved path is outside `example_dir`.
+            config '{cfg}': "`); a supplement file or overlay file that is
+            missing or whose resolved path is outside `example_dir`.
     """
     resolved_example_dir = example_dir.resolve()
     members: list[tuple[str, Path]] = []
@@ -214,11 +219,26 @@ def _packed_config_members(
             if supplement.path is None:
                 continue
             members.append(
-                _supplement_member(
+                _config_file_member(
                     entry.name,
                     filename,
-                    supplement.decl.name,
+                    f"supplement '{supplement.decl.name}'",
                     supplement.path,
+                    resolved_example_dir,
+                )
+            )
+        if config.readme_overlay is not None:
+            overlay_path = (config_path.parent / config.readme_overlay).resolve()
+            if not overlay_path.is_file():
+                raise PackBuildError(
+                    f"{prefix}readme_overlay: missing file {overlay_path}"
+                )
+            members.append(
+                _config_file_member(
+                    entry.name,
+                    filename,
+                    "readme_overlay",
+                    overlay_path,
                     resolved_example_dir,
                 )
             )

@@ -374,6 +374,69 @@ def test_inline_only_supplement_adds_no_member(tmp_path: Path) -> None:
     ]
 
 
+def test_readme_overlay_becomes_archive_member(tmp_path: Path) -> None:
+    """A config's `readme_overlay` file lands as a member at its
+    config-relative path with the source bytes, so the packed config runs
+    from the extracted pack."""
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text(
+        "mode: dimensional\nreadme_overlay: notes/README-overlay.md\n"
+        + _DIMENSIONAL_TABLE_YAML,
+        encoding="utf-8",
+    )
+    (example_dir / "notes").mkdir()
+    overlay_bytes = b"## overview\n\nDomain prose.\n"
+    (example_dir / "notes" / "README-overlay.md").write_bytes(overlay_bytes)
+
+    out_path = tmp_path / "out" / "demo-pack.tar.gz"
+    pack_builder.build_pack(_entry(), example_dir, out_path)
+
+    with tarfile.open(out_path, mode="r:gz") as archive:
+        names = [m.name for m in archive.getmembers()]
+        member = archive.extractfile("notes/README-overlay.md")
+        assert member is not None
+        member_bytes = member.read()
+
+    assert names == sorted(names)
+    assert "notes/README-overlay.md" in names
+    assert member_bytes == overlay_bytes
+
+
+def test_missing_readme_overlay_names_dataset_config_path(tmp_path: Path) -> None:
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text(
+        "mode: dimensional\nreadme_overlay: README-overlay.md\n"
+        + _DIMENSIONAL_TABLE_YAML,
+        encoding="utf-8",
+    )
+    # README-overlay.md deliberately not written.
+
+    with pytest.raises(pack_builder.PackBuildError) as excinfo:
+        pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
+
+    message = str(excinfo.value)
+    assert "demo-pack" in message
+    assert "dimensional.yaml" in message
+    assert "README-overlay.md" in message
+
+
+def test_readme_overlay_escaping_dataset_directory_refused(tmp_path: Path) -> None:
+    example_dir = tmp_path / "example"
+    _write_full_example(example_dir)
+    (example_dir / "dimensional.yaml").write_text(
+        "mode: dimensional\nreadme_overlay: ../outside.md\n" + _DIMENSIONAL_TABLE_YAML,
+        encoding="utf-8",
+    )
+    (tmp_path / "outside.md").write_text("## overview\n\nx\n", encoding="utf-8")
+
+    with pytest.raises(
+        pack_builder.PackBuildError, match="outside the dataset directory"
+    ):
+        pack_builder.build_pack(_entry(), example_dir, tmp_path / "out.tar.gz")
+
+
 def test_stream_config_still_packs_and_loads(tmp_path: Path) -> None:
     """A `streams` top-level config packs through load_stream_config."""
     example_dir = tmp_path / "example"

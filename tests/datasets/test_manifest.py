@@ -45,7 +45,7 @@ def test_load_manifest_returns_shipped_catalog() -> None:
     assert [entry.name for entry in manifest.datasets] == [
         "nhs",
         "retail",
-        "saas",
+        "saas-billing",
         "ride-sharing",
         "ride-sharing-marketplace",
         "security-logs",
