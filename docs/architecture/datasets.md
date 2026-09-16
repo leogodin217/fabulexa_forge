@@ -130,9 +130,11 @@ substitutes to the path as given — never absolutized. Behavior cases:
 
 ### Pack
 
-- Layout: `bundle/run.duckdb`, `bundle/base.json`, `bundle/ATLAS.md`, and the
-  manifest-named config YAMLs at the archive root. All member paths relative;
-  no wrapper directory; no `exports/`, no demo-glue files.
+- Layout: `bundle/run.duckdb`, `bundle/base.json`, `bundle/ATLAS.md`, the
+  manifest-named config YAMLs at the archive root, and every config-relative
+  file those configs name (file supplements, `readme_overlay`) at its
+  config-relative path. All member paths relative; no wrapper directory; no
+  `exports/`, no demo-glue files.
 - Format: gzip-compressed tar. One archive per dataset per release; the
   manifest URL pins the exact asset.
 - The builder produces regular-file members only; `get` additionally accepts
@@ -190,6 +192,12 @@ stderr, exit 1. It never talks to the network.
   absolute path), is a build refusal naming the config and the path — `get`'s
   member-safety rule refuses such members on extraction regardless. Supplement
   members join the sorted-path member order under the same normalization.
+- **The overlay is a pack member.** A packed export config's `readme_overlay`
+  ([`companion-artifacts.md`](companion-artifacts.md)) resolves beside the
+  config exactly as the CLI resolves it at export time and is added at its
+  config-relative path, under the same missing-file and escape refusals as a
+  supplement file. The rule behind both: a packed config runs from the
+  extracted pack, so every file it names travels with it.
 
 Publishing a dataset is: author configs in `docs/examples/<name>/` → run the
 pack builder → upload the archive to the release → commit the manifest entry.

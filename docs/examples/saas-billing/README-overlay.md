@@ -7,6 +7,12 @@ credits, seats and usage — and none of the **outcomes**: there is no invoice
 table, no commit balance, no applied-credit residue. Those are the reference
 query's job, and the spec below is what that query implements.
 
+The exercises themselves — a clean reference query and an inherited one per
+tier, the pinned conventions, and a grader that needs only the DuckDB CLI —
+live in [fabulexa_complex_queries](https://github.com/leogodin217/fabulexa_complex_queries),
+which also publishes this warehouse as a ready-made DuckDB file so the track
+can be run without forge.
+
 ### Billing spec — the reference query's stage order
 
 One invoice per account per calendar month. Stages run in this order; each

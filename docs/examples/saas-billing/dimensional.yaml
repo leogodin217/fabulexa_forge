@@ -3,9 +3,9 @@
 # `fabulexa-forge export docs/examples/saas-billing/bundle docs/examples/saas-billing/dimensional.yaml <out> --fmt duckdb`
 #
 # The billing warehouse for the inherited-complex-query teaching track. Forked
-# from `docs/examples/saas/dimensional.yaml` (the product-analytics star) and
-# extended over the billing facts this scenario adds; every claim below was
-# re-derived against this bundle's own sidecar and data.
+# from the retired `saas` example's product-analytics star and extended over
+# the billing facts this scenario adds; every claim below was re-derived
+# against this bundle's own sidecar and data.
 #
 # The kind -> table mapping, from the atlas and `sub_type_columns`:
 #

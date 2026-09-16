@@ -64,7 +64,7 @@ def _make_entry(archive_bytes: bytes) -> DatasetEntry:
 _SHIPPED_NAMES = [
     "nhs",
     "retail",
-    "saas",
+    "saas-billing",
     "ride-sharing",
     "ride-sharing-marketplace",
     "security-logs",
