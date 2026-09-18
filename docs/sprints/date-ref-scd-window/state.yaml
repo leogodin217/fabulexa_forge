@@ -1,0 +1,62 @@
+sprint: date-ref-scd-window
+parent_branch: date-ref-scd-window-work
+baseline_sha: bdfcb2cf8612aca182e8d0b76b985516360ed07d
+started: 2026-09-18
+current_phase: 1
+capabilities:
+  - date-dimension: [DateRefSpec.scd_window, resolve_date_ref_source nullable, render_date_ref_expr bound shape, DateRefWindowBoundRequiresScd2, TemporalRenderRequiresAnchor bound shape, slice-only collector no-op]
+  - dimensional-scd2: [build_scd2_column_expr_flag bound branch, records-grain source assertion]
+  - incremental-windowing: [_channel_variance bound-shape branch]
+  - companion-artifacts: ["QuerySpec/TableReport window_bounds", _table_window_bounds, both report-assembly sites, bound-shape pinned dictionary prose]
+  - recipes: [date-dimension type-2 dim with bound keys]
+gates:
+  tests:
+    - "make test"
+phases:
+  1:
+    status: pending
+    name: "The bound shape — grammar, rendering, rules, windowing"
+    demo: "docs/sprints/date-ref-scd-window/demos/phase_1_bound_shape_render.py"
+    steps:
+      - kind: source
+        summary: "DateRefSpec.scd_window + three-way validator; resolve_date_ref_source -> str | None with every reader on its no-column path (records-grain assertion, slice-only collector skip, provenance None); render_date_ref_expr bound shape; build_scd2_column_expr_flag bound branch before source resolution; check_date_ref_window_bound_on_scd2 in the per-column loop ahead of the anchor rule; anchor rule covers the bound shape; _channel_variance bound branch; demo"
+      - kind: author
+        summary: "Grammar cases (three-way shape, literal refusal, ColumnDecl / ExportConfig gates) and rendering + execution cases (resolve/render/SCD-2 builder, family agreement under two zones, NULL valid_to, same-day versions, no-sibling key, determinism, records-grain assertion)"
+        files:
+          - "tests/config/test_date_dimension.py"
+          - "tests/exporters/dimensional/test_date_ref.py"
+      - kind: author
+        summary: "Rule cases (new rule both bounds / off type-2, anchor rule, mode gate admits, slice-only collector empty, timestamp/date-parse gates pass, validate_table ordering pin), variance cases (append/upsert, KeyColumnsStable both bounds), provenance cases (no entry, references dim_date)"
+        files:
+          - "tests/exporters/dimensional/test_validation.py"
+          - "tests/exporters/dimensional/test_windowing.py"
+          - "tests/exporters/dimensional/test_provenance.py"
+  2:
+    status: pending
+    name: "The report carriage, the documentation channel, and the recipe"
+    demo: "docs/sprints/date-ref-scd-window/demos/phase_2_documented_export.py"
+    steps:
+      - kind: source
+        summary: "QuerySpec.window_bounds (defaulted) + TableReport.window_bounds (required); write_query_specs both arms and _build_windowed_report forward it; _table_window_bounds stamped in build_query_specs beside references; _DATE_REF_WINDOW_BOUND_DESCRIPTION_TEMPLATE + resolve_column_doc bound-shape branch; demo"
+      - kind: migrate
+        tactic: fan-out
+        change: "TableReport(...) gains required window_bounds — pass window_bounds={} at every constructor"
+        files:
+          - "tests/exporters/companion/_fixtures.py"
+          - "tests/exporters/companion/test_manifest.py"
+          - "tests/exporters/companion/test_readme.py"
+          - "tests/exporters/companion/test_paths.py"
+          - "tests/exporters/companion/test_artifacts.py"
+      - kind: author
+        summary: "Migrate test_date_dimension.py's three TableReport constructors, then: bound-shape dictionary prose (forge both bounds / author override / instant+parse unchanged), manifest entry shape + determinism, README line; write_query_specs both arms forward window_bounds; build_query_specs stamps window_bounds in declaration order and {} elsewhere (base/source empty); end-to-end full export both fmts with bound keys + shape-blind range guard; export_window forwarding + upsert/append delivery"
+        files:
+          - "tests/exporters/companion/test_date_dimension.py"
+          - "tests/exporters/test_query_spec.py"
+          - "tests/exporters/dimensional/test_provenance.py"
+          - "tests/exporters/dimensional/test_export_date_dimension.py"
+          - "tests/incremental/test_date_dimension.py"
+      - kind: author
+        summary: "date-dimension recipe: add dim_patient_status (scd: type2 over patient, scd_window date siblings + both bound keys, header comments in the recipe voice); pin its four rows in expect.yaml"
+        files:
+          - "examples/recipes/date-dimension/config.yaml"
+          - "examples/recipes/date-dimension/expect.yaml"
